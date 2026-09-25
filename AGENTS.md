@@ -113,6 +113,33 @@ immutable action pins, least privilege, evidence boundaries, budgets, and cleanu
 adds no software dependencies, operational pins, or Renovate configuration. Agent model choices
 are maintainer-owned routing policy, not automatically updated software release versions.
 
+## Cross-repository workflow and version policy
+
+- Keep equivalent local development tasks and GitHub PR, main, and release workflow definitions
+  aligned across BoxFerry, ComposeLens, PodmanLens, QuadletLens, DockerLens, and the website where
+  their responsibilities match. Before a change, identify the canonical definition and every
+  affected consumer; coordinate updates and document justified repository-specific differences.
+- Reuse common scripts, actions, and workflows without making Lens product libraries depend on
+  BoxFerry. Preserve native conformance, least privilege, exact-candidate evidence, resource budgets,
+  and cleanup. One repository passing does not establish that the shared rollout is complete.
+- Every added or changed software dependency or operational tool/runtime pin needs an explicit
+  version and immutable integrity information where the ecosystem supports it:
+  - Container images: a readable version tag plus an immutable digest.
+  - GitHub Actions and reusable workflows: a full commit SHA plus an exact release-tag comment.
+  - Downloaded tools: a version plus a verified checksum for the selected artifact.
+  - Package dependencies: policy-compliant version declarations and lockfile integrity records.
+  Document justified exceptions when integrity metadata is unavailable; never invent a checksum,
+  replace a reviewed pin with a floating reference, or weaken existing admission controls.
+- Whenever a pin or definition is added, changed, moved, or removed, review Renovate in the same
+  change: canonical ownership, manager paths and extraction, grouping, approvals, and regression
+  coverage. Update configuration and affected consumers together. If no configuration edit is
+  needed, record verified extraction evidence and the reason in the issue or PR. Avoid duplicate
+  managers for the same operational pin; keep historical evidence and intentional fixtures outside
+  automatic update streams.
+- These rules do not change current validation gates or grant release, publication, deployment,
+  or out-of-workspace authority. Agent model choices remain maintainer-owned routing policy, not
+  automatically updated software dependencies.
+
 ## Code discovery
 
 Use an available codebase-memory graph for structural exploration, or an existing usable CodeGraph
