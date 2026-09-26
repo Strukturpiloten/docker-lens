@@ -1,15 +1,45 @@
-//! Closed, explicit, read-only acquisition vocabulary and limits.
-//!
-//! There is no transport implementation in this bootstrap. A future transport
-//! must enforce these limits while reading and must never infer a local daemon.
+//! Closed, explicit, read-only Docker Engine acquisition over a supplied Unix socket.
 
-use std::collections::HashMap;
-use std::io::Read;
+use std::collections::{HashMap, HashSet};
+use std::io::{self, Read, Write};
+use std::num::NonZeroU16;
+use std::os::fd::OwnedFd;
+use std::os::unix::net::UnixStream;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
+
+use serde_json::Value;
+use socket2::{Domain, SockAddr, Socket, Type};
 
 use crate::evidence::{Capture, CaptureBounds, CapturedExchange, HttpStatus, ProtectedValue};
 use crate::observation::ResourceRef;
 use crate::version::{ApiVersion, ObservationId, ObservationIdError};
+
+const MAX_HEADER_BYTES: usize = 16 * 1024;
+const MAX_JSON_BYTES: usize = 8 * 1024 * 1024;
+const MAX_COLLECTION_ITEMS: usize = 4096;
+const IO_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const MAX_KNOWN_API_MINOR: u16 = 49;
+
+/// Acquisition errors never contain socket paths, native names, or response bytes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AcquisitionError {
+    Endpoint,
+    Cancelled,
+    Deadline,
+    Io,
+    Protocol,
+    Status,
+    Version,
+    Shape,
+    Budget(LimitError),
+}
+
+impl From<LimitError> for AcquisitionError {
+    fn from(value: LimitError) -> Self {
+        Self::Budget(value)
+    }
+}
 
 /// A caller-provided endpoint. No ambient socket search is permitted.
 pub struct Endpoint(std::path::PathBuf);
@@ -54,7 +84,7 @@ impl std::fmt::Debug for NativeId {
     }
 }
 
-/// The only requests a future transport may issue. No arbitrary URL or method.
+/// The only requests the transport may issue. No arbitrary URL or method.
 #[derive(Debug)]
 pub enum ReadRequest {
     DaemonVersion,
@@ -285,7 +315,7 @@ impl Budget {
 
     /// Read at most the remaining budget plus one sentinel byte. The sentinel
     /// detects an oversized body without allocating the remainder of it.
-    /// A future transport must also configure an I/O deadline: a blocking
+    /// The socket transport separately configures an I/O deadline: a blocking
     /// reader cannot be interrupted by this synchronous counter alone.
     pub fn read_response<R: Read>(
         &mut self,
@@ -353,6 +383,549 @@ impl Budget {
         Capture::from_completed(self.observation_id, self.counts(), self.exchanges)
             .map_err(|_| LimitError::CaptureAccounting)
     }
+}
+
+fn remaining(
+    started: Instant,
+    limit: Duration,
+    cancelled: &AtomicBool,
+) -> Result<Duration, AcquisitionError> {
+    if cancelled.load(Ordering::Relaxed) {
+        return Err(AcquisitionError::Cancelled);
+    }
+    limit
+        .checked_sub(started.elapsed())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or(AcquisitionError::Deadline)
+}
+
+fn connect(
+    endpoint: &Endpoint,
+    started: Instant,
+    limit: Duration,
+    cancelled: &AtomicBool,
+) -> Result<UnixStream, AcquisitionError> {
+    if !endpoint.path().is_absolute() {
+        return Err(AcquisitionError::Endpoint);
+    }
+    let address = SockAddr::unix(endpoint.path()).map_err(|_| AcquisitionError::Endpoint)?;
+    loop {
+        let timeout = remaining(started, limit, cancelled)?.min(IO_POLL_INTERVAL);
+        let socket =
+            Socket::new(Domain::UNIX, Type::STREAM, None).map_err(|_| AcquisitionError::Io)?;
+        match socket.connect_timeout(&address, timeout) {
+            Ok(()) => {
+                let fd: OwnedFd = socket.into();
+                return Ok(UnixStream::from(fd));
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                ) =>
+            {
+                remaining(started, limit, cancelled)?;
+            }
+            Err(_) => return Err(AcquisitionError::Io),
+        }
+    }
+}
+
+struct Wire<'a> {
+    stream: UnixStream,
+    started: Instant,
+    limit: Duration,
+    cancelled: &'a AtomicBool,
+}
+
+impl Wire<'_> {
+    fn read(&mut self, bytes: &mut [u8]) -> Result<usize, AcquisitionError> {
+        loop {
+            let timeout =
+                remaining(self.started, self.limit, self.cancelled)?.min(IO_POLL_INTERVAL);
+            self.stream
+                .set_read_timeout(Some(timeout))
+                .map_err(|_| AcquisitionError::Io)?;
+            match self.stream.read(bytes) {
+                Ok(count) => return Ok(count),
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::TimedOut
+                            | io::ErrorKind::WouldBlock
+                            | io::ErrorKind::Interrupted
+                    ) => {}
+                Err(_) => return Err(AcquisitionError::Io),
+            }
+        }
+    }
+
+    fn write_all(&mut self, mut bytes: &[u8]) -> Result<(), AcquisitionError> {
+        while !bytes.is_empty() {
+            let timeout =
+                remaining(self.started, self.limit, self.cancelled)?.min(IO_POLL_INTERVAL);
+            self.stream
+                .set_write_timeout(Some(timeout))
+                .map_err(|_| AcquisitionError::Io)?;
+            match self.stream.write(bytes) {
+                Ok(0) => return Err(AcquisitionError::Io),
+                Ok(count) => bytes = &bytes[count..],
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::TimedOut
+                            | io::ErrorKind::WouldBlock
+                            | io::ErrorKind::Interrupted
+                    ) => {}
+                Err(_) => return Err(AcquisitionError::Io),
+            }
+        }
+        Ok(())
+    }
+
+    fn byte(&mut self) -> Result<u8, AcquisitionError> {
+        let mut byte = [0];
+        if self.read(&mut byte)? != 1 {
+            return Err(AcquisitionError::Protocol);
+        }
+        Ok(byte[0])
+    }
+
+    fn line(&mut self, cap: usize) -> Result<Vec<u8>, AcquisitionError> {
+        let mut line = Vec::new();
+        while line.len() < cap {
+            line.push(self.byte()?);
+            if line.ends_with(b"\r\n") {
+                line.truncate(line.len() - 2);
+                return Ok(line);
+            }
+        }
+        Err(AcquisitionError::Protocol)
+    }
+
+    fn exact(&mut self, mut count: usize, out: &mut Vec<u8>) -> Result<(), AcquisitionError> {
+        let mut buffer = [0; 8192];
+        while count > 0 {
+            let amount = count.min(buffer.len());
+            let read = self.read(&mut buffer[..amount])?;
+            if read == 0 {
+                return Err(AcquisitionError::Protocol);
+            }
+            out.extend_from_slice(&buffer[..read]);
+            count -= read;
+        }
+        Ok(())
+    }
+}
+
+fn http_get(
+    endpoint: &Endpoint,
+    path: &str,
+    started: Instant,
+    limit: Duration,
+    cancelled: &AtomicBool,
+    allowance: usize,
+) -> Result<(HttpStatus, Vec<u8>), AcquisitionError> {
+    let mut wire = Wire {
+        stream: connect(endpoint, started, limit, cancelled)?,
+        started,
+        limit,
+        cancelled,
+    };
+    let request = format!(
+        "GET {path} HTTP/1.1\r\nHost: docker\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
+    );
+    wire.write_all(request.as_bytes())?;
+
+    let mut headers = Vec::new();
+    while headers.len() < MAX_HEADER_BYTES {
+        headers.push(wire.byte()?);
+        if headers.ends_with(b"\r\n\r\n") {
+            break;
+        }
+    }
+    if !headers.ends_with(b"\r\n\r\n") {
+        return Err(AcquisitionError::Protocol);
+    }
+    let headers = std::str::from_utf8(&headers).map_err(|_| AcquisitionError::Protocol)?;
+    let mut lines = headers.split("\r\n");
+    let status_line = lines.next().ok_or(AcquisitionError::Protocol)?;
+    let mut status_parts = status_line.split_ascii_whitespace();
+    if !matches!(status_parts.next(), Some("HTTP/1.1" | "HTTP/1.0")) {
+        return Err(AcquisitionError::Protocol);
+    }
+    let code = status_parts
+        .next()
+        .and_then(|code| code.parse::<u16>().ok())
+        .ok_or(AcquisitionError::Protocol)?;
+    let status = HttpStatus::new(code).map_err(|_| AcquisitionError::Protocol)?;
+    let mut content_length = None;
+    let mut chunked = false;
+    for line in lines {
+        if line.is_empty() {
+            continue;
+        }
+        let (name, value) = line.split_once(':').ok_or(AcquisitionError::Protocol)?;
+        let value = value.trim();
+        if name.eq_ignore_ascii_case("content-length") {
+            if content_length.is_some() {
+                return Err(AcquisitionError::Protocol);
+            }
+            content_length = Some(
+                value
+                    .parse::<usize>()
+                    .map_err(|_| AcquisitionError::Protocol)?,
+            );
+        } else if name.eq_ignore_ascii_case("transfer-encoding") {
+            if chunked || !value.eq_ignore_ascii_case("chunked") {
+                return Err(AcquisitionError::Protocol);
+            }
+            chunked = true;
+        } else if name.eq_ignore_ascii_case("content-encoding")
+            && !value.eq_ignore_ascii_case("identity")
+        {
+            return Err(AcquisitionError::Protocol);
+        }
+    }
+    if chunked == content_length.is_some() {
+        return Err(AcquisitionError::Protocol);
+    }
+    let mut body = Vec::new();
+    if chunked {
+        loop {
+            let line = wire.line(64)?;
+            let hex = line
+                .split(|byte| *byte == b';')
+                .next()
+                .ok_or(AcquisitionError::Protocol)?;
+            let hex = std::str::from_utf8(hex).map_err(|_| AcquisitionError::Protocol)?;
+            let size = usize::from_str_radix(hex, 16).map_err(|_| AcquisitionError::Protocol)?;
+            if size == 0 {
+                if !wire.line(MAX_HEADER_BYTES)?.is_empty() {
+                    return Err(AcquisitionError::Protocol);
+                }
+                break;
+            }
+            if size > allowance.saturating_sub(body.len()) {
+                return Err(AcquisitionError::Budget(LimitError::Bytes));
+            }
+            wire.exact(size, &mut body)?;
+            if wire.byte()? != b'\r' || wire.byte()? != b'\n' {
+                return Err(AcquisitionError::Protocol);
+            }
+        }
+    } else if let Some(size) = content_length {
+        if size > allowance {
+            return Err(AcquisitionError::Budget(LimitError::Bytes));
+        }
+        wire.exact(size, &mut body)?;
+    }
+    Ok((status, body))
+}
+
+fn encode_segment(id: &NativeId) -> Result<String, AcquisitionError> {
+    if id.as_str().len() > 1024 {
+        return Err(AcquisitionError::Shape);
+    }
+    let mut encoded = String::new();
+    for byte in id.as_str().bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            use std::fmt::Write as _;
+            write!(&mut encoded, "%{byte:02X}").map_err(|_| AcquisitionError::Shape)?;
+        }
+    }
+    Ok(encoded)
+}
+
+fn request_path(
+    request: &ReadRequest,
+    api: Option<ApiVersion>,
+) -> Result<String, AcquisitionError> {
+    if matches!(request, ReadRequest::DaemonVersion) {
+        return Ok("/version".to_owned());
+    }
+    let api = api.ok_or(AcquisitionError::Version)?;
+    let prefix = format!("/v{}.{}", api.major, api.minor);
+    let path = match request {
+        ReadRequest::DaemonVersion => unreachable!(),
+        ReadRequest::DaemonInfo => "/info".to_owned(),
+        ReadRequest::ListContainers => "/containers/json?all=1".to_owned(),
+        ReadRequest::InspectContainer(id) => format!("/containers/{}/json", encode_segment(id)?),
+        ReadRequest::ListNetworks => "/networks".to_owned(),
+        ReadRequest::InspectNetwork(id) => format!("/networks/{}", encode_segment(id)?),
+        ReadRequest::ListVolumes => "/volumes".to_owned(),
+        ReadRequest::InspectVolume(id) => format!("/volumes/{}", encode_segment(id)?),
+    };
+    Ok(prefix + &path)
+}
+
+fn exchange<'a>(
+    budget: &'a mut Budget,
+    endpoint: &Endpoint,
+    request: ReadRequest,
+    resource: Option<ResourceRef>,
+    api: Option<ApiVersion>,
+    cancelled: &AtomicBool,
+) -> Result<&'a ProtectedValue, AcquisitionError> {
+    let path = request_path(&request, api)?;
+    budget.record_request(request, resource, api)?;
+    let allowance = budget
+        .limits
+        .max_response_bytes
+        .min(budget.limits.max_total_bytes - budget.bytes_read)
+        .min(MAX_JSON_BYTES);
+    let (status, body) = http_get(
+        endpoint,
+        &path,
+        budget.started,
+        budget.limits.max_elapsed,
+        cancelled,
+        allowance,
+    )?;
+    let captured = budget.read_response(status, body.as_slice())?;
+    if status.code() != 200 {
+        return Err(AcquisitionError::Status);
+    }
+    Ok(captured)
+}
+
+fn parse_api(text: &str) -> Option<ApiVersion> {
+    let (major, minor) = text.split_once('.')?;
+    if major.is_empty()
+        || minor.is_empty()
+        || !major.bytes().all(|b| b.is_ascii_digit())
+        || !minor.bytes().all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    Some(ApiVersion::new(
+        NonZeroU16::new(major.parse().ok()?)?,
+        minor.parse().ok()?,
+    ))
+}
+
+fn negotiated_api(body: &[u8]) -> Result<ApiVersion, AcquisitionError> {
+    let version: Value = serde_json::from_slice(body).map_err(|_| AcquisitionError::Version)?;
+    let maximum = version
+        .get("ApiVersion")
+        .and_then(Value::as_str)
+        .and_then(parse_api)
+        .ok_or(AcquisitionError::Version)?;
+    let minimum = match version.get("MinAPIVersion") {
+        Some(value) => Some(
+            value
+                .as_str()
+                .and_then(parse_api)
+                .ok_or(AcquisitionError::Version)?,
+        ),
+        None => None,
+    };
+    let known = ApiVersion::new(
+        NonZeroU16::new(1).expect("one is nonzero"),
+        MAX_KNOWN_API_MINOR,
+    );
+    if maximum.major.get() != 1 {
+        return Err(AcquisitionError::Version);
+    }
+    let selected = maximum.min(known);
+    if selected.minor < 41 || minimum.is_some_and(|minimum| minimum > selected) {
+        return Err(AcquisitionError::Version);
+    }
+    Ok(selected)
+}
+
+fn selected_ids(body: &[u8]) -> Result<Vec<NativeId>, AcquisitionError> {
+    let list: Value = serde_json::from_slice(body).map_err(|_| AcquisitionError::Shape)?;
+    let entries = list.as_array().ok_or(AcquisitionError::Shape)?;
+    if entries.len() > MAX_COLLECTION_ITEMS {
+        return Err(AcquisitionError::Shape);
+    }
+    entries
+        .iter()
+        .map(|entry| {
+            entry
+                .get("Id")
+                .and_then(Value::as_str)
+                .and_then(|id| NativeId::new(id.to_owned()))
+                .ok_or(AcquisitionError::Shape)
+        })
+        .collect()
+}
+
+fn related_ids(body: &[u8]) -> Result<(Vec<NativeId>, Vec<NativeId>), AcquisitionError> {
+    let root: Value = serde_json::from_slice(body).map_err(|_| AcquisitionError::Shape)?;
+    let object = root.as_object().ok_or(AcquisitionError::Shape)?;
+    let mut networks = Vec::new();
+    let mut volumes = Vec::new();
+    if let Some(endpoints) = object
+        .get("NetworkSettings")
+        .and_then(|settings| settings.get("Networks"))
+        .filter(|value| !value.is_null())
+    {
+        let entries = endpoints.as_object().ok_or(AcquisitionError::Shape)?;
+        if entries.len() > MAX_COLLECTION_ITEMS {
+            return Err(AcquisitionError::Shape);
+        }
+        for (name, endpoint) in entries {
+            let id = endpoint
+                .get("NetworkID")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .unwrap_or(name);
+            networks.push(NativeId::new(id.to_owned()).ok_or(AcquisitionError::Shape)?);
+        }
+    }
+    if let Some(mounts) = object.get("Mounts").filter(|value| !value.is_null()) {
+        let entries = mounts.as_array().ok_or(AcquisitionError::Shape)?;
+        if entries.len() > MAX_COLLECTION_ITEMS {
+            return Err(AcquisitionError::Shape);
+        }
+        for mount in entries {
+            if mount.get("Type").and_then(Value::as_str) == Some("volume") {
+                let name = mount
+                    .get("Name")
+                    .and_then(Value::as_str)
+                    .and_then(|name| NativeId::new(name.to_owned()))
+                    .ok_or(AcquisitionError::Shape)?;
+                volumes.push(name);
+            }
+        }
+    }
+    Ok((networks, volumes))
+}
+
+/// Read a bounded inventory from one explicitly supplied Unix socket.
+///
+/// The caller can cancel between I/O polls. Each completed exchange is protected
+/// and tagged with the API version used in its URL. Socket contact is not peer
+/// authentication, and the resulting reads are not an atomic daemon snapshot.
+pub fn acquire(
+    endpoint: &Endpoint,
+    selector: Selector,
+    limits: Limits,
+    cancelled: &AtomicBool,
+) -> Result<Capture, AcquisitionError> {
+    let mut budget = Budget::new(limits)?;
+    let api = negotiated_api(
+        exchange(
+            &mut budget,
+            endpoint,
+            ReadRequest::DaemonVersion,
+            None,
+            None,
+            cancelled,
+        )?
+        .as_bytes(),
+    )?;
+    exchange(
+        &mut budget,
+        endpoint,
+        ReadRequest::DaemonInfo,
+        None,
+        Some(api),
+        cancelled,
+    )?;
+
+    let containers = match selector {
+        Selector::ContainerIds(ids) => {
+            if ids.len() > budget.limits.max_selected_resources {
+                return Err(AcquisitionError::Budget(LimitError::SelectedResources));
+            }
+            ids
+        }
+        Selector::AllContainers => selected_ids(
+            exchange(
+                &mut budget,
+                endpoint,
+                ReadRequest::ListContainers,
+                None,
+                Some(api),
+                cancelled,
+            )?
+            .as_bytes(),
+        )?,
+    };
+    let mut seen = HashSet::new();
+    let containers: Vec<_> = containers
+        .into_iter()
+        .filter(|id| seen.insert(id.clone()))
+        .collect();
+    budget.record_selection(containers.len())?;
+    let mut next_reference = 1_u64;
+    let mut networks = HashSet::new();
+    let mut volumes = HashSet::new();
+    for id in containers {
+        let reference = ResourceRef::new(next_reference);
+        next_reference = next_reference
+            .checked_add(1)
+            .ok_or(AcquisitionError::Shape)?;
+        let body = exchange(
+            &mut budget,
+            endpoint,
+            ReadRequest::InspectContainer(id),
+            Some(reference),
+            Some(api),
+            cancelled,
+        )?;
+        let (related_networks, related_volumes) = related_ids(body.as_bytes())?;
+        let new_networks: HashSet<_> = related_networks
+            .into_iter()
+            .filter(|id| !networks.contains(id))
+            .collect();
+        let new_volumes: HashSet<_> = related_volumes
+            .into_iter()
+            .filter(|id| !volumes.contains(id))
+            .collect();
+        let additional = new_networks
+            .len()
+            .checked_add(new_volumes.len())
+            .ok_or(AcquisitionError::Budget(LimitError::Expansions))?;
+        let projected = budget
+            .expansions
+            .checked_add(additional)
+            .ok_or(AcquisitionError::Budget(LimitError::Expansions))?;
+        if projected > budget.limits.max_expansions {
+            return Err(AcquisitionError::Budget(LimitError::Expansions));
+        }
+        networks.extend(new_networks);
+        volumes.extend(new_volumes);
+    }
+    let mut networks: Vec<_> = networks.into_iter().collect();
+    networks.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+    let mut volumes: Vec<_> = volumes.into_iter().collect();
+    volumes.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+    for id in networks {
+        let reference = ResourceRef::new(next_reference);
+        next_reference = next_reference
+            .checked_add(1)
+            .ok_or(AcquisitionError::Shape)?;
+        exchange(
+            &mut budget,
+            endpoint,
+            ReadRequest::InspectNetwork(id),
+            Some(reference),
+            Some(api),
+            cancelled,
+        )?;
+    }
+    for id in volumes {
+        let reference = ResourceRef::new(next_reference);
+        next_reference = next_reference
+            .checked_add(1)
+            .ok_or(AcquisitionError::Shape)?;
+        exchange(
+            &mut budget,
+            endpoint,
+            ReadRequest::InspectVolume(id),
+            Some(reference),
+            Some(api),
+            cancelled,
+        )?;
+    }
+    remaining(budget.started, budget.limits.max_elapsed, cancelled)?;
+    Ok(budget.into_capture()?.with_explicit_socket())
 }
 
 #[cfg(test)]

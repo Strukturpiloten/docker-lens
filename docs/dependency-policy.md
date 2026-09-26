@@ -1,9 +1,12 @@
 # Dependency and pin policy
 
 The decoder pins `serde_json = 1.0.149` for pure Engine JSON parsing. The
-committed `Cargo.lock` records its dependency graph and registry checksums.
-Renovate's existing Cargo manager owns this package and lockfile; no duplicate
-regex manager or extraction path is needed. `rust-toolchain.toml` pins Rust 1.98.1;
+bounded Unix-socket connector pins `socket2 = 0.6.5` for its safe
+`connect_timeout` operation. The committed `Cargo.lock` records their dependency
+graphs and registry checksums. Renovate's existing Cargo manager owns both
+manifest pins and the lockfile (`enabledManagers` includes `cargo`); the
+custom regex manager only extracts `rust-toolchain.toml`, so there is no
+duplicate manager or new extraction path. `rust-toolchain.toml` pins Rust 1.98.1;
 `Cargo.toml` declares MSRV 1.85.0. Cargo/rustup distribution uses its standard
 toolchain integrity mechanism; no independently verified download checksum is
 claimed here.

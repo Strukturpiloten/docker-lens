@@ -14,3 +14,11 @@ Engine suite. No workflow in this scaffold publishes or deploys software.
 
 The intended client platform is Linux. Mac client compatibility is not
 validated by this scaffold. There is no macOS or Windows runner requirement.
+
+The fake Unix-socket acquisition tests verify request framing, privacy,
+deadlines, cancellation, and budget failures without a Docker daemon. The
+ignored `live_read_only_acquisition_matches_oracle` test is invoked only by the
+isolated native Engine harness. It reads that harness's explicit socket and
+private direct-API oracle files to compare selected container, network, volume,
+version, and mode semantics. A fake-socket pass is not rootful or rootless
+Engine compatibility evidence.

@@ -1,8 +1,8 @@
 //! Native Docker Engine contracts.
 //!
-//! This crate decodes bounded captures and plans inert standalone targets but does
-//! not connect to a daemon or apply a plan. Native conformance evidence is required
-//! before a release can pass.
+//! This crate reads a bounded explicit Unix-socket endpoint, decodes protected
+//! captures, and plans inert standalone targets. It never applies a plan.
+//! Native conformance evidence is required before a release can pass.
 //!
 //! The public contract can be assembled without contacting a daemon:
 //!
