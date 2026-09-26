@@ -1,0 +1,19 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "DockerLens: format and lint",
+      "type": "shell",
+      "command": "./scripts/format-lint.sh --fix",
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "DockerLens: complete check",
+      "type": "shell",
+      "command": "./scripts/check-all.sh --check",
+      "group": "test",
+      "problemMatcher": []
+    }
+  ]
+}

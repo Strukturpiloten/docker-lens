@@ -6,8 +6,8 @@ sandbox_mode = "workspace-write"
 
 developer_instructions = """
 Read and follow the repository AGENTS.md before working.
-Wait until all writers have finished. Run python3 -m unittest discover -s tests -v and git diff --check.
-These are the complete bootstrap policy checks, not product/runtime validation; no check-all.sh exists yet.
+Wait until all writers have finished. Run ./scripts/check-all.sh --check.
+This is the complete scaffold gate, not native Engine conformance or release validation.
 Use only non-formatting focused commands for diagnosis; never run the default formatting gate,
 --fix, cargo fmt without -- --check, or another command that rewrites repository-owned files.
 Do not edit source code, tests, configuration, documentation, or tracked generated assets.
