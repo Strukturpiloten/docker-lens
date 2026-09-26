@@ -28,7 +28,14 @@ class NativeHarnessTests(unittest.TestCase):
             "daemon_dockerd_unavailable": "stage=daemon category=rootless_dockerd_unavailable",
             "daemon_upstream_storage": "stage=daemon category=daemon_storage",
             "daemon_upstream_network": "stage=daemon category=daemon_network",
+            "daemon_unknown_127": "stage=daemon category=unclassified",
         }
+        helpers = ("launcher", "dockerd", "rootlesskit", "slirp4netns", "newuidmap", "newgidmap")
+        for helper in helpers:
+            for suffix in ("marker", "missing_log"):
+                diagnoses[f"daemon_{helper}_{suffix}"] = (
+                    f"stage=daemon category=rootless_{helper}_unavailable"
+                )
         for fault in (
             "volume", "pull", "run", "run_exists_error", "pull_exists_error",
             "preflight_exists_error", "daemon_exit", "daemon_sources_unexpected", "daemon_package_missing",
@@ -37,7 +44,8 @@ class NativeHarnessTests(unittest.TestCase):
             "daemon_guest_dependency", "daemon_guest_unknown",
             "daemon_prior_update_error", "daemon_home_unwritable",
             "daemon_runtime_unwritable", "daemon_dockerd_unavailable", "daemon_upstream_storage",
-            "daemon_upstream_network",
+            "daemon_upstream_network", "daemon_unknown_127",
+            *(f"daemon_{helper}_{suffix}" for helper in helpers for suffix in ("marker", "missing_log")),
             "cleanup_container_remains",
             "cleanup_volume_remains", "cleanup_container_query_error",
             "cleanup_volume_query_error",
@@ -109,7 +117,11 @@ case "$command" in
     elif [[ $* == *State.Running* ]]; then
       [[ $FAKE_NATIVE_FAULT == daemon_* ]] && echo false || echo true
     elif [[ $* == *State.Status* ]]; then
-      echo 'exited|42|false'
+      if [[ $FAKE_NATIVE_FAULT == *_marker || $FAKE_NATIVE_FAULT == *_missing_log || $FAKE_NATIVE_FAULT == daemon_unknown_127 ]]; then
+        echo 'exited|127|false'
+      else
+        echo 'exited|42|false'
+      fi
     else
       echo true
     fi ;;
@@ -164,6 +176,20 @@ case "$command" in
         echo 'error initializing graphdriver: protected-secret'
         echo 'DOCKERLENS_DAEMON_RESULT: dockerd_unavailable'
         echo 'protected-secret' ;;
+      daemon_*_marker)
+        helper=${FAKE_NATIVE_FAULT#daemon_}; helper=${helper%_marker}
+        echo 'DOCKERLENS_APT_STAGE: daemon'
+        echo "DOCKERLENS_DAEMON_RESULT: ${helper}_unavailable"
+        echo 'protected-secret' ;;
+      daemon_*_missing_log)
+        helper=${FAKE_NATIVE_FAULT#daemon_}; helper=${helper%_missing_log}
+        [[ $helper == launcher ]] && helper=/usr/share/docker.io/contrib/dockerd-rootless.sh
+        echo 'DOCKERLENS_APT_STAGE: daemon'
+        echo "sh: 1: $helper: not found"
+        echo 'protected-secret' ;;
+      daemon_unknown_127)
+        echo 'DOCKERLENS_APT_STAGE: daemon'
+        echo 'protected-secret: unexpected failure' ;;
       daemon_upstream_storage)
         echo 'error initializing graphdriver: protected-secret' ;;
       daemon_upstream_network)
@@ -191,7 +217,7 @@ esac
                      "debian11-rootless" if fault in (
                          "daemon_exit", "daemon_home_unwritable", "daemon_runtime_unwritable",
                          "daemon_dockerd_unavailable"
-                     )
+                     ) or fault.endswith(("_marker", "_missing_log")) or fault == "daemon_unknown_127"
                      else "upstream-rootful" if fault.startswith("daemon_upstream_")
                      else "debian11-rootful" if fault.startswith("daemon_")
                      else "upstream-rootful"],
@@ -214,7 +240,8 @@ esac
                     self.assertIn("state=exited|42|false stage=daemon category=rootless_uidmap", result.stderr)
                     self.assertNotIn("protected-secret", result.stderr)
                 elif fault in diagnoses:
-                    self.assertIn(f"state=exited|42|false {diagnoses[fault]}", result.stderr)
+                    code = 127 if fault.endswith(("_marker", "_missing_log")) or fault == "daemon_unknown_127" else 42
+                    self.assertIn(f"state=exited|{code}|false {diagnoses[fault]}", result.stderr)
                     self.assertNotIn("protected-secret", result.stderr)
                 elif fault.startswith("cleanup_"):
                     resource = "container" if "container" in fault else "volume"

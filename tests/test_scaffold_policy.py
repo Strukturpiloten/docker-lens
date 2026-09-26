@@ -61,7 +61,10 @@ class ScaffoldPolicyTests(unittest.TestCase):
         self.assertIn('test -w /home/rootless', native_script)
         self.assertIn('test -w /run/user/1000', native_script)
         self.assertIn('rootless_path=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', native_script)
-        self.assertIn('command -v dockerd', native_script)
+        self.assertIn('test -x /usr/share/docker.io/contrib/dockerd-rootless.sh', native_script)
+        self.assertIn('for helper in dockerd rootlesskit slirp4netns newuidmap newgidmap', native_script)
+        self.assertIn('executable=\\$(command -v $helper) && test -x', native_script)
+        self.assertIn('DOCKERLENS_DAEMON_RESULT: %s_unavailable', native_script)
         self.assertIn('/usr/bin/env PATH=$rootless_path XDG_RUNTIME_DIR=/run/user/1000', native_script)
         self.assertIn('chown -R rootless:rootless /home/rootless/.local/share/docker', native_script)
         for workflow in (ROOT / ".github/workflows").glob("*.yml"):

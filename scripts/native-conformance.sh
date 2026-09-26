@@ -137,6 +137,7 @@ for chunk in iter(lambda: sys.stdin.buffer.read(65536), b""):
     tail.extend(chunk)
     if len(tail) > 65536:
         del tail[:-65536]
+import re
 s = tail.decode("utf-8", "replace").lower()
 stages = {"dockerlens_apt_stage: sources": "sources",
           "dockerlens_apt_stage: update": "update",
@@ -179,8 +180,13 @@ package_checks = (("package_sources_unexpected", ("dockerlens_apt_result: unexpe
                                        "was not found", "has no installation candidate")),
                   ("package_apt_failure", ("dockerlens_apt_result: package_apt_failure",
                                            "dockerlens_apt_result: install-failed")))
-daemon_checks = (("rootless_dockerd_unavailable", ("dockerlens_daemon_result: dockerd_unavailable",)),
-                 ("rootless_home_unwritable", ("dockerlens_daemon_result: home_unwritable",
+rootless_executable_checks = (("rootless_launcher_unavailable", ("dockerlens_daemon_result: launcher_unavailable",)),
+                 ("rootless_dockerd_unavailable", ("dockerlens_daemon_result: dockerd_unavailable",)),
+                 ("rootless_rootlesskit_unavailable", ("dockerlens_daemon_result: rootlesskit_unavailable",)),
+                 ("rootless_slirp4netns_unavailable", ("dockerlens_daemon_result: slirp4netns_unavailable",)),
+                 ("rootless_newuidmap_unavailable", ("dockerlens_daemon_result: newuidmap_unavailable",)),
+                 ("rootless_newgidmap_unavailable", ("dockerlens_daemon_result: newgidmap_unavailable",)))
+daemon_checks = rootless_executable_checks + (("rootless_home_unwritable", ("dockerlens_daemon_result: home_unwritable",
                                                "home needs to be set and writable")),
                  ("rootless_runtime_unwritable", ("dockerlens_daemon_result: runtime_unwritable",
                                                   "xdg_runtime_dir needs to be set and writable")),
@@ -198,7 +204,23 @@ elif stage == "daemon":
     checks = daemon_checks
 else:
     checks = package_checks + daemon_checks
-category = next((name for name, needles in checks if any(item in s for item in needles)), "unclassified")
+explicit = rootless_executable_checks if stage == "daemon" and sys.argv[1] == "debian11-rootless" else ()
+category = next((name for name, needles in explicit if any(item in s for item in needles)), None)
+if category is None and stage == "daemon" and sys.argv[1] == "debian11-rootless":
+    # Recognize only shell/exec missing-executable signatures for the known
+    # launcher and helpers. Do not expose the matching private log line.
+    missing = r": (?:not found|no such file or directory)$"
+    launcher = r"(?:^|: )(?:exec: )?/usr/share/docker\.io/contrib/dockerd-rootless\.sh" + missing
+    if re.search(launcher, s, re.MULTILINE):
+        category = "rootless_launcher_unavailable"
+    else:
+        for helper in ("dockerd", "rootlesskit", "slirp4netns", "newuidmap", "newgidmap"):
+            pattern = r"(?:^|: )(?:exec: )?" + helper + missing
+            if re.search(pattern, s, re.MULTILINE):
+                category = "rootless_" + helper + "_unavailable"
+                break
+if category is None:
+    category = next((name for name, needles in checks if any(item in s for item in needles)), "unclassified")
 print("stage=" + stage + " category=" + category)' "$lane") || diagnosis='stage=unavailable category=unavailable'
   echo "inner daemon startup diagnosis: state=$state $diagnosis" >&2
 }
@@ -307,10 +329,16 @@ elif [[ $lane == debian11-rootless ]]; then
       exit 100
     fi
     rootless_path=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-    if ! su -s /bin/sh rootless -c "PATH=$rootless_path; export PATH; command -v dockerd" >/dev/null 2>&1; then
-      printf "DOCKERLENS_DAEMON_RESULT: dockerd_unavailable\n"
+    if ! su -s /bin/sh rootless -c "PATH=$rootless_path; XDG_RUNTIME_DIR=/run/user/1000; HOME=/home/rootless; export PATH XDG_RUNTIME_DIR HOME; test -x /usr/share/docker.io/contrib/dockerd-rootless.sh" >/dev/null 2>&1; then
+      printf "DOCKERLENS_DAEMON_RESULT: launcher_unavailable\n"
       exit 100
     fi
+    for helper in dockerd rootlesskit slirp4netns newuidmap newgidmap; do
+      if ! su -s /bin/sh rootless -c "PATH=$rootless_path; XDG_RUNTIME_DIR=/run/user/1000; HOME=/home/rootless; export PATH XDG_RUNTIME_DIR HOME; executable=\$(command -v $helper) && test -x \"\$executable\"" >/dev/null 2>&1; then
+        printf "DOCKERLENS_DAEMON_RESULT: %s_unavailable\n" "$helper"
+        exit 100
+      fi
+    done
     exec su -s /bin/sh rootless -c "/usr/bin/env PATH=$rootless_path XDG_RUNTIME_DIR=/run/user/1000 HOME=/home/rootless /usr/share/docker.io/contrib/dockerd-rootless.sh --host=unix:///run/dockerlens/docker.sock --storage-driver=vfs"
   ')
 else
