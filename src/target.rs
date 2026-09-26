@@ -5,7 +5,9 @@
 
 use crate::evidence::ProtectedValue;
 use crate::observation::ResourceRef;
-use crate::version::ValidatedCapabilities;
+use crate::version::{
+    Capability, CapabilityScope, TargetCapabilities, TargetProfile, ValidatedCapabilities,
+};
 use std::collections::{HashMap, HashSet};
 
 /// Explicit desired identity, never an observed or runtime-assigned name.
@@ -186,7 +188,57 @@ pub struct OperationNode {
 #[derive(Debug)]
 pub struct OperationGraph<'a> {
     intent: &'a TargetIntent,
+    context: PlanningContext,
     nodes: Vec<OperationNode>,
+}
+
+/// The validated source of capability claims used for this inert graph.
+/// Offline targets never acquire an observation ID.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PlanningContext {
+    Observed(CapabilityScope),
+    Target(TargetProfile),
+}
+
+mod sealed {
+    pub trait Sealed {}
+    impl Sealed for crate::version::ValidatedCapabilities<'_> {}
+    impl Sealed for crate::version::TargetCapabilities<'_> {}
+}
+
+/// Only validated observed facts or a resolved offline target can be used.
+pub trait PlanningCapabilitySet: sealed::Sealed {
+    fn supports(&self, capability: Capability) -> bool;
+    fn context(&self) -> PlanningContext;
+}
+
+impl PlanningCapabilitySet for ValidatedCapabilities<'_> {
+    fn supports(&self, capability: Capability) -> bool {
+        ValidatedCapabilities::supports(self, capability)
+    }
+    fn context(&self) -> PlanningContext {
+        let facts = self.facts();
+        PlanningContext::Observed(CapabilityScope {
+            observation_id: facts.observation_id,
+            release: facts
+                .release
+                .clone()
+                .expect("validated daemon has a release"),
+            api_version: facts
+                .api_version
+                .expect("validated daemon has an API version"),
+            mode: facts.mode,
+        })
+    }
+}
+
+impl PlanningCapabilitySet for TargetCapabilities<'_> {
+    fn supports(&self, capability: Capability) -> bool {
+        TargetCapabilities::supports(self, capability)
+    }
+    fn context(&self) -> PlanningContext {
+        PlanningContext::Target(self.profile().clone())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -198,7 +250,13 @@ pub enum PlanningError {
 }
 
 impl<'a> OperationGraph<'a> {
-    pub fn new(intent: &'a TargetIntent, nodes: Vec<OperationNode>) -> Result<Self, PlanningError> {
+    /// Validate graph topology and current resource capabilities. Further
+    /// setting-level checks must be added before those settings are renderable.
+    pub fn new(
+        intent: &'a TargetIntent,
+        capabilities: &dyn PlanningCapabilitySet,
+        nodes: Vec<OperationNode>,
+    ) -> Result<Self, PlanningError> {
         let mut references = HashSet::new();
         if nodes.len() != intent.resources().len()
             || !nodes
@@ -257,7 +315,21 @@ impl<'a> OperationGraph<'a> {
         if visited != nodes.len() {
             return Err(PlanningError::Cycle);
         }
-        Ok(Self { intent, nodes })
+        for resource in intent.resources() {
+            let required = match resource {
+                TargetResource::Network { .. } => Capability::BridgeNetwork,
+                TargetResource::Volume { .. } => Capability::NamedVolume,
+                TargetResource::Container(_) => Capability::StandaloneContainer,
+            };
+            if !capabilities.supports(required) {
+                return Err(PlanningError::MissingCapability);
+            }
+        }
+        Ok(Self {
+            intent,
+            context: capabilities.context(),
+            nodes,
+        })
     }
 
     #[must_use]
@@ -269,6 +341,11 @@ impl<'a> OperationGraph<'a> {
     pub fn intent(&self) -> &'a TargetIntent {
         self.intent
     }
+
+    #[must_use]
+    pub fn context(&self) -> &PlanningContext {
+        &self.context
+    }
 }
 
 /// Implementations must prove required capabilities for the requested daemon.
@@ -276,7 +353,7 @@ pub trait Planner {
     fn plan<'a>(
         &self,
         intent: &'a TargetIntent,
-        capabilities: &ValidatedCapabilities<'_>,
+        capabilities: &dyn PlanningCapabilitySet,
     ) -> Result<OperationGraph<'a>, PlanningError>;
 }
 
@@ -314,6 +391,12 @@ pub trait Renderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::version::{
+        ApiVersion, CapabilityEvidenceKey, CapabilityFact, CapabilityScope, CapabilityState,
+        DaemonFacts, DaemonMode, EngineRelease, FactProvenance, ObservationId,
+        TargetCapabilityCatalog, TargetCapabilityFact, TargetCapabilityRecord,
+    };
+    use std::num::NonZeroU16;
 
     #[test]
     fn target_intent_is_explicit_and_sensitive_data_stays_out_of_debug() {
@@ -358,6 +441,34 @@ mod tests {
 
     #[test]
     fn operation_graph_rejects_missing_dependencies_and_cycles() {
+        let mut daemon = DaemonFacts {
+            observation_id: ObservationId::fresh().unwrap(),
+            release: EngineRelease::new("20.10.24".into()),
+            api_version: Some(ApiVersion::new(NonZeroU16::new(1).unwrap(), 41)),
+            minimum_api_version: None,
+            mode: DaemonMode::Rootless,
+            capabilities: vec![],
+        };
+        // Fabricated test facts exercise graph checks; they are not native evidence.
+        let scope = CapabilityScope {
+            observation_id: daemon.observation_id,
+            release: daemon.release.clone().unwrap(),
+            api_version: daemon.api_version.unwrap(),
+            mode: daemon.mode,
+        };
+        for capability in [
+            Capability::BridgeNetwork,
+            Capability::NamedVolume,
+            Capability::StandaloneContainer,
+        ] {
+            daemon.capabilities.push(CapabilityFact {
+                capability,
+                state: CapabilityState::Available,
+                provenance: FactProvenance::NativeConformance,
+                scope: Some(scope.clone()),
+            });
+        }
+        let capabilities = ValidatedCapabilities::new(&daemon).unwrap();
         let intent = TargetIntent::new(vec![
             TargetResource::Network {
                 reference: ResourceRef::new(1),
@@ -386,12 +497,13 @@ mod tests {
         let volume = || node(2, TargetKind::Volume, vec![]);
         let container = || node(3, TargetKind::Container, vec![1, 2]);
         assert!(matches!(
-            OperationGraph::new(&intent, vec![network(), volume()]),
+            OperationGraph::new(&intent, &capabilities, vec![network(), volume()]),
             Err(PlanningError::InvalidDependency)
         ));
         assert!(matches!(
             OperationGraph::new(
                 &intent,
+                &capabilities,
                 vec![
                     node(1, TargetKind::Container, vec![]),
                     volume(),
@@ -403,12 +515,81 @@ mod tests {
         assert!(matches!(
             OperationGraph::new(
                 &intent,
+                &capabilities,
                 vec![node(1, TargetKind::Network, vec![3]), volume(), container()]
             ),
             Err(PlanningError::Cycle)
         ));
-        let graph = OperationGraph::new(&intent, vec![network(), volume(), container()]).unwrap();
+        let graph = OperationGraph::new(
+            &intent,
+            &capabilities,
+            vec![network(), volume(), container()],
+        )
+        .unwrap();
         assert_eq!(graph.nodes().len(), 3);
         assert!(std::ptr::eq(graph.intent(), &intent));
+        assert!(matches!(graph.context(), PlanningContext::Observed(_)));
+        let all_facts = daemon.capabilities.clone();
+        for missing in [
+            Capability::BridgeNetwork,
+            Capability::NamedVolume,
+            Capability::StandaloneContainer,
+        ] {
+            daemon.capabilities = all_facts
+                .iter()
+                .filter(|fact| fact.capability != missing)
+                .cloned()
+                .collect();
+            let incomplete = ValidatedCapabilities::new(&daemon).unwrap();
+            assert!(matches!(
+                OperationGraph::new(&intent, &incomplete, vec![network(), volume(), container()]),
+                Err(PlanningError::MissingCapability)
+            ));
+        }
+    }
+
+    #[test]
+    fn offline_target_context_is_retained_without_live_observation() {
+        let api = ApiVersion::new(NonZeroU16::new(1).unwrap(), 41);
+        let profile = TargetProfile::new(
+            EngineRelease::new("20.10.24".into()).unwrap(),
+            api,
+            DaemonMode::Rootless,
+            CapabilityEvidenceKey::sha256([7; 32]).unwrap(),
+        )
+        .unwrap();
+        // Fabricated test record; production catalog is empty until native review.
+        let catalog = TargetCapabilityCatalog::from_test_records(vec![TargetCapabilityRecord {
+            profile: profile.clone(),
+            capabilities: vec![TargetCapabilityFact {
+                capability: Capability::NamedVolume,
+                state: CapabilityState::Available,
+            }],
+        }])
+        .unwrap();
+        let capabilities = catalog.resolve(&profile).unwrap();
+        assert!(PlanningCapabilitySet::supports(
+            &capabilities,
+            Capability::NamedVolume
+        ));
+        let intent = TargetIntent::new(vec![TargetResource::Volume {
+            reference: ResourceRef::new(1),
+            identity: TargetIdentity::new(b"private-volume".to_vec()).unwrap(),
+        }])
+        .unwrap();
+        let graph = OperationGraph::new(
+            &intent,
+            &capabilities,
+            vec![OperationNode {
+                operation: Operation {
+                    resource: ResourceRef::new(1),
+                    kind: TargetKind::Volume,
+                },
+                depends_on: vec![],
+            }],
+        )
+        .unwrap();
+        assert_eq!(graph.context(), &PlanningContext::Target(profile));
+        assert!(!format!("{graph:?}").contains("private-volume"));
     }
 }

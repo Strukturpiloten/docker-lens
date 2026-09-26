@@ -18,12 +18,23 @@ Compose compatibility and Swarm mode are separate discussion topics.
   selection, expansion, response bytes, total bytes, and elapsed time.
 - Captured bytes and observed values are protected. Findings contain only closed
   codes, opaque local resource references, and closed field categories.
+- Each completed capture exchange binds its closed request, local resource
+  reference where applicable, actual request-URL API version, HTTP status, and
+  protected body. Inspect reads count as expansions and native objects have
+  one-to-one local references within a capture. An unfinished or failed acquisition cannot
+  become a capture.
 - Availability (missing, null, empty, present, redacted) and origin (configured,
   effective, runtime assigned, unknown) are independent. `Config.*` fields do
   not imply an application author wrote those values.
 - Engine release, API version, daemon mode, and capability facts are separate.
   Capability claims are tied to an opaque acquisition identity as well as the
   exact daemon facts; caller-declared provenance is not proof of conformance.
+- An offline target profile uses an exact Engine release, API version, mode and
+  immutable capability-evidence digest. It must match a reviewed catalog entry;
+  the public catalog remains empty until independent native review supplies
+  records. Offline planning does not invent a live observation. The operation
+  graph checks capabilities for the current standalone container, named volume,
+  and bridge network shapes, then retains its planning context.
 - Target intent includes explicit resource identities, a container image, and
   protected environment assignments; other settings await native review.
   Target intent, operation graph, and rendered artifact are inert data. The

@@ -35,7 +35,7 @@ pub enum ObservationIdError {
 }
 
 /// Exact Docker Engine API version; it is independent of the Engine release.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Ord, PartialOrd)]
 pub struct ApiVersion {
     pub major: NonZeroU16,
     pub minor: u16,
@@ -51,7 +51,7 @@ impl ApiVersion {
 
 /// Engine release text is kept separate from API negotiation.
 /// The value is untrusted and therefore intentionally omitted from `Debug`.
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, Eq, Hash, PartialEq)]
 pub struct EngineRelease(String);
 
 impl EngineRelease {
@@ -74,7 +74,7 @@ impl std::fmt::Debug for EngineRelease {
 }
 
 /// Do not infer privilege mode from the client's UID or socket path.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum DaemonMode {
     Rootful,
     Rootless,
@@ -91,6 +91,7 @@ pub enum CapabilityState {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Capability {
+    StandaloneContainer,
     BindMount,
     NamedVolume,
     BridgeNetwork,
@@ -142,6 +143,154 @@ pub enum CapabilityError {
     DuplicateCapability,
     InvalidProvenance,
     ScopeMismatch,
+    UnknownTargetMode,
+    EmptyEvidenceKey,
+    DuplicateProfile,
+    ProfileNotReviewed,
+}
+
+/// SHA-256 of an independently reviewed, immutable native capability record.
+/// A digest alone does not establish that such evidence was actually reviewed.
+#[derive(Clone, Eq, Hash, PartialEq)]
+pub struct CapabilityEvidenceKey([u8; 32]);
+
+impl CapabilityEvidenceKey {
+    pub fn sha256(digest: [u8; 32]) -> Result<Self, CapabilityError> {
+        (digest != [0; 32])
+            .then_some(Self(digest))
+            .ok_or(CapabilityError::EmptyEvidenceKey)
+    }
+}
+
+impl std::fmt::Debug for CapabilityEvidenceKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CapabilityEvidenceKey([opaque sha256])")
+    }
+}
+
+/// Exact, offline target request. It is never a live daemon observation.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct TargetProfile {
+    release: EngineRelease,
+    api_version: ApiVersion,
+    mode: DaemonMode,
+    evidence_key: CapabilityEvidenceKey,
+}
+
+impl TargetProfile {
+    pub fn new(
+        release: EngineRelease,
+        api_version: ApiVersion,
+        mode: DaemonMode,
+        evidence_key: CapabilityEvidenceKey,
+    ) -> Result<Self, CapabilityError> {
+        if mode == DaemonMode::Unknown {
+            return Err(CapabilityError::UnknownTargetMode);
+        }
+        Ok(Self {
+            release,
+            api_version,
+            mode,
+            evidence_key,
+        })
+    }
+
+    #[must_use]
+    pub fn release(&self) -> &EngineRelease {
+        &self.release
+    }
+    #[must_use]
+    pub const fn api_version(&self) -> ApiVersion {
+        self.api_version
+    }
+    #[must_use]
+    pub const fn mode(&self) -> DaemonMode {
+        self.mode
+    }
+    #[must_use]
+    pub fn evidence_key(&self) -> &CapabilityEvidenceKey {
+        &self.evidence_key
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TargetCapabilityFact {
+    pub capability: Capability,
+    pub state: CapabilityState,
+}
+
+/// Internal reviewed-catalog entry. Native conformance will provide real records.
+pub(crate) struct TargetCapabilityRecord {
+    pub profile: TargetProfile,
+    pub capabilities: Vec<TargetCapabilityFact>,
+}
+
+pub struct TargetCapabilityCatalog {
+    records: Vec<TargetCapabilityRecord>,
+}
+
+impl TargetCapabilityCatalog {
+    /// No reviewed native capability records ship with this contract milestone.
+    /// Every nonempty profile therefore fails closed until conformance lands.
+    #[must_use]
+    pub fn reviewed() -> Self {
+        Self {
+            records: Vec::new(),
+        }
+    }
+
+    /// Only crate tests may fabricate records to exercise matching rules.
+    #[cfg(test)]
+    pub(crate) fn from_test_records(
+        records: Vec<TargetCapabilityRecord>,
+    ) -> Result<Self, CapabilityError> {
+        let mut profiles = HashSet::new();
+        for record in &records {
+            if !profiles.insert(&record.profile) {
+                return Err(CapabilityError::DuplicateProfile);
+            }
+            let mut capabilities = HashSet::new();
+            if !record
+                .capabilities
+                .iter()
+                .all(|fact| capabilities.insert(fact.capability))
+            {
+                return Err(CapabilityError::DuplicateCapability);
+            }
+        }
+        Ok(Self { records })
+    }
+
+    pub fn resolve(
+        &self,
+        profile: &TargetProfile,
+    ) -> Result<TargetCapabilities<'_>, CapabilityError> {
+        self.records
+            .iter()
+            .find(|record| &record.profile == profile)
+            .map(|record| TargetCapabilities { record })
+            .ok_or(CapabilityError::ProfileNotReviewed)
+    }
+}
+
+/// Capabilities resolved from an exact reviewed catalog entry, not live facts.
+pub struct TargetCapabilities<'a> {
+    record: &'a TargetCapabilityRecord,
+}
+
+impl TargetCapabilities<'_> {
+    #[must_use]
+    pub fn profile(&self) -> &TargetProfile {
+        &self.record.profile
+    }
+
+    #[must_use]
+    pub fn supports(&self, capability: Capability) -> bool {
+        self.record
+            .capabilities
+            .iter()
+            .any(|fact| fact.capability == capability && fact.state == CapabilityState::Available)
+    }
 }
 
 /// Checks the formal claims before planning; native evidence still needs
@@ -288,6 +437,122 @@ mod tests {
         assert!(matches!(
             ValidatedCapabilities::new(&second),
             Err(CapabilityError::ScopeMismatch)
+        ));
+    }
+
+    #[test]
+    fn offline_target_needs_exact_reviewed_catalog_entry() {
+        let api = ApiVersion::new(NonZeroU16::new(1).unwrap(), 41);
+        let release = EngineRelease::new("20.10.24".into()).unwrap();
+        assert_eq!(
+            CapabilityEvidenceKey::sha256([0; 32]),
+            Err(CapabilityError::EmptyEvidenceKey)
+        );
+        let key = CapabilityEvidenceKey::sha256([1; 32]).unwrap();
+        assert_eq!(
+            TargetProfile::new(release.clone(), api, DaemonMode::Unknown, key.clone()),
+            Err(CapabilityError::UnknownTargetMode)
+        );
+        let profile =
+            TargetProfile::new(release.clone(), api, DaemonMode::Rootless, key.clone()).unwrap();
+        let catalog = TargetCapabilityCatalog::from_test_records(vec![TargetCapabilityRecord {
+            profile: profile.clone(),
+            capabilities: vec![TargetCapabilityFact {
+                capability: Capability::PortPublish,
+                state: CapabilityState::Available,
+            }],
+        }])
+        .unwrap();
+        assert!(
+            catalog
+                .resolve(&profile)
+                .unwrap()
+                .supports(Capability::PortPublish)
+        );
+        assert!(
+            !catalog
+                .resolve(&profile)
+                .unwrap()
+                .supports(Capability::NamedVolume)
+        );
+        let other_mode =
+            TargetProfile::new(release.clone(), api, DaemonMode::Rootful, key.clone()).unwrap();
+        assert!(matches!(
+            catalog.resolve(&other_mode),
+            Err(CapabilityError::ProfileNotReviewed)
+        ));
+        let other_api = TargetProfile::new(
+            release.clone(),
+            ApiVersion::new(NonZeroU16::new(1).unwrap(), 40),
+            DaemonMode::Rootless,
+            key.clone(),
+        )
+        .unwrap();
+        assert!(matches!(
+            catalog.resolve(&other_api),
+            Err(CapabilityError::ProfileNotReviewed)
+        ));
+        let other_release = TargetProfile::new(
+            EngineRelease::new("20.10.25".into()).unwrap(),
+            api,
+            DaemonMode::Rootless,
+            key.clone(),
+        )
+        .unwrap();
+        assert!(matches!(
+            catalog.resolve(&other_release),
+            Err(CapabilityError::ProfileNotReviewed)
+        ));
+        let other_key = TargetProfile::new(
+            release,
+            api,
+            DaemonMode::Rootless,
+            CapabilityEvidenceKey::sha256([2; 32]).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            catalog.resolve(&other_key),
+            Err(CapabilityError::ProfileNotReviewed)
+        ));
+        assert!(matches!(
+            TargetCapabilityCatalog::reviewed().resolve(&profile),
+            Err(CapabilityError::ProfileNotReviewed)
+        ));
+        assert!(!format!("{profile:?}").contains("20.10.24"));
+    }
+
+    #[test]
+    fn catalog_rejects_duplicate_profile_and_capability() {
+        let profile = TargetProfile::new(
+            EngineRelease::new("20.10.24".into()).unwrap(),
+            ApiVersion::new(NonZeroU16::new(1).unwrap(), 41),
+            DaemonMode::Rootful,
+            CapabilityEvidenceKey::sha256([3; 32]).unwrap(),
+        )
+        .unwrap();
+        let record = || TargetCapabilityRecord {
+            profile: profile.clone(),
+            capabilities: vec![],
+        };
+        assert!(matches!(
+            TargetCapabilityCatalog::from_test_records(vec![record(), record()]),
+            Err(CapabilityError::DuplicateProfile)
+        ));
+        assert!(matches!(
+            TargetCapabilityCatalog::from_test_records(vec![TargetCapabilityRecord {
+                profile,
+                capabilities: vec![
+                    TargetCapabilityFact {
+                        capability: Capability::BindMount,
+                        state: CapabilityState::Available
+                    },
+                    TargetCapabilityFact {
+                        capability: Capability::BindMount,
+                        state: CapabilityState::Unavailable
+                    },
+                ],
+            }]),
+            Err(CapabilityError::DuplicateCapability)
         ));
     }
 }
