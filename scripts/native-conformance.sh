@@ -150,6 +150,10 @@ last_stage = next(((index, stages[lines[index].strip()])
 stage = (last_stage[1] if last_stage else "unavailable") if sys.argv[1].startswith("debian11-") else "daemon"
 if last_stage and sys.argv[1].startswith("debian11-"):
     s = "\n".join(lines[last_stage[0] + 1:])
+# Trace arguments are private and are not evidence for a daemon category.
+# Only fixed preflight results and non-trace daemon lines may classify it.
+category_text = "\n".join(line for line in s.splitlines()
+                          if not line.strip().startswith("dockerlens_rootless_trace:"))
 package_checks = (("package_sources_unexpected", ("dockerlens_apt_result: unexpected_sources",)),
                   ("package_version_unavailable", ("dockerlens_apt_result: version-unavailable",)),
                   ("package_post_invoke", ("dockerlens_apt_result: package_post_invoke",)),
@@ -185,8 +189,16 @@ rootless_executable_checks = (("rootless_launcher_unavailable", ("dockerlens_dae
                  ("rootless_rootlesskit_unavailable", ("dockerlens_daemon_result: rootlesskit_unavailable",)),
                  ("rootless_slirp4netns_unavailable", ("dockerlens_daemon_result: slirp4netns_unavailable",)),
                  ("rootless_newuidmap_unavailable", ("dockerlens_daemon_result: newuidmap_unavailable",)),
-                 ("rootless_newgidmap_unavailable", ("dockerlens_daemon_result: newgidmap_unavailable",)))
-daemon_checks = rootless_executable_checks + (("rootless_home_unwritable", ("dockerlens_daemon_result: home_unwritable",
+                 ("rootless_newgidmap_unavailable", ("dockerlens_daemon_result: newgidmap_unavailable",)),
+                 ("rootless_which_unavailable", ("dockerlens_daemon_result: which_unavailable",)),
+                 ("rootless_ip_unavailable", ("dockerlens_daemon_result: ip_unavailable",)),
+                 ("rootless_rm_unavailable", ("dockerlens_daemon_result: rm_unavailable",)),
+                 ("rootless_env_unavailable", ("dockerlens_daemon_result: env_unavailable",)))
+rootless_smoke_checks = tuple(("rootless_" + helper + "_unrunnable",
+                               ("dockerlens_daemon_result: " + helper + "_unrunnable",))
+                              for helper in ("which", "ip", "rm", "env", "dockerd",
+                                             "rootlesskit", "slirp4netns"))
+daemon_checks = rootless_executable_checks + rootless_smoke_checks + (("rootless_home_unwritable", ("dockerlens_daemon_result: home_unwritable",
                                                "home needs to be set and writable")),
                  ("rootless_runtime_unwritable", ("dockerlens_daemon_result: runtime_unwritable",
                                                   "xdg_runtime_dir needs to be set and writable")),
@@ -204,24 +216,38 @@ elif stage == "daemon":
     checks = daemon_checks
 else:
     checks = package_checks + daemon_checks
-explicit = rootless_executable_checks if stage == "daemon" and sys.argv[1] == "debian11-rootless" else ()
-category = next((name for name, needles in explicit if any(item in s for item in needles)), None)
+explicit = rootless_executable_checks + rootless_smoke_checks if stage == "daemon" and sys.argv[1] == "debian11-rootless" else ()
+category = next((name for name, needles in explicit if any(item in category_text for item in needles)), None)
 if category is None and stage == "daemon" and sys.argv[1] == "debian11-rootless":
     # Recognize only shell/exec missing-executable signatures for the known
     # launcher and helpers. Do not expose the matching private log line.
     missing = r": (?:not found|no such file or directory)$"
     launcher = r"(?:^|: )(?:exec: )?/usr/share/docker\.io/contrib/dockerd-rootless\.sh" + missing
-    if re.search(launcher, s, re.MULTILINE):
+    if re.search(launcher, category_text, re.MULTILINE):
         category = "rootless_launcher_unavailable"
     else:
-        for helper in ("dockerd", "rootlesskit", "slirp4netns", "newuidmap", "newgidmap"):
+        for helper in ("dockerd", "rootlesskit", "slirp4netns", "newuidmap", "newgidmap",
+                       "which", "ip", "rm", "env", "/usr/bin/env"):
             pattern = r"(?:^|: )(?:exec: )?" + helper + missing
-            if re.search(pattern, s, re.MULTILINE):
-                category = "rootless_" + helper + "_unavailable"
+            if re.search(pattern, category_text, re.MULTILINE):
+                category = "rootless_" + ("env" if helper == "/usr/bin/env" else helper) + "_unavailable"
                 break
 if category is None:
-    category = next((name for name, needles in checks if any(item in s for item in needles)), "unclassified")
-print("stage=" + stage + " category=" + category)' "$lane") || diagnosis='stage=unavailable category=unavailable'
+    category = next((name for name, needles in checks if any(item in category_text for item in needles)), "unclassified")
+# The private shell trace may contain values. Admit only these fixed command
+# names and the harness-owned marker; never emit source lines or arguments.
+trace = "unavailable"
+if stage == "daemon" and sys.argv[1] == "debian11-rootless":
+    allowed = {"which", "ip", "rm", "env", "dockerd", "rootlesskit", "slirp4netns",
+               "newuidmap", "newgidmap"}
+    for line in lines[last_stage[0] + 1:] if last_stage else lines:
+        line = line.strip()
+        if line == "dockerlens_rootless_stage: preflight_complete":
+            trace = "preflight_complete"
+        match = re.fullmatch(r"dockerlens_rootless_trace:(?:exec )?([^ ]+)(?: .*)?", line)
+        if match and match[1] in allowed:
+            trace = match[1]
+print("stage=" + stage + " category=" + category + " trace=" + trace)' "$lane") || diagnosis='stage=unavailable category=unavailable trace=unavailable'
   echo "inner daemon startup diagnosis: state=$state $diagnosis" >&2
 }
 
@@ -333,13 +359,31 @@ elif [[ $lane == debian11-rootless ]]; then
       printf "DOCKERLENS_DAEMON_RESULT: launcher_unavailable\n"
       exit 100
     fi
-    for helper in dockerd rootlesskit slirp4netns newuidmap newgidmap; do
+    if ! su -s /bin/sh rootless -c "test -x /usr/bin/env" >/dev/null 2>&1; then
+      printf "DOCKERLENS_DAEMON_RESULT: env_unavailable\n"
+      exit 100
+    fi
+    for helper in dockerd rootlesskit slirp4netns newuidmap newgidmap which ip rm; do
       if ! su -s /bin/sh rootless -c "PATH=$rootless_path; XDG_RUNTIME_DIR=/run/user/1000; HOME=/home/rootless; export PATH XDG_RUNTIME_DIR HOME; executable=\$(command -v $helper) && test -x \"\$executable\"" >/dev/null 2>&1; then
         printf "DOCKERLENS_DAEMON_RESULT: %s_unavailable\n" "$helper"
         exit 100
       fi
     done
-    exec su -s /bin/sh rootless -c "/usr/bin/env PATH=$rootless_path XDG_RUNTIME_DIR=/run/user/1000 HOME=/home/rootless /usr/share/docker.io/contrib/dockerd-rootless.sh --host=unix:///run/dockerlens/docker.sock --storage-driver=vfs"
+    # These commands have side-effect-free version or lookup modes. setuid
+    # uidmap helpers have no equivalent dry run, so only existence is checked.
+    for helper in which ip rm env dockerd rootlesskit slirp4netns; do
+      case $helper in
+        which) smoke_arg=sh ;;
+        ip) smoke_arg=-Version ;;
+        *) smoke_arg=--version ;;
+      esac
+      if ! su -s /bin/sh rootless -c "PATH=$rootless_path; XDG_RUNTIME_DIR=/run/user/1000; HOME=/home/rootless; export PATH XDG_RUNTIME_DIR HOME; $helper $smoke_arg" >/dev/null 2>&1; then
+        printf "DOCKERLENS_DAEMON_RESULT: %s_unrunnable\n" "$helper"
+        exit 100
+      fi
+    done
+    printf "DOCKERLENS_ROOTLESS_STAGE: preflight_complete\n"
+    exec su -s /bin/sh rootless -c "/usr/bin/env PATH=$rootless_path XDG_RUNTIME_DIR=/run/user/1000 HOME=/home/rootless PS4=DOCKERLENS_ROOTLESS_TRACE: /bin/sh -x /usr/share/docker.io/contrib/dockerd-rootless.sh --host=unix:///run/dockerlens/docker.sock --storage-driver=vfs"
   ')
 else
   if [[ $expected_mode == rootless ]]; then

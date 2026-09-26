@@ -26,11 +26,14 @@ class NativeHarnessTests(unittest.TestCase):
             "daemon_home_unwritable": "stage=daemon category=rootless_home_unwritable",
             "daemon_runtime_unwritable": "stage=daemon category=rootless_runtime_unwritable",
             "daemon_dockerd_unavailable": "stage=daemon category=rootless_dockerd_unavailable",
+            "daemon_which_unrunnable": "stage=daemon category=rootless_which_unrunnable",
+            "daemon_env_unrunnable": "stage=daemon category=rootless_env_unrunnable",
             "daemon_upstream_storage": "stage=daemon category=daemon_storage",
             "daemon_upstream_network": "stage=daemon category=daemon_network",
             "daemon_unknown_127": "stage=daemon category=unclassified",
         }
-        helpers = ("launcher", "dockerd", "rootlesskit", "slirp4netns", "newuidmap", "newgidmap")
+        helpers = ("launcher", "dockerd", "rootlesskit", "slirp4netns", "newuidmap",
+                   "newgidmap", "which", "ip", "rm", "env")
         for helper in helpers:
             for suffix in ("marker", "missing_log"):
                 diagnoses[f"daemon_{helper}_{suffix}"] = (
@@ -43,8 +46,10 @@ class NativeHarnessTests(unittest.TestCase):
             "daemon_post_invoke", "daemon_pin_missing", "daemon_dpkg",
             "daemon_guest_dependency", "daemon_guest_unknown",
             "daemon_prior_update_error", "daemon_home_unwritable",
-            "daemon_runtime_unwritable", "daemon_dockerd_unavailable", "daemon_upstream_storage",
-            "daemon_upstream_network", "daemon_unknown_127",
+            "daemon_runtime_unwritable", "daemon_dockerd_unavailable",
+            "daemon_which_unrunnable", "daemon_env_unrunnable", "daemon_upstream_storage",
+            "daemon_upstream_network", "daemon_unknown_127", "daemon_trace_which",
+            "daemon_trace_rootlesskit", "daemon_trace_unknown", "daemon_preflight_complete",
             *(f"daemon_{helper}_{suffix}" for helper in helpers for suffix in ("marker", "missing_log")),
             "cleanup_container_remains",
             "cleanup_volume_remains", "cleanup_container_query_error",
@@ -117,7 +122,7 @@ case "$command" in
     elif [[ $* == *State.Running* ]]; then
       [[ $FAKE_NATIVE_FAULT == daemon_* ]] && echo false || echo true
     elif [[ $* == *State.Status* ]]; then
-      if [[ $FAKE_NATIVE_FAULT == *_marker || $FAKE_NATIVE_FAULT == *_missing_log || $FAKE_NATIVE_FAULT == daemon_unknown_127 ]]; then
+      if [[ $FAKE_NATIVE_FAULT == *_marker || $FAKE_NATIVE_FAULT == *_missing_log || $FAKE_NATIVE_FAULT == daemon_unknown_127 || $FAKE_NATIVE_FAULT == daemon_trace_* || $FAKE_NATIVE_FAULT == daemon_preflight_complete ]]; then
         echo 'exited|127|false'
       else
         echo 'exited|42|false'
@@ -176,6 +181,11 @@ case "$command" in
         echo 'error initializing graphdriver: protected-secret'
         echo 'DOCKERLENS_DAEMON_RESULT: dockerd_unavailable'
         echo 'protected-secret' ;;
+      daemon_which_unrunnable|daemon_env_unrunnable)
+        helper=${FAKE_NATIVE_FAULT#daemon_}; helper=${helper%_unrunnable}
+        echo 'DOCKERLENS_APT_STAGE: daemon'
+        echo "DOCKERLENS_DAEMON_RESULT: ${helper}_unrunnable"
+        echo 'protected-secret' ;;
       daemon_*_marker)
         helper=${FAKE_NATIVE_FAULT#daemon_}; helper=${helper%_marker}
         echo 'DOCKERLENS_APT_STAGE: daemon'
@@ -189,6 +199,21 @@ case "$command" in
         echo 'protected-secret' ;;
       daemon_unknown_127)
         echo 'DOCKERLENS_APT_STAGE: daemon'
+        echo 'protected-secret: unexpected failure' ;;
+      daemon_trace_which|daemon_trace_rootlesskit)
+        helper=${FAKE_NATIVE_FAULT#daemon_trace_}
+        echo 'DOCKERLENS_APT_STAGE: daemon'
+        echo 'DOCKERLENS_ROOTLESS_STAGE: preflight_complete'
+        echo "DOCKERLENS_ROOTLESS_TRACE:command -v $helper"
+        echo "DOCKERLENS_ROOTLESS_TRACE:$helper protected-secret error initializing graphdriver"
+        echo 'protected-secret: unexpected failure' ;;
+      daemon_trace_unknown)
+        echo 'DOCKERLENS_APT_STAGE: daemon'
+        echo 'DOCKERLENS_ROOTLESS_TRACE:unrecognized protected-secret'
+        echo 'protected-secret: unexpected failure' ;;
+      daemon_preflight_complete)
+        echo 'DOCKERLENS_APT_STAGE: daemon'
+        echo 'DOCKERLENS_ROOTLESS_STAGE: preflight_complete'
         echo 'protected-secret: unexpected failure' ;;
       daemon_upstream_storage)
         echo 'error initializing graphdriver: protected-secret' ;;
@@ -217,7 +242,10 @@ esac
                      "debian11-rootless" if fault in (
                          "daemon_exit", "daemon_home_unwritable", "daemon_runtime_unwritable",
                          "daemon_dockerd_unavailable"
-                     ) or fault.endswith(("_marker", "_missing_log")) or fault == "daemon_unknown_127"
+                     ) or fault.endswith(("_marker", "_missing_log")) or fault in (
+                         "daemon_unknown_127", "daemon_which_unrunnable", "daemon_env_unrunnable",
+                         "daemon_trace_which", "daemon_trace_rootlesskit", "daemon_trace_unknown",
+                         "daemon_preflight_complete")
                      else "upstream-rootful" if fault.startswith("daemon_upstream_")
                      else "debian11-rootful" if fault.startswith("daemon_")
                      else "upstream-rootful"],
@@ -242,6 +270,15 @@ esac
                 elif fault in diagnoses:
                     code = 127 if fault.endswith(("_marker", "_missing_log")) or fault == "daemon_unknown_127" else 42
                     self.assertIn(f"state=exited|{code}|false {diagnoses[fault]}", result.stderr)
+                    self.assertNotIn("protected-secret", result.stderr)
+                elif fault.startswith("daemon_trace_") or fault == "daemon_preflight_complete":
+                    trace = fault.removeprefix("daemon_trace_") if fault.startswith("daemon_trace_") else "preflight_complete"
+                    if trace == "unknown":
+                        trace = "unavailable"
+                    self.assertIn(
+                        f"state=exited|127|false stage=daemon category=unclassified trace={trace}",
+                        result.stderr,
+                    )
                     self.assertNotIn("protected-secret", result.stderr)
                 elif fault.startswith("cleanup_"):
                     resource = "container" if "container" in fault else "volume"

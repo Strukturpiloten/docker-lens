@@ -66,13 +66,24 @@ storage and checks that its home and runtime directories are writable by the
 rootless user before starting the daemon; failures report only the closed
 `rootless_home_unwritable` or `rootless_runtime_unwritable` category. Its
 launcher receives an explicit path including Debian's `/usr/sbin` location for
-`dockerd`. Before execution, the harness checks that the exact launcher is
-executable and that `dockerd`, `rootlesskit`, `slirp4netns`, `newuidmap`, and
-`newgidmap` resolve to executable files in the rootless user's environment.
-Each missing executable has a fixed `rootless_<name>_unavailable` category;
-the launcher uses `rootless_launcher_unavailable`. Private daemon logs are
-also checked for narrow shell missing-executable signatures for these names.
-Other exit 127 failures remain `unclassified`; no raw log text is printed.
+`dockerd`. Before execution, the harness checks that the exact launcher and
+`/usr/bin/env` are executable and that `dockerd`, `rootlesskit`, `slirp4netns`,
+`newuidmap`, `newgidmap`, `which`, `ip`, and `rm` resolve to executable files in
+the rootless user's environment. It runs bounded, output-suppressed version or
+lookup smoke checks for `which`, `ip`, `rm`, `env`, `dockerd`, `rootlesskit`, and
+`slirp4netns`; the setuid uidmap helpers have no safe dry run. Missing and
+failed smoke checks have fixed `rootless_<name>_unavailable` and
+`rootless_<name>_unrunnable` categories; the launcher uses
+`rootless_launcher_unavailable`. Private daemon logs are also checked for
+narrow shell missing-executable signatures. For this diagnostic run the harness
+invokes the Debian `.sh` launcher through `/bin/sh -x`; this uses its POSIX shell
+entry point with tracing enabled. The trace stays in private logs. The bounded parser emits at
+most the last allowlisted command name or the fixed `preflight_complete`
+marker as `trace`; unknown transitions are `unavailable`. It never prints a
+trace line or command arguments, and trace arguments cannot assign a startup
+category. Other exit 127 failures remain
+`unclassified`; these diagnostics narrow an investigation but do not establish
+rootless compatibility.
 It deletes its exact named container, volume, and temporary files after
 success, failure, or catchable termination. SIGKILL, host failure, or hard
 runner shutdown can prevent cleanup; inspect the printed exact names and
