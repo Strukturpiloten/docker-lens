@@ -482,17 +482,63 @@ else
   [[ $docker_root == /var/lib/docker ]] || { echo 'rootful daemon store is outside owned volume' >&2; exit 1; }
 fi
 timeout 120 "${inner_docker[@]}" pull "$FIXTURE_IMAGE" >/dev/null
+# Docker CLI errors may contain authored values. Drain stderr without retaining
+# more than its final 8 KiB, and emit only a fixed cause category.
+classify_minimal_start_error() {
+  python3 -c 'import sys
+tail = bytearray()
+for chunk in iter(lambda: sys.stdin.buffer.read(4096), b""):
+    tail.extend(chunk)
+    if len(tail) > 8192:
+        del tail[:-8192]
+message = tail.decode("utf-8", "replace").lower()
+checks = (
+    ("uidmap", ("newuidmap", "newgidmap", "uidmap", "gidmap")),
+    ("userns", ("user namespace", "userns", "unshare")),
+    ("cgroup", ("cgroup",)),
+    ("network", ("iptables", "slirp", "network namespace", "failed to create network")),
+    ("mount", ("mount", "pivot_root", "rootfs", "overlay", "fuse")),
+    ("storage", ("no space left", "disk quota", "out of space")),
+    ("executable", ("exec format error", "executable file not found")),
+    ("security", ("seccomp", "apparmor", "selinux")),
+    ("permission", ("permission denied", "operation not permitted")),
+    ("runtime", ("runc", "oci runtime")),
+)
+print(next((category for category, tokens in checks
+            if any(token in message for token in tokens)), "unclassified"))'
+}
+export -f classify_minimal_start_error
 # Distinguish a rootless OCI baseline failure from a feature-rich fixture failure.
 # The inert probe uses the already-pulled image, no network or mounts, and only
 # run-owned inner storage; the outer run-owned volume is removed by cleanup.
 minimal_name="dl-${run_id}-minimal"
-if timeout 45 "${inner_docker[@]}" run --rm --name "$minimal_name" \
+if minimal_start_category=$(timeout --kill-after=1s 44s bash -c \
+  'set -o pipefail; "$@" 2>&1 >/dev/null | classify_minimal_start_error' bash \
+  "${inner_docker[@]}" run --rm --name "$minimal_name" \
   --label "io.dockerlens.native-run=$run_id" --network none --entrypoint /bin/true \
-  "$FIXTURE_IMAGE" >/dev/null 2>&1; then
+  "$FIXTURE_IMAGE"); then
   echo 'DOCKERLENS_NATIVE_PROBE: minimal_start_ok'
 else
-  timeout 15 "${inner_docker[@]}" container rm -f "$minimal_name" >/dev/null 2>&1 || true
-  echo 'DOCKERLENS_NATIVE_PROBE: minimal_start_failed' >&2
+  minimal_start_status=$?
+  if [[ $minimal_start_status == 124 ]]; then
+    minimal_start_category=timeout
+  elif [[ $minimal_start_status == 137 ]]; then
+    minimal_start_category=terminated
+  elif [[ ! $minimal_start_category =~ ^(uidmap|userns|cgroup|network|mount|storage|executable|security|permission|runtime|unclassified)$ ]]; then
+    minimal_start_category=unclassified
+  fi
+  if minimal_owner=$(timeout 10 "${inner_docker[@]}" container inspect \
+    --format '{{index .Config.Labels "io.dockerlens.native-run"}}' "$minimal_name" 2>/dev/null); then
+    if [[ $minimal_owner == "$run_id" ]]; then
+      timeout 15 "${inner_docker[@]}" container rm -f "$minimal_name" >/dev/null 2>&1 || \
+        echo 'DOCKERLENS_NATIVE_PROBE: minimal_cleanup_unverified' >&2
+    else
+      echo 'DOCKERLENS_NATIVE_PROBE: minimal_cleanup_unverified' >&2
+    fi
+  else
+    echo 'DOCKERLENS_NATIVE_PROBE: minimal_cleanup_unverified' >&2
+  fi
+  echo "DOCKERLENS_NATIVE_PROBE: minimal_start_$minimal_start_category" >&2
   exit 1
 fi
 network_id=$(timeout 30 "${inner_docker[@]}" network create --driver bridge "dl-${run_id}-net")
