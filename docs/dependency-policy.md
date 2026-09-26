@@ -1,7 +1,9 @@
 # Dependency and pin policy
 
-The scaffold has no third-party Rust package dependencies. `Cargo.lock` is
-committed for repeatable validation. `rust-toolchain.toml` pins Rust 1.98.1;
+The decoder pins `serde_json = 1.0.149` for pure Engine JSON parsing. The
+committed `Cargo.lock` records its dependency graph and registry checksums.
+Renovate's existing Cargo manager owns this package and lockfile; no duplicate
+regex manager or extraction path is needed. `rust-toolchain.toml` pins Rust 1.98.1;
 `Cargo.toml` declares MSRV 1.85.0. Cargo/rustup distribution uses its standard
 toolchain integrity mechanism; no independently verified download checksum is
 claimed here.

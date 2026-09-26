@@ -4,10 +4,11 @@ This file applies to the entire DockerLens repository.
 
 ## Product scope
 
-DockerLens contains a contract scaffold, not native Docker Engine behavior. Read this file,
+DockerLens contains native contracts and a pure Docker Engine capture decoder, not a live
+transport or proven Engine compatibility. Read this file,
 `README.md`, `docs/architecture.md`, `docs/verification.md`, and relevant decisions before editing.
-No acquisition transport, native decoder, planner, renderer, or Engine conformance is implemented.
-Do not claim compatibility from scaffold checks. Product libraries must not depend on BoxFerry.
+No acquisition transport, target planner/renderer, or Engine conformance is implemented yet.
+Pure decoder tests do not establish native compatibility. Product libraries must not depend on BoxFerry.
 
 ## Workspace scope and standing GitHub authorization
 
