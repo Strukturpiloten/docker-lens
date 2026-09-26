@@ -1,8 +1,8 @@
 //! Native Docker Engine contracts.
 //!
-//! This crate decodes bounded captures but does not connect to a daemon, plan a
-//! target from decoded values, or render an artifact. Native conformance evidence
-//! is required before a release can pass.
+//! This crate decodes bounded captures and plans inert standalone targets but does
+//! not connect to a daemon or apply a plan. Native conformance evidence is required
+//! before a release can pass.
 //!
 //! The public contract can be assembled without contacting a daemon:
 //!
@@ -19,12 +19,19 @@
 //!     max_response_bytes: 1024, max_total_bytes: 4096,
 //!     max_elapsed: Duration::from_secs(5),
 //! }.validate().unwrap();
-//! let intent = TargetIntent::new(vec![TargetResource::Container(ContainerIntent {
+//! let intent = TargetIntent::new(vec![TargetResource::Container(Box::new(ContainerIntent {
 //!     reference: ResourceRef::new(1),
 //!     identity: TargetIdentity::new(b"example".to_vec()).unwrap(),
 //!     image: ImageReference::new(b"example:1".to_vec()).unwrap(),
 //!     environment: vec![],
-//! })]).unwrap();
+//!     ports: vec![],
+//!     mounts: vec![],
+//!     network: None,
+//!     entrypoint: None,
+//!     command: None,
+//!     healthcheck: None,
+//!     restart: None,
+//! }))]).unwrap();
 //! assert!(endpoint.path().is_absolute());
 //! assert!(matches!(selector, Selector::ContainerIds(_)));
 //! assert_eq!(limits.max_requests, 8);

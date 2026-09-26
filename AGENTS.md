@@ -7,7 +7,8 @@ This file applies to the entire DockerLens repository.
 DockerLens contains native contracts and a pure Docker Engine capture decoder, not a live
 transport or proven Engine compatibility. Read this file,
 `README.md`, `docs/architecture.md`, `docs/verification.md`, and relevant decisions before editing.
-No acquisition transport, target planner/renderer, or Engine conformance is implemented yet.
+No acquisition transport or Engine conformance is implemented yet. Standalone target
+planning and rendering produce inert data only; they do not contact a daemon.
 Pure decoder tests do not establish native compatibility. Product libraries must not depend on BoxFerry.
 
 ## Workspace scope and standing GitHub authorization

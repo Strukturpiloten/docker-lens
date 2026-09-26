@@ -25,20 +25,21 @@
    Runtime port bindings and network addresses have runtime-assigned origin.
    Findings contain no raw values. A caller-provided capture is not proof of
    daemon contact.
-4. Target intent currently carries explicit resource identities, a container
-   image, and protected environment assignments. A future planner accepts
+4. Target intent carries explicit identities and typed standalone container
+   settings: image, ports, mounts, bridge network, environment, exec-form
+   command and health check, and restart policy. The planner accepts
    either validated observed-daemon capabilities or a distinct offline target
    profile. The offline profile names an exact Engine release, API version,
    daemon mode, and SHA-256 key of reviewed capability evidence; it must match
    an entry in the reviewed catalog. The public catalog is empty until native
    conformance supplies reviewed records, so callers cannot admit arbitrary
    positive capabilities. The operation graph retains the chosen context and
-   checks the current resource requirements: standalone containers, named
-   volumes, and bridge networks. A network target currently means a bridge
-   network; other network modes await explicit native review. Offline targets
-   never receive a fabricated observation ID. Future setting-level checks
-   and a renderer produce inert bytes. DockerLens never
-   applies those operations or writes the artifact.
+   checks standalone containers, named volumes, bridge networks, and each
+   requested setting. Other network modes await explicit native review.
+   Offline targets never receive a fabricated observation ID. The renderer
+   emits inert Engine API request descriptions; it never contacts a daemon,
+   applies an operation, or writes the artifact. API versions below 1.41 are
+   rejected conservatively pending independent native evidence.
 
 `src/acquisition.rs` owns request and resource budgets; `src/decoder.rs` owns
 pure native JSON decoding; `src/evidence.rs` owns
