@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   scaffold:
-    name: Complete scaffold gate
+    name: Complete offline gate
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -20,3 +20,44 @@ jobs:
           persist-credentials: false
       - name: Validate scaffold
         run: ./scripts/check-all.sh --check
+
+  native-conformance:
+    name: Native Engine ${{ matrix.lane }}
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [debian11-rootful, debian11-rootless, upstream-rootful, upstream-rootless]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Run isolated native lane
+        run: ./scripts/native-conformance.sh "${{ matrix.lane }}"
+
+  check-gate:
+    name: Complete gate (PR offline, main native)
+    if: always()
+    needs: [scaffold, native-conformance]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Fail on skipped, cancelled, or failed validation
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+          SCAFFOLD_RESULT: ${{ needs.scaffold.result }}
+          NATIVE_RESULT: ${{ needs.native-conformance.result }}
+        run: |
+          test "$SCAFFOLD_RESULT" = success
+          if [[ "$EVENT_NAME" == pull_request ]]; then
+            test "$NATIVE_RESULT" = skipped
+            echo 'PR validation is offline-only; native Engine evidence is not claimed'
+          elif [[ "$EVENT_NAME" == push && "$EVENT_REF" == refs/heads/main ]]; then
+            test "$NATIVE_RESULT" = success
+          else
+            echo 'unexpected validation event; native evidence is required' >&2
+            exit 1
+          fi

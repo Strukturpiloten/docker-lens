@@ -10,6 +10,21 @@
       "depNameTemplate": "rust-lang/rust",
       "datasourceTemplate": "github-tags",
       "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^scripts\\/native-conformance\\.sh$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>docker) depName=(?<depName>[^\\s]+)\\s+[A-Z_]+_IMAGE='[^']+:(?<currentValue>[^@']+)@(?<currentDigest>sha256:[a-f0-9]{64})'"
+      ]
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Review native Engine image and fixture updates together with conformance evidence",
+      "matchFileNames": ["scripts/native-conformance.sh"],
+      "groupName": "DockerLens native conformance images",
+      "automerge": false
     }
   ]
 }

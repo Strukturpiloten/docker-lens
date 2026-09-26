@@ -51,7 +51,8 @@ Compose compatibility and Swarm mode are separate discussion topics.
   Target intent, operation graph, and rendered artifact are inert data. The
   crate has no executor, deployment API, or file writer.
 
-No native conformance has been established yet. The release validation workflow
-contains a deliberately failing native gate until a separately reviewed native
-suite replaces it. See [architecture](docs/architecture.md) and
+Native conformance has separate Debian 11 and upstream rootful/rootless
+test lanes. Passing hosted evidence for live #10 acquisition and #12 target
+request conformance is required before any compatibility claim. See
+[architecture](docs/architecture.md) and
 [verification](docs/verification.md).
