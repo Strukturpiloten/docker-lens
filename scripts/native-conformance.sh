@@ -14,6 +14,7 @@ DEBIAN_IMAGE='docker.io/library/debian:11.11-slim@sha256:e5b6442dd2e9684cf5e87d8
 FIXTURE_IMAGE='docker.io/library/busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e'
 # Debian 11 distribution revision, distinct from upstream Engine 28.5.1.
 DEBIAN_DOCKER_PACKAGE='20.10.5+dfsg1-1+deb11u4'
+DEBIAN_CA_CERTIFICATES_PACKAGE='20250419~deb12u1~deb11u1'
 DEBIAN_ROOTLESSKIT_PACKAGE='0.14.2-1+b3'
 DEBIAN_SLIRP4NETNS_PACKAGE='1.0.1-2'
 DEBIAN_UIDMAP_PACKAGE='1:4.8.1-1+deb11u1'
@@ -178,7 +179,11 @@ package_checks = (("package_sources_unexpected", ("dockerlens_apt_result: unexpe
                                        "was not found", "has no installation candidate")),
                   ("package_apt_failure", ("dockerlens_apt_result: package_apt_failure",
                                            "dockerlens_apt_result: install-failed")))
-daemon_checks = (("daemon_storage", ("error initializing graphdriver",
+daemon_checks = (("rootless_home_unwritable", ("dockerlens_daemon_result: home_unwritable",
+                                               "home needs to be set and writable")),
+                 ("rootless_runtime_unwritable", ("dockerlens_daemon_result: runtime_unwritable",
+                                                  "xdg_runtime_dir needs to be set and writable")),
+                 ("daemon_storage", ("error initializing graphdriver",
                                      "failed to mount overlay", "storage driver")),
                  ("rootless_uidmap", ("uid_map", "newuidmap", "newgidmap")),
                  ("daemon_permission", ("operation not permitted", "permission denied")),
@@ -245,7 +250,7 @@ if [[ $lane == debian11-rootful ]]; then
     printf "DOCKERLENS_APT_STAGE: update\n"
     apt-get update -qq
     printf "DOCKERLENS_APT_STAGE: install\n"
-    for spec in "docker.io=$DEBIAN_DOCKER_PACKAGE"; do
+    for spec in "docker.io=$DEBIAN_DOCKER_PACKAGE" "ca-certificates=$DEBIAN_CA_CERTIFICATES_PACKAGE"; do
       package=${spec%%=*}; pinned=${spec#*=}
       if ! apt-cache madison "$package" | awk -F "|" -v pin="$pinned" '\''
         { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); if ($2 == pin) found = 1 }
@@ -254,7 +259,8 @@ if [[ $lane == debian11-rootful ]]; then
         exit 100
       fi
     done
-    sh /run/dockerlens/native-apt-install.sh "docker.io=$DEBIAN_DOCKER_PACKAGE"
+    sh /run/dockerlens/native-apt-install.sh \
+      "docker.io=$DEBIAN_DOCKER_PACKAGE" "ca-certificates=$DEBIAN_CA_CERTIFICATES_PACKAGE"
     printf "DOCKERLENS_APT_STAGE: daemon\n"
     exec dockerd --host=unix:///run/dockerlens/docker.sock --storage-driver=vfs
   ')
@@ -266,7 +272,8 @@ elif [[ $lane == debian11-rootless ]]; then
     printf "DOCKERLENS_APT_STAGE: update\n"
     apt-get update -qq
     printf "DOCKERLENS_APT_STAGE: install\n"
-    for spec in "docker.io=$DEBIAN_DOCKER_PACKAGE" "rootlesskit=$DEBIAN_ROOTLESSKIT_PACKAGE" \
+    for spec in "docker.io=$DEBIAN_DOCKER_PACKAGE" "ca-certificates=$DEBIAN_CA_CERTIFICATES_PACKAGE" \
+      "rootlesskit=$DEBIAN_ROOTLESSKIT_PACKAGE" \
       "slirp4netns=$DEBIAN_SLIRP4NETNS_PACKAGE" "uidmap=$DEBIAN_UIDMAP_PACKAGE" \
       "fuse-overlayfs=$DEBIAN_FUSE_OVERLAYFS_PACKAGE"; do
       package=${spec%%=*}; pinned=${spec#*=}
@@ -278,16 +285,26 @@ elif [[ $lane == debian11-rootless ]]; then
       fi
     done
     sh /run/dockerlens/native-apt-install.sh \
-      "docker.io=$DEBIAN_DOCKER_PACKAGE" "rootlesskit=$DEBIAN_ROOTLESSKIT_PACKAGE" \
+      "docker.io=$DEBIAN_DOCKER_PACKAGE" "ca-certificates=$DEBIAN_CA_CERTIFICATES_PACKAGE" \
+      "rootlesskit=$DEBIAN_ROOTLESSKIT_PACKAGE" \
       "slirp4netns=$DEBIAN_SLIRP4NETNS_PACKAGE" "uidmap=$DEBIAN_UIDMAP_PACKAGE" \
       "fuse-overlayfs=$DEBIAN_FUSE_OVERLAYFS_PACKAGE"
     useradd --create-home --uid 1000 --shell /bin/sh rootless
+    install -d -m 0700 -o rootless -g rootless /home/rootless
     grep -q "^rootless:" /etc/subuid || printf "rootless:100000:65536\n" >> /etc/subuid
     grep -q "^rootless:" /etc/subgid || printf "rootless:100000:65536\n" >> /etc/subgid
     install -d -m 0700 -o rootless -g rootless /run/user/1000
     install -d -m 0700 -o rootless -g rootless /home/rootless/.local/share/docker
     chown -R rootless:rootless /home/rootless/.local/share/docker
     printf "DOCKERLENS_APT_STAGE: daemon\n"
+    if ! su -s /bin/sh rootless -c "test -w /home/rootless" >/dev/null 2>&1; then
+      printf "DOCKERLENS_DAEMON_RESULT: home_unwritable\n"
+      exit 100
+    fi
+    if ! su -s /bin/sh rootless -c "test -w /run/user/1000" >/dev/null 2>&1; then
+      printf "DOCKERLENS_DAEMON_RESULT: runtime_unwritable\n"
+      exit 100
+    fi
     exec su -s /bin/sh rootless -c "/usr/bin/env XDG_RUNTIME_DIR=/run/user/1000 HOME=/home/rootless /usr/share/docker.io/contrib/dockerd-rootless.sh --host=unix:///run/dockerlens/docker.sock --storage-driver=vfs"
   ')
 else
@@ -307,6 +324,7 @@ timeout 180 "${podman_cmd[@]}" pull "$image" >/dev/null
 timeout 120 "${podman_cmd[@]}" run --pull=never -d --name "$container" --label "io.dockerlens.native-run=$run_id" \
   --privileged --pids-limit=512 --memory=4g --cpus=2 \
   --env DOCKER_TLS_CERTDIR= --env "DEBIAN_DOCKER_PACKAGE=$DEBIAN_DOCKER_PACKAGE" \
+  --env "DEBIAN_CA_CERTIFICATES_PACKAGE=$DEBIAN_CA_CERTIFICATES_PACKAGE" \
   --env "DEBIAN_ROOTLESSKIT_PACKAGE=$DEBIAN_ROOTLESSKIT_PACKAGE" \
   --env "DEBIAN_SLIRP4NETNS_PACKAGE=$DEBIAN_SLIRP4NETNS_PACKAGE" \
   --env "DEBIAN_UIDMAP_PACKAGE=$DEBIAN_UIDMAP_PACKAGE" \
@@ -355,7 +373,7 @@ server_version=$(json_key "$run_dir/version.json" Version)
 }
 api_get "/v$api_version/info" "$run_dir/info.json"
 if [[ $lane == debian11-* ]]; then
-  packages=("docker.io:$DEBIAN_DOCKER_PACKAGE")
+  packages=("docker.io:$DEBIAN_DOCKER_PACKAGE" "ca-certificates:$DEBIAN_CA_CERTIFICATES_PACKAGE")
   if [[ $expected_mode == rootless ]]; then
     packages+=("rootlesskit:$DEBIAN_ROOTLESSKIT_PACKAGE" "slirp4netns:$DEBIAN_SLIRP4NETNS_PACKAGE" "uidmap:$DEBIAN_UIDMAP_PACKAGE" "fuse-overlayfs:$DEBIAN_FUSE_OVERLAYFS_PACKAGE")
   fi

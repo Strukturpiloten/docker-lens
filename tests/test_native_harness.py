@@ -23,6 +23,8 @@ class NativeHarnessTests(unittest.TestCase):
             "daemon_guest_dependency": "stage=install category=package_dependency",
             "daemon_guest_unknown": "stage=install category=package_apt_failure",
             "daemon_prior_update_error": "stage=install category=package_apt_failure",
+            "daemon_home_unwritable": "stage=daemon category=rootless_home_unwritable",
+            "daemon_runtime_unwritable": "stage=daemon category=rootless_runtime_unwritable",
             "daemon_upstream_storage": "stage=daemon category=daemon_storage",
             "daemon_upstream_network": "stage=daemon category=daemon_network",
         }
@@ -32,7 +34,8 @@ class NativeHarnessTests(unittest.TestCase):
             "daemon_signature", "daemon_time", "daemon_dependency",
             "daemon_post_invoke", "daemon_pin_missing", "daemon_dpkg",
             "daemon_guest_dependency", "daemon_guest_unknown",
-            "daemon_prior_update_error", "daemon_upstream_storage",
+            "daemon_prior_update_error", "daemon_home_unwritable",
+            "daemon_runtime_unwritable", "daemon_upstream_storage",
             "daemon_upstream_network",
             "cleanup_container_remains",
             "cleanup_volume_remains", "cleanup_container_query_error",
@@ -146,6 +149,15 @@ case "$command" in
         echo 'NO_PUBKEY protected-secret'
         echo 'DOCKERLENS_APT_STAGE: install'
         echo 'DOCKERLENS_APT_RESULT: install-failed' ;;
+      daemon_home_unwritable)
+        echo 'DOCKERLENS_APT_STAGE: daemon'
+        echo 'error initializing graphdriver: protected-secret'
+        echo 'DOCKERLENS_DAEMON_RESULT: home_unwritable'
+        echo 'protected-secret' ;;
+      daemon_runtime_unwritable)
+        echo 'DOCKERLENS_APT_STAGE: daemon'
+        echo 'DOCKERLENS_DAEMON_RESULT: runtime_unwritable'
+        echo 'protected-secret' ;;
       daemon_upstream_storage)
         echo 'error initializing graphdriver: protected-secret' ;;
       daemon_upstream_network)
@@ -170,7 +182,9 @@ esac
                 )
                 result = subprocess.run(
                     ["bash", str(ROOT / "scripts/native-conformance.sh"),
-                     "debian11-rootless" if fault == "daemon_exit"
+                     "debian11-rootless" if fault in (
+                         "daemon_exit", "daemon_home_unwritable", "daemon_runtime_unwritable"
+                     )
                      else "upstream-rootful" if fault.startswith("daemon_upstream_")
                      else "debian11-rootful" if fault.startswith("daemon_")
                      else "upstream-rootful"],
