@@ -1,8 +1,8 @@
 //! Native Docker Engine contracts.
 //!
-//! This bootstrap crate does not connect to a daemon, decode an Engine response,
-//! plan a target, or render an artifact. Those implementations require separate
-//! native conformance evidence before a release can pass.
+//! This crate decodes bounded captures but does not connect to a daemon, plan a
+//! target from decoded values, or render an artifact. Native conformance evidence
+//! is required before a release can pass.
 //!
 //! The public contract can be assembled without contacting a daemon:
 //!
@@ -34,6 +34,7 @@
 #![forbid(unsafe_code)]
 
 pub mod acquisition;
+pub mod decoder;
 pub mod evidence;
 pub mod finding;
 pub mod observation;

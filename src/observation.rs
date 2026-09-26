@@ -24,6 +24,13 @@ pub enum FieldPath {
     Mount { index: usize },
     Port { index: usize },
     Network { index: usize },
+    NetworkMode,
+    Volume { index: usize },
+    Healthcheck,
+    RestartPolicy,
+    EngineRelease,
+    ApiVersion,
+    DaemonMode,
     Other,
 }
 
@@ -115,6 +122,49 @@ impl std::fmt::Debug for ObservedField {
         f.debug_struct("ObservedField")
             .field("resource", &self.resource)
             .field("field", &self.field)
+            .field("availability", &self.availability)
+            .field("origin", &self.origin)
+            .field("value", &self.value.as_ref().map(|_| "[redacted]"))
+            .finish()
+    }
+}
+
+/// One decoded native field. Values can contain paths, credentials or command
+/// arguments; only callers explicitly accessing `value` can inspect them.
+pub struct Observed<T> {
+    pub availability: Availability,
+    pub origin: Origin,
+    value: Option<T>,
+}
+
+impl<T> Observed<T> {
+    #[must_use]
+    pub const fn unavailable(availability: Availability, origin: Origin) -> Self {
+        Self {
+            availability,
+            origin,
+            value: None,
+        }
+    }
+
+    #[must_use]
+    pub fn present(value: T, availability: Availability, origin: Origin) -> Self {
+        Self {
+            availability,
+            origin,
+            value: Some(value),
+        }
+    }
+
+    #[must_use]
+    pub fn value(&self) -> Option<&T> {
+        self.value.as_ref()
+    }
+}
+
+impl<T> std::fmt::Debug for Observed<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Observed")
             .field("availability", &self.availability)
             .field("origin", &self.origin)
             .field("value", &self.value.as_ref().map(|_| "[redacted]"))

@@ -1,9 +1,9 @@
 # DockerLens
 
 DockerLens is a native Docker Engine library under construction. The current
-crate establishes privacy, observation, acquisition-limit, and inert target
-contracts. It does **not** connect to Docker, decode Engine responses, render
-output, validate an Engine version, or execute a target.
+crate establishes privacy, observation, acquisition-limit, pure Engine JSON
+decoding, and inert target contracts. It does **not** connect to Docker, render
+output, establish native compatibility, or execute a target.
 
 The planned native work is tracked in [DockerLens #3](https://github.com/Strukturpiloten/docker-lens/issues/3).
 BoxFerry integration is a separate stream in

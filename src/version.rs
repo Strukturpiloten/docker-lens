@@ -98,6 +98,11 @@ pub enum Capability {
     HostNetwork,
     PortPublish,
     UserNamespace,
+    EnvironmentAssignment,
+    Command,
+    Entrypoint,
+    Healthcheck,
+    RestartPolicy,
 }
 
 /// The exact daemon scope of a capability claim.
