@@ -131,21 +131,34 @@ done
 printf '%s:%s\n' "$count" "$effective""#,
     ]);
     command.stderr(Stdio::null());
-    let output = command.output().expect("isolated dockerd UID probe");
-    assert!(output.status.success(), "dockerd UID probe failed");
-    let result = std::str::from_utf8(&output.stdout).expect("numeric dockerd UID probe");
-    let (count, effective) = result
-        .trim()
-        .split_once(':')
-        .expect("dockerd UID probe shape");
-    assert!(count == "1", "expected exactly one inner dockerd");
-    assert!(
-        !effective.is_empty() && effective.bytes().all(|byte| byte.is_ascii_digit()),
-        "dockerd effective UID is not numeric"
-    );
-    effective
-        .parse()
-        .expect("bounded numeric dockerd effective UID")
+    let output = command.output().unwrap_or_else(|_| {
+        eprintln!("DOCKERLENS_NATIVE_CHECK: target_uid_probe_failed");
+        panic!("isolated dockerd UID probe failed");
+    });
+    if !output.status.success() {
+        eprintln!("DOCKERLENS_NATIVE_CHECK: target_uid_probe_failed");
+        panic!("dockerd UID probe failed");
+    }
+    let result = std::str::from_utf8(&output.stdout).unwrap_or_else(|_| {
+        eprintln!("DOCKERLENS_NATIVE_CHECK: target_uid_shape");
+        panic!("dockerd UID probe was not UTF-8");
+    });
+    let (count, effective) = result.trim().split_once(':').unwrap_or_else(|| {
+        eprintln!("DOCKERLENS_NATIVE_CHECK: target_uid_shape");
+        panic!("dockerd UID probe shape");
+    });
+    if count != "1" {
+        eprintln!("DOCKERLENS_NATIVE_CHECK: target_uid_count");
+        panic!("expected exactly one inner dockerd");
+    }
+    if effective.is_empty() || !effective.bytes().all(|byte| byte.is_ascii_digit()) {
+        eprintln!("DOCKERLENS_NATIVE_CHECK: target_uid_shape");
+        panic!("dockerd effective UID is not numeric");
+    }
+    effective.parse().unwrap_or_else(|_| {
+        eprintln!("DOCKERLENS_NATIVE_CHECK: target_uid_shape");
+        panic!("bounded numeric dockerd effective UID");
+    })
 }
 
 fn assert_all_interface_binding(container: &Value, key: &str, host_port: &str) {
@@ -255,9 +268,15 @@ fn live_target_render_matches_engine() {
     eprintln!("DOCKERLENS_NATIVE_CHECK: target_daemon_uid");
     let effective_uid = dockerd_effective_uid();
     if observed_rootless {
-        assert!(effective_uid != 0, "rootless dockerd must be unprivileged");
+        if effective_uid == 0 {
+            eprintln!("DOCKERLENS_NATIVE_CHECK: target_rootless_uid_zero");
+            panic!("rootless dockerd must be unprivileged");
+        }
     } else {
-        assert!(effective_uid == 0, "rootful dockerd must run as root");
+        if effective_uid != 0 {
+            eprintln!("DOCKERLENS_NATIVE_CHECK: target_rootful_uid_nonzero");
+            panic!("rootful dockerd must run as root");
+        }
     }
     let lane_mode = required("NATIVE_DAEMON_MODE");
     assert!(

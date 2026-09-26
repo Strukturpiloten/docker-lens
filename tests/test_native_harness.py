@@ -392,6 +392,7 @@ esac
             ("zero", False),
             ("runfail", False),
             ("acquirefail", False),
+            ("uidfail", False),
             ("listfail", False),
         ):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
@@ -422,6 +423,12 @@ elif [[ $FAKE_NATIVE_TEST_MODE == acquirefail ]]; then
   echo 'DOCKERLENS_NATIVE_ERROR: protected-secret' >&2
   echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
   exit 8
+elif [[ $FAKE_NATIVE_TEST_MODE == uidfail ]]; then
+  echo 'protected process details' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: target_uid_count' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: target_uid_private' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 9
 else
   echo 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;'
 fi
@@ -448,6 +455,9 @@ fi
                     self.assertIn("DOCKERLENS_NATIVE_CHECK: acquire_socket", result.stderr)
                     self.assertIn("DOCKERLENS_NATIVE_ERROR: shape", result.stderr)
                     self.assertNotIn("protected-secret", result.stderr)
+                elif mode == "uidfail":
+                    self.assertIn("DOCKERLENS_NATIVE_CHECK: target_uid_count", result.stderr)
+                    self.assertNotIn("target_uid_private", result.stderr)
                 elif mode == "listfail":
                     self.assertIn("fixture::live_check (exit 23)", result.stderr)
 
