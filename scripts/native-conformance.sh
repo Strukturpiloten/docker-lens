@@ -482,6 +482,19 @@ else
   [[ $docker_root == /var/lib/docker ]] || { echo 'rootful daemon store is outside owned volume' >&2; exit 1; }
 fi
 timeout 120 "${inner_docker[@]}" pull "$FIXTURE_IMAGE" >/dev/null
+# Distinguish a rootless OCI baseline failure from a feature-rich fixture failure.
+# The inert probe uses the already-pulled image, no network or mounts, and only
+# run-owned inner storage; the outer run-owned volume is removed by cleanup.
+minimal_name="dl-${run_id}-minimal"
+if timeout 45 "${inner_docker[@]}" run --rm --name "$minimal_name" \
+  --label "io.dockerlens.native-run=$run_id" --network none --entrypoint /bin/true \
+  "$FIXTURE_IMAGE" >/dev/null 2>&1; then
+  echo 'DOCKERLENS_NATIVE_PROBE: minimal_start_ok'
+else
+  timeout 15 "${inner_docker[@]}" container rm -f "$minimal_name" >/dev/null 2>&1 || true
+  echo 'DOCKERLENS_NATIVE_PROBE: minimal_start_failed' >&2
+  exit 1
+fi
 network_id=$(timeout 30 "${inner_docker[@]}" network create --driver bridge "dl-${run_id}-net")
 volume_name="dl-${run_id}-vol"
 timeout 30 "${inner_docker[@]}" volume create "$volume_name" >/dev/null
