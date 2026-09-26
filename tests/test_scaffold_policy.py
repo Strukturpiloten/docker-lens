@@ -44,6 +44,36 @@ class ScaffoldPolicyTests(unittest.TestCase):
         self.assertIn("python3 -m unittest discover", complete)
         self.assertIn("exit 1", native)
 
+    def test_manual_native_dispatch_is_trusted_exact_head_and_validation_only(self) -> None:
+        workflow = (ROOT / ".github/workflows/native-validation.yml").read_text()
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertIn("draft is allowed", workflow)
+        self.assertNotIn("pull_request:", workflow)
+        self.assertNotIn("pull_request_target:", workflow)
+        self.assertNotIn("push:", workflow)
+        self.assertIn("pull-requests: read", workflow)
+        self.assertIn("persist-credentials: false", workflow)
+        self.assertEqual(workflow.count("ref: ${{ inputs.expected_sha }}"), 2)
+        self.assertEqual(workflow.count("python3 scripts/native-dispatch-admission.py"), 3)
+        self.assertIn("if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'", workflow)
+        native_job = workflow.split("  native-conformance:\n", 1)[1].split("  native-gate:\n", 1)[0]
+        trusted_checkout = native_job.index("ref: main")
+        actor_check = native_job.index("run: python3 scripts/native-dispatch-admission.py")
+        candidate_checkout = native_job.index("ref: ${{ inputs.expected_sha }}")
+        native_execution = native_job.index("./scripts/native-conformance.sh")
+        self.assertLess(trusted_checkout, actor_check)
+        self.assertLess(actor_check, candidate_checkout)
+        self.assertLess(candidate_checkout, native_execution)
+        self.assertEqual(native_job.count("GITHUB_TOKEN: ${{ github.token }}"), 1)
+        self.assertIn("needs: [admission, candidate, native-conformance]", workflow)
+        self.assertIn('test "$ADMISSION_RESULT" = success', workflow)
+        self.assertIn('test "$CANDIDATE_RESULT" = success', workflow)
+        self.assertIn('test "$NATIVE_RESULT" = success', workflow)
+        self.assertIn("[debian11-rootful, debian11-rootless, upstream-rootful, upstream-rootless]", workflow)
+        self.assertNotIn("cargo publish", workflow)
+        self.assertNotIn("gh release", workflow)
+        self.assertIn("A draft PR stays unmergeable during validation", (ROOT / "docs/verification.md").read_text())
+
 
 if __name__ == "__main__":
     unittest.main()

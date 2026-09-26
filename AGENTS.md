@@ -100,6 +100,13 @@ The release validation workflow must also pass native Engine conformance for the
 its native script deliberately fails until the separately reviewed suite is implemented. Never
 silently skip a required check or claim native compatibility from scaffold tests.
 
+The separate, validation-only native dispatcher is installed before the native suite. It runs
+only by reviewed manual dispatch from trusted `main` for an open same-repository PR's exact
+head SHA, including a draft PR. Both the original and rerun actors need current write-level
+permission. Each native lane rechecks admission from trusted `main` before executing candidate
+code; the aggregate rechecks again. The dispatcher does not make a draft mergeable, replace the
+release gate, publish, or prove native compatibility until real lanes pass.
+
 ## Shared workflow and dependency changes
 
 Before changing shared task definitions, identify all consumers in the six authorized workspace
