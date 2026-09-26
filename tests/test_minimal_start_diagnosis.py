@@ -139,6 +139,71 @@ esac
         self.assertIn("none_start_unclassified", result.stderr)
         self.assertNotIn(secret, result.stdout + result.stderr)
 
+    def test_fixed_oci_symptoms_are_distinct_and_private(self) -> None:
+        symptoms = (
+            ("error waiting for final child pid from pipe: EOF", "final_pid_pipe_eof"),
+            ("error waiting for final child pid from pipe: unexpected end of file", "final_pid_pipe_eof"),
+            ("error waiting for final child pid from pipe: connection reset by peer", "final_pid_pipe_reset"),
+            ("error waiting for final child pid from pipe: broken pipe", "final_pid_pipe_other"),
+            ("unable to spawn stage-1: resource temporarily unavailable", "stage1_eagain"),
+            ("failed to spawn stage-2: EAGAIN", "stage2_eagain"),
+            (
+                "unable to spawn stage-2: resource temporarily unavailable; "
+                "error waiting for final child pid from pipe: EOF",
+                "stage2_eagain",
+            ),
+            ("unable to spawn stage-2: operation not permitted", "stage2_permission"),
+            ("unable to spawn stage-2: invalid argument", "stage2_invalid_argument"),
+            ("unable to spawn stage-1: unexpected runtime failure", "stage1_other"),
+            (
+                "unable to spawn stage-1: operation not permitted; unrelated EAGAIN",
+                "stage1_permission",
+            ),
+            (
+                "unable to spawn stage-2: invalid argument\nunrelated EAGAIN",
+                "stage2_invalid_argument",
+            ),
+            (
+                "unable to spawn stage-1: unexpected failure; unrelated EAGAIN",
+                "stage1_other",
+            ),
+            (
+                "unable to spawn stage-1: permission denied\n"
+                "failed to spawn stage-2: EAGAIN",
+                "stage1_permission",
+            ),
+            (
+                "failed to spawn stage-2: EAGAIN; unable to spawn stage-1: permission denied",
+                "stage2_eagain",
+            ),
+            ("runc: resource temporarily unavailable", "resource_unavailable"),
+            ("runc: too many open files", "file_descriptors"),
+        )
+        secret = "synthetic-private-value-never-print"
+        for detail, category in symptoms:
+            with self.subTest(category=category, detail=detail):
+                result, created, removed, _ = self.run_probe(
+                    f"OCI runtime create failed: {detail} {secret}"
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(created, ["none", "bridge"])
+                self.assertEqual(removed, ["none", "bridge"])
+                self.assertIn(f"none_start_{category}", result.stderr)
+                self.assertIn("bridge_start_ok", result.stderr)
+                self.assertNotIn(secret, result.stdout + result.stderr)
+
+    def test_state_error_reports_fixed_oci_symptom_after_generic_cli_error(self) -> None:
+        secret = "private-state-detail-never-print"
+        result, _, removed, _ = self.run_probe(
+            "OCI runtime create failed: runc private-cli-detail",
+            state_error=f"error waiting for final child pid from pipe: EOF {secret}",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(removed, ["none", "bridge"])
+        self.assertIn("none_start_final_pid_pipe_eof", result.stderr)
+        self.assertIn("none_state_error_final_pid_pipe_eof", result.stderr)
+        self.assertNotIn("private", result.stdout + result.stderr)
+
     def test_timeout_and_unknown_fail_closed(self) -> None:
         for exit_code, category in ((124, "timeout"), (125, "unclassified")):
             with self.subTest(exit_code=exit_code):

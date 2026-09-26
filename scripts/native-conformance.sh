@@ -497,19 +497,49 @@ timeout 120 "${inner_docker[@]}" pull "$FIXTURE_IMAGE" >/dev/null
 # Docker CLI errors may contain authored values. Drain stderr without retaining
 # more than its final 8 KiB, and emit only a fixed cause category.
 classify_probe_error() {
-  python3 -c 'import sys
+  python3 -c 'import re
+import sys
 tail = bytearray()
 for chunk in iter(lambda: sys.stdin.buffer.read(4096), b""):
     tail.extend(chunk)
     if len(tail) > 8192:
         del tail[:-8192]
 message = tail.decode("utf-8", "replace").lower()
+stage_match = re.search(
+    r"(?:unable|failed) to spawn stage-([12])(?:[ \t]*:[ \t]*([^;\r\n]*))?",
+    message,
+)
+stage = stage_match.group(1) if stage_match else None
+stage_detail = (stage_match.group(2) or "") if stage_match else ""
+if stage is not None:
+    if "resource temporarily unavailable" in stage_detail or re.search(r"\beagain\b", stage_detail):
+        print("stage" + stage + "_eagain")
+        sys.exit(0)
+    elif "operation not permitted" in stage_detail or "permission denied" in stage_detail:
+        print("stage" + stage + "_permission")
+        sys.exit(0)
+    elif "invalid argument" in stage_detail:
+        print("stage" + stage + "_invalid_argument")
+        sys.exit(0)
+if "final child pid from pipe" in message:
+    if "eof" in message or "unexpected end of file" in message:
+        print("final_pid_pipe_eof")
+    elif "connection reset by peer" in message:
+        print("final_pid_pipe_reset")
+    else:
+        print("final_pid_pipe_other")
+    sys.exit(0)
+if stage is not None:
+    print("stage" + stage + "_other")
+    sys.exit(0)
 checks = (
     ("init_pipe_eof", ("init pipe eof", "init-pipe eof", "init-p: eof",
                        "failed to read init pid file", "read init-p: connection reset")),
     ("runtime_state_missing", ("state.json: no such file", "runtime state does not exist",
                                "failed to get container state")),
     ("invalid_argument", ("invalid argument",)),
+    ("resource_unavailable", ("resource temporarily unavailable", "eagain")),
+    ("file_descriptors", ("too many open files", "emfile", "enfile")),
     ("uidmap", ("newuidmap", "newgidmap", "uidmap", "gidmap")),
     ("userns", ("user namespace", "userns", "unshare")),
     ("cgroup", ("cgroup",)),
@@ -525,13 +555,14 @@ print(next((category for category, tokens in checks
             if any(token in message for token in tokens)), "unclassified"))'
 }
 export -f classify_probe_error
+probe_known_categories='^(final_pid_pipe_eof|final_pid_pipe_reset|final_pid_pipe_other|stage[12]_(eagain|permission|invalid_argument|other)|resource_unavailable|file_descriptors|init_pipe_eof|runtime_state_missing|invalid_argument|uidmap|userns|cgroup|network|mount|storage|executable|security|permission|oci|unclassified)$'
 probe_failure_category() {
   local status=$1 category=$2
   if [[ $status == 124 ]]; then
     printf timeout
   elif [[ $status == 137 ]]; then
     printf terminated
-  elif [[ $category =~ ^(init_pipe_eof|runtime_state_missing|invalid_argument|uidmap|userns|cgroup|network|mount|storage|executable|security|permission|oci|unclassified)$ ]]; then
+  elif [[ $category =~ $probe_known_categories ]]; then
     printf '%s' "$category"
   else
     printf unclassified
@@ -587,7 +618,7 @@ run_inert_probe() {
       'set -o pipefail; "$@" 2>/dev/null | classify_probe_error' bash \
       "${inner_docker[@]}" container inspect --format '{{.State.Error}}' "$name") || \
       state_error_category=unavailable
-    [[ $state_error_category =~ ^(init_pipe_eof|runtime_state_missing|invalid_argument|uidmap|userns|cgroup|network|mount|storage|executable|security|permission|oci|unclassified)$ ]] || \
+    [[ $state_error_category =~ $probe_known_categories ]] || \
       state_error_category=unavailable
   fi
   if [[ $category == oci || $category == unclassified || $category == wait_failed ]]; then
