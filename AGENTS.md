@@ -69,9 +69,10 @@ checkout and must not perform those writes.
 
 Model defaults belong in [`.codex/config.toml`](.codex/config.toml); task-specific models and
 reasoning belong in [`.codex/agents/`](.codex/agents/). The primary manager always uses
-`gpt-6-astra` with `xhigh` reasoning. Implementation, specification research, and independent review
+`gpt-6-sol` with `xhigh` reasoning. Implementation, specification research, and independent review
 use `gpt-6-sol` with `high` reasoning; check-only verification uses `gpt-6-luna` with `high`
-reasoning. Use Luna for bounded read-only exploration and Sol for difficult failure diagnosis.
+reasoning. Use Luna for bounded read-only exploration and Sol for difficult failure diagnosis;
+reserve Astra at `xhigh` for particularly difficult architectural questions.
 These model settings do not expand the workspace scope or grant additional permissions.
 
 - Delegate bounded tasks when independent work can usefully proceed in parallel. Define the shared
