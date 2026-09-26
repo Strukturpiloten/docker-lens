@@ -11,9 +11,30 @@ SCRIPT = ROOT / "scripts/native-evidence.py"
 SHA = "a" * 40
 IMAGE = ("ghcr.io/strukturpiloten/docker-29-rootful:v29.8.1@sha256:"
          + "b" * 64)
+SHAPES = {
+    "StandaloneContainer": ["StandaloneCreate"],
+    "NamedVolume": ["NamedVolumeCreate", "NamedVolumeMountReadWrite", "NamedVolumeMountReadOnly"],
+    "BridgeNetwork": ["BridgeNetworkCreate", "BridgeNetworkAttach"],
+    "PortPublish": ["FixedTcpPort", "FixedUdpPort"],
+    "BindMount": ["BindMountReadWrite", "BindMountReadOnly"],
+    "EnvironmentAssignment": ["EnvironmentValue", "EnvironmentEmptyValue"],
+    "Command": ["ExecCommand"],
+    "Entrypoint": ["ExecEntrypoint"],
+    "Healthcheck": ["ExecHealthcheck"],
+    "RestartPolicy": ["RestartNo", "RestartAlways", "RestartUnlessStopped",
+                      "RestartOnFailureUnlimited", "RestartOnFailureLimited"],
+}
 
 
 class NativeEvidenceTests(unittest.TestCase):
+    def test_reviewed_record_schema_names_exact_native_shapes(self) -> None:
+        schema = json.loads((ROOT / "docs/native-evidence.schema.json").read_text(encoding="utf-8"))
+        reviewed = schema["properties"]["capabilities"]["items"]["properties"]
+        names = set(reviewed["name"]["enum"])
+        shape_names = set(reviewed["admitted_shapes"]["items"]["enum"])
+        self.assertTrue(set(SHAPES).issubset(names))
+        self.assertEqual(shape_names, {shape for values in SHAPES.values() for shape in values})
+
     def test_acquisition_cap_matches_manifest_calculation(self) -> None:
         acquisition = (ROOT / "src/acquisition.rs").read_text(encoding="utf-8")
         evidence = SCRIPT.read_text(encoding="utf-8")
@@ -22,15 +43,17 @@ class NativeEvidenceTests(unittest.TestCase):
 
     def run_emit(self, version: dict, image: str = IMAGE, sha: str = SHA,
                  lane: str = "upstream-rootful", mode: str = "rootful",
-                 package: str = "") -> tuple[subprocess.CompletedProcess[str], Path]:
+                 package: str = "", shapes: dict | None = None) -> tuple[subprocess.CompletedProcess[str], Path]:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
         version_path = root / "version.json"
+        shapes_path = root / "shapes.json"
         destination = root / "out" / f"{lane}.json"
         version_path.write_text(json.dumps(version), encoding="utf-8")
+        shapes_path.write_text(json.dumps(SHAPES if shapes is None else shapes), encoding="utf-8")
         result = subprocess.run(
-            ["python3", str(SCRIPT), str(version_path), str(destination),
+            ["python3", str(SCRIPT), str(version_path), str(shapes_path), str(destination),
              lane, image, mode, package, sha],
             capture_output=True, text=True, check=False,
         )
@@ -52,6 +75,7 @@ class NativeEvidenceTests(unittest.TestCase):
         self.assertEqual(evidence["runtime_components"], {"containerd": "2.3.5", "runc": "1.5.1"})
         self.assertEqual(len(evidence["capability_outcome"]), 10)
         self.assertEqual(set(evidence["capability_outcome"].values()), {"available"})
+        self.assertEqual(evidence["admitted_shapes"], SHAPES)
         self.assertNotIn("protected-secret", path.read_text(encoding="utf-8"))
 
     def test_rejects_unreviewed_identity_and_unacquirable_api(self) -> None:
@@ -91,6 +115,24 @@ class NativeEvidenceTests(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(path.exists())
+
+    def test_missing_or_extra_shape_never_creates_positive_manifest(self) -> None:
+        version = {"Version": "29.8.1", "ApiVersion": "1.56", "MinAPIVersion": "1.44"}
+        for capability, shape in (("PortPublish", "FixedUdpPort"),
+                                  ("NamedVolume", "NamedVolumeMountReadOnly"),
+                                  ("RestartPolicy", "RestartOnFailureUnlimited")):
+            partial = json.loads(json.dumps(SHAPES))
+            partial[capability].remove(shape)
+            with self.subTest(capability=capability, shape=shape):
+                result, path = self.run_emit(version, shapes=partial)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(path.exists())
+        private = json.loads(json.dumps(SHAPES))
+        private["PortPublish"].append("protected-secret")
+        result, path = self.run_emit(version, shapes=private)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(path.exists())
+        self.assertNotIn("protected-secret", result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

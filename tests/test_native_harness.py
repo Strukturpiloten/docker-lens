@@ -1,6 +1,7 @@
 """Fault injection for exact resource cleanup and ignored native test selection."""
 
 import os
+import stat
 import subprocess
 import tempfile
 import unittest
@@ -10,6 +11,28 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class NativeHarnessTests(unittest.TestCase):
+    def test_synthetic_bind_fixture_is_writable_but_parent_stays_private(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
+        fixture = source.split(
+            "# A random directory, container, and volume belong to exactly this lane.", 1
+        )[1].split("\nwatchdog_pid=", 1)[0]
+        with tempfile.TemporaryDirectory() as temporary:
+            env = os.environ.copy()
+            env["TMPDIR"] = temporary
+            result = subprocess.run(
+                ["bash", "-c", "set -euo pipefail\numask 077\n" + fixture
+                 + "\nprintf '%s\\n' \"$run_dir\""],
+                env=env, capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            run_dir = Path(result.stdout.strip())
+            bind = run_dir / "socket/native-bind"
+            self.assertEqual(stat.S_IMODE(run_dir.stat().st_mode), 0o700)
+            self.assertEqual(stat.S_IMODE((run_dir / "socket").stat().st_mode), 0o777)
+            self.assertEqual(stat.S_IMODE(bind.stat().st_mode), 0o777)
+            self.assertEqual(stat.S_IMODE((bind / "canary").stat().st_mode), 0o644)
+            self.assertEqual(stat.S_IMODE((bind / "index.html").stat().st_mode), 0o644)
+
     def test_runtime_package_versions_are_allowlisted(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         version_reader = "native_package_version() {" + source.split(
@@ -349,6 +372,7 @@ esac
             ("acquirefail", False),
             ("uidfail", False),
             ("phasefail", False),
+            ("shapefail", False),
             ("startfail", False),
             ("listfail", False),
         ):
@@ -392,6 +416,12 @@ elif [[ $FAKE_NATIVE_TEST_MODE == phasefail ]]; then
   echo 'DOCKERLENS_NATIVE_CHECK: target_traffic_private' >&2
   echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
   exit 10
+elif [[ $FAKE_NATIVE_TEST_MODE == shapefail ]]; then
+  echo 'protected native shape detail' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: target_shape_volume_ro' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: target_shape_private' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 12
 elif [[ $FAKE_NATIVE_TEST_MODE == startfail ]]; then
   echo 'protected daemon start detail' >&2
   echo 'DOCKERLENS_NATIVE_CHECK: target_start_cgroup' >&2
@@ -430,11 +460,60 @@ fi
                 elif mode == "phasefail":
                     self.assertIn("DOCKERLENS_NATIVE_CHECK: target_traffic_probe", result.stderr)
                     self.assertNotIn("target_traffic_private", result.stderr)
+                elif mode == "shapefail":
+                    self.assertIn("DOCKERLENS_NATIVE_CHECK: target_shape_volume_ro", result.stderr)
+                    self.assertNotIn("target_shape_private", result.stderr)
                 elif mode == "startfail":
                     self.assertIn("DOCKERLENS_NATIVE_CHECK: target_start_cgroup", result.stderr)
                     self.assertNotIn("target_start_private", result.stderr)
                 elif mode == "listfail":
                     self.assertIn("fixture::live_check (exit 23)", result.stderr)
+
+    def test_native_target_uses_private_library_test_by_exact_name(self) -> None:
+        for listed, expected_success in ((0, False), (1, True), (2, False)):
+            with self.subTest(listed=listed), tempfile.TemporaryDirectory() as directory:
+                bin_dir = Path(directory)
+                self._tool(
+                    bin_dir,
+                    "cargo",
+                    """#!/usr/bin/env bash
+set -eu
+printf '%s\\n' "$*" >> "$FAKE_NATIVE_INVOCATIONS"
+if [[ $* == *--list* ]]; then
+  for ((i=0; i<FAKE_NATIVE_LISTED; i++)); do
+    echo 'native_target_tests::live_target_render_matches_engine: test'
+  done
+else
+  echo 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;'
+fi
+""",
+                )
+                invocation = bin_dir / "invocations"
+                env = os.environ.copy()
+                env.update(PATH=f"{bin_dir}:{env['PATH']}",
+                           FAKE_NATIVE_INVOCATIONS=str(invocation),
+                           FAKE_NATIVE_LISTED=str(listed))
+                result = subprocess.run(
+                    [str(ROOT / "scripts/run-exact-native-test.sh"),
+                     "native_target", "live_target_render_matches_engine"],
+                    env=env, capture_output=True, text=True, timeout=15, check=False,
+                )
+                self.assertEqual(result.returncode == 0, expected_success)
+                calls = invocation.read_text().splitlines()
+                self.assertEqual(len(calls), 2 if expected_success else 1)
+                self.assertTrue(all("--lib" in call and "--test" not in call for call in calls))
+                if expected_success:
+                    self.assertIn(
+                        "--ignored --exact native_target_tests::live_target_render_matches_engine",
+                        calls[1],
+                    )
+
+        invalid = subprocess.run(
+            [str(ROOT / "scripts/run-exact-native-test.sh"),
+             "native-target", "live_target_render_matches_engine"],
+            capture_output=True, text=True, timeout=15, check=False,
+        )
+        self.assertEqual(invalid.returncode, 2)
 
     @staticmethod
     def _tool(directory: Path, name: str, content: str) -> None:

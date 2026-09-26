@@ -1,0 +1,164 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DockerLens reviewed native capability record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "lane",
+    "candidate_sha",
+    "run_url",
+    "native_manifest_artifact_name",
+    "native_manifest_sha256",
+    "identity",
+    "capabilities"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "lane": {
+      "enum": ["debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless"]
+    },
+    "candidate_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "run_url": {
+      "type": "string",
+      "pattern": "^https://github\\.com/Strukturpiloten/docker-lens/actions/runs/[1-9][0-9]*/attempts/[1-9][0-9]*$"
+    },
+    "native_manifest_artifact_name": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9._-]+$"
+    },
+    "native_manifest_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "build",
+        "engine_release",
+        "advertised_api",
+        "acquisition_api",
+        "rendering_api",
+        "mode"
+      ],
+      "properties": {
+        "build": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind"],
+              "properties": { "kind": { "const": "upstream" } }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "distribution", "package_name", "package_revision"],
+              "properties": {
+                "kind": { "const": "debian-package" },
+                "distribution": { "const": "debian11" },
+                "package_name": { "const": "docker.io" },
+                "package_revision": { "const": "20.10.5+dfsg1-1+deb11u2" }
+              }
+            }
+          ]
+        },
+        "engine_release": { "type": "string", "minLength": 1 },
+        "advertised_api": { "$ref": "#/$defs/api_version" },
+        "acquisition_api": { "$ref": "#/$defs/api_version" },
+        "rendering_api": { "$ref": "#/$defs/api_version" },
+        "mode": { "enum": ["rootful", "rootless"] }
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "state", "admitted_shapes"],
+        "properties": {
+          "name": {
+            "enum": [
+              "StandaloneContainer", "BindMount", "NamedVolume", "BridgeNetwork",
+              "HostNetwork", "PortPublish", "UserNamespace", "EnvironmentAssignment",
+              "Command", "Entrypoint", "Healthcheck", "RestartPolicy"
+            ]
+          },
+          "state": { "enum": ["available", "unavailable", "unknown"] },
+          "admitted_shapes": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "enum": [
+                "StandaloneCreate", "NamedVolumeCreate", "NamedVolumeMountReadWrite",
+                "NamedVolumeMountReadOnly", "BridgeNetworkCreate", "BridgeNetworkAttach",
+                "FixedTcpPort", "FixedUdpPort", "BindMountReadWrite", "BindMountReadOnly",
+                "EnvironmentValue", "EnvironmentEmptyValue", "ExecCommand", "ExecEntrypoint",
+                "ExecHealthcheck", "RestartNo", "RestartAlways", "RestartUnlessStopped",
+                "RestartOnFailureUnlimited", "RestartOnFailureLimited"
+              ]
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "api_version": { "type": "string", "pattern": "^[1-9][0-9]*\\.[0-9]+$" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "lane": { "enum": ["debian11-rootful", "debian11-rootless"] } } },
+      "then": {
+        "properties": {
+          "identity": {
+            "properties": {
+              "build": { "properties": { "kind": { "const": "debian-package" } } },
+              "engine_release": { "const": "20.10.5+dfsg1" },
+              "advertised_api": { "const": "1.41" },
+              "acquisition_api": { "const": "1.41" },
+              "rendering_api": { "const": "1.41" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "lane": { "enum": ["upstream-rootful", "upstream-rootless"] } } },
+      "then": {
+        "properties": {
+          "identity": {
+            "properties": {
+              "build": { "properties": { "kind": { "const": "upstream" } } },
+              "engine_release": { "const": "29.8.1" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "lane": { "enum": ["debian11-rootful", "upstream-rootful"] } } },
+      "then": { "properties": { "identity": { "properties": { "mode": { "const": "rootful" } } } } }
+    },
+    {
+      "if": { "properties": { "lane": { "enum": ["debian11-rootless", "upstream-rootless"] } } },
+      "then": { "properties": { "identity": { "properties": { "mode": { "const": "rootless" } } } } }
+    },
+    {
+      "if": { "properties": { "lane": { "const": "debian11-rootful" } } },
+      "then": { "properties": { "native_manifest_artifact_name": { "const": "dockerlens-native-debian11-rootful" } } }
+    },
+    {
+      "if": { "properties": { "lane": { "const": "debian11-rootless" } } },
+      "then": { "properties": { "native_manifest_artifact_name": { "const": "dockerlens-native-debian11-rootless" } } }
+    },
+    {
+      "if": { "properties": { "lane": { "const": "upstream-rootful" } } },
+      "then": { "properties": { "native_manifest_artifact_name": { "const": "dockerlens-native-upstream-rootful" } } }
+    },
+    {
+      "if": { "properties": { "lane": { "const": "upstream-rootless" } } },
+      "then": { "properties": { "native_manifest_artifact_name": { "const": "dockerlens-native-upstream-rootless" } } }
+    }
+  ]
+}

@@ -54,9 +54,12 @@ volume="dl-native-data-${run_id}"
 socket_dir="$run_dir/socket"
 socket="$socket_dir/docker.sock"
 mkdir -m 0777 "$socket_dir"
-mkdir -m 0755 "$socket_dir/native-bind"
+# The parent remains private; the synthetic bind source must be writable by
+# both rootful and rootless mapped inner-container UIDs for the RW probe.
+mkdir -m 0777 "$socket_dir/native-bind"
 printf 'native-bind-canary\n' > "$socket_dir/native-bind/canary"
 printf 'native-tcp-canary\n' > "$socket_dir/native-bind/index.html"
+chmod 0644 "$socket_dir/native-bind/canary" "$socket_dir/native-bind/index.html"
 chmod 0700 "$run_dir"
 watchdog_pid=
 cleanup() {
@@ -532,6 +535,7 @@ export NATIVE_ENGINE_VERSION="$server_version" NATIVE_DAEMON_MODE="$expected_mod
 export NATIVE_API_VERSION="$api_version"
 export NATIVE_FIXTURE_IMAGE="$FIXTURE_IMAGE" NATIVE_OUTER_CONTAINER="$container"
 export NATIVE_BIND_SOURCE=/dockerlens-native/native-bind
+export NATIVE_SHAPES_PATH="$run_dir/target-shapes.json"
 if [[ $EUID == 0 ]]; then export NATIVE_PODMAN_USE_SUDO=0; else export NATIVE_PODMAN_USE_SUDO=1; fi
 "$(dirname "$0")/run-exact-native-test.sh" native_capture live_engine_capture_decodes
 "$(dirname "$0")/run-exact-native-test.sh" acquisition live_read_only_acquisition_matches_oracle
@@ -547,7 +551,7 @@ if [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]; then
     echo 'native evidence requires a clean candidate checkout' >&2
     exit 1
   }
-  python3 "$script_dir/native-evidence.py" "$run_dir/version.json" \
+  python3 "$script_dir/native-evidence.py" "$run_dir/version.json" "$NATIVE_SHAPES_PATH" \
     "$DOCKERLENS_NATIVE_EVIDENCE_DIR/$lane.json" "$lane" "$image" "$expected_mode" \
     "$installed_docker_package" "$candidate_sha"
 fi

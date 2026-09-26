@@ -12,16 +12,16 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::Duration;
 
-use docker_lens::acquisition::{Endpoint, Limits, NativeId, Selector, acquire};
-use docker_lens::decoder::decode_capture;
-use docker_lens::evidence::CaptureRoute;
-use docker_lens::observation::ResourceRef;
-use docker_lens::target::{
+use crate::acquisition::{Endpoint, Limits, NativeId, Selector, acquire};
+use crate::decoder::decode_capture;
+use crate::evidence::CaptureRoute;
+use crate::observation::ResourceRef;
+use crate::target::{
     Argument, ContainerIntent, DockerApiRenderer, DockerPlanner, EnvironmentAssignment,
     Healthcheck, ImageReference, Mount, Planner, PortBinding, Protocol, Renderer, RestartPolicy,
     TargetIdentity, TargetIntent, TargetResource,
 };
-use docker_lens::version::{
+use crate::version::{
     Capability, CapabilityFact, CapabilityScope, CapabilityState, DaemonMode, FactProvenance,
     ValidatedCapabilities,
 };
@@ -358,6 +358,76 @@ fn argument(value: &str) -> Argument {
     Argument::new(value.as_bytes().to_vec()).unwrap()
 }
 
+fn render_and_inspect_variant(
+    name: &str,
+    image: &str,
+    api_version: &str,
+    capabilities: &ValidatedCapabilities<'_>,
+    mounts: Vec<Mount>,
+    existing_volume: Option<&str>,
+    restart: Option<RestartPolicy>,
+) -> (String, Value) {
+    let mut resources = Vec::new();
+    if let Some(volume) = existing_volume {
+        resources.push(TargetResource::Volume {
+            reference: ResourceRef::new(2),
+            identity: TargetIdentity::new(volume.as_bytes().to_vec()).unwrap(),
+        });
+    }
+    resources.push(TargetResource::Container(Box::new(ContainerIntent {
+        reference: ResourceRef::new(3),
+        identity: TargetIdentity::new(name.as_bytes().to_vec()).unwrap(),
+        image: ImageReference::new(image.as_bytes().to_vec()).unwrap(),
+        environment: vec![],
+        ports: vec![],
+        mounts,
+        network: None,
+        entrypoint: None,
+        command: Some(vec![argument("sh"), argument("-c"), argument("sleep 30")]),
+        healthcheck: None,
+        restart,
+    })));
+    let intent = TargetIntent::new(resources).unwrap();
+    let graph = DockerPlanner
+        .plan(&intent, capabilities)
+        .expect("native variant plans");
+    let artifact = DockerApiRenderer
+        .render(&graph)
+        .expect("native variant renders");
+    let lines: Vec<Value> = artifact
+        .bytes()
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(|line| serde_json::from_slice(line).expect("rendered variant JSON"))
+        .collect();
+    assert_eq!(lines.len(), if existing_volume.is_some() { 2 } else { 1 });
+    if let Some(volume) = existing_volume {
+        assert_eq!(lines[0]["method"], "POST");
+        assert_eq!(lines[0]["path"], format!("/v{api_version}/volumes/create"));
+        assert_eq!(lines[0]["body"], json!({"Name": volume}));
+        // The primary rendered request already created this exact volume.
+    }
+    let container = lines.last().unwrap();
+    let expected_path = format!("/v{api_version}/containers/create?name={name}");
+    assert_eq!(container["method"], "POST");
+    assert_eq!(container["path"], expected_path);
+    assert_eq!(container["body"]["Image"], image);
+    let (status, response) = api("POST", &expected_path, Some(&container["body"]));
+    assert_eq!(status, 201, "Engine accepts rendered variant");
+    let created: Value = serde_json::from_slice(&response).unwrap();
+    let id = created["Id"]
+        .as_str()
+        .expect("variant container ID")
+        .to_owned();
+    let (status, response) = api(
+        "GET",
+        &format!("/v{api_version}/containers/{id}/json"),
+        None,
+    );
+    assert_eq!(status, 200);
+    (id, serde_json::from_slice(&response).unwrap())
+}
+
 #[test]
 #[ignore = "requires isolated rootful/rootless inner Engine and exact test-only resources"]
 fn live_target_render_matches_engine() {
@@ -642,7 +712,7 @@ fn live_target_render_matches_engine() {
     let denied = ValidatedCapabilities::new(&without_port).expect("scoped partial native facts");
     assert!(matches!(
         planner.plan(&intent, &denied),
-        Err(docker_lens::target::PlanningError::MissingCapability {
+        Err(crate::target::PlanningError::MissingCapability {
             capability: Capability::PortPublish,
             ..
         })
@@ -711,6 +781,19 @@ fn live_target_render_matches_engine() {
     );
     assert_eq!(status, 204, "test-only container starts");
     probe_traffic(&target_id, 18090, 18091);
+    eprintln!("DOCKERLENS_NATIVE_CHECK: target_shape_network_attach");
+    let (status, response) = api(
+        "GET",
+        &format!("/v{api_version}/networks/{target_network}"),
+        None,
+    );
+    assert_eq!(status, 200);
+    let attached_network: Value = serde_json::from_slice(&response).unwrap();
+    assert_eq!(
+        attached_network["Containers"][target_id.as_str()]["Name"],
+        target_container,
+        "rendered container must attach to the declared bridge network"
+    );
     let (status, response) = api(
         "GET",
         &format!("/v{api_version}/containers/{target_id}/json"),
@@ -755,6 +838,24 @@ fn live_target_render_matches_engine() {
     );
     let bind_data = inner_docker(&["exec", &target_id, "cat", "/readonly/index.html"]);
     assert_eq!(bind_data.as_slice(), b"native-tcp-canary\n");
+    let mut readonly_bind_write = inner_docker_command(&[
+        "exec",
+        &target_id,
+        "sh",
+        "-c",
+        "printf blocked > /readonly/blocked",
+    ]);
+    readonly_bind_write
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    assert_eq!(
+        readonly_bind_write
+            .status()
+            .expect("read-only bind write probe")
+            .code(),
+        Some(1),
+        "read-only bind mount must reject a container write"
+    );
     let mut healthy = false;
     for _ in 0..10 {
         let (status, response) = api(
@@ -774,4 +875,152 @@ fn live_target_render_matches_engine() {
         healthy,
         "rendered exec-form healthcheck must become healthy"
     );
+
+    // Exercise renderer branches that the primary container does not cover.
+    // Direct Engine inspection and live mount behavior are independent oracles.
+    eprintln!("DOCKERLENS_NATIVE_CHECK: target_shape_bind_rw");
+    let bind_rw_name = format!("dl-target-{run_id}-bind-rw");
+    let (bind_rw_id, bind_rw) = render_and_inspect_variant(
+        &bind_rw_name,
+        &image,
+        &api_version,
+        &admitted,
+        vec![
+            Mount::bind(
+                required("NATIVE_BIND_SOURCE").into_bytes(),
+                b"/writable".to_vec(),
+                false,
+            )
+            .unwrap(),
+        ],
+        None,
+        None,
+    );
+    assert_mount(&bind_rw, "bind", "/writable", None, true);
+    let (status, _) = api(
+        "POST",
+        &format!("/v{api_version}/containers/{bind_rw_id}/start"),
+        None,
+    );
+    assert_eq!(status, 204);
+    inner_docker(&[
+        "exec",
+        &bind_rw_id,
+        "sh",
+        "-c",
+        "printf native-rw-canary > /writable/rw-canary",
+    ]);
+    assert_eq!(
+        fs::read(
+            PathBuf::from(required("NATIVE_CAPTURE_DIR")).join("socket/native-bind/rw-canary")
+        )
+        .unwrap(),
+        b"native-rw-canary"
+    );
+
+    eprintln!("DOCKERLENS_NATIVE_CHECK: target_shape_volume_ro");
+    let volume_ro_name = format!("dl-target-{run_id}-volume-ro");
+    let (volume_ro_id, volume_ro) = render_and_inspect_variant(
+        &volume_ro_name,
+        &image,
+        &api_version,
+        &admitted,
+        vec![Mount::volume(ResourceRef::new(2), b"/readonly-volume".to_vec(), true).unwrap()],
+        Some(&target_volume),
+        None,
+    );
+    assert_mount(
+        &volume_ro,
+        "volume",
+        "/readonly-volume",
+        Some(&target_volume),
+        false,
+    );
+    let (status, _) = api(
+        "POST",
+        &format!("/v{api_version}/containers/{volume_ro_id}/start"),
+        None,
+    );
+    assert_eq!(status, 204);
+    inner_docker(&[
+        "exec",
+        &volume_ro_id,
+        "sh",
+        "-c",
+        "test -d /readonly-volume",
+    ]);
+    let mut write_probe = inner_docker_command(&[
+        "exec",
+        &volume_ro_id,
+        "sh",
+        "-c",
+        "printf blocked > /readonly-volume/blocked",
+    ]);
+    write_probe.stdout(Stdio::null()).stderr(Stdio::null());
+    assert_eq!(
+        write_probe
+            .status()
+            .expect("read-only volume write probe")
+            .code(),
+        Some(1),
+        "read-only named volume must reject a container write"
+    );
+
+    eprintln!("DOCKERLENS_NATIVE_CHECK: target_shape_restart");
+    for (suffix, policy, expected_name, expected_retries) in [
+        ("restart-no", RestartPolicy::No, "no", 0),
+        ("restart-always", RestartPolicy::Always, "always", 0),
+        (
+            "restart-unless-stopped",
+            RestartPolicy::UnlessStopped,
+            "unless-stopped",
+            0,
+        ),
+        (
+            "restart-unlimited",
+            RestartPolicy::OnFailure { maximum_retries: 0 },
+            "on-failure",
+            0,
+        ),
+    ] {
+        let name = format!("dl-target-{run_id}-{suffix}");
+        let (_, inspected) = render_and_inspect_variant(
+            &name,
+            &image,
+            &api_version,
+            &admitted,
+            vec![],
+            None,
+            Some(policy),
+        );
+        assert_eq!(
+            inspected["HostConfig"]["RestartPolicy"]["Name"],
+            expected_name
+        );
+        assert_eq!(
+            inspected["HostConfig"]["RestartPolicy"]["MaximumRetryCount"],
+            expected_retries
+        );
+    }
+
+    // The private shape file is written only after every native assertion above
+    // has passed. The emitter accepts only this closed shape map.
+    let shapes = json!({
+        "StandaloneContainer": ["StandaloneCreate"],
+        "NamedVolume": ["NamedVolumeCreate", "NamedVolumeMountReadWrite", "NamedVolumeMountReadOnly"],
+        "BridgeNetwork": ["BridgeNetworkCreate", "BridgeNetworkAttach"],
+        "PortPublish": ["FixedTcpPort", "FixedUdpPort"],
+        "BindMount": ["BindMountReadWrite", "BindMountReadOnly"],
+        "EnvironmentAssignment": ["EnvironmentValue", "EnvironmentEmptyValue"],
+        "Command": ["ExecCommand"],
+        "Entrypoint": ["ExecEntrypoint"],
+        "Healthcheck": ["ExecHealthcheck"],
+        "RestartPolicy": ["RestartNo", "RestartAlways", "RestartUnlessStopped",
+                          "RestartOnFailureUnlimited", "RestartOnFailureLimited"]
+    });
+    fs::write(
+        required("NATIVE_SHAPES_PATH"),
+        serde_json::to_vec(&shapes).unwrap(),
+    )
+    .expect("write closed private shape evidence");
 }

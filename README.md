@@ -39,12 +39,14 @@ Compose compatibility and Swarm mode are separate discussion topics.
 - Engine release, API version, daemon mode, and capability facts are separate.
   Capability claims are tied to an opaque acquisition identity as well as the
   exact daemon facts; caller-declared provenance is not proof of conformance.
-- An offline target profile uses an exact Engine release, API version, mode and
-  immutable capability-evidence digest. It must match a reviewed catalog entry;
-  the public catalog remains empty until independent native review supplies
-  records. Offline planning does not invent a live observation. The operation
-  graph checks capabilities for the current standalone container, named volume,
-  and bridge network shapes, then retains its planning context.
+- An offline target profile distinguishes upstream builds from an exact Debian
+  package revision, the reported Engine release, advertised maximum API,
+  negotiated acquisition API, tested rendering API, and daemon mode. The
+  reviewed catalog exposes exact profiles and their immutable evidence digests;
+  callers cannot manufacture positive planning claims. It remains empty until
+  independent native review supplies records. Offline planning does not invent
+  a live observation. The operation graph retains the resolved context and
+  checks capabilities for each requested standalone shape.
 - Target intent includes explicit resource identities, container image, ports,
   mounts, bridge network, protected environment assignments, exec-form command,
   health check, and restart policy. Unsupported settings remain explicit.
