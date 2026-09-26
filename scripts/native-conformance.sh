@@ -476,6 +476,18 @@ PY
 inner_docker=("${podman_cmd[@]}" exec "$container" docker -H unix:///run/dockerlens/docker.sock)
 docker_root=$(timeout 15 "${inner_docker[@]}" info --format '{{.DockerRootDir}}')
 inner_cgroup=$(timeout 15 "${inner_docker[@]}" info --format '{{.CgroupVersion}}')
+# Report only fixed fields and validated package revision strings. In particular,
+# never print Docker info or package-manager output containing host/user values.
+inner_cgroup_driver=$(timeout 15 "${inner_docker[@]}" info --format '{{.CgroupDriver}}' 2>/dev/null) || inner_cgroup_driver=unavailable
+[[ $inner_cgroup =~ ^[12]$ ]] || inner_cgroup=unavailable
+[[ $inner_cgroup_driver =~ ^(cgroupfs|systemd|none)$ ]] || inner_cgroup_driver=unavailable
+native_package_version() {
+  local version
+  version=$(timeout 15 "${podman_cmd[@]}" exec "$container" dpkg-query -W -f='${Version}' "$1" 2>/dev/null) || version=unavailable
+  [[ ${#version} -le 80 && $version =~ ^[0-9][A-Za-z0-9.+:~_-]*$ ]] || version=unavailable
+  printf '%s' "$version"
+}
+echo "DOCKERLENS_NATIVE_ENV: cgroup_driver=$inner_cgroup_driver cgroup_version=$inner_cgroup runc=$(native_package_version runc) containerd=$(native_package_version containerd) libseccomp2=$(native_package_version libseccomp2)"
 if [[ $expected_mode == rootless ]]; then
   [[ $docker_root == /home/rootless/.local/share/docker ]] || { echo 'rootless daemon store is outside owned volume' >&2; exit 1; }
 else
@@ -484,7 +496,7 @@ fi
 timeout 120 "${inner_docker[@]}" pull "$FIXTURE_IMAGE" >/dev/null
 # Docker CLI errors may contain authored values. Drain stderr without retaining
 # more than its final 8 KiB, and emit only a fixed cause category.
-classify_minimal_start_error() {
+classify_probe_error() {
   python3 -c 'import sys
 tail = bytearray()
 for chunk in iter(lambda: sys.stdin.buffer.read(4096), b""):
@@ -493,6 +505,11 @@ for chunk in iter(lambda: sys.stdin.buffer.read(4096), b""):
         del tail[:-8192]
 message = tail.decode("utf-8", "replace").lower()
 checks = (
+    ("init_pipe_eof", ("init pipe eof", "init-pipe eof", "init-p: eof",
+                       "failed to read init pid file", "read init-p: connection reset")),
+    ("runtime_state_missing", ("state.json: no such file", "runtime state does not exist",
+                               "failed to get container state")),
+    ("invalid_argument", ("invalid argument",)),
     ("uidmap", ("newuidmap", "newgidmap", "uidmap", "gidmap")),
     ("userns", ("user namespace", "userns", "unshare")),
     ("cgroup", ("cgroup",)),
@@ -502,45 +519,96 @@ checks = (
     ("executable", ("exec format error", "executable file not found")),
     ("security", ("seccomp", "apparmor", "selinux")),
     ("permission", ("permission denied", "operation not permitted")),
-    ("runtime", ("runc", "oci runtime")),
+    ("oci", ("runc", "oci runtime", "oci runtime error")),
 )
 print(next((category for category, tokens in checks
             if any(token in message for token in tokens)), "unclassified"))'
 }
-export -f classify_minimal_start_error
-# Distinguish a rootless OCI baseline failure from a feature-rich fixture failure.
-# The inert probe uses the already-pulled image, no network or mounts, and only
-# run-owned inner storage; the outer run-owned volume is removed by cleanup.
-minimal_name="dl-${run_id}-minimal"
-if minimal_start_category=$(timeout --kill-after=1s 44s bash -c \
-  'set -o pipefail; "$@" 2>&1 >/dev/null | classify_minimal_start_error' bash \
-  "${inner_docker[@]}" run --rm --name "$minimal_name" \
-  --label "io.dockerlens.native-run=$run_id" --network none --entrypoint /bin/sh \
-  "$FIXTURE_IMAGE" -c 'exit 0'); then
-  echo 'DOCKERLENS_NATIVE_PROBE: minimal_start_ok'
-else
-  minimal_start_status=$?
-  if [[ $minimal_start_status == 124 ]]; then
-    minimal_start_category=timeout
-  elif [[ $minimal_start_status == 137 ]]; then
-    minimal_start_category=terminated
-  elif [[ ! $minimal_start_category =~ ^(uidmap|userns|cgroup|network|mount|storage|executable|security|permission|runtime|unclassified)$ ]]; then
-    minimal_start_category=unclassified
+export -f classify_probe_error
+probe_failure_category() {
+  local status=$1 category=$2
+  if [[ $status == 124 ]]; then
+    printf timeout
+  elif [[ $status == 137 ]]; then
+    printf terminated
+  elif [[ $category =~ ^(init_pipe_eof|runtime_state_missing|invalid_argument|uidmap|userns|cgroup|network|mount|storage|executable|security|permission|oci|unclassified)$ ]]; then
+    printf '%s' "$category"
+  else
+    printf unclassified
   fi
-  if minimal_owner=$(timeout 10 "${inner_docker[@]}" container inspect \
-    --format '{{index .Config.Labels "io.dockerlens.native-run"}}' "$minimal_name" 2>/dev/null); then
-    if [[ $minimal_owner == "$run_id" ]]; then
-      timeout 15 "${inner_docker[@]}" container rm -f "$minimal_name" >/dev/null 2>&1 || \
-        echo 'DOCKERLENS_NATIVE_PROBE: minimal_cleanup_unverified' >&2
+}
+probe_cleanup() {
+  local name=$1 owner remaining
+  if owner=$(timeout 10 "${inner_docker[@]}" container inspect \
+    --format '{{index .Config.Labels "io.dockerlens.native-run"}}' "$name" 2>/dev/null); then
+    [[ $owner == "$run_id" ]] || return 1
+    timeout 15 "${inner_docker[@]}" container rm -f "$name" >/dev/null 2>&1 || return 1
+  fi
+  # A failed inspect alone cannot prove absence. A bounded exact-name listing
+  # verifies removal even when create failed after creating the container.
+  remaining=$(timeout 10 "${inner_docker[@]}" container ls -a \
+    --filter "name=^/${name}$" --format '{{.Names}}' 2>/dev/null) || return 1
+  [[ -z $remaining ]]
+}
+run_inert_probe() {
+  local network=$1 name="dl-${run_id}-probe-${1}" category=ok status state wait_code owner state_error_category
+  # Both modes use the same pinned image and inert command. Keep the container
+  # until its bounded state inspection and ownership-verified removal complete.
+  if category=$(timeout --kill-after=1s 44s bash -c \
+    'set -o pipefail; "$@" 2>&1 >/dev/null | classify_probe_error' bash \
+    "${inner_docker[@]}" container create --name "$name" \
+    --label "io.dockerlens.native-run=$run_id" --network "$network" \
+    --entrypoint /bin/sh "$FIXTURE_IMAGE" -c 'exit 0'); then
+    if category=$(timeout --kill-after=1s 44s bash -c \
+      'set -o pipefail; "$@" 2>&1 >/dev/null | classify_probe_error' bash \
+      "${inner_docker[@]}" container start "$name"); then
+      category=ok
+      wait_code=$(timeout 20 "${inner_docker[@]}" container wait "$name" 2>/dev/null) || wait_code=unavailable
+      [[ $wait_code == 0 ]] || category=wait_failed
     else
-      echo 'DOCKERLENS_NATIVE_PROBE: minimal_cleanup_unverified' >&2
+      status=$?
+      category=$(probe_failure_category "$status" "$category")
     fi
   else
-    echo 'DOCKERLENS_NATIVE_PROBE: minimal_cleanup_unverified' >&2
+    status=$?
+    category="create_$(probe_failure_category "$status" "$category")"
   fi
-  echo "DOCKERLENS_NATIVE_PROBE: minimal_start_$minimal_start_category" >&2
-  exit 1
-fi
+  owner=$(timeout 10 "${inner_docker[@]}" container inspect \
+    --format '{{index .Config.Labels "io.dockerlens.native-run"}}' "$name" 2>/dev/null) || owner=unavailable
+  state=unavailable
+  state_error_category=unavailable
+  if [[ $owner == "$run_id" ]]; then
+    state=$(timeout 10 "${inner_docker[@]}" container inspect \
+      --format '{{.State.Status}}|{{.State.ExitCode}}' "$name" 2>/dev/null) || state=unavailable
+    [[ $state =~ ^(created|running|exited|dead)\|[0-9]+$ ]] || state=unavailable
+    # Stream private State.Error directly into the bounded classifier. Shell
+    # variables and logs retain only its fixed category, never the raw value.
+    state_error_category=$(timeout --kill-after=1s 12s bash -c \
+      'set -o pipefail; "$@" 2>/dev/null | classify_probe_error' bash \
+      "${inner_docker[@]}" container inspect --format '{{.State.Error}}' "$name") || \
+      state_error_category=unavailable
+    [[ $state_error_category =~ ^(init_pipe_eof|runtime_state_missing|invalid_argument|uidmap|userns|cgroup|network|mount|storage|executable|security|permission|oci|unclassified)$ ]] || \
+      state_error_category=unavailable
+  fi
+  if [[ $category == oci || $category == unclassified || $category == wait_failed ]]; then
+    if [[ $state_error_category != unavailable && $state_error_category != unclassified ]]; then
+      category=$state_error_category
+    fi
+  fi
+  echo "DOCKERLENS_NATIVE_PROBE: ${network}_start_${category} state=$state" >&2
+  if [[ $category != ok ]]; then
+    echo "DOCKERLENS_NATIVE_PROBE: ${network}_state_error_${state_error_category}" >&2
+  fi
+  if ! probe_cleanup "$name"; then
+    echo "DOCKERLENS_NATIVE_PROBE: ${network}_cleanup_unverified state_error=$state_error_category" >&2
+    return 1
+  fi
+  [[ $category == ok ]]
+}
+probe_failed=0
+run_inert_probe none || probe_failed=1
+run_inert_probe bridge || probe_failed=1
+(( probe_failed == 0 )) || exit 1
 network_id=$(timeout 30 "${inner_docker[@]}" network create --driver bridge "dl-${run_id}-net")
 volume_name="dl-${run_id}-vol"
 timeout 30 "${inner_docker[@]}" volume create "$volume_name" >/dev/null

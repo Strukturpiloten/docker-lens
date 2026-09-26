@@ -10,6 +10,176 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class NativeHarnessTests(unittest.TestCase):
+    def test_runtime_package_versions_are_allowlisted(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text()
+        version_reader = "native_package_version() {" + source.split(
+            "native_package_version() {", 1
+        )[1].split("\necho \"DOCKERLENS_NATIVE_ENV:", 1)[0]
+        with tempfile.TemporaryDirectory() as temporary:
+            self._tool(
+                Path(temporary),
+                "fake_package_query",
+                "#!/bin/sh\ncase \"$*\" in *runc) printf '1.1.5+ds1-1+deb11u2' ;; "
+                "*containerd) printf 'protected-secret value' ;; *) exit 1 ;; esac\n",
+            )
+            env = os.environ.copy()
+            env["PATH"] = f"{temporary}:{env['PATH']}"
+            result = subprocess.run(
+                ["bash", "-c", "podman_cmd=(fake_package_query)\ncontainer=fake\n"
+                 + version_reader
+                 + "\nprintf '%s|%s|%s' "
+                 "\"$(native_package_version runc)\" "
+                 "\"$(native_package_version containerd)\" "
+                 "\"$(native_package_version libseccomp2)\""],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "1.1.5+ds1-1+deb11u2|unavailable|unavailable")
+            self.assertNotIn("protected-secret", result.stdout + result.stderr)
+
+    def test_probe_error_categories_never_echo_private_details(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text()
+        classifier = "classify_probe_error() {" + source.split(
+            "classify_probe_error() {", 1
+        )[1].split("\nexport -f classify_probe_error", 1)[0]
+        cases = {
+            "read init-p: connection reset by peer protected-secret": "init_pipe_eof",
+            "state.json: no such file protected-secret": "runtime_state_missing",
+            "invalid argument protected-secret": "invalid_argument",
+            "failed to mount protected-secret": "mount",
+            "cgroup protected-secret": "cgroup",
+            "operation not permitted protected-secret": "permission",
+            "OCI runtime create failed protected-secret": "oci",
+            "protected-secret": "unclassified",
+        }
+        for detail, category in cases.items():
+            with self.subTest(category=category):
+                result = subprocess.run(
+                    ["bash", "-c", classifier + "\nclassify_probe_error"],
+                    input=detail,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), category)
+                self.assertNotIn("protected-secret", result.stdout + result.stderr)
+
+    def test_both_inert_probe_modes_report_and_remove_exact_owned_containers(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text()
+        probe = "classify_probe_error() {" + source.split(
+            "classify_probe_error() {", 1
+        )[1].split("\nnetwork_id=", 1)[0]
+        fake_docker = """#!/usr/bin/env bash
+set -euo pipefail
+state=$FAKE_PROBE_STATE
+[[ $1 == container ]]
+action=$2
+shift 2
+case $action in
+  create)
+    [[ $* == *'--entrypoint /bin/sh'* ]]
+    [[ $* == *'-c exit 0'* ]]
+    [[ $* == *'example.invalid/pinned:1@sha256:1234'* ]]
+    if [[ $* == *'--network none'* ]]; then mode=none; else
+      [[ $* == *'--network bridge'* ]]; mode=bridge
+    fi
+    touch "$state/$mode"
+    printf '%s\\n' "$mode" >> "$state/created"
+    if [[ $mode == "$FAKE_PROBE_CREATE_FAIL" ]]; then
+      echo 'invalid argument protected-secret' >&2
+      exit 42
+    fi
+    echo synthetic-id ;;
+  start)
+    mode=${1##*-}
+    if [[ $mode == "$FAKE_PROBE_START_FAIL" ]]; then
+      echo 'OCI runtime create failed: protected-secret' >&2
+      exit 42
+    fi
+    echo synthetic-id ;;
+  wait) echo 0 ;;
+  inspect)
+    mode=${*: -1}; mode=${mode##*-}
+    [[ -f $state/$mode ]] || exit 1
+    if [[ $* == *Config.Labels* ]]; then
+      if [[ $mode == "$FAKE_PROBE_FOREIGN_LABEL" ]]; then echo foreign;
+      else echo synthetic; fi
+    elif [[ $* == *State.Error* ]]; then
+      touch "$state/error_inspected-$mode"
+      if [[ $mode == "$FAKE_PROBE_START_FAIL" ]]; then
+        echo 'read init-p: connection reset by peer protected-secret'
+      else echo; fi
+    else echo 'exited|0'; fi ;;
+  rm)
+    mode=${*: -1}; mode=${mode##*-}
+    [[ $mode != "$FAKE_PROBE_REMOVE_FAIL" ]] || exit 1
+    rm "$state/$mode" ;;
+  ls)
+    if [[ $* == *probe-none* && -f $state/none ]]; then echo 'dl-synthetic-probe-none'; fi
+    if [[ $* == *probe-bridge* && -f $state/bridge ]]; then echo 'dl-synthetic-probe-bridge'; fi ;;
+  *) exit 2 ;;
+esac
+"""
+        cases = (
+            ("none", "", "", ""),
+            ("", "bridge", "", ""),
+            ("", "", "none", ""),
+            ("", "", "", "bridge"),
+        )
+        for start_fail, remove_fail, create_fail, foreign_label in cases:
+            with self.subTest(start_fail=start_fail, remove_fail=remove_fail,
+                              create_fail=create_fail, foreign_label=foreign_label):
+                with tempfile.TemporaryDirectory() as temporary:
+                    state = Path(temporary)
+                    self._tool(state, "fake_docker", fake_docker)
+                    env = os.environ.copy()
+                    env.update(
+                        PATH=f"{state}:{env['PATH']}",
+                        FAKE_PROBE_STATE=str(state),
+                        FAKE_PROBE_START_FAIL=start_fail,
+                        FAKE_PROBE_REMOVE_FAIL=remove_fail,
+                        FAKE_PROBE_CREATE_FAIL=create_fail,
+                        FAKE_PROBE_FOREIGN_LABEL=foreign_label,
+                    )
+                    result = subprocess.run(
+                        ["bash", "-c", "set -euo pipefail\nrun_id=synthetic\n"
+                         "FIXTURE_IMAGE=example.invalid/pinned:1@sha256:1234\n"
+                         "inner_docker=(fake_docker)\n" + probe],
+                        env=env,
+                        capture_output=True,
+                        text=True,
+                        timeout=15,
+                        check=False,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual((state / "created").read_text().splitlines(),
+                                     ["none", "bridge"])
+                    self.assertNotIn("protected-secret", result.stdout + result.stderr)
+                    if start_fail:
+                        self.assertIn("none_start_init_pipe_eof", result.stderr)
+                        self.assertIn("none_state_error_init_pipe_eof", result.stderr)
+                        self.assertIn("bridge_start_ok", result.stderr)
+                        self.assertFalse((state / "none").exists())
+                        self.assertFalse((state / "bridge").exists())
+                    elif create_fail:
+                        self.assertIn("none_start_create_invalid_argument", result.stderr)
+                        self.assertIn("bridge_start_ok", result.stderr)
+                        self.assertFalse((state / "none").exists())
+                        self.assertFalse((state / "bridge").exists())
+                    elif remove_fail:
+                        self.assertIn("bridge_cleanup_unverified", result.stderr)
+                        self.assertFalse((state / "none").exists())
+                        self.assertTrue((state / "bridge").exists())
+                    else:
+                        self.assertIn("bridge_cleanup_unverified", result.stderr)
+                        self.assertFalse((state / "none").exists())
+                        self.assertTrue((state / "bridge").exists())
+                        self.assertFalse((state / "error_inspected-bridge").exists())
+
     def test_created_resources_are_removed_even_when_create_reports_failure(self) -> None:
         diagnoses = {
             "daemon_sources_unexpected": "stage=sources category=package_sources_unexpected",
