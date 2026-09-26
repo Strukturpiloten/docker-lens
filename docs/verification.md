@@ -46,7 +46,10 @@ numeric libtest summary, last fixed native check marker, and a closed
 acquisition-error category where applicable. Daemon startup failures show
 bounded container state and a classified startup category. Debian lanes also
 show the last fixed APT stage, including signature, clock, dependency and
-post-invoke failures. Raw
+post-invoke failures. The Debian harness checks every requested revision in
+APT metadata before install, and reports a fixed `package_version_unavailable`
+category if a pin is absent. Failed installs also report bounded disk, lock,
+dependency, download, or `dpkg` categories when recognized. Raw
 assertions, daemon logs, and API responses stay private.
 It deletes its exact named container, volume, and temporary files after
 success, failure, or catchable termination. SIGKILL, host failure, or hard

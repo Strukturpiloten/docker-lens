@@ -17,6 +17,9 @@ class NativeHarnessTests(unittest.TestCase):
             "daemon_time": "stage=update category=package_time",
             "daemon_dependency": "stage=install category=package_dependency",
             "daemon_post_invoke": "stage=update category=package_post_invoke",
+            "daemon_pin_missing": "stage=install category=package_version_unavailable",
+            "daemon_dpkg": "stage=install category=package_dpkg",
+            "daemon_prior_update_error": "stage=install category=package_apt_failure",
             "daemon_upstream_storage": "stage=daemon category=daemon_storage",
             "daemon_upstream_network": "stage=daemon category=daemon_network",
         }
@@ -24,7 +27,8 @@ class NativeHarnessTests(unittest.TestCase):
             "volume", "pull", "run", "run_exists_error", "pull_exists_error",
             "preflight_exists_error", "daemon_exit", "daemon_package_missing",
             "daemon_signature", "daemon_time", "daemon_dependency",
-            "daemon_post_invoke", "daemon_upstream_storage",
+            "daemon_post_invoke", "daemon_pin_missing", "daemon_dpkg",
+            "daemon_prior_update_error", "daemon_upstream_storage",
             "daemon_upstream_network",
             "cleanup_container_remains",
             "cleanup_volume_remains", "cleanup_container_query_error",
@@ -118,6 +122,17 @@ case "$command" in
       daemon_post_invoke)
         echo 'DOCKERLENS_APT_STAGE: update'
         echo 'APT::Update::Post-Invoke failed for protected-secret' ;;
+      daemon_pin_missing)
+        echo 'DOCKERLENS_APT_STAGE: install'
+        echo 'DOCKERLENS_APT_RESULT: version-unavailable' ;;
+      daemon_dpkg)
+        echo 'DOCKERLENS_APT_STAGE: install'
+        echo 'E: Sub-process /usr/bin/dpkg returned an error code (1); protected-secret' ;;
+      daemon_prior_update_error)
+        echo 'DOCKERLENS_APT_STAGE: update'
+        echo 'NO_PUBKEY protected-secret'
+        echo 'DOCKERLENS_APT_STAGE: install'
+        echo 'DOCKERLENS_APT_RESULT: install-failed' ;;
       daemon_upstream_storage)
         echo 'error initializing graphdriver: protected-secret' ;;
       daemon_upstream_network)

@@ -137,22 +137,32 @@ s = tail.decode("utf-8", "replace").lower()
 stages = {"dockerlens_apt_stage: update": "update",
           "dockerlens_apt_stage: install": "install",
           "dockerlens_apt_stage: daemon": "daemon"}
-stage = (next((stages[line.strip()] for line in reversed(s.splitlines())
-               if line.strip() in stages), "unavailable")
-         if sys.argv[1].startswith("debian11-") else "daemon")
-package_checks = (("package_post_invoke", ("post-invoke",)),
+lines = s.splitlines()
+last_stage = next(((index, stages[lines[index].strip()])
+                   for index in range(len(lines) - 1, -1, -1)
+                   if lines[index].strip() in stages), None)
+stage = (last_stage[1] if last_stage else "unavailable") if sys.argv[1].startswith("debian11-") else "daemon"
+if last_stage and sys.argv[1].startswith("debian11-"):
+    s = "\n".join(lines[last_stage[0] + 1:])
+package_checks = (("package_version_unavailable", ("dockerlens_apt_result: version-unavailable",)),
+                  ("package_post_invoke", ("post-invoke",)),
                   ("package_signature", ("no_pubkey", "expkeysig", "badsig",
                                  "signatures could not be verified", "invalid signature",
                                  "is not signed")),
                   ("package_time", ("not valid yet", "release file is expired",
                             "release file expired", "invalid for another")),
+                  ("package_disk", ("no space left on device", "write error - write",)),
+                  ("package_lock", ("could not get lock", "unable to acquire the dpkg frontend lock")),
                   ("package_dependency", ("unmet dependencies", "dependency problems",
                                   "unable to correct problems", "held broken packages",
                                   "depends:")),
                   ("package_download", ("failed to fetch", "temporary failure resolving",
-                                "does not have a release file")),
+                                "does not have a release file", "404 not found")),
+                  ("package_dpkg", ("sub-process /usr/bin/dpkg returned an error code",
+                                    "dpkg: error processing", "dpkg: error:")),
                   ("package_install", ("unable to locate package",
-                                       "was not found", "has no installation candidate")))
+                                       "was not found", "has no installation candidate")),
+                  ("package_apt_failure", ("dockerlens_apt_result: install-failed",)))
 daemon_checks = (("daemon_storage", ("error initializing graphdriver",
                                      "failed to mount overlay", "storage driver")),
                  ("rootless_uidmap", ("uid_map", "newuidmap", "newgidmap")),
@@ -218,7 +228,22 @@ if [[ $lane == debian11-rootful ]]; then
     printf "DOCKERLENS_APT_STAGE: update\n"
     apt-get update -qq
     printf "DOCKERLENS_APT_STAGE: install\n"
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "docker.io=$DEBIAN_DOCKER_PACKAGE"
+    for spec in "docker.io=$DEBIAN_DOCKER_PACKAGE"; do
+      package=${spec%%=*}; pinned=${spec#*=}
+      if ! apt-cache madison "$package" | awk -F "|" -v pin="$pinned" '\''
+        { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); if ($2 == pin) found = 1 }
+        END { exit !found }'\''; then
+        printf "DOCKERLENS_APT_RESULT: version-unavailable\n"
+        exit 100
+      fi
+    done
+    if DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "docker.io=$DEBIAN_DOCKER_PACKAGE"; then
+      :
+    else
+      result=$?
+      printf "DOCKERLENS_APT_RESULT: install-failed\n"
+      exit "$result"
+    fi
     printf "DOCKERLENS_APT_STAGE: daemon\n"
     exec dockerd --host=unix:///run/dockerlens/docker.sock --storage-driver=vfs
   ')
@@ -228,10 +253,27 @@ elif [[ $lane == debian11-rootless ]]; then
     printf "DOCKERLENS_APT_STAGE: update\n"
     apt-get update -qq
     printf "DOCKERLENS_APT_STAGE: install\n"
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+    for spec in "docker.io=$DEBIAN_DOCKER_PACKAGE" "rootlesskit=$DEBIAN_ROOTLESSKIT_PACKAGE" \
+      "slirp4netns=$DEBIAN_SLIRP4NETNS_PACKAGE" "uidmap=$DEBIAN_UIDMAP_PACKAGE" \
+      "fuse-overlayfs=$DEBIAN_FUSE_OVERLAYFS_PACKAGE"; do
+      package=${spec%%=*}; pinned=${spec#*=}
+      if ! apt-cache madison "$package" | awk -F "|" -v pin="$pinned" '\''
+        { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); if ($2 == pin) found = 1 }
+        END { exit !found }'\''; then
+        printf "DOCKERLENS_APT_RESULT: version-unavailable\n"
+        exit 100
+      fi
+    done
+    if DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
       "docker.io=$DEBIAN_DOCKER_PACKAGE" "rootlesskit=$DEBIAN_ROOTLESSKIT_PACKAGE" \
       "slirp4netns=$DEBIAN_SLIRP4NETNS_PACKAGE" "uidmap=$DEBIAN_UIDMAP_PACKAGE" \
-      "fuse-overlayfs=$DEBIAN_FUSE_OVERLAYFS_PACKAGE"
+      "fuse-overlayfs=$DEBIAN_FUSE_OVERLAYFS_PACKAGE"; then
+      :
+    else
+      result=$?
+      printf "DOCKERLENS_APT_RESULT: install-failed\n"
+      exit "$result"
+    fi
     useradd --create-home --uid 1000 --shell /bin/sh rootless
     grep -q "^rootless:" /etc/subuid || printf "rootless:100000:65536\n" >> /etc/subuid
     grep -q "^rootless:" /etc/subgid || printf "rootless:100000:65536\n" >> /etc/subgid
