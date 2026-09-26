@@ -18,6 +18,14 @@ must be added with readable versions and verified immutable integrity records
 before their workflows are enabled. Historical captures and fixtures are
 immutable and must not be auto-updated.
 
+The manual native dispatcher reuses the existing checkout Action SHA and exact
+tag, which Renovate's GitHub Actions manager already extracts from every
+`.github/workflows/*.yml` file; `tests/test_scaffold_policy.py` checks all
+workflow Action pins. No new Renovate manager or extraction path is needed.
+The admission helper uses the Ubuntu runner's Python standard library and
+introduces no downloaded binary. The dispatcher introduces no native image
+pin; #13 must add its reviewed version-plus-digest pins with its own suite.
+
 Shared workflow rollout decisions: this repository adopts the workspace's
 canonical `scripts/format-lint.sh` and `scripts/check-all.sh` entry points.
 No change is needed in the other five repositories for this independent scaffold;
