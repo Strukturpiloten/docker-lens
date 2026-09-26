@@ -26,12 +26,22 @@ Debian 11 `docker.io=20.10.5+dfsg1-1+deb11u4`,
 `uidmap=1:4.8.1-1+deb11u1`, and `fuse-overlayfs=1.4.0-1` were checked against
 Debian package listings on 2026-09-26. The harness installs them through
 Debian's signed APT metadata inside the pinned Debian 11 image and asserts
-each installed revision. Renovate has no supported manager for Debian APT
+each installed revision. The guest replaces that image's live APT sources with
+the official `20260824T000000Z` Debian Snapshot for Bullseye, Bullseye
+security, and Bullseye updates. The live security index still lists the pinned
+`docker.io` revision but its package URL returned 404 on 2026-09-26; the same
+artifact and all three signed snapshot `InRelease` files were available at the
+fixed snapshot. Only historical `Valid-Until` expiry is disabled; APT signature
+and package-hash verification remain enabled. This is a frozen compatibility
+baseline, not evidence that Debian 11 still receives security maintenance.
+Renovate has no supported manager for Debian APT
 package revisions in shell variables here; the repository maintainer owns a
 manual check of these five pins before every native release candidate and
-when Debian publishes a Bullseye security update. The check compares Debian's
-package listing and `apt-cache policy` in the pinned image, updates the exact
-revision in this script and policy tests, and reruns both Debian native lanes.
+if an archive or package revision changes. The check compares the fixed
+snapshot's package listing and `apt-cache policy` in the pinned image, updates
+the exact revision or snapshot date in the harness and policy tests, and reruns
+both Debian native lanes. The immutable archive timestamp is not a software
+version and has no Renovate manager; the image pin still has one regex manager.
 Never change only the upstream Engine tag to represent a distribution update.
 
 `podman`, `curl`, `python3`, `timeout`, and core utilities are provided

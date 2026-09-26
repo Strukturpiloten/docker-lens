@@ -35,9 +35,15 @@ mounts, environment, command, health, and restart behavior. Decoder-only
 fixtures cannot establish this evidence. Native compatibility remains unproven
 until all lanes genuinely pass and their evidence is independently reviewed.
 
+The Debian guests use one fixed official Debian Snapshot date, not the live
+Bullseye mirror: the latter advertised the pinned `docker.io` package after
+its file disappeared. The snapshot's signed metadata and package hashes remain
+verified; only historical `Valid-Until` expiry is disabled. This proves a
+historical Debian 11 package baseline, not current security support.
+
 Run one lane with `./scripts/native-conformance.sh <lane>` on Linux with
 rootful Podman through passwordless `sudo`, at least 8 GiB free, and access to
-the pinned image manifests and Debian 11 package repository. The script caps
+the pinned image manifests and Debian 11 snapshot. The script caps
 the nested daemon at 4 GiB storage, 4 GiB memory, two CPUs and 512 processes.
 It bounds the outer image pull to three minutes, checks free space before the
 pull, monitors space during it, and forbids an implicit pull when starting the
@@ -45,8 +51,9 @@ outer container. Failure diagnostics show the exact native test, exit status,
 numeric libtest summary, last fixed native check marker, and a closed
 acquisition-error category where applicable. Daemon startup failures show
 bounded container state and a classified startup category. Debian lanes also
-show the last fixed APT stage, including signature, clock, dependency and
-post-invoke failures. The Debian harness checks every requested revision in
+show the last fixed APT stage, including a fail-closed `package_sources_unexpected`
+category if the pinned image gains another APT source, plus signature, clock,
+dependency and post-invoke failures. The Debian harness checks every requested revision in
 APT metadata before install, and reports a fixed `package_version_unavailable`
 category if a pin is absent. Failed installs also report bounded disk, lock,
 dependency, download, or `dpkg` categories when recognized. The guest captures

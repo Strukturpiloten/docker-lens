@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class NativeHarnessTests(unittest.TestCase):
     def test_created_resources_are_removed_even_when_create_reports_failure(self) -> None:
         diagnoses = {
+            "daemon_sources_unexpected": "stage=sources category=package_sources_unexpected",
             "daemon_package_missing": "stage=install category=package_install",
             "daemon_signature": "stage=update category=package_signature",
             "daemon_time": "stage=update category=package_time",
@@ -27,7 +28,7 @@ class NativeHarnessTests(unittest.TestCase):
         }
         for fault in (
             "volume", "pull", "run", "run_exists_error", "pull_exists_error",
-            "preflight_exists_error", "daemon_exit", "daemon_package_missing",
+            "preflight_exists_error", "daemon_exit", "daemon_sources_unexpected", "daemon_package_missing",
             "daemon_signature", "daemon_time", "daemon_dependency",
             "daemon_post_invoke", "daemon_pin_missing", "daemon_dpkg",
             "daemon_guest_dependency", "daemon_guest_unknown",
@@ -108,8 +109,11 @@ case "$command" in
     else
       echo true
     fi ;;
-  logs)
-    case "$FAKE_NATIVE_FAULT" in
+      logs)
+        case "$FAKE_NATIVE_FAULT" in
+          daemon_sources_unexpected)
+            echo 'DOCKERLENS_APT_STAGE: sources'
+            echo 'DOCKERLENS_APT_RESULT: unexpected_sources' ;;
       daemon_package_missing)
         echo 'DOCKERLENS_APT_STAGE: install'
         echo "E: Version 'protected-secret' for 'docker.io' was not found" ;;
@@ -223,6 +227,57 @@ esac
                 self.assertEqual(result.stderr, "")
                 self.assertNotIn("protected-secret", result.stdout + result.stderr)
                 self.assertEqual(list(root.glob("dockerlens-apt.*")), [])
+
+    def test_debian_guest_uses_one_signed_historical_snapshot(self) -> None:
+        harness = (ROOT / "scripts/native-conformance.sh").read_text()
+        self.assertEqual(harness.count("sh /run/dockerlens/native-debian-snapshot.sh"), 2)
+        with tempfile.TemporaryDirectory() as directory:
+            apt_dir = Path(directory)
+            env = os.environ.copy()
+            env["DOCKERLENS_APT_DIR"] = str(apt_dir)
+            result = subprocess.run(
+                ["sh", str(ROOT / "scripts/native-debian-snapshot.sh")],
+                env=env, capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout + result.stderr, "")
+            self.assertEqual((apt_dir / "sources.list").read_text().splitlines(), [
+                "deb http://snapshot.debian.org/archive/debian/20260824T000000Z bullseye main",
+                "deb http://snapshot.debian.org/archive/debian-security/20260824T000000Z bullseye-security main",
+                "deb http://snapshot.debian.org/archive/debian/20260824T000000Z bullseye-updates main",
+            ])
+            self.assertEqual(
+                (apt_dir / "apt.conf.d/99dockerlens-snapshot").read_text(),
+                'Acquire::Check-Valid-Until "false";\n',
+            )
+            (apt_dir / "sources.list.d").mkdir()
+            (apt_dir / "sources.list.d/other.list").write_text("unexpected source\n")
+            rejected = subprocess.run(
+                ["sh", str(ROOT / "scripts/native-debian-snapshot.sh")],
+                env=env, capture_output=True, text=True, check=False,
+            )
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertEqual(rejected.stderr, "DOCKERLENS_APT_RESULT: unexpected_sources\n")
+            (apt_dir / "sources.list.d/other.list").unlink()
+            (apt_dir / "sources.list.d/other.sources").symlink_to(apt_dir / "sources.list")
+            symlink_rejected = subprocess.run(
+                ["sh", str(ROOT / "scripts/native-debian-snapshot.sh")],
+                env=env, capture_output=True, text=True, check=False,
+            )
+            self.assertNotEqual(symlink_rejected.returncode, 0)
+            self.assertEqual(symlink_rejected.stderr, "DOCKERLENS_APT_RESULT: unexpected_sources\n")
+            (apt_dir / "sources.list.d/other.sources").unlink()
+            (apt_dir / "sources.list.d").rmdir()
+            extra = apt_dir / "extra-sources"
+            extra.mkdir()
+            (extra / "other.list").write_text("unexpected source\n")
+            (apt_dir / "sources.list.d").symlink_to(extra, target_is_directory=True)
+            directory_rejected = subprocess.run(
+                ["sh", str(ROOT / "scripts/native-debian-snapshot.sh")],
+                env=env, capture_output=True, text=True, check=False,
+            )
+            self.assertNotEqual(directory_rejected.returncode, 0)
+            self.assertEqual(directory_rejected.stderr, "DOCKERLENS_APT_RESULT: unexpected_sources\n")
 
     def test_engine_release_match_has_exact_boundaries(self) -> None:
         helper = ROOT / "scripts/native-version.sh"

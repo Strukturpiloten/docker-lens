@@ -58,6 +58,7 @@ socket="$socket_dir/docker.sock"
 mkdir -m 0777 "$socket_dir"
 mkdir -m 0755 "$socket_dir/native-bind"
 install -m 0644 "$script_dir/native-apt-install.sh" "$socket_dir/native-apt-install.sh"
+install -m 0644 "$script_dir/native-debian-snapshot.sh" "$socket_dir/native-debian-snapshot.sh"
 printf 'native-bind-canary\n' > "$socket_dir/native-bind/canary"
 printf 'native-tcp-canary\n' > "$socket_dir/native-bind/index.html"
 chmod 0700 "$run_dir"
@@ -136,7 +137,8 @@ for chunk in iter(lambda: sys.stdin.buffer.read(65536), b""):
     if len(tail) > 65536:
         del tail[:-65536]
 s = tail.decode("utf-8", "replace").lower()
-stages = {"dockerlens_apt_stage: update": "update",
+stages = {"dockerlens_apt_stage: sources": "sources",
+          "dockerlens_apt_stage: update": "update",
           "dockerlens_apt_stage: install": "install",
           "dockerlens_apt_stage: daemon": "daemon"}
 lines = s.splitlines()
@@ -146,7 +148,8 @@ last_stage = next(((index, stages[lines[index].strip()])
 stage = (last_stage[1] if last_stage else "unavailable") if sys.argv[1].startswith("debian11-") else "daemon"
 if last_stage and sys.argv[1].startswith("debian11-"):
     s = "\n".join(lines[last_stage[0] + 1:])
-package_checks = (("package_version_unavailable", ("dockerlens_apt_result: version-unavailable",)),
+package_checks = (("package_sources_unexpected", ("dockerlens_apt_result: unexpected_sources",)),
+                  ("package_version_unavailable", ("dockerlens_apt_result: version-unavailable",)),
                   ("package_post_invoke", ("dockerlens_apt_result: package_post_invoke",)),
                   ("package_signature", ("dockerlens_apt_result: package_signature",)),
                   ("package_time", ("dockerlens_apt_result: package_time",)),
@@ -183,7 +186,7 @@ daemon_checks = (("daemon_storage", ("error initializing graphdriver",
                  ("daemon_network", ("iptables", "failed to create nat chain",
                                      "error creating default bridge")),
                  ("daemon_startup", ("failed to start daemon",)))
-if stage in ("update", "install"):
+if stage in ("sources", "update", "install"):
     checks = package_checks
 elif stage == "daemon":
     checks = daemon_checks
@@ -237,6 +240,8 @@ watchdog() {
 if [[ $lane == debian11-rootful ]]; then
   storage_mount="$volume:/var/lib/docker:U"
   start=(sh -ec '
+    printf "DOCKERLENS_APT_STAGE: sources\n"
+    sh /run/dockerlens/native-debian-snapshot.sh
     printf "DOCKERLENS_APT_STAGE: update\n"
     apt-get update -qq
     printf "DOCKERLENS_APT_STAGE: install\n"
@@ -256,6 +261,8 @@ if [[ $lane == debian11-rootful ]]; then
 elif [[ $lane == debian11-rootless ]]; then
   storage_mount="$volume:/home/rootless/.local/share/docker:U"
   start=(sh -ec '
+    printf "DOCKERLENS_APT_STAGE: sources\n"
+    sh /run/dockerlens/native-debian-snapshot.sh
     printf "DOCKERLENS_APT_STAGE: update\n"
     apt-get update -qq
     printf "DOCKERLENS_APT_STAGE: install\n"
