@@ -394,6 +394,7 @@ esac
             ("acquirefail", False),
             ("uidfail", False),
             ("phasefail", False),
+            ("startfail", False),
             ("listfail", False),
         ):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
@@ -436,6 +437,12 @@ elif [[ $FAKE_NATIVE_TEST_MODE == phasefail ]]; then
   echo 'DOCKERLENS_NATIVE_CHECK: target_traffic_private' >&2
   echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
   exit 10
+elif [[ $FAKE_NATIVE_TEST_MODE == startfail ]]; then
+  echo 'protected daemon start detail' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: target_start_cgroup' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: target_start_private' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 11
 else
   echo 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;'
 fi
@@ -468,6 +475,9 @@ fi
                 elif mode == "phasefail":
                     self.assertIn("DOCKERLENS_NATIVE_CHECK: target_traffic_probe", result.stderr)
                     self.assertNotIn("target_traffic_private", result.stderr)
+                elif mode == "startfail":
+                    self.assertIn("DOCKERLENS_NATIVE_CHECK: target_start_cgroup", result.stderr)
+                    self.assertNotIn("target_start_private", result.stderr)
                 elif mode == "listfail":
                     self.assertIn("fixture::live_check (exit 23)", result.stderr)
 

@@ -2,11 +2,13 @@
 //! This test-only executor applies a closed set of inert renderer requests.
 
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::num::{NonZeroU16, NonZeroU32, NonZeroU64};
+use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::AtomicBool;
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::Duration;
 
@@ -76,7 +78,7 @@ fn api(method: &str, path: &str, body: Option<&Value>) -> (u16, Vec<u8>) {
     (status, output.stdout[..split].to_vec())
 }
 
-fn inner_docker(args: &[&str]) -> Vec<u8> {
+fn inner_docker_command(args: &[&str]) -> Command {
     let outer = required("NATIVE_OUTER_CONTAINER");
     let mut command = Command::new("timeout");
     command.arg("60");
@@ -93,6 +95,11 @@ fn inner_docker(args: &[&str]) -> Vec<u8> {
         "unix:///run/dockerlens/docker.sock",
     ]);
     command.args(args);
+    command
+}
+
+fn inner_docker(args: &[&str]) -> Vec<u8> {
+    let mut command = inner_docker_command(args);
     command.stderr(Stdio::null());
     let output = command.output().expect("isolated inner Docker CLI");
     assert!(
@@ -100,6 +107,123 @@ fn inner_docker(args: &[&str]) -> Vec<u8> {
         "independent inner Docker probe failed"
     );
     output.stdout
+}
+
+fn bounded_error_tail(mut stderr: impl Read) -> Vec<u8> {
+    const LIMIT: usize = 8192;
+    let mut tail = Vec::with_capacity(LIMIT);
+    let mut chunk = [0_u8; 4096];
+    loop {
+        let count = match stderr.read(&mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(count) => count,
+        };
+        tail.extend_from_slice(&chunk[..count]);
+        if tail.len() > LIMIT {
+            tail.drain(..tail.len() - LIMIT);
+        }
+    }
+    tail
+}
+
+fn start_failure_category(stderr: &[u8]) -> &'static str {
+    let message = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+    if message.contains("uidmap") || message.contains("newuidmap") {
+        "uidmap"
+    } else if message.contains("user namespace") || message.contains("userns") {
+        "userns"
+    } else if message.contains("cgroup") {
+        "cgroup"
+    } else if message.contains("network")
+        || message.contains("iptables")
+        || message.contains("slirp")
+    {
+        "network"
+    } else if message.contains("mount") || message.contains("overlay") || message.contains("fuse") {
+        "mount"
+    } else if message.contains("no space left") || message.contains("quota") {
+        "storage"
+    } else if message.contains("runc") || message.contains("oci runtime") {
+        "runtime"
+    } else if message.contains("permission denied") || message.contains("operation not permitted") {
+        "permission"
+    } else {
+        "unclassified"
+    }
+}
+
+fn start_native_source(container_id: &str) {
+    let mut command = inner_docker_command(&["start", container_id]);
+    command.stdout(Stdio::null()).stderr(Stdio::piped());
+    let mut child = command.spawn().unwrap_or_else(|_| {
+        eprintln!("DOCKERLENS_NATIVE_CHECK: target_start_exec");
+        panic!("isolated inner Docker start probe unavailable");
+    });
+    let stderr = child.stderr.take().expect("bounded Docker start stderr");
+    let (sender, receiver) = mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let _ = sender.send(bounded_error_tail(stderr));
+    });
+    let status = child.wait().unwrap_or_else(|_| {
+        eprintln!("DOCKERLENS_NATIVE_CHECK: target_start_exec");
+        panic!("isolated inner Docker start probe wait failed");
+    });
+    let error_tail = match receiver.recv_timeout(Duration::from_secs(2)) {
+        Ok(tail) => tail,
+        Err(RecvTimeoutError::Timeout) => {
+            eprintln!("DOCKERLENS_NATIVE_CHECK: target_start_timeout");
+            panic!("isolated inner Docker start stderr did not close");
+        }
+        Err(RecvTimeoutError::Disconnected) => {
+            eprintln!("DOCKERLENS_NATIVE_CHECK: target_start_exec");
+            panic!("isolated inner Docker start probe read failed");
+        }
+    };
+    if !status.success() {
+        let category = if status.code() == Some(124) {
+            "timeout"
+        } else {
+            start_failure_category(&error_tail)
+        };
+        eprintln!("DOCKERLENS_NATIVE_CHECK: target_start_{category}");
+        panic!("independent inner Docker start failed");
+    }
+}
+
+#[test]
+fn start_failure_classifier_is_closed_and_uses_bounded_private_input() {
+    let category = start_failure_category(b"protected-secret: cgroup: operation not permitted");
+    assert_eq!(category, "cgroup");
+    assert!(!category.contains("protected-secret"));
+    assert_eq!(
+        start_failure_category(b"protected-secret only"),
+        "unclassified"
+    );
+    assert_eq!(start_failure_category(&[0xff, 0xfe]), "unclassified");
+    let mut oversized = vec![b'x'; 16_384];
+    oversized.extend_from_slice(b"protected-secret user namespace");
+    let tail = bounded_error_tail(oversized.as_slice());
+    assert_eq!(tail.len(), 8192);
+    assert_eq!(start_failure_category(&tail), "userns");
+}
+
+#[test]
+fn start_error_tail_wait_has_a_deadline_if_a_writer_remains_open() {
+    let (mut writer, reader) = UnixStream::pair().unwrap();
+    let (sender, receiver) = mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let _ = sender.send(bounded_error_tail(reader));
+    });
+    writer.write_all(b"protected-secret").unwrap();
+    assert!(matches!(
+        receiver.recv_timeout(Duration::from_millis(20)),
+        Err(RecvTimeoutError::Timeout)
+    ));
+    drop(writer);
+    assert_eq!(
+        receiver.recv_timeout(Duration::from_secs(1)).unwrap(),
+        b"protected-secret"
+    );
 }
 
 // Test-only independent evidence from the outer container's own /proc view.
@@ -306,7 +430,7 @@ fn live_target_render_matches_engine() {
     assert!(source_env.iter().any(|entry| entry == "EMPTY="));
     assert!(source_env.iter().any(|entry| entry == "QUOTED=a\"b\\c"));
     eprintln!("DOCKERLENS_NATIVE_CHECK: target_traffic");
-    inner_docker(&["start", &source_id]);
+    start_native_source(&source_id);
     eprintln!("DOCKERLENS_NATIVE_CHECK: target_traffic_probe");
     probe_traffic(&source_id, 18080, 18081);
     eprintln!("DOCKERLENS_NATIVE_CHECK: target_health_create");
