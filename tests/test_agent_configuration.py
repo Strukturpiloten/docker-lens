@@ -1,4 +1,4 @@
-"""Repository-local agent roles and bootstrap policy contracts."""
+"""Repository-local agent roles and scaffold policy contracts."""
 
 import tomllib
 import unittest
@@ -39,8 +39,7 @@ class AgentConfigurationTests(unittest.TestCase):
                     self.assertIn("original user requirements", instructions)
                     self.assertIn("independent expected results", instructions)
                 if role == "verifier":
-                    self.assertIn("python3 -m unittest discover -s tests -v", instructions)
-                    self.assertIn("git diff --check", instructions)
+                    self.assertIn("./scripts/check-all.sh --check", instructions)
                     self.assertIn(
                         "Escalate complex failure diagnosis to a Sol agent",
                         instructions,

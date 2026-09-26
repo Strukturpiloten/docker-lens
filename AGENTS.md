@@ -2,13 +2,12 @@
 
 This file applies to the entire DockerLens repository.
 
-## Bootstrap scope
+## Product scope
 
-DockerLens currently contains its license and repository agent policy, not a library or runtime
-implementation. Read this file and all files relevant to the assigned task before editing.
-Do not invent product APIs, Docker operations, release workflows, or BoxFerry adapters as part of
-agent-policy maintenance. Establish architecture and acceptance criteria in a separate requested
-implementation task. Product libraries must not depend on BoxFerry.
+DockerLens contains a contract scaffold, not native Docker Engine behavior. Read this file,
+`README.md`, `docs/architecture.md`, `docs/verification.md`, and relevant decisions before editing.
+No acquisition transport, native decoder, planner, renderer, or Engine conformance is implemented.
+Do not claim compatibility from scaffold checks. Product libraries must not depend on BoxFerry.
 
 ## Workspace scope and standing GitHub authorization
 
@@ -51,10 +50,11 @@ checkout and must not perform those writes.
 2. Search for duplicates, then create or reuse one focused issue.
 3. Fetch `origin/main`, synchronize local `main`, and create `TheRealBecks/issue<NUMBER>`.
 4. Implement the bounded change and obtain an independent read-only review.
-5. Run every bootstrap check below after the final edit. A failed or incomplete run is a hard gate
+5. Run the complete scaffold gate below after the final edit. A failed or incomplete run is a hard gate
    against commit, push, and pull-request creation; any later edit invalidates the result.
 6. Stage explicit paths, run `git diff --cached --check`, review the staged diff, and create one
-   intentional maintenance commit using `docs`, `test`, or `chore`.
+   intentional Conventional Commit. Use a product type for product changes and `docs`, `test`,
+   `ci`, `build`, `style`, or `chore` for non-release work.
 7. Push and open a ready pull request containing `Closes #<NUMBER>`. Read back the issue, commit,
    pull request, and available checks.
 8. Apply the standing authorization and exact-head safeguards above before merging.
@@ -84,25 +84,19 @@ These model settings do not expand the workspace scope or grant additional permi
   concurrent implementation. Research and review remain read-only.
 - The reviewer checks the original requirements and independent expected results, not just agreement
   between the implementation and its tests.
-- After writing finishes, the verifier runs the complete bootstrap checks listed below. It reports
+- After writing finishes, the verifier runs the complete scaffold gate listed below. It reports
   failures without formatting or editing tracked files; ignored caches are allowed.
 - Run at most one complete gate or heavy runtime suite at a time across this workspace. Agent
   concurrency is not permission for competing builds. The primary owns integration, the final
   complete gate, and every authorized Git or GitHub write.
 
-## Complete bootstrap validation
+## Complete scaffold validation
 
-Use Python 3.11 or newer; the policy tests use only the standard library:
-
-```console
-python3 -m unittest discover -s tests -v
-git diff --check
-```
-
-These checks cover the current documentation/configuration-only repository. There is no product
-test suite or `scripts/check-all.sh` yet. Do not claim product or runtime validation. Once an
-implementation establishes a canonical complete gate, update these instructions, the verifier,
-and the policy tests together. Never silently skip a required check.
+Run `./scripts/format-lint.sh --fix`, then `./scripts/check-all.sh --check` after the final edit.
+The complete gate covers formatting, Clippy, unit and documentation tests, policy tests, and docs.
+The release validation workflow must also pass native Engine conformance for the exact candidate;
+its native script deliberately fails until the separately reviewed suite is implemented. Never
+silently skip a required check or claim native compatibility from scaffold tests.
 
 ## Shared workflow and dependency changes
 
@@ -110,8 +104,8 @@ Before changing shared task definitions, identify all consumers in the six autho
 repositories. Reuse common logic without making independently published Lens libraries depend on
 BoxFerry. Coordinate affected consumers and record justified no-change decisions in the issue or
 PR. Review Renovate ownership whenever an operational pin or its location changes; preserve
-immutable action pins, least privilege, evidence boundaries, budgets, and cleanup. This bootstrap
-adds no software dependencies, operational pins, or Renovate configuration. Agent model choices
+immutable action pins, least privilege, evidence boundaries, budgets, and cleanup. This scaffold
+adds a pinned toolchain, GitHub Action, and Renovate configuration. Agent model choices
 are maintainer-owned routing policy, not automatically updated software release versions.
 
 ## Cross-repository workflow and version policy

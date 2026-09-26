@@ -1,0 +1,10 @@
+[package]
+name = "docker-lens"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85.0"
+license = "MPL-2.0"
+description = "Bounded native Docker Engine observation and inert target planning contracts"
+repository = "https://github.com/Strukturpiloten/docker-lens"
+
+[dependencies]
