@@ -393,6 +393,7 @@ esac
             ("runfail", False),
             ("acquirefail", False),
             ("uidfail", False),
+            ("phasefail", False),
             ("listfail", False),
         ):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
@@ -429,6 +430,12 @@ elif [[ $FAKE_NATIVE_TEST_MODE == uidfail ]]; then
   echo 'DOCKERLENS_NATIVE_CHECK: target_uid_private' >&2
   echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
   exit 9
+elif [[ $FAKE_NATIVE_TEST_MODE == phasefail ]]; then
+  echo 'protected network details' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: target_traffic_probe' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: target_traffic_private' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 10
 else
   echo 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;'
 fi
@@ -458,6 +465,9 @@ fi
                 elif mode == "uidfail":
                     self.assertIn("DOCKERLENS_NATIVE_CHECK: target_uid_count", result.stderr)
                     self.assertNotIn("target_uid_private", result.stderr)
+                elif mode == "phasefail":
+                    self.assertIn("DOCKERLENS_NATIVE_CHECK: target_traffic_probe", result.stderr)
+                    self.assertNotIn("target_traffic_private", result.stderr)
                 elif mode == "listfail":
                     self.assertIn("fixture::live_check (exit 23)", result.stderr)
 

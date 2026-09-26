@@ -278,16 +278,20 @@ fn live_target_render_matches_engine() {
             panic!("rootful dockerd must run as root");
         }
     }
+    eprintln!("DOCKERLENS_NATIVE_CHECK: target_mode");
     let lane_mode = required("NATIVE_DAEMON_MODE");
     assert!(
         matches!(lane_mode.as_str(), "rootful" | "rootless"),
         "closed native daemon mode"
     );
     assert_eq!(observed_rootless, lane_mode == "rootless");
+    eprintln!("DOCKERLENS_NATIVE_CHECK: target_ports");
     assert_all_interface_binding(&source, "8080/tcp", "18080");
     assert_all_interface_binding(&source, "8081/udp", "18081");
+    eprintln!("DOCKERLENS_NATIVE_CHECK: target_mounts");
     assert_mount(&source, "volume", "/data", Some(&source_volume), true);
     assert_mount(&source, "bind", "/readonly", None, false);
+    eprintln!("DOCKERLENS_NATIVE_CHECK: target_settings");
     assert_eq!(source["HostConfig"]["RestartPolicy"]["Name"], "on-failure");
     assert_eq!(
         source["HostConfig"]["RestartPolicy"]["MaximumRetryCount"],
@@ -301,8 +305,11 @@ fn live_target_render_matches_engine() {
     let source_env = source["Config"]["Env"].as_array().unwrap();
     assert!(source_env.iter().any(|entry| entry == "EMPTY="));
     assert!(source_env.iter().any(|entry| entry == "QUOTED=a\"b\\c"));
+    eprintln!("DOCKERLENS_NATIVE_CHECK: target_traffic");
     inner_docker(&["start", &source_id]);
+    eprintln!("DOCKERLENS_NATIVE_CHECK: target_traffic_probe");
     probe_traffic(&source_id, 18080, 18081);
+    eprintln!("DOCKERLENS_NATIVE_CHECK: target_health_create");
     let run_id = required("NATIVE_OUTER_CONTAINER")
         .trim_start_matches("dl-native-")
         .to_owned();
@@ -333,12 +340,14 @@ fn live_target_render_matches_engine() {
         inspected["Config"]["Healthcheck"]["Test"],
         json!(["CMD", "/bin/true"])
     );
+    eprintln!("DOCKERLENS_NATIVE_CHECK: target_health_start");
     let (status, _) = api(
         "POST",
         &format!("/v{api_version}/containers/{cmd_probe_id}/start"),
         None,
     );
     assert_eq!(status, 204);
+    eprintln!("DOCKERLENS_NATIVE_CHECK: target_health_wait");
     let mut probe_healthy = false;
     for _ in 0..10 {
         let (status, body) = api(
