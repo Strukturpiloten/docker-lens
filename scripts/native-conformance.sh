@@ -515,8 +515,8 @@ minimal_name="dl-${run_id}-minimal"
 if minimal_start_category=$(timeout --kill-after=1s 44s bash -c \
   'set -o pipefail; "$@" 2>&1 >/dev/null | classify_minimal_start_error' bash \
   "${inner_docker[@]}" run --rm --name "$minimal_name" \
-  --label "io.dockerlens.native-run=$run_id" --network none --entrypoint /bin/true \
-  "$FIXTURE_IMAGE"); then
+  --label "io.dockerlens.native-run=$run_id" --network none --entrypoint /bin/sh \
+  "$FIXTURE_IMAGE" -c 'exit 0'); then
   echo 'DOCKERLENS_NATIVE_PROBE: minimal_start_ok'
 else
   minimal_start_status=$?

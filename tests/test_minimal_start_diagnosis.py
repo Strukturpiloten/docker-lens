@@ -32,6 +32,10 @@ class MinimalStartDiagnosisTests(unittest.TestCase):
             docker.write_text(
                 """#!/bin/sh
 if [ "$1" = run ]; then
+  case " $* " in
+    *" --network none --entrypoint /bin/sh synthetic-image -c exit 0 "*) ;;
+    *) exit 3 ;;
+  esac
   if [ "$FAKE_OPEN_WRITER" = 1 ]; then sleep 30 >&2 & fi
   printf '%s\\n' "$FAKE_ERROR" >&2
   exit "$FAKE_EXIT"
