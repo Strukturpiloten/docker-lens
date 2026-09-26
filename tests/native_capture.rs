@@ -16,6 +16,7 @@ use docker_lens::version::{ApiVersion, DaemonMode};
 #[test]
 #[ignore = "requires an isolated inner Docker Engine and protected live API responses"]
 fn live_engine_capture_decodes() {
+    eprintln!("DOCKERLENS_NATIVE_CHECK: capture_input");
     let dir = std::env::var("NATIVE_CAPTURE_DIR").expect("harness supplies capture directory");
     let container_id = std::env::var("NATIVE_CONTAINER_ID").expect("harness supplies container ID");
     let network_id = std::env::var("NATIVE_NETWORK_ID").expect("harness supplies network ID");
@@ -82,7 +83,9 @@ fn live_engine_capture_decodes() {
             .expect("bounded response");
     }
     let capture = budget.into_capture().expect("complete bounded capture");
+    eprintln!("DOCKERLENS_NATIVE_CHECK: capture_decode");
     let decoded = decode_capture(&capture).expect("live API capture decodes");
+    eprintln!("DOCKERLENS_NATIVE_CHECK: capture_daemon");
     assert_eq!(
         decoded.version.daemon.release.as_ref().unwrap().as_str(),
         expected_version
@@ -96,11 +99,14 @@ fn live_engine_capture_decodes() {
             DaemonMode::Rootful
         }
     );
+    eprintln!("DOCKERLENS_NATIVE_CHECK: capture_counts");
     assert_eq!(decoded.containers.len(), 1);
     assert_eq!(decoded.networks.len(), 1);
     assert_eq!(decoded.volumes.len(), 1);
     let container = &decoded.containers[0];
+    eprintln!("DOCKERLENS_NATIVE_CHECK: capture_image");
     assert_eq!(container.image.origin, Origin::Effective);
+    eprintln!("DOCKERLENS_NATIVE_CHECK: capture_ports");
     for (container_port, protocol, host_port) in [
         (8080, TransportProtocol::Tcp, 18080),
         (8081, TransportProtocol::Udp, 18081),
@@ -124,6 +130,7 @@ fn live_engine_capture_decodes() {
             assert!([b"".as_slice(), b"0.0.0.0".as_slice(), b"::".as_slice()].contains(&ip));
         }
     }
+    eprintln!("DOCKERLENS_NATIVE_CHECK: capture_mounts");
     let mount = container
         .mounts
         .value()
@@ -150,6 +157,7 @@ fn live_engine_capture_decodes() {
     );
     assert_eq!(bind.destination.value().unwrap().as_bytes(), b"/readonly");
     assert_eq!(bind.read_write.value(), Some(&false));
+    eprintln!("DOCKERLENS_NATIVE_CHECK: capture_environment");
     let assignment = container
         .environment
         .value()
@@ -174,6 +182,7 @@ fn live_engine_capture_decodes() {
             .expect("independent environment shape exists");
         assert_eq!(assignment.value.as_ref().unwrap().as_bytes(), value);
     }
+    eprintln!("DOCKERLENS_NATIVE_CHECK: capture_command");
     assert!(
         matches!(container.entrypoint.value(), Some(CommandValue::Exec(parts)) if parts.len() == 1 && parts[0].as_bytes() == b"/bin/sh")
     );
@@ -189,6 +198,7 @@ fn live_engine_capture_decodes() {
         .expect("restart policy exists");
     assert_eq!(restart.name.value().unwrap().as_bytes(), b"on-failure");
     assert_eq!(restart.maximum_retry_count.value(), Some(&3));
+    eprintln!("DOCKERLENS_NATIVE_CHECK: capture_privacy");
     let debug = format!("{decoded:?}");
     assert!(!debug.contains("synthetic-secret"));
 }

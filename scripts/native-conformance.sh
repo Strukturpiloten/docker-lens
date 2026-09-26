@@ -77,6 +77,12 @@ cleanup() {
     owner=$("${podman_cmd[@]}" inspect --format '{{index .Config.Labels "io.dockerlens.native-run"}}' "$container") || status=1
     if [[ ${owner:-} == "$run_id" ]]; then
       "${podman_cmd[@]}" rm -f "$container" >/dev/null || status=1
+      removed_state=0
+      "${podman_cmd[@]}" container exists "$container" || removed_state=$?
+      if (( removed_state != 1 )); then
+        echo "owned container cleanup readback failed (exists exit $removed_state)" >&2
+        status=1
+      fi
     else
       echo "refusing to remove container $container without matching ownership label" >&2
       status=1
@@ -92,6 +98,12 @@ cleanup() {
     owner=$("${podman_cmd[@]}" volume inspect --format '{{index .Labels "io.dockerlens.native-run"}}' "$volume") || status=1
     if [[ ${owner:-} == "$run_id" ]]; then
       "${podman_cmd[@]}" volume rm "$volume" >/dev/null || status=1
+      removed_state=0
+      "${podman_cmd[@]}" volume exists "$volume" || removed_state=$?
+      if (( removed_state != 1 )); then
+        echo "owned volume cleanup readback failed (exists exit $removed_state)" >&2
+        status=1
+      fi
     else
       echo "refusing to remove volume $volume without matching ownership label" >&2
       status=1
@@ -107,6 +119,30 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 echo "native lane $lane owns Podman container $container and volume $volume"
+
+diagnose_debian_startup() {
+  [[ $lane == debian11-* ]] || return 0
+  local state category
+  state=$("${podman_cmd[@]}" inspect --format '{{.State.Status}}|{{.State.ExitCode}}|{{.State.OOMKilled}}' "$container" 2>/dev/null) || state=unavailable
+  [[ $state =~ ^(running|exited|created|configured|paused|stopped)\|[0-9]+\|(true|false)$ ]] || state=unavailable
+  # Read at most 64 KiB of the last 80 lines. Logs can contain protected values,
+  # so only a fixed category ever leaves this function.
+  category=$(timeout 10 "${podman_cmd[@]}" logs --tail 80 "$container" 2>/dev/null |
+    python3 -c 'import sys
+s = sys.stdin.buffer.read(65536).decode("utf-8", "replace").lower()
+for chunk in iter(lambda: sys.stdin.buffer.read(65536), b""):
+    pass
+checks = (("rootless_uidmap", ("uid_map", "newuidmap", "newgidmap")),
+          ("rootless_network", ("rootlesskit", "slirp4netns")),
+          ("daemon_storage", ("failed to start daemon", "error initializing graphdriver")),
+          ("package_download", ("failed to fetch", "temporary failure resolving",
+                                "does not have a release file")),
+          ("package_install", ("unable to locate package", "held broken packages",
+                               "was not found", "has no installation candidate")),
+          ("daemon_permission", ("operation not permitted", "permission denied")))
+print(next((name for name, needles in checks if any(item in s for item in needles)), "unclassified"))' ) || category=unavailable
+  echo "Debian inner daemon startup diagnosis: state=$state category=$category" >&2
+}
 
 graph_root=$("${podman_cmd[@]}" info --format '{{.Store.GraphRoot}}')
 [[ $graph_root == /* ]] || { echo 'outer Podman graph root is unavailable' >&2; exit 1; }
@@ -199,11 +235,18 @@ while (( SECONDS < deadline )); do
     if [[ $EUID == 0 ]]; then chmod 0666 "$socket"; else sudo -n chmod 0666 "$socket"; fi
     if curl -fsS --max-time 5 --unix-socket "$socket" http://localhost/_ping >/dev/null; then break; fi
   fi
-  "${podman_cmd[@]}" container exists "$container" || { echo 'inner daemon exited before readiness' >&2; exit 1; }
+  running=$("${podman_cmd[@]}" inspect --format '{{.State.Running}}' "$container" 2>/dev/null) || running=unknown
+  if [[ $running != true ]]; then
+    echo 'inner daemon exited before readiness' >&2
+    diagnose_debian_startup
+    exit 1
+  fi
   sleep 2
 done
 [[ -S $socket ]] && curl -fsS --max-time 5 --unix-socket "$socket" http://localhost/_ping >/dev/null || {
-  echo 'inner daemon did not become ready within six minutes' >&2; exit 1;
+  echo 'inner daemon did not become ready within six minutes' >&2
+  diagnose_debian_startup
+  exit 1
 }
 
 api_get() {

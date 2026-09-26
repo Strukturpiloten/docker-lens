@@ -281,6 +281,7 @@ fn live_target_render_matches_engine() {
         "independent exec-form health probe did not pass"
     );
 
+    eprintln!("DOCKERLENS_NATIVE_CHECK: read_only_acquire");
     let capture = acquire(
         &Endpoint::unix_socket(socket),
         Selector::ContainerIds(vec![NativeId::new(source_id).unwrap()]),
@@ -295,14 +296,18 @@ fn live_target_render_matches_engine() {
         &AtomicBool::new(false),
     )
     .expect("live bounded read-only acquisition");
+    eprintln!("DOCKERLENS_NATIVE_CHECK: read_only_route");
     assert_eq!(capture.route(), CaptureRoute::ExplicitUnixSocket);
+    eprintln!("DOCKERLENS_NATIVE_CHECK: read_only_status");
     assert!(
         capture
             .exchanges()
             .iter()
             .all(|exchange| exchange.status().code() == 200)
     );
+    eprintln!("DOCKERLENS_NATIVE_CHECK: read_only_decode");
     let decoded = decode_capture(&capture).expect("native source inventory");
+    eprintln!("DOCKERLENS_NATIVE_CHECK: read_only_daemon");
     assert_eq!(capture.observation_id(), decoded.observation_id);
     let mut facts = decoded.version.daemon;
     assert_eq!(facts.observation_id, capture.observation_id());
@@ -310,6 +315,7 @@ fn live_target_render_matches_engine() {
         facts.release.as_ref().unwrap().as_str(),
         required("NATIVE_ENGINE_VERSION")
     );
+    eprintln!("DOCKERLENS_NATIVE_CHECK: read_only_mode");
     assert_eq!(
         facts.mode,
         if observed_rootless {
@@ -318,6 +324,7 @@ fn live_target_render_matches_engine() {
             DaemonMode::Rootful
         }
     );
+    eprintln!("DOCKERLENS_NATIVE_CHECK: read_only_api");
     let observed_api = facts.api_version.expect("observed exact daemon API");
     assert_eq!(
         format!("{}.{}", observed_api.major, observed_api.minor),

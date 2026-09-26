@@ -25,8 +25,12 @@ result=$(timeout 180 cargo test --locked --test "$target" -- --ignored --exact "
 # Only libtest's numeric summary is safe to print. Test and compiler output can
 # contain protected native values, socket payloads, or authored secrets.
 summary=$(grep -Eo '^test result: (ok|FAILED)\. [0-9]+ passed; [0-9]+ failed; [0-9]+ ignored; [0-9]+ measured; [0-9]+ filtered out;' <<<"$result" | tail -n 1 || true)
+# Only constant markers authored by the native tests may pass this boundary.
+# Never print arbitrary assertion, compiler, daemon, or captured API output.
+marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: (capture_(input|decode|daemon|counts|image|ports|mounts|environment|command|privacy)|read_only_(acquire|route|status|decode|daemon|mode|api))$' <<<"$result" | tail -n 1 || true)
 if (( run_status != 0 )); then
   echo "required native test $target::$test_name failed (exit $run_status)" >&2
+  if [[ -n $marker ]]; then echo "$marker" >&2; fi
   if [[ -n $summary ]]; then
     echo "$summary" >&2
   fi

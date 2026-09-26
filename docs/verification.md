@@ -36,14 +36,17 @@ the pinned image manifests and Debian 11 package repository. The script caps
 the nested daemon at 4 GiB storage, 4 GiB memory, two CPUs and 512 processes.
 It bounds the outer image pull to three minutes, checks free space before the
 pull, monitors space during it, and forbids an implicit pull when starting the
-outer container. Failure diagnostics show the exact native test and exit status
-plus only libtest's numeric result summary; raw test output stays private.
+outer container. Failure diagnostics show the exact native test, exit status,
+numeric libtest summary, and last fixed native check marker. Debian startup
+failures show bounded container state and a classified startup category. Raw
+assertions, daemon logs, and API responses stay private.
 It deletes its exact named container, volume, and temporary files after
 success, failure, or catchable termination. SIGKILL, host failure, or hard
 runner shutdown can prevent cleanup; inspect the printed exact names and
 `io.dockerlens.native-run` labels before manual removal. Never global-prune.
 Podman existence-query errors are not treated as absence: cleanup attempts
-label-verified removal where possible and still fails the lane for review.
+label-verified removal where possible, reads back exact resource absence, and
+still fails the lane for review when absence cannot be verified.
 
 Release validation checks the supplied full SHA against current `main`, runs
 the complete gate, runs all four native lanes independently, then rechecks
