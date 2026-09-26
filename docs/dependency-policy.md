@@ -21,7 +21,8 @@ avoids duplicate manager ownership. These registry digests were verified with
 review; automerge is disabled for them.
 
 Debian 11 `docker.io=20.10.5+dfsg1-1+deb11u4`,
-`rootlesskit=0.14.2-1`, `slirp4netns=1.0.1-2`,
+`rootlesskit=0.14.2-1+b3` (the Debian 11 amd64 binary revision),
+`slirp4netns=1.0.1-2`,
 `uidmap=1:4.8.1-1+deb11u1`, and `fuse-overlayfs=1.4.0-1` were checked against
 Debian package listings on 2026-09-26. The harness installs them through
 Debian's signed APT metadata inside the pinned Debian 11 image and asserts

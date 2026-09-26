@@ -12,6 +12,7 @@ use docker_lens::decoder::{
 use docker_lens::evidence::HttpStatus;
 use docker_lens::observation::{Origin, ResourceRef};
 use docker_lens::version::{ApiVersion, DaemonMode};
+use serde_json::Value;
 
 #[test]
 #[ignore = "requires an isolated inner Docker Engine and protected live API responses"]
@@ -24,6 +25,10 @@ fn live_engine_capture_decodes() {
     let expected_version =
         std::env::var("NATIVE_ENGINE_VERSION").expect("harness supplies Engine version");
     let expected_mode = std::env::var("NATIVE_DAEMON_MODE").expect("harness supplies daemon mode");
+    assert!(
+        matches!(expected_mode.as_str(), "rootful" | "rootless"),
+        "closed native daemon mode"
+    );
     let api = std::env::var("NATIVE_API_VERSION").expect("harness supplies API version");
     let (major, minor) = api.split_once('.').expect("major.minor API version");
     let api = ApiVersion::new(
@@ -86,19 +91,37 @@ fn live_engine_capture_decodes() {
     eprintln!("DOCKERLENS_NATIVE_CHECK: capture_decode");
     let decoded = decode_capture(&capture).expect("live API capture decodes");
     eprintln!("DOCKERLENS_NATIVE_CHECK: capture_daemon");
+    let info: Value = serde_json::from_slice(
+        &fs::read(Path::new(&dir).join("info.json")).expect("private direct info response"),
+    )
+    .expect("direct info JSON");
+    let option_rootless = info["SecurityOptions"].as_array().is_some_and(|options| {
+        options.iter().any(|option| {
+            option.as_str().is_some_and(|value| {
+                value == "name=rootless" || value.starts_with("name=rootless,")
+            })
+        })
+    });
+    let explicit_rootless = info["Rootless"].as_bool();
+    assert!(
+        !(option_rootless && explicit_rootless == Some(false)),
+        "conflicting daemon mode oracle"
+    );
+    let oracle_mode = match (option_rootless, explicit_rootless) {
+        (true, _) | (_, Some(true)) => DaemonMode::Rootless,
+        (_, Some(false)) => DaemonMode::Rootful,
+        _ => DaemonMode::Unknown,
+    };
+    assert_eq!(
+        expected_mode == "rootless",
+        oracle_mode == DaemonMode::Rootless
+    );
     assert_eq!(
         decoded.version.daemon.release.as_ref().unwrap().as_str(),
         expected_version
     );
     assert_eq!(decoded.version.daemon.api_version, Some(api));
-    assert_eq!(
-        decoded.version.daemon.mode,
-        if expected_mode == "rootless" {
-            DaemonMode::Rootless
-        } else {
-            DaemonMode::Rootful
-        }
-    );
+    assert_eq!(decoded.version.daemon.mode, oracle_mode);
     eprintln!("DOCKERLENS_NATIVE_CHECK: capture_counts");
     assert_eq!(decoded.containers.len(), 1);
     assert_eq!(decoded.networks.len(), 1);

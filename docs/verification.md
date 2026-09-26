@@ -20,8 +20,13 @@ Each lane reads live Engine API version, info, container, network, and volume
 responses. The harness creates only synthetic test resources and stores live
 responses in a private temporary directory. The Rust integration test checks
 bounded capture decoding without writing responses to the repository or CI
-log. The gate also requires #10's live acquisition test and an independent
-`native_target` test of #12's rendered request shapes against Engine behavior.
+log. A rootful `/info` response without affirmative mode evidence remains
+`Unknown` in the decoder. The target conformance test independently checks
+that exactly one inner `dockerd` has effective UID zero for rootful or nonzero
+for rootless, and requires positive rootless `/info` evidence before using a
+test-local mode fact for planning. The gate also requires #10's live acquisition
+test and an independent `native_target` test of #12's rendered request shapes
+against Engine behavior.
 The latter first checks independently created CLI resources and direct API
 responses, including TCP/UDP traffic, before admitting capabilities scoped to
 #10's actual observation. It applies only three allowlisted inert POST shapes
@@ -37,8 +42,11 @@ the nested daemon at 4 GiB storage, 4 GiB memory, two CPUs and 512 processes.
 It bounds the outer image pull to three minutes, checks free space before the
 pull, monitors space during it, and forbids an implicit pull when starting the
 outer container. Failure diagnostics show the exact native test, exit status,
-numeric libtest summary, and last fixed native check marker. Debian startup
-failures show bounded container state and a classified startup category. Raw
+numeric libtest summary, last fixed native check marker, and a closed
+acquisition-error category where applicable. Daemon startup failures show
+bounded container state and a classified startup category. Debian lanes also
+show the last fixed APT stage, including signature, clock, dependency and
+post-invoke failures. Raw
 assertions, daemon logs, and API responses stay private.
 It deletes its exact named container, volume, and temporary files after
 success, failure, or catchable termination. SIGKILL, host failure, or hard

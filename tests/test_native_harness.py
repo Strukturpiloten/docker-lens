@@ -11,9 +11,21 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class NativeHarnessTests(unittest.TestCase):
     def test_created_resources_are_removed_even_when_create_reports_failure(self) -> None:
+        diagnoses = {
+            "daemon_package_missing": "stage=install category=package_install",
+            "daemon_signature": "stage=update category=package_signature",
+            "daemon_time": "stage=update category=package_time",
+            "daemon_dependency": "stage=install category=package_dependency",
+            "daemon_post_invoke": "stage=update category=package_post_invoke",
+            "daemon_upstream_storage": "stage=daemon category=daemon_storage",
+            "daemon_upstream_network": "stage=daemon category=daemon_network",
+        }
         for fault in (
             "volume", "pull", "run", "run_exists_error", "pull_exists_error",
             "preflight_exists_error", "daemon_exit", "daemon_package_missing",
+            "daemon_signature", "daemon_time", "daemon_dependency",
+            "daemon_post_invoke", "daemon_upstream_storage",
+            "daemon_upstream_network",
             "cleanup_container_remains",
             "cleanup_volume_remains", "cleanup_container_query_error",
             "cleanup_volume_query_error",
@@ -90,11 +102,30 @@ case "$command" in
       echo true
     fi ;;
   logs)
-    if [[ $FAKE_NATIVE_FAULT == daemon_package_missing ]]; then
-      echo "E: Version 'protected-secret' for 'docker.io' was not found"
-    else
-      echo 'newuidmap: protected-secret could not write uid_map'
-    fi ;;
+    case "$FAKE_NATIVE_FAULT" in
+      daemon_package_missing)
+        echo 'DOCKERLENS_APT_STAGE: install'
+        echo "E: Version 'protected-secret' for 'docker.io' was not found" ;;
+      daemon_signature)
+        echo 'DOCKERLENS_APT_STAGE: update'
+        echo 'NO_PUBKEY protected-secret' ;;
+      daemon_time)
+        echo 'DOCKERLENS_APT_STAGE: update'
+        echo 'Release file is not valid yet; protected-secret' ;;
+      daemon_dependency)
+        echo 'DOCKERLENS_APT_STAGE: install'
+        echo 'Unmet dependencies: protected-secret' ;;
+      daemon_post_invoke)
+        echo 'DOCKERLENS_APT_STAGE: update'
+        echo 'APT::Update::Post-Invoke failed for protected-secret' ;;
+      daemon_upstream_storage)
+        echo 'error initializing graphdriver: protected-secret' ;;
+      daemon_upstream_network)
+        echo 'failed to create NAT chain: iptables protected-secret' ;;
+      *)
+        echo 'DOCKERLENS_APT_STAGE: daemon'
+        echo 'newuidmap: protected-secret could not write uid_map' ;;
+    esac ;;
   rm)
     touch "$state/container_removal_attempted"
     [[ $FAKE_NATIVE_FAULT == cleanup_container_remains ]] || rm -f "$state/container" ;;
@@ -112,7 +143,8 @@ esac
                 result = subprocess.run(
                     ["bash", str(ROOT / "scripts/native-conformance.sh"),
                      "debian11-rootless" if fault == "daemon_exit"
-                     else "debian11-rootful" if fault == "daemon_package_missing"
+                     else "upstream-rootful" if fault.startswith("daemon_upstream_")
+                     else "debian11-rootful" if fault.startswith("daemon_")
                      else "upstream-rootful"],
                     env=env,
                     capture_output=True,
@@ -130,10 +162,10 @@ esac
                 elif fault == "preflight_exists_error":
                     self.assertIn("could not verify generated native container name", result.stderr)
                 elif fault == "daemon_exit":
-                    self.assertIn("state=exited|42|false category=rootless_uidmap", result.stderr)
+                    self.assertIn("state=exited|42|false stage=daemon category=rootless_uidmap", result.stderr)
                     self.assertNotIn("protected-secret", result.stderr)
-                elif fault == "daemon_package_missing":
-                    self.assertIn("state=exited|42|false category=package_install", result.stderr)
+                elif fault in diagnoses:
+                    self.assertIn(f"state=exited|42|false {diagnoses[fault]}", result.stderr)
                     self.assertNotIn("protected-secret", result.stderr)
                 elif fault.startswith("cleanup_"):
                     resource = "container" if "container" in fault else "volume"
@@ -170,6 +202,7 @@ esac
             ("nonignored", False),
             ("zero", False),
             ("runfail", False),
+            ("acquirefail", False),
             ("listfail", False),
         ):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
@@ -193,6 +226,13 @@ elif [[ $FAKE_NATIVE_TEST_MODE == runfail ]]; then
   echo 'DOCKERLENS_NATIVE_CHECK: capture_protected_secret' >&2
   echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; trailing protected value'
   exit 7
+elif [[ $FAKE_NATIVE_TEST_MODE == acquirefail ]]; then
+  echo 'protected native response and secret' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: acquire_socket' >&2
+  echo 'DOCKERLENS_NATIVE_ERROR: shape' >&2
+  echo 'DOCKERLENS_NATIVE_ERROR: protected-secret' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 8
 else
   echo 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;'
 fi
@@ -215,6 +255,10 @@ fi
                     self.assertIn("DOCKERLENS_NATIVE_CHECK: capture_mounts", result.stderr)
                     self.assertNotIn("capture_protected_secret", result.stderr)
                     self.assertIn("test result: FAILED. 0 passed; 1 failed;", result.stderr)
+                elif mode == "acquirefail":
+                    self.assertIn("DOCKERLENS_NATIVE_CHECK: acquire_socket", result.stderr)
+                    self.assertIn("DOCKERLENS_NATIVE_ERROR: shape", result.stderr)
+                    self.assertNotIn("protected-secret", result.stderr)
                 elif mode == "listfail":
                     self.assertIn("fixture::live_check (exit 23)", result.stderr)
 

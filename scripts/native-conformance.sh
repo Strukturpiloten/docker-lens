@@ -13,7 +13,7 @@ DEBIAN_IMAGE='docker.io/library/debian:11.11-slim@sha256:e5b6442dd2e9684cf5e87d8
 FIXTURE_IMAGE='docker.io/library/busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e'
 # Debian 11 distribution revision, distinct from upstream Engine 28.5.1.
 DEBIAN_DOCKER_PACKAGE='20.10.5+dfsg1-1+deb11u4'
-DEBIAN_ROOTLESSKIT_PACKAGE='0.14.2-1'
+DEBIAN_ROOTLESSKIT_PACKAGE='0.14.2-1+b3'
 DEBIAN_SLIRP4NETNS_PACKAGE='1.0.1-2'
 DEBIAN_UIDMAP_PACKAGE='1:4.8.1-1+deb11u1'
 DEBIAN_FUSE_OVERLAYFS_PACKAGE='1.4.0-1'
@@ -120,28 +120,56 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 echo "native lane $lane owns Podman container $container and volume $volume"
 
-diagnose_debian_startup() {
-  [[ $lane == debian11-* ]] || return 0
-  local state category
+diagnose_native_startup() {
+  local state diagnosis
   state=$("${podman_cmd[@]}" inspect --format '{{.State.Status}}|{{.State.ExitCode}}|{{.State.OOMKilled}}' "$container" 2>/dev/null) || state=unavailable
   [[ $state =~ ^(running|exited|created|configured|paused|stopped)\|[0-9]+\|(true|false)$ ]] || state=unavailable
-  # Read at most 64 KiB of the last 80 lines. Logs can contain protected values,
-  # so only a fixed category ever leaves this function.
-  category=$(timeout 10 "${podman_cmd[@]}" logs --tail 80 "$container" 2>/dev/null |
+  # Retain only the final 64 KiB of the last 80 lines. Logs can contain protected
+  # values, so only fixed stage and category names leave this function.
+  diagnosis=$(timeout 10 "${podman_cmd[@]}" logs --tail 80 "$container" 2>/dev/null |
     python3 -c 'import sys
-s = sys.stdin.buffer.read(65536).decode("utf-8", "replace").lower()
+tail = bytearray()
 for chunk in iter(lambda: sys.stdin.buffer.read(65536), b""):
-    pass
-checks = (("rootless_uidmap", ("uid_map", "newuidmap", "newgidmap")),
-          ("rootless_network", ("rootlesskit", "slirp4netns")),
-          ("daemon_storage", ("failed to start daemon", "error initializing graphdriver")),
-          ("package_download", ("failed to fetch", "temporary failure resolving",
+    tail.extend(chunk)
+    if len(tail) > 65536:
+        del tail[:-65536]
+s = tail.decode("utf-8", "replace").lower()
+stages = {"dockerlens_apt_stage: update": "update",
+          "dockerlens_apt_stage: install": "install",
+          "dockerlens_apt_stage: daemon": "daemon"}
+stage = (next((stages[line.strip()] for line in reversed(s.splitlines())
+               if line.strip() in stages), "unavailable")
+         if sys.argv[1].startswith("debian11-") else "daemon")
+package_checks = (("package_post_invoke", ("post-invoke",)),
+                  ("package_signature", ("no_pubkey", "expkeysig", "badsig",
+                                 "signatures could not be verified", "invalid signature",
+                                 "is not signed")),
+                  ("package_time", ("not valid yet", "release file is expired",
+                            "release file expired", "invalid for another")),
+                  ("package_dependency", ("unmet dependencies", "dependency problems",
+                                  "unable to correct problems", "held broken packages",
+                                  "depends:")),
+                  ("package_download", ("failed to fetch", "temporary failure resolving",
                                 "does not have a release file")),
-          ("package_install", ("unable to locate package", "held broken packages",
-                               "was not found", "has no installation candidate")),
-          ("daemon_permission", ("operation not permitted", "permission denied")))
-print(next((name for name, needles in checks if any(item in s for item in needles)), "unclassified"))' ) || category=unavailable
-  echo "Debian inner daemon startup diagnosis: state=$state category=$category" >&2
+                  ("package_install", ("unable to locate package",
+                                       "was not found", "has no installation candidate")))
+daemon_checks = (("daemon_storage", ("error initializing graphdriver",
+                                     "failed to mount overlay", "storage driver")),
+                 ("rootless_uidmap", ("uid_map", "newuidmap", "newgidmap")),
+                 ("daemon_permission", ("operation not permitted", "permission denied")),
+                 ("rootless_network", ("rootlesskit", "slirp4netns")),
+                 ("daemon_network", ("iptables", "failed to create nat chain",
+                                     "error creating default bridge")),
+                 ("daemon_startup", ("failed to start daemon",)))
+if stage in ("update", "install"):
+    checks = package_checks
+elif stage == "daemon":
+    checks = daemon_checks
+else:
+    checks = package_checks + daemon_checks
+category = next((name for name, needles in checks if any(item in s for item in needles)), "unclassified")
+print("stage=" + stage + " category=" + category)' "$lane") || diagnosis='stage=unavailable category=unavailable'
+  echo "inner daemon startup diagnosis: state=$state $diagnosis" >&2
 }
 
 graph_root=$("${podman_cmd[@]}" info --format '{{.Store.GraphRoot}}')
@@ -186,11 +214,20 @@ watchdog() {
 }
 if [[ $lane == debian11-rootful ]]; then
   storage_mount="$volume:/var/lib/docker:U"
-  start=(sh -ec 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "docker.io=$DEBIAN_DOCKER_PACKAGE" && exec dockerd --host=unix:///run/dockerlens/docker.sock --storage-driver=vfs')
+  start=(sh -ec '
+    printf "DOCKERLENS_APT_STAGE: update\n"
+    apt-get update -qq
+    printf "DOCKERLENS_APT_STAGE: install\n"
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "docker.io=$DEBIAN_DOCKER_PACKAGE"
+    printf "DOCKERLENS_APT_STAGE: daemon\n"
+    exec dockerd --host=unix:///run/dockerlens/docker.sock --storage-driver=vfs
+  ')
 elif [[ $lane == debian11-rootless ]]; then
   storage_mount="$volume:/home/rootless/.local/share/docker:U"
   start=(sh -ec '
+    printf "DOCKERLENS_APT_STAGE: update\n"
     apt-get update -qq
+    printf "DOCKERLENS_APT_STAGE: install\n"
     DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
       "docker.io=$DEBIAN_DOCKER_PACKAGE" "rootlesskit=$DEBIAN_ROOTLESSKIT_PACKAGE" \
       "slirp4netns=$DEBIAN_SLIRP4NETNS_PACKAGE" "uidmap=$DEBIAN_UIDMAP_PACKAGE" \
@@ -201,6 +238,7 @@ elif [[ $lane == debian11-rootless ]]; then
     install -d -m 0700 -o rootless -g rootless /run/user/1000
     install -d -m 0700 -o rootless -g rootless /home/rootless/.local/share/docker
     chown -R rootless:rootless /home/rootless/.local/share/docker
+    printf "DOCKERLENS_APT_STAGE: daemon\n"
     exec su -s /bin/sh rootless -c "/usr/bin/env XDG_RUNTIME_DIR=/run/user/1000 HOME=/home/rootless /usr/share/docker.io/contrib/dockerd-rootless.sh --host=unix:///run/dockerlens/docker.sock --storage-driver=vfs"
   ')
 else
@@ -233,19 +271,19 @@ deadline=$((SECONDS + 360))
 while (( SECONDS < deadline )); do
   if [[ -S $socket ]]; then
     if [[ $EUID == 0 ]]; then chmod 0666 "$socket"; else sudo -n chmod 0666 "$socket"; fi
-    if curl -fsS --max-time 5 --unix-socket "$socket" http://localhost/_ping >/dev/null; then break; fi
+    if curl -fs --max-time 5 --unix-socket "$socket" http://localhost/_ping >/dev/null; then break; fi
   fi
   running=$("${podman_cmd[@]}" inspect --format '{{.State.Running}}' "$container" 2>/dev/null) || running=unknown
   if [[ $running != true ]]; then
     echo 'inner daemon exited before readiness' >&2
-    diagnose_debian_startup
+    diagnose_native_startup
     exit 1
   fi
   sleep 2
 done
-[[ -S $socket ]] && curl -fsS --max-time 5 --unix-socket "$socket" http://localhost/_ping >/dev/null || {
+[[ -S $socket ]] && curl -fs --max-time 5 --unix-socket "$socket" http://localhost/_ping >/dev/null || {
   echo 'inner daemon did not become ready within six minutes' >&2
-  diagnose_debian_startup
+  diagnose_native_startup
   exit 1
 }
 

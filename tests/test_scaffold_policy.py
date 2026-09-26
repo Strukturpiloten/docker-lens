@@ -49,7 +49,7 @@ class ScaffoldPolicyTests(unittest.TestCase):
         self.assertTrue(all(re.fullmatch(r"sha256:[0-9a-f]{64}", pin.group("currentDigest")) for pin in pins))
         for package, revision in (
             ("DOCKER", "20.10.5+dfsg1-1+deb11u4"),
-            ("ROOTLESSKIT", "0.14.2-1"),
+            ("ROOTLESSKIT", "0.14.2-1+b3"),
             ("SLIRP4NETNS", "1.0.1-2"),
             ("UIDMAP", "1:4.8.1-1+deb11u1"),
             ("FUSE_OVERLAYFS", "1.4.0-1"),

@@ -102,6 +102,52 @@ fn inner_docker(args: &[&str]) -> Vec<u8> {
     output.stdout
 }
 
+// Test-only independent evidence from the outer container's own /proc view.
+// Neither the harness lane name nor a missing /info marker establishes rootful mode.
+fn dockerd_effective_uid() -> u32 {
+    let outer = required("NATIVE_OUTER_CONTAINER");
+    let mut command = Command::new("timeout");
+    command.arg("15");
+    if required("NATIVE_PODMAN_USE_SUDO") == "1" {
+        command.args(["sudo", "-n", "podman"]);
+    } else {
+        command.arg("podman");
+    }
+    command.args([
+        "exec",
+        &outer,
+        "sh",
+        "-ec",
+        r#"count=0; effective=
+for status in /proc/[0-9]*/status; do
+  [ -f "$status" ] || continue
+  IFS= read -r comm < "${status%/status}/comm" || continue
+  [ "$comm" = dockerd ] || continue
+  count=$((count + 1))
+  while read -r key real uid saved filesystem; do
+    if [ "$key" = Uid: ]; then effective=$uid; break; fi
+  done < "$status"
+done
+printf '%s:%s\n' "$count" "$effective""#,
+    ]);
+    command.stderr(Stdio::null());
+    let output = command.output().expect("isolated dockerd UID probe");
+    assert!(output.status.success(), "dockerd UID probe failed");
+    let result = std::str::from_utf8(&output.stdout).expect("numeric dockerd UID probe");
+    let (count, effective) = result
+        .trim()
+        .split_once(':')
+        .expect("dockerd UID probe shape");
+    assert!(count == "1", "expected exactly one inner dockerd");
+    assert!(
+        !effective.is_empty() && effective.bytes().all(|byte| byte.is_ascii_digit()),
+        "dockerd effective UID is not numeric"
+    );
+    effective
+        .parse()
+        .expect("bounded numeric dockerd effective UID")
+}
+
 fn assert_all_interface_binding(container: &Value, key: &str, host_port: &str) {
     let bindings = container["HostConfig"]["PortBindings"][key]
         .as_array()
@@ -199,13 +245,26 @@ fn live_target_render_matches_engine() {
     assert_eq!(version["ApiVersion"], api_version);
     assert_eq!(version["Version"], required("NATIVE_ENGINE_VERSION"));
     let observed_rootless = info["Rootless"] == true
-        || info["SecurityOptions"]
-            .as_array()
-            .is_some_and(|items| items.iter().any(|item| item == "name=rootless"));
-    assert_eq!(
-        observed_rootless,
-        required("NATIVE_DAEMON_MODE") == "rootless"
+        || info["SecurityOptions"].as_array().is_some_and(|items| {
+            items.iter().any(|item| {
+                item.as_str().is_some_and(|value| {
+                    value == "name=rootless" || value.starts_with("name=rootless,")
+                })
+            })
+        });
+    eprintln!("DOCKERLENS_NATIVE_CHECK: target_daemon_uid");
+    let effective_uid = dockerd_effective_uid();
+    if observed_rootless {
+        assert!(effective_uid != 0, "rootless dockerd must be unprivileged");
+    } else {
+        assert!(effective_uid == 0, "rootful dockerd must run as root");
+    }
+    let lane_mode = required("NATIVE_DAEMON_MODE");
+    assert!(
+        matches!(lane_mode.as_str(), "rootful" | "rootless"),
+        "closed native daemon mode"
     );
+    assert_eq!(observed_rootless, lane_mode == "rootless");
     assert_all_interface_binding(&source, "8080/tcp", "18080");
     assert_all_interface_binding(&source, "8081/udp", "18081");
     assert_mount(&source, "volume", "/data", Some(&source_volume), true);
@@ -316,14 +375,15 @@ fn live_target_render_matches_engine() {
         required("NATIVE_ENGINE_VERSION")
     );
     eprintln!("DOCKERLENS_NATIVE_CHECK: read_only_mode");
-    assert_eq!(
-        facts.mode,
-        if observed_rootless {
-            DaemonMode::Rootless
-        } else {
-            DaemonMode::Rootful
-        }
-    );
+    if observed_rootless {
+        assert_eq!(facts.mode, DaemonMode::Rootless);
+    } else {
+        assert_ne!(facts.mode, DaemonMode::Rootless);
+        // /info may omit Rootless on a rootful daemon. The independent
+        // single-process effective UID probe above supplies test-only mode
+        // evidence; keep the observed release, API and observation ID intact.
+        facts.mode = DaemonMode::Rootful;
+    }
     eprintln!("DOCKERLENS_NATIVE_CHECK: read_only_api");
     let observed_api = facts.api_version.expect("observed exact daemon API");
     assert_eq!(
