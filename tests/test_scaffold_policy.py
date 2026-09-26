@@ -60,6 +60,9 @@ class ScaffoldPolicyTests(unittest.TestCase):
         self.assertEqual(native_script.count('"ca-certificates=$DEBIAN_CA_CERTIFICATES_PACKAGE"'), 4)
         self.assertIn('test -w /home/rootless', native_script)
         self.assertIn('test -w /run/user/1000', native_script)
+        self.assertIn('rootless_path=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', native_script)
+        self.assertIn('command -v dockerd', native_script)
+        self.assertIn('/usr/bin/env PATH=$rootless_path XDG_RUNTIME_DIR=/run/user/1000', native_script)
         self.assertIn('chown -R rootless:rootless /home/rootless/.local/share/docker', native_script)
         for workflow in (ROOT / ".github/workflows").glob("*.yml"):
             text = workflow.read_text()

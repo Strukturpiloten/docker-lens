@@ -179,7 +179,8 @@ package_checks = (("package_sources_unexpected", ("dockerlens_apt_result: unexpe
                                        "was not found", "has no installation candidate")),
                   ("package_apt_failure", ("dockerlens_apt_result: package_apt_failure",
                                            "dockerlens_apt_result: install-failed")))
-daemon_checks = (("rootless_home_unwritable", ("dockerlens_daemon_result: home_unwritable",
+daemon_checks = (("rootless_dockerd_unavailable", ("dockerlens_daemon_result: dockerd_unavailable",)),
+                 ("rootless_home_unwritable", ("dockerlens_daemon_result: home_unwritable",
                                                "home needs to be set and writable")),
                  ("rootless_runtime_unwritable", ("dockerlens_daemon_result: runtime_unwritable",
                                                   "xdg_runtime_dir needs to be set and writable")),
@@ -305,7 +306,12 @@ elif [[ $lane == debian11-rootless ]]; then
       printf "DOCKERLENS_DAEMON_RESULT: runtime_unwritable\n"
       exit 100
     fi
-    exec su -s /bin/sh rootless -c "/usr/bin/env XDG_RUNTIME_DIR=/run/user/1000 HOME=/home/rootless /usr/share/docker.io/contrib/dockerd-rootless.sh --host=unix:///run/dockerlens/docker.sock --storage-driver=vfs"
+    rootless_path=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    if ! su -s /bin/sh rootless -c "PATH=$rootless_path; export PATH; command -v dockerd" >/dev/null 2>&1; then
+      printf "DOCKERLENS_DAEMON_RESULT: dockerd_unavailable\n"
+      exit 100
+    fi
+    exec su -s /bin/sh rootless -c "/usr/bin/env PATH=$rootless_path XDG_RUNTIME_DIR=/run/user/1000 HOME=/home/rootless /usr/share/docker.io/contrib/dockerd-rootless.sh --host=unix:///run/dockerlens/docker.sock --storage-driver=vfs"
   ')
 else
   if [[ $expected_mode == rootless ]]; then

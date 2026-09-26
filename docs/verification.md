@@ -64,7 +64,9 @@ The Debian guest installs a pinned CA-certificate package before pulling the
 fixture through its inner daemon. The rootless lane owns its mounted Docker
 storage and checks that its home and runtime directories are writable by the
 rootless user before starting the daemon; failures report only the closed
-`rootless_home_unwritable` or `rootless_runtime_unwritable` category.
+`rootless_home_unwritable` or `rootless_runtime_unwritable` category. Its
+launcher receives an explicit path including Debian's `/usr/sbin` location for
+`dockerd`; an unresolvable command reports only `rootless_dockerd_unavailable`.
 It deletes its exact named container, volume, and temporary files after
 success, failure, or catchable termination. SIGKILL, host failure, or hard
 runner shutdown can prevent cleanup; inspect the printed exact names and
