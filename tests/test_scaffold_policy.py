@@ -54,10 +54,17 @@ class ScaffoldPolicyTests(unittest.TestCase):
             ("SLIRP4NETNS", "1.0.1-2"),
             ("UIDMAP", "1:4.8.1-1+deb11u1"),
             ("FUSE_OVERLAYFS", "1.4.0-1"),
+            ("IPROUTE2", "5.10.0-4"),
         ):
             self.assertIn(f"DEBIAN_{package}_PACKAGE='{revision}'", native_script)
-        self.assertIn("manual check of these six pins before every native release", (ROOT / "docs/dependency-policy.md").read_text())
+        self.assertIn("manual check of these seven pins before every native release", (ROOT / "docs/dependency-policy.md").read_text())
         self.assertEqual(native_script.count('"ca-certificates=$DEBIAN_CA_CERTIFICATES_PACKAGE"'), 4)
+        self.assertEqual(native_script.count('"iproute2=$DEBIAN_IPROUTE2_PACKAGE"'), 2)
+        self.assertIn('"iproute2:$DEBIAN_IPROUTE2_PACKAGE"', native_script)
+        rootful_start = native_script.split('if [[ $lane == debian11-rootful ]]; then', 1)[1].split(
+            'elif [[ $lane == debian11-rootless ]]; then', 1
+        )[0]
+        self.assertNotIn('IPROUTE2', rootful_start)
         self.assertIn('test -w /home/rootless', native_script)
         self.assertIn('test -w /run/user/1000', native_script)
         self.assertIn('rootless_path=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', native_script)

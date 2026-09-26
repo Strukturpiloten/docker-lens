@@ -19,6 +19,7 @@ DEBIAN_ROOTLESSKIT_PACKAGE='0.14.2-1+b3'
 DEBIAN_SLIRP4NETNS_PACKAGE='1.0.1-2'
 DEBIAN_UIDMAP_PACKAGE='1:4.8.1-1+deb11u1'
 DEBIAN_FUSE_OVERLAYFS_PACKAGE='1.4.0-1'
+DEBIAN_IPROUTE2_PACKAGE='5.10.0-4'
 
 usage() {
   echo "usage: $0 {debian11-rootful|debian11-rootless|upstream-rootful|upstream-rootless}" >&2
@@ -324,7 +325,7 @@ elif [[ $lane == debian11-rootless ]]; then
     for spec in "docker.io=$DEBIAN_DOCKER_PACKAGE" "ca-certificates=$DEBIAN_CA_CERTIFICATES_PACKAGE" \
       "rootlesskit=$DEBIAN_ROOTLESSKIT_PACKAGE" \
       "slirp4netns=$DEBIAN_SLIRP4NETNS_PACKAGE" "uidmap=$DEBIAN_UIDMAP_PACKAGE" \
-      "fuse-overlayfs=$DEBIAN_FUSE_OVERLAYFS_PACKAGE"; do
+      "fuse-overlayfs=$DEBIAN_FUSE_OVERLAYFS_PACKAGE" "iproute2=$DEBIAN_IPROUTE2_PACKAGE"; do
       package=${spec%%=*}; pinned=${spec#*=}
       if ! apt-cache madison "$package" | awk -F "|" -v pin="$pinned" '\''
         { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); if ($2 == pin) found = 1 }
@@ -337,7 +338,7 @@ elif [[ $lane == debian11-rootless ]]; then
       "docker.io=$DEBIAN_DOCKER_PACKAGE" "ca-certificates=$DEBIAN_CA_CERTIFICATES_PACKAGE" \
       "rootlesskit=$DEBIAN_ROOTLESSKIT_PACKAGE" \
       "slirp4netns=$DEBIAN_SLIRP4NETNS_PACKAGE" "uidmap=$DEBIAN_UIDMAP_PACKAGE" \
-      "fuse-overlayfs=$DEBIAN_FUSE_OVERLAYFS_PACKAGE"
+      "fuse-overlayfs=$DEBIAN_FUSE_OVERLAYFS_PACKAGE" "iproute2=$DEBIAN_IPROUTE2_PACKAGE"
     useradd --create-home --uid 1000 --shell /bin/sh rootless
     install -d -m 0700 -o rootless -g rootless /home/rootless
     grep -q "^rootless:" /etc/subuid || printf "rootless:100000:65536\n" >> /etc/subuid
@@ -407,6 +408,7 @@ timeout 120 "${podman_cmd[@]}" run --pull=never -d --name "$container" --label "
   --env "DEBIAN_SLIRP4NETNS_PACKAGE=$DEBIAN_SLIRP4NETNS_PACKAGE" \
   --env "DEBIAN_UIDMAP_PACKAGE=$DEBIAN_UIDMAP_PACKAGE" \
   --env "DEBIAN_FUSE_OVERLAYFS_PACKAGE=$DEBIAN_FUSE_OVERLAYFS_PACKAGE" \
+  --env "DEBIAN_IPROUTE2_PACKAGE=$DEBIAN_IPROUTE2_PACKAGE" \
   --volume "$storage_mount" --volume "$socket_dir:/run/dockerlens" \
   "$image" "${start[@]}" >/dev/null
 privileged=$("${podman_cmd[@]}" inspect --format '{{.HostConfig.Privileged}}' "$container")
@@ -453,7 +455,7 @@ api_get "/v$api_version/info" "$run_dir/info.json"
 if [[ $lane == debian11-* ]]; then
   packages=("docker.io:$DEBIAN_DOCKER_PACKAGE" "ca-certificates:$DEBIAN_CA_CERTIFICATES_PACKAGE")
   if [[ $expected_mode == rootless ]]; then
-    packages+=("rootlesskit:$DEBIAN_ROOTLESSKIT_PACKAGE" "slirp4netns:$DEBIAN_SLIRP4NETNS_PACKAGE" "uidmap:$DEBIAN_UIDMAP_PACKAGE" "fuse-overlayfs:$DEBIAN_FUSE_OVERLAYFS_PACKAGE")
+    packages+=("rootlesskit:$DEBIAN_ROOTLESSKIT_PACKAGE" "slirp4netns:$DEBIAN_SLIRP4NETNS_PACKAGE" "uidmap:$DEBIAN_UIDMAP_PACKAGE" "fuse-overlayfs:$DEBIAN_FUSE_OVERLAYFS_PACKAGE" "iproute2:$DEBIAN_IPROUTE2_PACKAGE")
   fi
   for package in "${packages[@]}"; do
     name=${package%%:*}

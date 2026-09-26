@@ -24,7 +24,8 @@ Debian 11 `docker.io=20.10.5+dfsg1-1+deb11u4`,
 `ca-certificates=20250419~deb12u1~deb11u1`,
 `rootlesskit=0.14.2-1+b3` (the Debian 11 amd64 binary revision),
 `slirp4netns=1.0.1-2`,
-`uidmap=1:4.8.1-1+deb11u1`, and `fuse-overlayfs=1.4.0-1` were checked against
+`uidmap=1:4.8.1-1+deb11u1`, `fuse-overlayfs=1.4.0-1`, and rootless-only
+`iproute2=5.10.0-4` were checked against
 Debian package listings on 2026-09-26. The harness installs them through
 Debian's signed APT metadata inside the pinned Debian 11 image and asserts
 each installed revision. The guest replaces that image's live APT sources with
@@ -37,7 +38,7 @@ and package-hash verification remain enabled. This is a frozen compatibility
 baseline, not evidence that Debian 11 still receives security maintenance.
 Renovate has no supported manager for Debian APT
 package revisions in shell variables here; the repository maintainer owns a
-manual check of these six pins before every native release candidate and
+manual check of these seven pins before every native release candidate and
 if an archive or package revision changes. The check compares the fixed
 snapshot's package listing and `apt-cache policy` in the pinned image, updates
 the exact revision or snapshot date in the harness and policy tests, and reruns

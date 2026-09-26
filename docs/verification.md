@@ -66,7 +66,9 @@ storage and checks that its home and runtime directories are writable by the
 rootless user before starting the daemon; failures report only the closed
 `rootless_home_unwritable` or `rootless_runtime_unwritable` category. Its
 launcher receives an explicit path including Debian's `/usr/sbin` location for
-`dockerd`. Before execution, the harness checks that the exact launcher and
+`dockerd`. The Debian rootless lane checks, installs, and verifies the exact
+`iproute2` revision from the pinned snapshot because RootlessKit invokes `ip`.
+Before execution, the harness checks that the exact launcher and
 `/usr/bin/env` are executable and that `dockerd`, `rootlesskit`, `slirp4netns`,
 `newuidmap`, `newgidmap`, `which`, `ip`, and `rm` resolve to executable files in
 the rootless user's environment. It runs bounded, output-suppressed version or
