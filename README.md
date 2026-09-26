@@ -2,8 +2,8 @@
 
 DockerLens is a native Docker Engine library under construction. The current
 crate establishes privacy, observation, acquisition-limit, pure Engine JSON
-decoding, and inert target contracts. It does **not** connect to Docker, render
-output, establish native compatibility, or execute a target.
+decoding, and inert standalone target planning and rendering. It does **not**
+connect to Docker, establish native compatibility, or execute a target.
 
 The planned native work is tracked in [DockerLens #3](https://github.com/Strukturpiloten/docker-lens/issues/3).
 BoxFerry integration is a separate stream in
@@ -35,8 +35,9 @@ Compose compatibility and Swarm mode are separate discussion topics.
   records. Offline planning does not invent a live observation. The operation
   graph checks capabilities for the current standalone container, named volume,
   and bridge network shapes, then retains its planning context.
-- Target intent includes explicit resource identities, a container image, and
-  protected environment assignments; other settings await native review.
+- Target intent includes explicit resource identities, container image, ports,
+  mounts, bridge network, protected environment assignments, exec-form command,
+  health check, and restart policy. Unsupported settings remain explicit.
   Target intent, operation graph, and rendered artifact are inert data. The
   crate has no executor, deployment API, or file writer.
 
