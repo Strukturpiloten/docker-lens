@@ -13,10 +13,29 @@ claimed here.
 
 GitHub Actions use full commit SHAs with exact release-tag comments. The
 runner is `ubuntu-24.04`. Renovate owns Cargo, GitHub Actions, and the pinned
-Rust toolchain through `renovate.json`. Native test images and downloaded tools
-must be added with readable versions and verified immutable integrity records
-before their workflows are enabled. Historical captures and fixtures are
-immutable and must not be auto-updated.
+Rust toolchain through `renovate.json`. Its one native-image regex manager owns
+the four version-tag plus manifest-digest pairs in
+`scripts/native-conformance.sh`; the policy test checks exact extraction and
+avoids duplicate manager ownership. These registry digests were verified with
+`skopeo inspect` on 2026-09-26. Image updates need native reruns and independent
+review; automerge is disabled for them.
+
+Debian 11 `docker.io=20.10.5+dfsg1-1+deb11u4`,
+`rootlesskit=0.14.2-1`, `slirp4netns=1.0.1-2`,
+`uidmap=1:4.8.1-1+deb11u1`, and `fuse-overlayfs=1.4.0-1` were checked against
+Debian package listings on 2026-09-26. The harness installs them through
+Debian's signed APT metadata inside the pinned Debian 11 image and asserts
+each installed revision. Renovate has no supported manager for Debian APT
+package revisions in shell variables here; the repository maintainer owns a
+manual check of these five pins before every native release candidate and
+when Debian publishes a Bullseye security update. The check compares Debian's
+package listing and `apt-cache policy` in the pinned image, updates the exact
+revision in this script and policy tests, and reruns both Debian native lanes.
+Never change only the upstream Engine tag to represent a distribution update.
+
+`podman`, `curl`, `python3`, `timeout`, and core utilities are provided
+by the Ubuntu 24.04 runner; no binary download is introduced. Historical
+captures and fixtures remain immutable and are not auto-updated.
 
 The manual native dispatcher reuses the existing checkout Action SHA and exact
 tag, which Renovate's GitHub Actions manager already extracts from every

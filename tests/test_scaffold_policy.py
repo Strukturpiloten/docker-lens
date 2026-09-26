@@ -1,7 +1,10 @@
 """Bounded bootstrap and release policy invariants."""
 
 import json
+import os
 import re
+import subprocess
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -25,11 +28,34 @@ class ScaffoldPolicyTests(unittest.TestCase):
             renovate["enabledManagers"],
             ["cargo", "github-actions", "custom.regex"],
         )
-        self.assertEqual(len(renovate["customManagers"]), 1)
+        self.assertEqual(len(renovate["customManagers"]), 2)
         manager = renovate["customManagers"][0]
         self.assertEqual(manager["datasourceTemplate"], "github-tags")
         extractor = manager["matchStrings"][0].replace("(?<currentValue>", "(?P<currentValue>")
         self.assertRegex((ROOT / "rust-toolchain.toml").read_text(), extractor)
+        native_manager = renovate["customManagers"][1]
+        self.assertEqual(native_manager["managerFilePatterns"], ["/^scripts\\/native-conformance\\.sh$/"])
+        native_extractor = re.sub(
+            r"\(\?<(\w+)>", r"(?P<\1>", native_manager["matchStrings"][0]
+        )
+        native_script = (ROOT / "scripts/native-conformance.sh").read_text()
+        pins = list(re.finditer(native_extractor, native_script))
+        self.assertEqual(len(pins), 4)
+        self.assertEqual({pin.group("datasource") for pin in pins}, {"docker"})
+        self.assertEqual(
+            {pin.group("currentValue") for pin in pins},
+            {"28.5.1-dind", "28.5.1-dind-rootless", "11.11-slim", "1.37.0"},
+        )
+        self.assertTrue(all(re.fullmatch(r"sha256:[0-9a-f]{64}", pin.group("currentDigest")) for pin in pins))
+        for package, revision in (
+            ("DOCKER", "20.10.5+dfsg1-1+deb11u4"),
+            ("ROOTLESSKIT", "0.14.2-1"),
+            ("SLIRP4NETNS", "1.0.1-2"),
+            ("UIDMAP", "1:4.8.1-1+deb11u1"),
+            ("FUSE_OVERLAYFS", "1.4.0-1"),
+        ):
+            self.assertIn(f"DEBIAN_{package}_PACKAGE='{revision}'", native_script)
+        self.assertIn("manual check of these five pins before every native release", (ROOT / "docs/dependency-policy.md").read_text())
         for workflow in (ROOT / ".github/workflows").glob("*.yml"):
             text = workflow.read_text()
             for action in re.findall(r"uses: (.+)", text):
@@ -43,6 +69,56 @@ class ScaffoldPolicyTests(unittest.TestCase):
         self.assertIn("cargo test --all-targets --locked", complete)
         self.assertIn("python3 -m unittest discover", complete)
         self.assertIn("exit 1", native)
+        self.assertIn("podman_cmd=(sudo -n podman)", native)
+        self.assertIn('"${podman_cmd[@]}" volume rm "$volume"', native)
+        self.assertIn("run-exact-native-test.sh\" acquisition live_read_only_acquisition_matches_oracle", native)
+        self.assertIn("run-exact-native-test.sh\" native_target live_target_render_matches_engine", native)
+        exact = (ROOT / "scripts/run-exact-native-test.sh").read_text()
+        self.assertIn("-- --ignored --list", exact)
+        self.assertIn("1 passed; 0 failed; 0 ignored", exact)
+        self.assertNotIn("system prune", native)
+        self.assertNotIn("volume prune", native)
+
+    def test_native_lanes_and_release_aggregate_remain_required(self) -> None:
+        check = (ROOT / ".github/workflows/check.yml").read_text()
+        release = (ROOT / ".github/workflows/release-validation.yml").read_text()
+        lanes = "[debian11-rootful, debian11-rootless, upstream-rootful, upstream-rootless]"
+        self.assertIn(lanes, check)
+        self.assertIn(lanes, release)
+        self.assertIn("needs: [scaffold, native-conformance]", check)
+        native_job = check.split("  native-conformance:\n", 1)[1].split("  check-gate:\n", 1)[0]
+        self.assertIn("if: github.event_name == 'push' && github.ref == 'refs/heads/main'", native_job)
+        self.assertEqual(check.count("./scripts/native-conformance.sh"), 1)
+        self.assertNotIn("pull_request_target:", check)
+        self.assertIn('test "$NATIVE_RESULT" = skipped', check)
+        self.assertIn('test "$NATIVE_RESULT" = success', check)
+        self.assertIn("fail-fast: false", release)
+        self.assertIn("if: always()", release)
+        self.assertIn("needs: [candidate, native-conformance]", release)
+        self.assertIn('test "$NATIVE_RESULT" = success', release)
+        self.assertIn('git fetch --no-tags origin main', release)
+
+    def test_pr_gate_is_offline_only_and_main_requires_native(self) -> None:
+        check = (ROOT / ".github/workflows/check.yml").read_text()
+        gate = check.split("  check-gate:\n", 1)[1].split("        run: |\n", 1)[1]
+        script = textwrap.dedent(gate)
+        for scenario, event, ref, native, should_pass in (
+            ("fork code", "pull_request", "refs/pull/1/merge", "skipped", True),
+            ("same-repo code", "pull_request", "refs/pull/2/merge", "skipped", True),
+            ("fork prose", "pull_request", "refs/pull/3/merge", "skipped", True),
+            ("PR claimed native", "pull_request", "refs/pull/4/merge", "success", False),
+            ("main native", "push", "refs/heads/main", "success", True),
+            ("main skipped", "push", "refs/heads/main", "skipped", False),
+            ("unknown push", "push", "refs/heads/other", "skipped", False),
+        ):
+            with self.subTest(scenario=scenario):
+                env = dict(os.environ, EVENT_NAME=event, EVENT_REF=ref,
+                           SCAFFOLD_RESULT="success", NATIVE_RESULT=native)
+                result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", script], env=env,
+                                        capture_output=True, text=True, check=False)
+                self.assertEqual(result.returncode == 0, should_pass)
+                if event == "pull_request" and should_pass:
+                    self.assertIn("offline-only", result.stdout)
 
     def test_manual_native_dispatch_is_trusted_exact_head_and_validation_only(self) -> None:
         workflow = (ROOT / ".github/workflows/native-validation.yml").read_text()
