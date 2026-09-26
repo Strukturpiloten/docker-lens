@@ -1,6 +1,6 @@
 # ADR 0002: Bind capture exchanges and separate offline target evidence
 
-Status: accepted contract; native transport and conformance remain unimplemented.
+Status: accepted contract; explicit socket transport implemented, native conformance pending.
 
 Each bounded exchange binds its closed read request, optional local resource
 reference, request URL API version, HTTP status, and protected body. The budget

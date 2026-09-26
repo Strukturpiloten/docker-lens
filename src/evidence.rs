@@ -116,6 +116,15 @@ pub struct Capture {
     observation_id: ObservationId,
     bounds: CaptureBounds,
     exchanges: Vec<CapturedExchange>,
+    route: CaptureRoute,
+}
+
+/// How this in-memory capture was assembled. A socket route does not
+/// authenticate the peer as Docker Engine or make the reads an atomic sample.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CaptureRoute {
+    CallerAssembled,
+    ExplicitUnixSocket,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -140,7 +149,18 @@ impl Capture {
             observation_id,
             bounds,
             exchanges,
+            route: CaptureRoute::CallerAssembled,
         })
+    }
+
+    pub(crate) fn with_explicit_socket(mut self) -> Self {
+        self.route = CaptureRoute::ExplicitUnixSocket;
+        self
+    }
+
+    #[must_use]
+    pub const fn route(&self) -> CaptureRoute {
+        self.route
     }
 
     #[must_use]
@@ -165,6 +185,7 @@ impl std::fmt::Debug for Capture {
             .field("bounds", &self.bounds)
             .field("observation_id", &self.observation_id)
             .field("exchanges", &self.exchanges.len())
+            .field("route", &self.route)
             .finish()
     }
 }
@@ -197,6 +218,7 @@ mod tests {
         ));
         let capture = Capture::from_completed(observation_id, bounds, vec![exchange()]).unwrap();
         assert_eq!(capture.bounds(), bounds);
+        assert_eq!(capture.route(), CaptureRoute::CallerAssembled);
         assert!(!format!("{capture:?}").contains("secret"));
         assert!(!format!("{:?}", capture.exchanges()[0]).contains("secret"));
         assert_eq!(HttpStatus::new(600), Err(CaptureError::InvalidStatus));

@@ -9,3 +9,4 @@ repository = "https://github.com/Strukturpiloten/docker-lens"
 
 [dependencies]
 serde_json = "=1.0.149"
+socket2 = "=0.6.5"

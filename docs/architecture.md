@@ -4,7 +4,7 @@
 
 1. An explicitly supplied endpoint and selector create a bounded read request
    plan. Every operation belongs to the closed `ReadRequest` enum.
-2. A future transport records each closed read request, its local resource
+2. The explicit Unix-socket transport records each closed HTTP GET request, its local resource
    reference when inspecting a resource, and the API version from its actual
    request URL. Versioned reads require that version; only unversioned
    `DaemonVersion` negotiation may omit it. Inspections count against the
@@ -13,10 +13,13 @@
    stores the HTTP status and protected body with that
    request, checks limits while reading, and creates one process-local
    observation ID for the completed capture. A failed or unfinished budget
-   cannot become a capture. The transport must enforce an I/O deadline:
-   synchronous counters cannot interrupt a blocked reader. These records and
-   counters are caller-supplied, not proof of daemon contact. Responses may be
-   from different moments; this is not an atomic snapshot.
+   cannot become a capture. Socket connection, reads, and writes use the
+   remaining acquisition deadline and 100 ms cancellation polls. Body limits
+   are separate from the 16 KiB response-header cap. The transport requires
+   Content-Length or chunked framing and rejects other content encodings.
+   A capture route distinguishes caller assembly from explicit socket contact;
+   neither proves the peer is a genuine Engine. Responses may be from different
+   moments; this is not an atomic snapshot.
 3. `decoder::decode_capture` turns protected capture into typed observed inventory.
    It checks closed requests, local references, status, and actual request API
    versions; caps JSON responses at 8 MiB and collections at 4096 entries; and
@@ -41,7 +44,7 @@
    applies an operation, or writes the artifact. API versions below 1.41 are
    rejected conservatively pending independent native evidence.
 
-`src/acquisition.rs` owns request and resource budgets; `src/decoder.rs` owns
+`src/acquisition.rs` owns the closed socket transport, request and resource budgets; `src/decoder.rs` owns
 pure native JSON decoding; `src/evidence.rs` owns
 protected values and captures; `src/observation.rs` owns availability and origin;
 `src/finding.rs` owns value-free diagnostics; `src/version.rs` owns Engine, API,
