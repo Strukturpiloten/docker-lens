@@ -49,8 +49,10 @@ show the last fixed APT stage, including signature, clock, dependency and
 post-invoke failures. The Debian harness checks every requested revision in
 APT metadata before install, and reports a fixed `package_version_unavailable`
 category if a pin is absent. Failed installs also report bounded disk, lock,
-dependency, download, or `dpkg` categories when recognized. Raw
-assertions, daemon logs, and API responses stay private.
+dependency, download, or `dpkg` categories when recognized. The guest captures
+the full install output in a temporary file, emits only a fixed category, and
+removes the file on exit. Unknown failures report `package_apt_failure` without
+printing APT output. Raw assertions, daemon logs, and API responses stay private.
 It deletes its exact named container, volume, and temporary files after
 success, failure, or catchable termination. SIGKILL, host failure, or hard
 runner shutdown can prevent cleanup; inspect the printed exact names and

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
-source "$(dirname "$0")/native-version.sh"
+script_dir=$(cd -- "$(dirname -- "$0")" && pwd -P)
+source "$script_dir/native-version.sh"
 
 # Registry manifest digests verified with skopeo inspect on 2026-09-26.
 # renovate: datasource=docker depName=docker.io/library/docker
@@ -33,7 +34,7 @@ case "$lane" in
   *) usage ;;
 esac
 
-for tool in podman curl python3 timeout df du mktemp; do
+for tool in podman curl python3 timeout df du mktemp install; do
   command -v "$tool" >/dev/null || { echo "missing native test tool: $tool" >&2; exit 1; }
 done
 if [[ $EUID == 0 ]]; then
@@ -56,6 +57,7 @@ socket_dir="$run_dir/socket"
 socket="$socket_dir/docker.sock"
 mkdir -m 0777 "$socket_dir"
 mkdir -m 0755 "$socket_dir/native-bind"
+install -m 0644 "$script_dir/native-apt-install.sh" "$socket_dir/native-apt-install.sh"
 printf 'native-bind-canary\n' > "$socket_dir/native-bind/canary"
 printf 'native-tcp-canary\n' > "$socket_dir/native-bind/index.html"
 chmod 0700 "$run_dir"
@@ -145,6 +147,15 @@ stage = (last_stage[1] if last_stage else "unavailable") if sys.argv[1].startswi
 if last_stage and sys.argv[1].startswith("debian11-"):
     s = "\n".join(lines[last_stage[0] + 1:])
 package_checks = (("package_version_unavailable", ("dockerlens_apt_result: version-unavailable",)),
+                  ("package_post_invoke", ("dockerlens_apt_result: package_post_invoke",)),
+                  ("package_signature", ("dockerlens_apt_result: package_signature",)),
+                  ("package_time", ("dockerlens_apt_result: package_time",)),
+                  ("package_disk", ("dockerlens_apt_result: package_disk",)),
+                  ("package_lock", ("dockerlens_apt_result: package_lock",)),
+                  ("package_dependency", ("dockerlens_apt_result: package_dependency",)),
+                  ("package_download", ("dockerlens_apt_result: package_download",)),
+                  ("package_dpkg", ("dockerlens_apt_result: package_dpkg",)),
+                  ("package_install", ("dockerlens_apt_result: package_install",)),
                   ("package_post_invoke", ("post-invoke",)),
                   ("package_signature", ("no_pubkey", "expkeysig", "badsig",
                                  "signatures could not be verified", "invalid signature",
@@ -162,7 +173,8 @@ package_checks = (("package_version_unavailable", ("dockerlens_apt_result: versi
                                     "dpkg: error processing", "dpkg: error:")),
                   ("package_install", ("unable to locate package",
                                        "was not found", "has no installation candidate")),
-                  ("package_apt_failure", ("dockerlens_apt_result: install-failed",)))
+                  ("package_apt_failure", ("dockerlens_apt_result: package_apt_failure",
+                                           "dockerlens_apt_result: install-failed")))
 daemon_checks = (("daemon_storage", ("error initializing graphdriver",
                                      "failed to mount overlay", "storage driver")),
                  ("rootless_uidmap", ("uid_map", "newuidmap", "newgidmap")),
@@ -237,13 +249,7 @@ if [[ $lane == debian11-rootful ]]; then
         exit 100
       fi
     done
-    if DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "docker.io=$DEBIAN_DOCKER_PACKAGE"; then
-      :
-    else
-      result=$?
-      printf "DOCKERLENS_APT_RESULT: install-failed\n"
-      exit "$result"
-    fi
+    sh /run/dockerlens/native-apt-install.sh "docker.io=$DEBIAN_DOCKER_PACKAGE"
     printf "DOCKERLENS_APT_STAGE: daemon\n"
     exec dockerd --host=unix:///run/dockerlens/docker.sock --storage-driver=vfs
   ')
@@ -264,16 +270,10 @@ elif [[ $lane == debian11-rootless ]]; then
         exit 100
       fi
     done
-    if DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+    sh /run/dockerlens/native-apt-install.sh \
       "docker.io=$DEBIAN_DOCKER_PACKAGE" "rootlesskit=$DEBIAN_ROOTLESSKIT_PACKAGE" \
       "slirp4netns=$DEBIAN_SLIRP4NETNS_PACKAGE" "uidmap=$DEBIAN_UIDMAP_PACKAGE" \
-      "fuse-overlayfs=$DEBIAN_FUSE_OVERLAYFS_PACKAGE"; then
-      :
-    else
-      result=$?
-      printf "DOCKERLENS_APT_RESULT: install-failed\n"
-      exit "$result"
-    fi
+      "fuse-overlayfs=$DEBIAN_FUSE_OVERLAYFS_PACKAGE"
     useradd --create-home --uid 1000 --shell /bin/sh rootless
     grep -q "^rootless:" /etc/subuid || printf "rootless:100000:65536\n" >> /etc/subuid
     grep -q "^rootless:" /etc/subgid || printf "rootless:100000:65536\n" >> /etc/subgid

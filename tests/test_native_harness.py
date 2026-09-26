@@ -19,6 +19,8 @@ class NativeHarnessTests(unittest.TestCase):
             "daemon_post_invoke": "stage=update category=package_post_invoke",
             "daemon_pin_missing": "stage=install category=package_version_unavailable",
             "daemon_dpkg": "stage=install category=package_dpkg",
+            "daemon_guest_dependency": "stage=install category=package_dependency",
+            "daemon_guest_unknown": "stage=install category=package_apt_failure",
             "daemon_prior_update_error": "stage=install category=package_apt_failure",
             "daemon_upstream_storage": "stage=daemon category=daemon_storage",
             "daemon_upstream_network": "stage=daemon category=daemon_network",
@@ -28,6 +30,7 @@ class NativeHarnessTests(unittest.TestCase):
             "preflight_exists_error", "daemon_exit", "daemon_package_missing",
             "daemon_signature", "daemon_time", "daemon_dependency",
             "daemon_post_invoke", "daemon_pin_missing", "daemon_dpkg",
+            "daemon_guest_dependency", "daemon_guest_unknown",
             "daemon_prior_update_error", "daemon_upstream_storage",
             "daemon_upstream_network",
             "cleanup_container_remains",
@@ -128,6 +131,12 @@ case "$command" in
       daemon_dpkg)
         echo 'DOCKERLENS_APT_STAGE: install'
         echo 'E: Sub-process /usr/bin/dpkg returned an error code (1); protected-secret' ;;
+      daemon_guest_dependency)
+        echo 'DOCKERLENS_APT_STAGE: install'
+        echo 'DOCKERLENS_APT_RESULT: package_dependency' ;;
+      daemon_guest_unknown)
+        echo 'DOCKERLENS_APT_STAGE: install'
+        echo 'DOCKERLENS_APT_RESULT: package_apt_failure' ;;
       daemon_prior_update_error)
         echo 'DOCKERLENS_APT_STAGE: update'
         echo 'NO_PUBKEY protected-secret'
@@ -189,6 +198,31 @@ esac
                         f"owned {resource} cleanup readback failed (exists exit {exit_status})",
                         result.stderr,
                     )
+
+    def test_guest_apt_install_output_is_bounded_and_removed(self) -> None:
+        for apt_output, category in (
+            ("Unmet dependencies: protected-secret", "package_dependency"),
+            ("unknown failure with protected-secret", "package_apt_failure"),
+        ):
+            with self.subTest(category=category), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self._tool(
+                    root,
+                    "apt-get",
+                    "#!/bin/sh\nprintf '%s\\n' \"$FAKE_APT_OUTPUT\" >&2\nexit 100\n",
+                )
+                env = os.environ.copy()
+                env.update(PATH=f"{root}:{env['PATH']}", FAKE_APT_OUTPUT=apt_output,
+                           TMPDIR=str(root))
+                result = subprocess.run(
+                    ["sh", str(ROOT / "scripts/native-apt-install.sh"), "docker.io=sample"],
+                    env=env, capture_output=True, text=True, check=False,
+                )
+                self.assertEqual(result.returncode, 100)
+                self.assertEqual(result.stdout, f"DOCKERLENS_APT_RESULT: {category}\n")
+                self.assertEqual(result.stderr, "")
+                self.assertNotIn("protected-secret", result.stdout + result.stderr)
+                self.assertEqual(list(root.glob("dockerlens-apt.*")), [])
 
     def test_engine_release_match_has_exact_boundaries(self) -> None:
         helper = ROOT / "scripts/native-version.sh"
