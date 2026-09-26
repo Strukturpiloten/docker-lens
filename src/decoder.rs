@@ -66,8 +66,14 @@ impl std::fmt::Debug for DecodedInventory {
 
 pub struct ContainerObservation {
     pub reference: ResourceRef,
+    /// Inspect `Name` is an effective identity, not evidence of who chose it.
+    pub name: Observed<ProtectedValue>,
     pub image: Observed<ProtectedValue>,
     pub image_id: Observed<ProtectedValue>,
+    pub labels: Observed<Vec<LabelObservation>>,
+    pub user: Observed<ProtectedValue>,
+    pub working_directory: Observed<ProtectedValue>,
+    pub hostname: Observed<ProtectedValue>,
     pub environment: Observed<Vec<EnvironmentAssignment>>,
     pub exposed_ports: Observed<Vec<PortKey>>,
     pub configured_ports: Observed<Vec<PortObservation>>,
@@ -79,6 +85,12 @@ pub struct ContainerObservation {
     pub entrypoint: Observed<CommandValue>,
     pub healthcheck: Observed<Healthcheck>,
     pub restart_policy: Observed<RestartPolicy>,
+}
+
+/// A native label key and its independently available value. Both are private.
+pub struct LabelObservation {
+    pub key: ProtectedValue,
+    pub value: Observed<ProtectedValue>,
 }
 
 pub struct EnvironmentAssignment {
@@ -447,6 +459,33 @@ fn environment(value: &Value) -> Result<Vec<EnvironmentAssignment>, DecodeError>
         .collect()
 }
 
+fn labels(value: &Value) -> Result<Vec<LabelObservation>, DecodeError> {
+    object(value, FieldPath::Label { index: 0 })?
+        .iter()
+        .enumerate()
+        .map(|(index, (key, value))| {
+            let field = FieldPath::Label { index };
+            let value = if value.is_null() {
+                Observed::unavailable(Availability::Null, Origin::Effective)
+            } else if is_redacted(value) {
+                Observed::unavailable(Availability::Redacted, Origin::Effective)
+            } else {
+                let value = string(value, field)?;
+                let availability = if value.is_empty() {
+                    Availability::Empty
+                } else {
+                    Availability::Present
+                };
+                Observed::present(value, availability, Origin::Effective)
+            };
+            Ok(LabelObservation {
+                key: ProtectedValue::new(key.as_bytes().to_vec()),
+                value,
+            })
+        })
+        .collect()
+}
+
 fn mounts(value: &Value) -> Result<Vec<MountObservation>, DecodeError> {
     array(value, FieldPath::Mount { index: 0 })?
         .iter()
@@ -613,6 +652,7 @@ fn container(root: &Value, reference: ResourceRef) -> Result<ContainerObservatio
     object(root, FieldPath::Other)?;
     Ok(ContainerObservation {
         reference,
+        name: string_field(root, &["Name"], FieldPath::ContainerName, Origin::Effective)?,
         image: string_field(
             root,
             &["Config", "Image"],
@@ -620,6 +660,31 @@ fn container(root: &Value, reference: ResourceRef) -> Result<ContainerObservatio
             Origin::Effective,
         )?,
         image_id: string_field(root, &["Image"], FieldPath::Image, Origin::RuntimeAssigned)?,
+        labels: observed(
+            root,
+            &["Config", "Labels"],
+            FieldPath::Label { index: 0 },
+            Origin::Effective,
+            labels,
+        )?,
+        user: string_field(
+            root,
+            &["Config", "User"],
+            FieldPath::User,
+            Origin::Effective,
+        )?,
+        working_directory: string_field(
+            root,
+            &["Config", "WorkingDir"],
+            FieldPath::WorkingDirectory,
+            Origin::Effective,
+        )?,
+        hostname: string_field(
+            root,
+            &["Config", "Hostname"],
+            FieldPath::Hostname,
+            Origin::Effective,
+        )?,
         environment: observed(
             root,
             &["Config", "Env"],

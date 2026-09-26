@@ -4,7 +4,11 @@ Status: accepted; independent native conformance remains pending.
 
 The library separates capture, observed inventory, desired target intent,
 operation graph, and rendered artifact. Origin and availability are independent
-facts. Native values, daemon identifiers, paths, and endpoints must not enter
+facts. Container inspect `Name`, `Config.Labels`, `Config.User`,
+`Config.WorkingDir`, and `Config.Hostname` are typed effective observations,
+including their missing, null, empty, and redacted states. Label keys and
+values remain protected; observed metadata does not claim authorship. Native
+values, daemon identifiers, paths, and endpoints must not enter
 Debug output or findings. A closed request vocabulary and explicit limits
 prevent accidental arbitrary Engine calls. The target types have no executor.
 
