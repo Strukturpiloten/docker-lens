@@ -454,7 +454,9 @@ fn acquisition_category(error: AcquisitionError) -> &'static str {
 }
 
 /// The native harness supplies a private isolated Engine socket and independent
-/// direct-API observations. Fake-socket tests above do not replace this check.
+/// direct-API observations. Its explicit synthetic identity fields are checked
+/// against fixed expectations, so an omitted field cannot pass by oracle parity.
+/// Fake-socket tests above do not replace this check.
 #[test]
 #[ignore = "requires the isolated native Engine harness"]
 fn live_read_only_acquisition_matches_oracle() {
@@ -589,13 +591,46 @@ fn live_read_only_acquisition_matches_oracle() {
         .expect("direct container name");
     assert!(direct_name.starts_with("/dl-") && direct_name.ends_with("-box"));
     effective_string(&oracle_container["Name"], &container.name);
+    assert!(
+        oracle_config["User"].as_str() == Some("0:0"),
+        "fixture User differs from the expected synthetic value"
+    );
     effective_string(&oracle_config["User"], &container.user);
+    assert!(
+        container
+            .user
+            .value()
+            .is_some_and(|user| user.as_bytes() == b"0:0")
+    );
+    assert!(
+        oracle_config["WorkingDir"].as_str() == Some("/tmp"),
+        "fixture WorkingDir differs from the expected synthetic value"
+    );
     effective_string(&oracle_config["WorkingDir"], &container.working_directory);
+    assert!(
+        container
+            .working_directory
+            .value()
+            .is_some_and(|directory| directory.as_bytes() == b"/tmp")
+    );
     let direct_hostname = oracle_config["Hostname"]
         .as_str()
         .expect("direct container hostname");
-    assert!(!direct_hostname.is_empty());
+    assert!(
+        direct_hostname == "dockerlens-native",
+        "fixture Hostname differs from the expected synthetic value"
+    );
     effective_string(&oracle_config["Hostname"], &container.hostname);
+    assert!(
+        container
+            .hostname
+            .value()
+            .is_some_and(|hostname| hostname.as_bytes() == b"dockerlens-native")
+    );
+    assert!(
+        oracle_config["Labels"]["io.dockerlens.fixture"].as_str() == Some("synthetic"),
+        "fixture label differs from the expected synthetic value"
+    );
     assert_eq!(container.labels.origin, Origin::Effective);
     match oracle_config.get("Labels") {
         None => {
@@ -642,6 +677,18 @@ fn live_read_only_acquisition_matches_oracle() {
         }
         _ => panic!("direct labels have unexpected shape"),
     }
+    assert!(
+        container
+            .labels
+            .value()
+            .is_some_and(|labels| labels.iter().any(|label| {
+                label.key.as_bytes() == b"io.dockerlens.fixture"
+                    && label
+                        .value
+                        .value()
+                        .is_some_and(|value| value.as_bytes() == b"synthetic")
+            }))
+    );
     let debug = format!(
         "{decoded:?} {:?} {:?} {:?} {:?} {:?}",
         container.name,
