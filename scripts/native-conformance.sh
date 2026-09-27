@@ -555,7 +555,57 @@ print(next((category for category, tokens in checks
             if any(token in message for token in tokens)), "unclassified"))'
 }
 export -f classify_probe_error
+# The validated per-probe --since boundary excludes earlier package output and
+# daemon errors. Keep only structured daemon error records, never shell trace
+# or raw values; an absent record makes the pipeline fail closed.
+filter_daemon_probe_logs() {
+  python3 -c 'import re
+import sys
+tail = bytearray()
+for chunk in iter(lambda: sys.stdin.buffer.read(4096), b""):
+    tail.extend(chunk)
+    if len(tail) > 65536:
+        del tail[:-65536]
+lines = tail.decode("utf-8", "replace").splitlines()[-160:]
+stages = [index for index, line in enumerate(lines)
+          if line.strip().lower() == "dockerlens_apt_stage: daemon"]
+if stages:
+    lines = lines[stages[-1] + 1:]
+daemon_record = re.compile(r"^time=\"[^\"\r\n]{1,80}\" level=(?:error|warning|fatal)\b", re.I)
+selected = [line for line in lines
+            if len(line) <= 2048 and
+            (daemon_record.match(line) or
+             re.match(r"^(?:failed|error) (?:to )?start daemon:", line, re.I))]
+if not selected:
+    sys.exit(1)
+sys.stdout.write(selected[-1])'
+}
+export -f filter_daemon_probe_logs
 probe_known_categories='^(final_pid_pipe_eof|final_pid_pipe_reset|final_pid_pipe_other|stage[12]_(eagain|permission|invalid_argument|other)|resource_unavailable|file_descriptors|init_pipe_eof|runtime_state_missing|invalid_argument|uidmap|userns|cgroup|network|mount|storage|executable|security|permission|oci|unclassified)$'
+probe_log_boundary() {
+  python3 -c 'from datetime import datetime, timezone
+print(datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z"))'
+}
+probe_daemon_category() {
+  local boundary=$1 outer_owner category
+  [[ $boundary =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}Z$ ]] || {
+    printf unavailable
+    return
+  }
+  outer_owner=$(timeout 10 "${podman_cmd[@]}" inspect \
+    --format '{{index .Config.Labels "io.dockerlens.native-run"}}' "$container" 2>/dev/null) || {
+    printf unavailable
+    return
+  }
+  [[ $outer_owner == "$run_id" ]] || { printf unavailable; return; }
+  category=$(timeout --kill-after=1s 12s bash -c \
+    'set -o pipefail; "$@" 2>/dev/null | filter_daemon_probe_logs | classify_probe_error' bash \
+    "${podman_cmd[@]}" logs --since "$boundary" --tail 160 "$container") || {
+    printf unavailable
+    return
+  }
+  [[ $category =~ $probe_known_categories ]] && printf '%s' "$category" || printf unavailable
+}
 probe_failure_category() {
   local status=$1 category=$2
   if [[ $status == 124 ]]; then
@@ -582,9 +632,14 @@ probe_cleanup() {
   [[ -z $remaining ]]
 }
 run_inert_probe() {
-  local network=$1 name="dl-${run_id}-probe-${1}" category=ok status state wait_code owner state_error_category
+  local network=$1 name="dl-${run_id}-probe-${1}" category=ok status state wait_code owner state_error_category daemon_category probe_started
   # Both modes use the same pinned image and inert command. Keep the container
   # until its bounded state inspection and ownership-verified removal complete.
+  # Use the outer Podman host's UTC clock before the attempt, so later probes
+  # cannot inherit prior daemon errors from cumulative container logs.
+  probe_started=$(probe_log_boundary) || probe_started=unavailable
+  [[ $probe_started =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}Z$ ]] || \
+    probe_started=unavailable
   if category=$(timeout --kill-after=1s 44s bash -c \
     'set -o pipefail; "$@" 2>&1 >/dev/null | classify_probe_error' bash \
     "${inner_docker[@]}" container create --name "$name" \
@@ -629,6 +684,12 @@ run_inert_probe() {
   echo "DOCKERLENS_NATIVE_PROBE: ${network}_start_${category} state=$state" >&2
   if [[ $category != ok ]]; then
     echo "DOCKERLENS_NATIVE_PROBE: ${network}_state_error_${state_error_category}" >&2
+    if [[ $owner == "$run_id" ]]; then
+      daemon_category=$(probe_daemon_category "$probe_started")
+    else
+      daemon_category=unavailable
+    fi
+    echo "DOCKERLENS_NATIVE_PROBE: ${network}_daemon_${daemon_category}" >&2
   fi
   if ! probe_cleanup "$name"; then
     echo "DOCKERLENS_NATIVE_PROBE: ${network}_cleanup_unverified state_error=$state_error_category" >&2
