@@ -198,10 +198,16 @@ watchdog() {
   done
 }
 storage_mount="$volume:$(if [[ $expected_mode == rootless ]]; then printf /home/docker/.local/share/docker; else printf /var/lib/docker; fi):U"
+if [[ $lane == debian11-rootless ]]; then
+  # Historical Debian rootless runc cannot RO-remount the named volume when
+  # its outer data store inherits nosuid,nodev. Scope this to the disposable
+  # privileged nesting volume; do not change host mount or AppArmor policy.
+  storage_mount+=,suid,dev
+fi
 # Keep the image's native daemon launcher. Its second Unix listener is bind-mounted
 # for explicit local test capture; neither listener is exposed over TCP.
 start=(/usr/local/bin/start-dockerd --host=unix:///dockerlens-native/docker.sock)
-run_flags=(--image-volume=ignore)
+run_flags=(--image-volume=ignore --security-opt apparmor=unconfined)
 if [[ $lane == debian11-rootless ]]; then run_flags+=(--oom-score-adj=0); fi
 watchdog &
 watchdog_pid=$!
@@ -215,8 +221,7 @@ timeout 120 "${podman_cmd[@]}" run --pull=never -d --name "$container" --label "
 privileged=$("${podman_cmd[@]}" inspect --format '{{.HostConfig.Privileged}}' "$container")
 [[ $privileged == true ]] || { echo 'outer container does not have reviewed nesting privilege' >&2; exit 1; }
 volume_mounts=$("${podman_cmd[@]}" inspect --format '{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}}:{{.Destination}}{{"\n"}}{{end}}{{end}}' "$container")
-expected_mount=${storage_mount%%:*}:${storage_mount#*:}
-expected_mount=${expected_mount%:U}
+expected_mount=${storage_mount%:*}
 [[ $volume_mounts == "$expected_mount" ]] || {
   echo 'outer container has unexpected image or data-root volumes' >&2
   exit 1
@@ -241,6 +246,15 @@ done
   diagnose_native_startup
   exit 1
 }
+if [[ $lane == debian11-rootless ]]; then
+  # Linux mountinfo reports suid/dev by absence of nosuid/nodev. Check the
+  # effective mount, not merely the requested Podman volume options.
+  if ! timeout 15 "${podman_cmd[@]}" exec "$container" cat /proc/self/mountinfo 2>/dev/null |
+    python3 "$script_dir/native-storage-options.py" /home/docker/.local/share/docker; then
+    echo 'Debian rootless outer data-root mount lacks required effective options' >&2
+    exit 1
+  fi
+fi
 
 api_get() {
   local path=$1 target=$2

@@ -50,7 +50,14 @@ that installed package revision separately from /version. The upstream
 images contain Engine 29.8.1. No lane installs packages at runtime. Debian 11
 is a historical compatibility baseline, not current security support.
 The Debian rootless image needs --oom-score-adj=0 on its privileged rootful
-outer Podman container for nested workloads.
+outer Podman container for nested workloads. All lanes explicitly disable
+AppArmor for that already-privileged outer container only; the harness does
+not change host policy. The Debian rootless lane additionally mounts its
+task-owned outer data-root volume with suid,dev. Controlled independent CLI
+probes showed the historical runc could not start a read-only named-volume
+container when that outer mount instead had nosuid,nodev. The harness checks
+the effective mount flags before native tests. The other three lanes keep
+their default volume options.
 
 Run one lane with ./scripts/native-conformance.sh <lane> on Linux with
 rootful Podman through passwordless sudo, at least 8 GiB free, and access
@@ -70,7 +77,9 @@ Every image declares a Docker data-root VOLUME. The harness disables
 automatic image volumes and mounts exactly one task-labeled named volume at
 the declared data root. It checks the mounted volume after launch; an
 unexpected anonymous or extra volume fails the lane. A watchdog bounds
-storage use and free space. Failure diagnostics show the exact native test,
+storage use and free space. This isolated nesting setup does not demonstrate
+compatibility with restrictive data-root mount flags or an enforcing outer
+AppArmor profile. Failure diagnostics show the exact native test,
 exit status, numeric libtest summary, fixed native marker, and closed
 acquisition-error category where applicable. Daemon startup failures show
 bounded container state and a fixed category. Raw daemon logs and API
@@ -94,7 +103,9 @@ uploads only this JSON as dockerlens-native-<lane>, with a fixed <lane>.json
 filename. Artifact upload failure fails the lane. A reviewer must bind
 the exact artifact bytes, run attempt, and candidate SHA before adding
 positive catalog evidence. No local harness definition or green offline
-check creates that evidence.
+check creates that evidence. The manifest records Engine identity and tested
+shapes, not outer mount or AppArmor settings; the reviewed exact-candidate
+harness and genuine passing lane run must establish those test conditions.
 It deletes its exact named container, volume, and temporary files after
 success, failure, or catchable termination. SIGKILL, host failure, or hard
 runner shutdown can prevent cleanup; inspect the printed exact names and

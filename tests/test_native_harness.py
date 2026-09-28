@@ -11,6 +11,38 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class NativeHarnessTests(unittest.TestCase):
+    def test_effective_storage_check_fails_closed_before_native_work(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text()
+        block = source.split("\n\napi_get() {", 1)[0].rsplit(
+            "\nif [[ $lane == debian11-rootless ]]; then", 1
+        )[1]
+        block = "if [[ $lane == debian11-rootless ]]; then" + block
+        destination = "/home/docker/.local/share/docker"
+        valid = f"18 7 0:42 /private-source {destination} rw - ext4 /private-device rw"
+        for lane, mountinfo, status, admitted in (
+            ("debian11-rootless", valid, 0, True),
+            ("debian11-rootless", valid.replace(" rw -", " rw,nosuid,nodev -"), 0, False),
+            ("debian11-rootless", valid, 42, False),
+            ("debian11-rootless", "", 0, False),
+            ("upstream-rootless", "", 42, True),
+        ):
+            with self.subTest(lane=lane, mountinfo=mountinfo, status=status):
+                env = os.environ.copy()
+                env.update(lane=lane, script_dir=str(ROOT / "scripts"),
+                           TEST_MOUNTINFO=mountinfo, TEST_STATUS=str(status))
+                result = subprocess.run(
+                    ["bash", "-c", "set -euo pipefail\n"
+                     "timeout() { printf '%s\\n' \"$TEST_MOUNTINFO\"; "
+                     "echo protected-secret >&2; return \"$TEST_STATUS\"; }\n"
+                     "podman_cmd=(unused)\ncontainer=synthetic\n" + block
+                     + "\nprintf 'native-work-admitted'\n"],
+                    env=env, capture_output=True, text=True, timeout=5, check=False,
+                )
+                self.assertEqual(result.returncode == 0, admitted, result.stderr)
+                self.assertEqual("native-work-admitted" in result.stdout, admitted)
+                self.assertNotIn("protected-secret", result.stdout + result.stderr)
+                self.assertNotIn("private-source", result.stdout + result.stderr)
+
     def test_read_only_volume_start_keeps_classified_failure_probe(self) -> None:
         source = (ROOT / "src/native_target_tests.rs").read_text(encoding="utf-8")
         start = source.split(
@@ -329,12 +361,18 @@ esac
                 if (state / "run-args").exists():
                     args = (state / "run-args").read_text()
                     self.assertIn("--image-volume=ignore", args)
+                    self.assertIn("--security-opt apparmor=unconfined", args)
                     self.assertEqual("--oom-score-adj=0" in args, lane == "debian11-rootless")
                     self.assertIn("/usr/local/bin/start-dockerd", args)
                     self.assertIn("--host=unix:///dockerlens-native/docker.sock", args)
                     self.assertIn(":/dockerlens-native", args)
-                    expected_store = ("/home/docker/.local/share/docker:U"
-                                      if lane.endswith("rootless") else "/var/lib/docker:U")
+                    expected_store = (
+                        "/home/docker/.local/share/docker:U,suid,dev"
+                        if lane == "debian11-rootless"
+                        else "/home/docker/.local/share/docker:U"
+                        if lane == "upstream-rootless"
+                        else "/var/lib/docker:U"
+                    )
                     self.assertIn(expected_store, args)
                     if fault == "unexpected_mount":
                         self.assertIn("unexpected image or data-root volumes", result.stderr)
