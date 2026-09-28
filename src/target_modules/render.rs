@@ -12,6 +12,7 @@ mod network;
 pub struct RenderedArtifact {
     bytes: Vec<u8>,
     network_prerequisites: Vec<NetworkPrerequisite>,
+    volume_prerequisites: Vec<VolumePrerequisite>,
 }
 
 /// A declared external network must be checked by the consumer before use.
@@ -37,12 +38,36 @@ impl std::fmt::Debug for NetworkPrerequisite {
     }
 }
 
+/// A declared external named volume must be checked by the consumer before use.
+/// This does not assert destination existence, content, or data transfer.
+pub struct VolumePrerequisite {
+    pub reference: ResourceRef,
+    identity: ProtectedValue,
+}
+
+impl VolumePrerequisite {
+    #[must_use]
+    pub fn identity(&self) -> &[u8] {
+        self.identity.as_bytes()
+    }
+}
+
+impl std::fmt::Debug for VolumePrerequisite {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VolumePrerequisite")
+            .field("reference", &self.reference)
+            .field("identity", &"[redacted]")
+            .finish()
+    }
+}
+
 impl RenderedArtifact {
     #[must_use]
     pub fn new(bytes: Vec<u8>) -> Self {
         Self {
             bytes,
             network_prerequisites: Vec::new(),
+            volume_prerequisites: Vec::new(),
         }
     }
 
@@ -54,6 +79,11 @@ impl RenderedArtifact {
     #[must_use]
     pub fn network_prerequisites(&self) -> &[NetworkPrerequisite] {
         &self.network_prerequisites
+    }
+
+    #[must_use]
+    pub fn volume_prerequisites(&self) -> &[VolumePrerequisite] {
+        &self.volume_prerequisites
     }
 }
 
@@ -91,6 +121,7 @@ impl Renderer for DockerApiRenderer {
         let mut emitted = HashSet::new();
         let mut lines = String::new();
         let mut network_prerequisites = Vec::new();
+        let mut volume_prerequisites = Vec::new();
         while emitted.len() < graph.nodes().len() {
             let node = graph
                 .nodes()
@@ -126,6 +157,16 @@ impl Renderer for DockerApiRenderer {
                     json_string(&mut body, identity.bytes());
                     body.push('}');
                     Some((format!("{prefix}volumes/create"), body))
+                }
+                TargetResource::ExternalVolume {
+                    reference,
+                    identity,
+                } => {
+                    volume_prerequisites.push(VolumePrerequisite {
+                        reference: *reference,
+                        identity: ProtectedValue::new(identity.bytes().to_vec()),
+                    });
+                    None
                 }
                 TargetResource::Container(container) => Some((
                     format!(
@@ -163,6 +204,7 @@ impl Renderer for DockerApiRenderer {
         Ok(RenderedArtifact {
             bytes: lines.into_bytes(),
             network_prerequisites,
+            volume_prerequisites,
         })
     }
 }
