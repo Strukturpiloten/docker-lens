@@ -11,6 +11,15 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class NativeHarnessTests(unittest.TestCase):
+    def test_read_only_volume_start_keeps_classified_failure_probe(self) -> None:
+        source = (ROOT / "src/native_target_tests.rs").read_text(encoding="utf-8")
+        start = source.split(
+            'eprintln!("DOCKERLENS_NATIVE_CHECK: target_shape_volume_ro_inspected");', 1
+        )[1].split(
+            'eprintln!("DOCKERLENS_NATIVE_CHECK: target_shape_volume_ro_started");', 1
+        )[0]
+        self.assertIn("start_native_source(&volume_ro_id);", start)
+
     def test_synthetic_bind_fixture_is_writable_but_parent_stays_private(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
         fixture = source.split(
@@ -434,6 +443,8 @@ elif [[ $FAKE_NATIVE_TEST_MODE == startfail ]]; then
   echo 'protected daemon start detail' >&2
   echo 'DOCKERLENS_NATIVE_CHECK: target_start_cgroup' >&2
   echo 'DOCKERLENS_NATIVE_CHECK: target_start_private' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: target_start_reason_operation_not_permitted' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: target_start_reason_private' >&2
   echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
   exit 11
 else
@@ -479,7 +490,12 @@ fi
                     self.assertNotIn("target_shape_volume_ro_write_private", result.stderr)
                 elif mode == "startfail":
                     self.assertIn("DOCKERLENS_NATIVE_CHECK: target_start_cgroup", result.stderr)
+                    self.assertIn(
+                        "DOCKERLENS_NATIVE_CHECK: target_start_reason_operation_not_permitted",
+                        result.stderr,
+                    )
                     self.assertNotIn("target_start_private", result.stderr)
+                    self.assertNotIn("target_start_reason_private", result.stderr)
                 elif mode == "listfail":
                     self.assertIn("fixture::live_check (exit 23)", result.stderr)
 

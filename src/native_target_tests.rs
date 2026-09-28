@@ -152,11 +152,32 @@ fn start_failure_category(stderr: &[u8]) -> &'static str {
     }
 }
 
+fn start_failure_reason(stderr: &[u8]) -> &'static str {
+    let message = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+    if message.contains("operation not permitted") {
+        "operation_not_permitted"
+    } else if message.contains("permission denied") {
+        "permission_denied"
+    } else if message.contains("invalid argument") {
+        "invalid_argument"
+    } else if message.contains("read-only file system") || message.contains("read-only filesystem")
+    {
+        "read_only_filesystem"
+    } else if message.contains("no such file or directory") || message.contains("not found") {
+        "not_found"
+    } else if message.contains("timed out") || message.contains("timeout") {
+        "timeout"
+    } else {
+        "unclassified"
+    }
+}
+
 fn start_native_source(container_id: &str) {
     let mut command = inner_docker_command(&["start", container_id]);
     command.stdout(Stdio::null()).stderr(Stdio::piped());
     let mut child = command.spawn().unwrap_or_else(|_| {
         eprintln!("DOCKERLENS_NATIVE_CHECK: target_start_exec");
+        eprintln!("DOCKERLENS_NATIVE_CHECK: target_start_reason_unclassified");
         panic!("isolated inner Docker start probe unavailable");
     });
     let stderr = child.stderr.take().expect("bounded Docker start stderr");
@@ -166,16 +187,19 @@ fn start_native_source(container_id: &str) {
     });
     let status = child.wait().unwrap_or_else(|_| {
         eprintln!("DOCKERLENS_NATIVE_CHECK: target_start_exec");
+        eprintln!("DOCKERLENS_NATIVE_CHECK: target_start_reason_unclassified");
         panic!("isolated inner Docker start probe wait failed");
     });
     let error_tail = match receiver.recv_timeout(Duration::from_secs(2)) {
         Ok(tail) => tail,
         Err(RecvTimeoutError::Timeout) => {
             eprintln!("DOCKERLENS_NATIVE_CHECK: target_start_timeout");
+            eprintln!("DOCKERLENS_NATIVE_CHECK: target_start_reason_timeout");
             panic!("isolated inner Docker start stderr did not close");
         }
         Err(RecvTimeoutError::Disconnected) => {
             eprintln!("DOCKERLENS_NATIVE_CHECK: target_start_exec");
+            eprintln!("DOCKERLENS_NATIVE_CHECK: target_start_reason_unclassified");
             panic!("isolated inner Docker start probe read failed");
         }
     };
@@ -185,7 +209,13 @@ fn start_native_source(container_id: &str) {
         } else {
             start_failure_category(&error_tail)
         };
+        let reason = if status.code() == Some(124) {
+            "timeout"
+        } else {
+            start_failure_reason(&error_tail)
+        };
         eprintln!("DOCKERLENS_NATIVE_CHECK: target_start_{category}");
+        eprintln!("DOCKERLENS_NATIVE_CHECK: target_start_reason_{reason}");
         panic!("independent inner Docker start failed");
     }
 }
@@ -195,11 +225,31 @@ fn start_failure_classifier_is_closed_and_uses_bounded_private_input() {
     let category = start_failure_category(b"protected-secret: cgroup: operation not permitted");
     assert_eq!(category, "cgroup");
     assert!(!category.contains("protected-secret"));
+    let reason = start_failure_reason(b"protected-secret: mount: operation not permitted");
+    assert_eq!(reason, "operation_not_permitted");
+    assert!(!reason.contains("protected-secret"));
+    for (message, expected) in [
+        ("permission denied", "permission_denied"),
+        ("invalid argument", "invalid_argument"),
+        ("read-only file system", "read_only_filesystem"),
+        ("no such file or directory", "not_found"),
+        ("timed out", "timeout"),
+    ] {
+        assert_eq!(
+            start_failure_reason(format!("protected-secret: {message}").as_bytes()),
+            expected
+        );
+    }
     assert_eq!(
         start_failure_category(b"protected-secret only"),
         "unclassified"
     );
+    assert_eq!(
+        start_failure_reason(b"protected-secret only"),
+        "unclassified"
+    );
     assert_eq!(start_failure_category(&[0xff, 0xfe]), "unclassified");
+    assert_eq!(start_failure_reason(&[0xff, 0xfe]), "unclassified");
     let mut oversized = vec![b'x'; 16_384];
     oversized.extend_from_slice(b"protected-secret user namespace");
     let tail = bounded_error_tail(oversized.as_slice());
@@ -938,12 +988,9 @@ fn live_target_render_matches_engine() {
         false,
     );
     eprintln!("DOCKERLENS_NATIVE_CHECK: target_shape_volume_ro_inspected");
-    let (status, _) = api(
-        "POST",
-        &format!("/v{api_version}/containers/{volume_ro_id}/start"),
-        None,
-    );
-    assert_eq!(status, 204);
+    // This API-created variant uses the independent CLI start probe so a
+    // failed older rootless Engine start yields a closed failure category.
+    start_native_source(&volume_ro_id);
     eprintln!("DOCKERLENS_NATIVE_CHECK: target_shape_volume_ro_started");
     inner_docker(&[
         "exec",

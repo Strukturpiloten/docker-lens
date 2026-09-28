@@ -76,7 +76,10 @@ acquisition-error category where applicable. Daemon startup failures show
 bounded container state and a fixed category. Raw daemon logs and API
 responses remain private; unknown failures are unclassified. The read-only
 volume shape uses fixed phase and write-exit-category markers to pinpoint
-failures without publishing daemon responses or volume contents.
+failures without publishing daemon responses or volume contents. Its
+API-created container uses the independent CLI start probe to report both a
+closed component category and a separate closed errno/reason token for a
+failed start before checking the live read-only mount behavior.
 
 After all three native Rust tests pass, a workflow lane writes one
 sanitized JSON manifest containing the exact candidate SHA, image
