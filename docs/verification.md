@@ -229,6 +229,20 @@ implementation is verified and merged.
 Record the manual run URL and exact candidate SHA in the PR: the dispatch
 runs on `main` and is not an automatic required check on the PR head.
 
+DockerLens [#42](https://github.com/Strukturpiloten/docker-lens/issues/42)
+owns the canonical reviewed-PR admission script. With `EXPECTED_REPOSITORY`
+absent, it retains DockerLens's native-validation repository policy. A trusted
+workflow may set literal `EXPECTED_REPOSITORY=Strukturpiloten/boxferry` when
+BoxFerry application validation invokes an immutable DockerLens commit
+checkout; the event repository, open PR's head and base full names and numeric
+IDs, and both actors must then all match BoxFerry. Unknown values and CLI
+arguments are rejected before any API request. BoxFerry
+[#369](https://github.com/Strukturpiloten/boxferry/issues/369) owns the
+immutable consumer pin and manual-review `github-digest` Renovate ownership;
+this producer change adds no pin or native workflow gate. Both consumers need
+independent validation before the shared admission rollout is complete. This
+helper never admits a release or publication operation.
+
 The intended client platform is Linux. Mac client compatibility is not
 validated by this scaffold. There is no macOS or Windows runner requirement.
 

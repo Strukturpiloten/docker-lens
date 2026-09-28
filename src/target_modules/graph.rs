@@ -167,6 +167,7 @@ pub enum TargetField {
     NetworkStaticAddress,
     NetworkMultipleAttachment,
     NetworkExternalReference,
+    VolumeExternalReference,
     Environment,
     Command,
     CommandClear,
@@ -229,6 +230,7 @@ impl<'a> OperationGraph<'a> {
                     {
                         OperationAction::RequireExisting
                     }
+                    TargetResource::ExternalVolume { .. } => OperationAction::RequireExisting,
                     _ => OperationAction::Create,
                 };
                 resource.reference() == node.operation.resource
@@ -394,6 +396,10 @@ impl<'a> OperationGraph<'a> {
                 TargetResource::Volume { .. } => {
                     require(TargetField::Resource, Capability::NamedVolume)?
                 }
+                TargetResource::ExternalVolume { .. } => require(
+                    TargetField::VolumeExternalReference,
+                    Capability::VolumeExternalReference,
+                )?,
                 TargetResource::Container(container) => {
                     require(TargetField::Resource, Capability::StandaloneContainer)?;
                     if mode == DaemonMode::Rootless
@@ -730,7 +736,9 @@ impl Planner for DockerPlanner {
                         }
                         references
                     }
-                    TargetResource::Network(_) | TargetResource::Volume { .. } => Vec::new(),
+                    TargetResource::Network(_)
+                    | TargetResource::Volume { .. }
+                    | TargetResource::ExternalVolume { .. } => Vec::new(),
                 };
                 OperationNode {
                     operation: Operation {
@@ -740,6 +748,9 @@ impl Planner for DockerPlanner {
                             TargetResource::Network(network)
                                 if matches!(&network.source, NetworkSource::External { .. }) =>
                             {
+                                OperationAction::RequireExisting
+                            }
+                            TargetResource::ExternalVolume { .. } => {
                                 OperationAction::RequireExisting
                             }
                             _ => OperationAction::Create,

@@ -47,6 +47,17 @@ TCP/UDP, exec command/entrypoint/health, bind/volume and restart shapes.
 No new container capability is positive merely because a target type and
 renderer branch exists.
 
+DockerLens #44 adds an inert existing named-volume target contract:
+`TargetResource::ExternalVolume` binds a caller-supplied destination name to a
+`RequireExisting(Volume)` graph step and protected `VolumePrerequisite`, with no
+volume-create request. `Mount::volume` still renders the exact declared target
+name. Inspected source identity is not authored destination ownership or proof
+that data exists there. Historical profiles remain unadmitted for this branch.
+DockerLens #44 requires independent four-lane native absence, mount-data and
+persistence evidence before admission; BoxFerry #343 must make an explicit
+promotion or loss decision and verify the destination prerequisite. The target
+checkpoint does not transfer data or close the migration issue.
+
 | #30 target branch | Typed request contract | Remaining proof / owner |
 | --- | --- | --- |
 | Publication | `PortPublication` has exposed-only or ordered `HostBinding` values; each binding distinguishes omitted/explicit IPv4 or IPv6 `HostIp` and fixed/ephemeral `HostPort`. Duplicate or wildcard-overlapping fixed bindings fail before planning. | #31 must inspect resulting fixed/repeated/dynamic bindings, loopback isolation and IPv6 behavior per exact lane; #343 must retain authored address versus observed assigned port. |

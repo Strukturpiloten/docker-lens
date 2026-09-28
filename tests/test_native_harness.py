@@ -28,15 +28,25 @@ class NativeHarnessTests(unittest.TestCase):
         self.assertEqual(re.findall(r'"nslookup",\s*"-type=A",\s*"([^"]+)"', source),
                          ["edge-sentinel", "backend-app"])
         self.assertIn("if nslookup -type=A edge-sentinel", source)
-        self.assertIn('edge_resolved && nslookup_has_ipv4_answer(edge_answer, "edge-sentinel", edge_ip)', source)
+        self.assertIn('let edge_dns_outcome = wait_for_exact_dns_answer(', source)
+        self.assertIn('if category != "cli_lookup"', source)
+        self.assertIn('edge_dns_outcome.is_ok()', source)
+        self.assertIn('let edge_alias_present =', source)
+        self.assertIn('aliases.iter().any(|alias| alias == "edge-sentinel")', source)
         self.assertRegex(source,
                          r'backend_resolved\s*&& nslookup_has_ipv4_answer\(&backend_answer, "backend-app", backend_ip\)')
         self.assertIn("fn nslookup_ipv4_answer_requires_exact_named_address_not_prefix_or_resolver()", source)
         self.assertIn('edge_only_body["State"]["Running"] != true', source)
         self.assertIn("fn edge_dns_failure_categories_are_closed_and_value_free()", source)
+        self.assertIn("fn exact_dns_readiness_retries_only_transient_lookup_with_finite_budget()", source)
         self.assertIn("const LIMIT: usize = 8192;", source)
         self.assertIn("let stdout_reader = std::thread::spawn", source)
         self.assertIn("let stderr_reader = std::thread::spawn", source)
+        self.assertIn('command.arg("8")', source)
+        self.assertIn('api_with_timeout("GET", path, None, "3")', source)
+        self.assertLess(source.index("match named_dns_answer_category"),
+                        source.index('if message.contains("can\'t resolve")'))
+        self.assertIn("mixed wrong answer must not be retried", source)
 
     def test_network_probe_is_exact_and_precedes_manifest_emission(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
@@ -66,7 +76,9 @@ fi
             env = os.environ.copy()
             env["PATH"] = f"{bin_dir}:{env['PATH']}"
             for marker in (
-                "edge_fixture_exited", "edge_dns", "edge_dns_output_limit",
+                "edge_fixture_exited", "edge_alias_missing", "edge_dns",
+                "edge_dns_fixture_exited", "edge_dns_readiness_exhausted",
+                "edge_dns_output_limit",
                 "edge_dns_cli_timeout", "edge_dns_cli_resolver", "edge_dns_cli_lookup",
                 "edge_dns_cli_docker", "edge_dns_cli_exec",
                 "edge_dns_cli_answer_present", "edge_dns_cli_unclassified",

@@ -32,7 +32,10 @@ pub use network::{
     NetworkCreate, NetworkDriver, NetworkIntent, NetworkIpam, NetworkIpamDriver, NetworkIpamPool,
     NetworkLabel, NetworkRole, NetworkSource, NetworkSubnet,
 };
-pub use render::{DockerApiRenderer, NetworkPrerequisite, RenderError, RenderedArtifact, Renderer};
+pub use render::{
+    DockerApiRenderer, NetworkPrerequisite, RenderError, RenderedArtifact, Renderer,
+    VolumePrerequisite,
+};
 
 #[cfg(test)]
 mod tests {
@@ -149,6 +152,193 @@ mod tests {
         Capability::Healthcheck,
         Capability::RestartPolicy,
     ];
+
+    fn external_volume_intent() -> TargetIntent {
+        TargetIntent::new(vec![
+            TargetResource::Container(Box::new(ContainerIntent {
+                reference: ResourceRef::new(2),
+                identity: TargetIdentity::new(b"consumer".to_vec()).unwrap(),
+                image: ImageReference::new(b"image:1".to_vec()).unwrap(),
+                environment: vec![],
+                ports: vec![],
+                mounts: vec![
+                    Mount::volume(ResourceRef::new(1), b"/persistent-data".to_vec(), true).unwrap(),
+                ],
+                networks: vec![],
+                entrypoint: ImageCommand::Inherit,
+                command: ImageCommand::Inherit,
+                healthcheck: None,
+                restart: None,
+                settings: ContainerSettings::default(),
+            })),
+            TargetResource::ExternalVolume {
+                reference: ResourceRef::new(1),
+                identity: TargetIdentity::new(b"destination_existing_secret".to_vec()).unwrap(),
+            },
+        ])
+        .unwrap()
+    }
+
+    #[test]
+    fn external_volume_is_ordered_prerequisite_with_exact_mount_and_no_create_request() {
+        let intent = external_volume_intent();
+        let daemon = facts(
+            41,
+            DaemonMode::Rootful,
+            &[
+                Capability::VolumeExternalReference,
+                Capability::StandaloneContainer,
+                Capability::NamedVolume,
+            ],
+        );
+        let capabilities = ValidatedCapabilities::new(&daemon).unwrap();
+        let graph = DockerPlanner.plan(&intent, &capabilities).unwrap();
+        assert_eq!(
+            graph.nodes()[1].operation.action,
+            OperationAction::RequireExisting
+        );
+        assert_eq!(
+            graph.steps()[1].action,
+            OperationStepAction::RequireExisting(TargetKind::Volume)
+        );
+        assert_eq!(graph.steps()[0].depends_on, vec![graph.steps()[1].id]);
+        let artifact = DockerApiRenderer.render(&graph).unwrap();
+        assert_eq!(
+            artifact.bytes(),
+            b"{\"method\":\"POST\",\"path\":\"/v1.41/containers/create?name=consumer\",\"body\":{\"Image\":\"image:1\",\"HostConfig\":{\"Mounts\":[{\"Type\":\"volume\",\"Source\":\"destination_existing_secret\",\"Target\":\"/persistent-data\",\"ReadOnly\":true}]}}}\n"
+        );
+        assert!(artifact.network_prerequisites().is_empty());
+        assert_eq!(artifact.volume_prerequisites().len(), 1);
+        assert_eq!(
+            artifact.volume_prerequisites()[0].reference,
+            ResourceRef::new(1)
+        );
+        assert_eq!(
+            artifact.volume_prerequisites()[0].identity(),
+            b"destination_existing_secret"
+        );
+        for value in [
+            format!("{intent:?}"),
+            format!("{graph:?}"),
+            format!("{artifact:?}"),
+            format!("{:?}", artifact.volume_prerequisites()[0]),
+        ] {
+            assert!(!value.contains("destination_existing_secret"));
+            assert!(!value.contains("persistent-data"));
+        }
+    }
+
+    #[test]
+    fn external_volume_rejects_unadmitted_or_unbound_dependency_and_conflicting_name() {
+        let intent = external_volume_intent();
+        let daemon = facts(
+            41,
+            DaemonMode::Rootful,
+            &[Capability::StandaloneContainer, Capability::NamedVolume],
+        );
+        let capabilities = ValidatedCapabilities::new(&daemon).unwrap();
+        assert_eq!(
+            DockerPlanner.plan(&intent, &capabilities).unwrap_err(),
+            PlanningError::MissingCapability {
+                resource: ResourceRef::new(1),
+                field: TargetField::VolumeExternalReference,
+                capability: Capability::VolumeExternalReference,
+            }
+        );
+        assert_eq!(
+            TargetIntent::new(vec![
+                TargetResource::Volume {
+                    reference: ResourceRef::new(1),
+                    identity: TargetIdentity::new(b"same_name".to_vec()).unwrap(),
+                },
+                TargetResource::ExternalVolume {
+                    reference: ResourceRef::new(2),
+                    identity: TargetIdentity::new(b"same_name".to_vec()).unwrap(),
+                },
+            ])
+            .unwrap_err(),
+            IntentError::DuplicateResource
+        );
+
+        let daemon = facts(
+            41,
+            DaemonMode::Rootful,
+            &[
+                Capability::VolumeExternalReference,
+                Capability::StandaloneContainer,
+                Capability::NamedVolume,
+            ],
+        );
+        let capabilities = ValidatedCapabilities::new(&daemon).unwrap();
+        let forged = vec![
+            OperationNode {
+                operation: Operation {
+                    resource: ResourceRef::new(1),
+                    kind: TargetKind::Volume,
+                    action: OperationAction::Create,
+                },
+                depends_on: vec![],
+            },
+            OperationNode {
+                operation: Operation {
+                    resource: ResourceRef::new(2),
+                    kind: TargetKind::Container,
+                    action: OperationAction::Create,
+                },
+                depends_on: vec![ResourceRef::new(1)],
+            },
+        ];
+        assert_eq!(
+            OperationGraph::new(&intent, &capabilities, forged).unwrap_err(),
+            PlanningError::InvalidDependency
+        );
+        let unbound = vec![
+            OperationNode {
+                operation: Operation {
+                    resource: ResourceRef::new(2),
+                    kind: TargetKind::Container,
+                    action: OperationAction::Create,
+                },
+                depends_on: vec![],
+            },
+            OperationNode {
+                operation: Operation {
+                    resource: ResourceRef::new(1),
+                    kind: TargetKind::Volume,
+                    action: OperationAction::RequireExisting,
+                },
+                depends_on: vec![],
+            },
+        ];
+        assert_eq!(
+            OperationGraph::new(&intent, &capabilities, unbound).unwrap_err(),
+            PlanningError::DependencyMismatch {
+                resource: ResourceRef::new(2),
+                dependency: ResourceRef::new(1),
+                expected: TargetKind::Volume,
+            }
+        );
+        let missing =
+            TargetIntent::new(vec![TargetResource::Container(Box::new(ContainerIntent {
+                reference: ResourceRef::new(2),
+                identity: TargetIdentity::new(b"consumer".to_vec()).unwrap(),
+                image: ImageReference::new(b"image:1".to_vec()).unwrap(),
+                environment: vec![],
+                ports: vec![],
+                mounts: vec![Mount::volume(ResourceRef::new(1), b"/data".to_vec(), false).unwrap()],
+                networks: vec![],
+                entrypoint: ImageCommand::Inherit,
+                command: ImageCommand::Inherit,
+                healthcheck: None,
+                restart: None,
+                settings: ContainerSettings::default(),
+            }))])
+            .unwrap();
+        assert_eq!(
+            DockerPlanner.plan(&missing, &capabilities).unwrap_err(),
+            PlanningError::InvalidDependency
+        );
+    }
 
     #[test]
     fn minimal_container_request_has_exact_inert_shape() {

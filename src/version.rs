@@ -95,6 +95,7 @@ pub enum Capability {
     BindMount,
     TmpfsMount,
     NamedVolume,
+    VolumeExternalReference,
     BridgeNetwork,
     NetworkExternalReference,
     NetworkInternal,
@@ -541,6 +542,7 @@ pub(crate) enum NativeCapabilityShape {
     NamedVolumeCreate,
     NamedVolumeMountReadWrite,
     NamedVolumeMountReadOnly,
+    ExternalVolumeReference,
     BridgeNetworkCreate,
     BridgeNetworkAttach,
     ExternalNetworkReference,
@@ -642,6 +644,7 @@ impl NativeCapabilityShape {
             Self::NamedVolumeCreate
             | Self::NamedVolumeMountReadWrite
             | Self::NamedVolumeMountReadOnly => Capability::NamedVolume,
+            Self::ExternalVolumeReference => Capability::VolumeExternalReference,
             Self::BridgeNetworkCreate | Self::BridgeNetworkAttach => Capability::BridgeNetwork,
             Self::ExternalNetworkReference => Capability::NetworkExternalReference,
             Self::InternalBridgeNetworkCreate => Capability::NetworkInternal,
@@ -735,6 +738,7 @@ impl NativeCapabilityShape {
                 Self::NamedVolumeMountReadWrite,
                 Self::NamedVolumeMountReadOnly,
             ]),
+            Capability::VolumeExternalReference => Some(&[Self::ExternalVolumeReference]),
             Capability::BridgeNetwork => {
                 Some(&[Self::BridgeNetworkCreate, Self::BridgeNetworkAttach])
             }

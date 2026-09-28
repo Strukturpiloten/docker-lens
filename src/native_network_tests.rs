@@ -133,7 +133,10 @@ fn bounded_dns_stream<R: Read>(reader: R) -> (Vec<u8>, bool) {
 
 fn cli_dns(args: &[&str]) -> BoundedDnsCliOutput {
     let mut command = Command::new("timeout");
-    command.arg("45");
+    // Four DNS commands and four three-second state reads plus conditional
+    // pauses sum to under 45 seconds of configured timeout within the exact
+    // native test's 180-second budget.
+    command.arg("8");
     if required("NATIVE_PODMAN_USE_SUDO") == "1" {
         command.args(["sudo", "-n", "podman"]);
     } else {
@@ -185,11 +188,17 @@ fn dns_failure_category(
         if matches!(result.code, Some(126 | 127)) {
             return "cli_exec";
         }
-        if nslookup_has_ipv4_answer(&result.stdout, alias, expected) {
-            return "cli_answer_present";
-        }
         let private = [&result.stdout[..], &result.stderr[..]].concat();
         let message = String::from_utf8_lossy(&private).to_ascii_lowercase();
+        if message.contains("error response from daemon") || message.contains("no such container") {
+            return "cli_docker";
+        }
+        match named_dns_answer_category(&result.stdout, alias, expected) {
+            "answer_inconsistent" => return "cli_answer_present",
+            "answer_wrong_ip" => return "answer_wrong_ip",
+            "answer_malformed" => return "answer_malformed",
+            _ => {}
+        }
         if message.contains("no servers could be reached")
             || message.contains("connection timed out")
         {
@@ -201,12 +210,13 @@ fn dns_failure_category(
         {
             return "cli_lookup";
         }
-        if message.contains("error response from daemon") || message.contains("no such container") {
-            return "cli_docker";
-        }
         return "cli_unclassified";
     }
-    let Ok(output) = std::str::from_utf8(&result.stdout) else {
+    named_dns_answer_category(&result.stdout, alias, expected)
+}
+
+fn named_dns_answer_category(output: &[u8], alias: &str, expected: Ipv4Addr) -> &'static str {
+    let Ok(output) = std::str::from_utf8(output) else {
         return "answer_malformed";
     };
     let mut named_answer = false;
@@ -249,6 +259,42 @@ fn dns_failure_category(
     } else {
         "answer_malformed"
     }
+}
+
+fn wait_for_exact_dns_answer<P, R, W>(
+    alias: &str,
+    expected: Ipv4Addr,
+    attempts: usize,
+    mut probe: P,
+    mut still_running: R,
+    mut wait: W,
+) -> Result<(), &'static str>
+where
+    P: FnMut() -> BoundedDnsCliOutput,
+    R: FnMut() -> bool,
+    W: FnMut(),
+{
+    assert!(attempts > 0, "DNS readiness budget must be nonzero");
+    for attempt in 0..attempts {
+        let result = probe();
+        if result.success && nslookup_has_ipv4_answer(&result.stdout, alias, expected) {
+            return Ok(());
+        }
+        let category = dns_failure_category(&result, alias, expected);
+        // A newly started endpoint may not yet have its A record. No other
+        // error is retried, and every success requires the exact inspected IP.
+        if category != "cli_lookup" {
+            return Err(category);
+        }
+        if !still_running() {
+            return Err("fixture_exited");
+        }
+        if attempt + 1 == attempts {
+            return Err("readiness_exhausted");
+        }
+        wait();
+    }
+    unreachable!("nonzero DNS readiness budget")
 }
 
 fn nslookup_has_ipv4_answer(output: &[u8], alias: &str, expected: Ipv4Addr) -> bool {
@@ -370,11 +416,128 @@ fn edge_dns_failure_categories_are_closed_and_value_free() {
         dns_failure_category(&result, "edge-sentinel", expected),
         "answer_malformed"
     );
+    result.success = false;
+    result.code = Some(1);
+    result.stdout = b"Name: edge-sentinel\nAddress: 172.29.244.20\ncan't resolve\n".to_vec();
+    assert_eq!(
+        dns_failure_category(&result, "edge-sentinel", expected),
+        "answer_wrong_ip"
+    );
+    result.stdout = b"Name: edge-sentinel\nAddress: not-an-ip\ncan't resolve\n".to_vec();
+    assert_eq!(
+        dns_failure_category(&result, "edge-sentinel", expected),
+        "answer_malformed"
+    );
+    result.stdout = b"can't resolve\n".to_vec();
+    result.stderr = b"Error response from daemon".to_vec();
+    assert_eq!(
+        dns_failure_category(&result, "edge-sentinel", expected),
+        "cli_docker"
+    );
     result.output_limit = true;
     assert_eq!(
         dns_failure_category(&result, "edge-sentinel", expected),
         "output_limit"
     );
+}
+
+#[test]
+fn exact_dns_readiness_retries_only_transient_lookup_with_finite_budget() {
+    let expected = Ipv4Addr::new(172, 29, 244, 2);
+    let synthetic = |success: bool, stdout: &[u8]| BoundedDnsCliOutput {
+        success,
+        code: Some(if success { 0 } else { 1 }),
+        stdout: stdout.to_vec(),
+        stderr: Vec::new(),
+        output_limit: false,
+    };
+    let probes = std::cell::Cell::new(0);
+    let pauses = std::cell::Cell::new(0);
+    let outcome = wait_for_exact_dns_answer(
+        "edge-sentinel",
+        expected,
+        4,
+        || {
+            probes.set(probes.get() + 1);
+            if probes.get() == 1 {
+                synthetic(false, b"can't resolve edge-sentinel")
+            } else {
+                synthetic(true, b"Name: edge-sentinel\nAddress: 172.29.244.2\n")
+            }
+        },
+        || true,
+        || pauses.set(pauses.get() + 1),
+    );
+    assert_eq!(outcome, Ok(()));
+    assert_eq!(probes.get(), 2);
+    assert_eq!(pauses.get(), 1);
+
+    probes.set(0);
+    pauses.set(0);
+    let exhausted = wait_for_exact_dns_answer(
+        "edge-sentinel",
+        expected,
+        2,
+        || {
+            probes.set(probes.get() + 1);
+            synthetic(false, b"can't resolve edge-sentinel")
+        },
+        || true,
+        || pauses.set(pauses.get() + 1),
+    );
+    assert_eq!(exhausted, Err("readiness_exhausted"));
+    assert_eq!(probes.get(), 2);
+    assert_eq!(pauses.get(), 1);
+
+    probes.set(0);
+    pauses.set(0);
+    let wrong = wait_for_exact_dns_answer(
+        "edge-sentinel",
+        expected,
+        4,
+        || {
+            probes.set(probes.get() + 1);
+            synthetic(true, b"Name: edge-sentinel\nAddress: 172.29.244.20\n")
+        },
+        || true,
+        || pauses.set(pauses.get() + 1),
+    );
+    assert_eq!(wrong, Err("answer_wrong_ip"));
+    assert_eq!(probes.get(), 1);
+    assert_eq!(pauses.get(), 0);
+
+    probes.set(0);
+    let mixed_wrong = wait_for_exact_dns_answer(
+        "edge-sentinel",
+        expected,
+        4,
+        || {
+            probes.set(probes.get() + 1);
+            synthetic(
+                false,
+                b"Name: edge-sentinel\nAddress: 172.29.244.20\ncan't resolve\n",
+            )
+        },
+        || true,
+        || panic!("mixed wrong answer must not be retried"),
+    );
+    assert_eq!(mixed_wrong, Err("answer_wrong_ip"));
+    assert_eq!(probes.get(), 1);
+
+    probes.set(0);
+    let exited = wait_for_exact_dns_answer(
+        "edge-sentinel",
+        expected,
+        4,
+        || {
+            probes.set(probes.get() + 1);
+            synthetic(false, b"can't resolve edge-sentinel")
+        },
+        || false,
+        || panic!("exited fixture must not be retried"),
+    );
+    assert_eq!(exited, Err("fixture_exited"));
+    assert_eq!(probes.get(), 1);
 }
 
 fn expected_post_bodies(run_id: &str, image: &str) -> [Value; 5] {
@@ -474,6 +637,15 @@ fn allowed_request(
 }
 
 fn api(method: &str, path: &str, body: Option<&Value>) -> (u16, Vec<u8>) {
+    api_with_timeout(method, path, body, "15")
+}
+
+fn api_with_timeout(
+    method: &str,
+    path: &str,
+    body: Option<&Value>,
+    max_time: &str,
+) -> (u16, Vec<u8>) {
     let run_id = run_id();
     assert!(
         allowed_request(
@@ -490,7 +662,7 @@ fn api(method: &str, path: &str, body: Option<&Value>) -> (u16, Vec<u8>) {
     command.args([
         "-sS",
         "--max-time",
-        "15",
+        max_time,
         "--unix-socket",
         &required("NATIVE_ENGINE_SOCKET"),
         "-X",
@@ -532,6 +704,16 @@ fn inspect(path: &str) -> Value {
     let (status, response) = api("GET", path, None);
     assert_eq!(status, 200, "independent Engine inspect succeeds");
     serde_json::from_slice(&response).expect("native inspect JSON")
+}
+
+fn inspect_running_with_dns_budget(path: &str) -> bool {
+    let (status, response) = api_with_timeout("GET", path, None, "3");
+    assert!(
+        status == 200,
+        "bounded independent Engine state inspect succeeds"
+    );
+    let inspected: Value = serde_json::from_slice(&response).expect("private state inspect JSON");
+    inspected["State"]["Running"] == true
 }
 
 fn rich_create() -> NetworkCreate {
@@ -1335,6 +1517,17 @@ fn live_network_render_matches_engine() {
             .get(edge.as_str())
             .is_some()
     );
+    let edge_alias_present =
+        edge_only_body["NetworkSettings"]["Networks"][edge.as_str()]["Aliases"]
+            .as_array()
+            .is_some_and(|aliases| aliases.iter().any(|alias| alias == "edge-sentinel"));
+    if !edge_alias_present {
+        eprintln!("DOCKERLENS_NATIVE_CHECK: network_isolation_edge_alias_missing");
+    }
+    assert!(
+        edge_alias_present,
+        "independent edge-only CLI fixture must register its alias"
+    );
     if edge_only_body["State"]["Running"] != true {
         eprintln!("DOCKERLENS_NATIVE_CHECK: network_isolation_edge_fixture_exited");
     }
@@ -1348,24 +1541,30 @@ fn live_network_render_matches_engine() {
         .parse::<Ipv4Addr>()
         .expect("bounded edge-only IPv4");
     eprintln!("DOCKERLENS_NATIVE_CHECK: network_isolation_edge_dns");
-    let edge_dns_result = cli_dns(&[
-        "run",
-        "--rm",
-        "--network",
-        &edge,
-        &image,
-        "nslookup",
-        "-type=A",
+    let edge_dns_outcome = wait_for_exact_dns_answer(
         "edge-sentinel",
-    ]);
-    let edge_resolved = edge_dns_result.success;
-    let edge_answer = &edge_dns_result.stdout;
-    if !(edge_resolved && nslookup_has_ipv4_answer(edge_answer, "edge-sentinel", edge_ip)) {
-        let category = dns_failure_category(&edge_dns_result, "edge-sentinel", edge_ip);
+        edge_ip,
+        4,
+        || {
+            cli_dns(&[
+                "run",
+                "--rm",
+                "--network",
+                &edge,
+                &image,
+                "nslookup",
+                "-type=A",
+                "edge-sentinel",
+            ])
+        },
+        || inspect_running_with_dns_budget(&format!("/v{api_version}/containers/{edge_only}/json")),
+        || std::thread::sleep(Duration::from_millis(250)),
+    );
+    if let Err(category) = edge_dns_outcome {
         eprintln!("DOCKERLENS_NATIVE_CHECK: network_isolation_edge_dns_{category}");
     }
     assert!(
-        edge_resolved && nslookup_has_ipv4_answer(edge_answer, "edge-sentinel", edge_ip),
+        edge_dns_outcome.is_ok(),
         "edge-side peer must resolve edge-only alias to its inspected IPv4"
     );
     eprintln!("DOCKERLENS_NATIVE_CHECK: network_isolation_edge_http");

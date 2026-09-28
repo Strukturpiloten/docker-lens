@@ -44,6 +44,11 @@ pub enum TargetResource {
         reference: ResourceRef,
         identity: TargetIdentity,
     },
+    /// Exact caller-supplied destination name; existence and data are not inferred.
+    ExternalVolume {
+        reference: ResourceRef,
+        identity: TargetIdentity,
+    },
     Container(Box<ContainerIntent>),
 }
 
@@ -52,7 +57,7 @@ impl TargetResource {
     pub const fn reference(&self) -> ResourceRef {
         match self {
             Self::Network(network) => network.reference,
-            Self::Volume { reference, .. } => *reference,
+            Self::Volume { reference, .. } | Self::ExternalVolume { reference, .. } => *reference,
             Self::Container(container) => container.reference,
         }
     }
@@ -61,7 +66,7 @@ impl TargetResource {
     pub const fn kind(&self) -> TargetKind {
         match self {
             Self::Network(_) => TargetKind::Network,
-            Self::Volume { .. } => TargetKind::Volume,
+            Self::Volume { .. } | Self::ExternalVolume { .. } => TargetKind::Volume,
             Self::Container(_) => TargetKind::Container,
         }
     }
@@ -152,7 +157,8 @@ impl TargetIntent {
             }
             let identity = match resource {
                 TargetResource::Network(network) => &network.identity,
-                TargetResource::Volume { identity, .. } => identity,
+                TargetResource::Volume { identity, .. }
+                | TargetResource::ExternalVolume { identity, .. } => identity,
                 TargetResource::Container(container) => &container.identity,
             };
             if !identities.insert((resource.kind(), identity.bytes())) {
