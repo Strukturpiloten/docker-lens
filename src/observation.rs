@@ -16,7 +16,11 @@ impl ResourceRef {
 /// Closed field categories prevent native paths or values appearing in findings.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FieldPath {
+    ContainerName,
     Image,
+    User,
+    WorkingDirectory,
+    Hostname,
     Command,
     Entrypoint,
     Environment { index: usize },

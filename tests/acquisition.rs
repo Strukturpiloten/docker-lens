@@ -12,7 +12,8 @@ use docker_lens::acquisition::{
     AcquisitionError, Endpoint, LimitError, Limits, NativeId, ReadRequest, Selector, acquire,
 };
 use docker_lens::decoder::decode_capture;
-use docker_lens::evidence::CaptureRoute;
+use docker_lens::evidence::{CaptureRoute, ProtectedValue};
+use docker_lens::observation::{Availability, Observed, Origin};
 use docker_lens::version::DaemonMode;
 use serde_json::Value;
 
@@ -453,7 +454,9 @@ fn acquisition_category(error: AcquisitionError) -> &'static str {
 }
 
 /// The native harness supplies a private isolated Engine socket and independent
-/// direct-API observations. Fake-socket tests above do not replace this check.
+/// direct-API observations. Its explicit synthetic identity fields are checked
+/// against fixed expectations, so an omitted field cannot pass by oracle parity.
+/// Fake-socket tests above do not replace this check.
 #[test]
 #[ignore = "requires the isolated native Engine harness"]
 fn live_read_only_acquisition_matches_oracle() {
@@ -563,6 +566,150 @@ fn live_read_only_acquisition_matches_oracle() {
     }
     let container = &decoded.containers[0];
     eprintln!("DOCKERLENS_NATIVE_CHECK: acquire_settings");
+    let oracle_config = oracle_container["Config"]
+        .as_object()
+        .expect("direct container Config object");
+    let effective_string = |source: &Value, observed: &Observed<ProtectedValue>| {
+        let expected = source.as_str().expect("direct string field");
+        assert_eq!(observed.origin, Origin::Effective);
+        assert_eq!(
+            observed.availability,
+            if expected.is_empty() {
+                Availability::Empty
+            } else {
+                Availability::Present
+            }
+        );
+        assert!(
+            observed
+                .value()
+                .is_some_and(|value| value.as_bytes() == expected.as_bytes())
+        );
+    };
+    let direct_name = oracle_container["Name"]
+        .as_str()
+        .expect("direct container name");
+    assert!(direct_name.starts_with("/dl-") && direct_name.ends_with("-box"));
+    effective_string(&oracle_container["Name"], &container.name);
+    assert!(
+        oracle_config["User"].as_str() == Some("0:0"),
+        "fixture User differs from the expected synthetic value"
+    );
+    effective_string(&oracle_config["User"], &container.user);
+    assert!(
+        container
+            .user
+            .value()
+            .is_some_and(|user| user.as_bytes() == b"0:0")
+    );
+    assert!(
+        oracle_config["WorkingDir"].as_str() == Some("/tmp"),
+        "fixture WorkingDir differs from the expected synthetic value"
+    );
+    effective_string(&oracle_config["WorkingDir"], &container.working_directory);
+    assert!(
+        container
+            .working_directory
+            .value()
+            .is_some_and(|directory| directory.as_bytes() == b"/tmp")
+    );
+    let direct_hostname = oracle_config["Hostname"]
+        .as_str()
+        .expect("direct container hostname");
+    assert!(
+        direct_hostname == "dockerlens-native",
+        "fixture Hostname differs from the expected synthetic value"
+    );
+    effective_string(&oracle_config["Hostname"], &container.hostname);
+    assert!(
+        container
+            .hostname
+            .value()
+            .is_some_and(|hostname| hostname.as_bytes() == b"dockerlens-native")
+    );
+    assert!(
+        oracle_config["Labels"]["io.dockerlens.fixture"].as_str() == Some("synthetic"),
+        "fixture label differs from the expected synthetic value"
+    );
+    assert_eq!(container.labels.origin, Origin::Effective);
+    match oracle_config.get("Labels") {
+        None => {
+            assert_eq!(container.labels.availability, Availability::Missing);
+            assert!(container.labels.value().is_none());
+        }
+        Some(Value::Null) => {
+            assert_eq!(container.labels.availability, Availability::Null);
+            assert!(container.labels.value().is_none());
+        }
+        Some(Value::Object(expected)) => {
+            assert_eq!(
+                container.labels.availability,
+                if expected.is_empty() {
+                    Availability::Empty
+                } else {
+                    Availability::Present
+                }
+            );
+            let labels = container.labels.value().expect("typed native labels");
+            assert_eq!(labels.len(), expected.len());
+            for (key, value) in expected {
+                let direct_value = value.as_str().expect("direct label string");
+                let label = labels
+                    .iter()
+                    .find(|label| label.key.as_bytes() == key.as_bytes())
+                    .expect("typed native label key");
+                assert_eq!(label.value.origin, Origin::Effective);
+                assert_eq!(
+                    label.value.availability,
+                    if direct_value.is_empty() {
+                        Availability::Empty
+                    } else {
+                        Availability::Present
+                    }
+                );
+                assert!(
+                    label
+                        .value
+                        .value()
+                        .is_some_and(|observed| observed.as_bytes() == direct_value.as_bytes())
+                );
+            }
+        }
+        _ => panic!("direct labels have unexpected shape"),
+    }
+    assert!(
+        container
+            .labels
+            .value()
+            .is_some_and(|labels| labels.iter().any(|label| {
+                label.key.as_bytes() == b"io.dockerlens.fixture"
+                    && label
+                        .value
+                        .value()
+                        .is_some_and(|value| value.as_bytes() == b"synthetic")
+            }))
+    );
+    let debug = format!(
+        "{decoded:?} {:?} {:?} {:?} {:?} {:?}",
+        container.name,
+        container.labels,
+        container.user,
+        container.working_directory,
+        container.hostname
+    );
+    for private in [
+        direct_name,
+        "0:0",
+        "/tmp",
+        direct_hostname,
+        "io.dockerlens.fixture",
+        "synthetic",
+    ] {
+        assert!(
+            !debug.contains(private),
+            "native identity leaked through Debug"
+        );
+    }
     let oracle_env = oracle_container["Config"]["Env"].as_array().unwrap();
     let synthetic = oracle_env
         .iter()

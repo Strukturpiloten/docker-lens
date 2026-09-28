@@ -7,7 +7,7 @@ use docker_lens::decoder::{
     decode_capture,
 };
 use docker_lens::evidence::HttpStatus;
-use docker_lens::observation::{Availability, Origin, ResourceRef};
+use docker_lens::observation::{Availability, FieldPath, Origin, ResourceRef};
 use docker_lens::version::{ApiVersion, DaemonMode};
 
 fn api(minor: u16) -> ApiVersion {
@@ -209,6 +209,191 @@ fn absence_null_empty_and_redaction_stay_distinct() {
     assert_eq!(c.mounts.availability, Availability::Empty);
     assert_eq!(c.runtime_ports.availability, Availability::Null);
     assert_eq!(c.healthcheck.availability, Availability::Missing);
+}
+
+#[test]
+fn container_identity_and_effective_config_are_typed_and_private() {
+    // Shape mirrors Engine's container inspect: Name is top-level, while the
+    // other fields are members of Config. Values are observations, not intent.
+    let decoded = decode_capture(&container(
+        r#"{"Name":"/private-app","Config":{"Labels":{"app.role":"frontend","secret.key":"private-token","empty.label":""},"User":"1000:1000","WorkingDir":"/private/work","Hostname":"private-host"}}"#,
+    ))
+    .unwrap();
+    let c = &decoded.containers[0];
+    assert_eq!(c.reference, ResourceRef::new(1));
+    assert_eq!(c.name.origin, Origin::Effective);
+    assert_eq!(c.name.value().unwrap().as_bytes(), b"/private-app");
+    assert_eq!(c.user.value().unwrap().as_bytes(), b"1000:1000");
+    assert_eq!(
+        c.working_directory.value().unwrap().as_bytes(),
+        b"/private/work"
+    );
+    assert_eq!(c.hostname.value().unwrap().as_bytes(), b"private-host");
+    assert_eq!(c.labels.origin, Origin::Effective);
+    assert_eq!(c.labels.availability, Availability::Present);
+    let label = |key: &[u8]| {
+        &c.labels
+            .value()
+            .unwrap()
+            .iter()
+            .find(|label| label.key.as_bytes() == key)
+            .unwrap()
+            .value
+    };
+    assert_eq!(label(b"app.role").value().unwrap().as_bytes(), b"frontend");
+    assert_eq!(
+        label(b"secret.key").value().unwrap().as_bytes(),
+        b"private-token"
+    );
+    assert_eq!(label(b"empty.label").availability, Availability::Empty);
+    assert!(decoded.findings.iter().all(|finding| {
+        !matches!(
+            finding.field,
+            Some(
+                FieldPath::ContainerName
+                    | FieldPath::User
+                    | FieldPath::WorkingDirectory
+                    | FieldPath::Hostname
+                    | FieldPath::Label { .. }
+            )
+        )
+    }));
+    let debug = format!(
+        "{decoded:?} {:?} {:?} {:?} {:?} {:?}",
+        c.name, c.labels, c.user, c.working_directory, c.hostname
+    );
+    for private in [
+        "/private-app",
+        "secret.key",
+        "private-token",
+        "1000:1000",
+        "/private/work",
+        "private-host",
+    ] {
+        assert!(!debug.contains(private));
+    }
+}
+
+#[test]
+fn effective_config_preserves_absence_null_empty_and_redaction() {
+    let missing = decode_capture(&container(r#"{}"#)).unwrap();
+    let c = &missing.containers[0];
+    for availability in [
+        c.name.availability,
+        c.labels.availability,
+        c.user.availability,
+        c.working_directory.availability,
+        c.hostname.availability,
+    ] {
+        assert_eq!(availability, Availability::Missing);
+    }
+
+    let null = decode_capture(&container(
+        r#"{"Name":null,"Config":{"Labels":null,"User":null,"WorkingDir":null,"Hostname":null}}"#,
+    ))
+    .unwrap();
+    let c = &null.containers[0];
+    for availability in [
+        c.name.availability,
+        c.labels.availability,
+        c.user.availability,
+        c.working_directory.availability,
+        c.hostname.availability,
+    ] {
+        assert_eq!(availability, Availability::Null);
+    }
+
+    let empty = decode_capture(&container(
+        r#"{"Name":"","Config":{"Labels":{},"User":"","WorkingDir":"","Hostname":""}}"#,
+    ))
+    .unwrap();
+    let c = &empty.containers[0];
+    for availability in [
+        c.name.availability,
+        c.labels.availability,
+        c.user.availability,
+        c.working_directory.availability,
+        c.hostname.availability,
+    ] {
+        assert_eq!(availability, Availability::Empty);
+    }
+    assert!(c.labels.value().unwrap().is_empty());
+    assert_eq!(c.user.value().unwrap().as_bytes(), b"");
+
+    let redacted = decode_capture(&container(
+        r#"{"Name":{"__docker_lens_redacted__":true},"Config":{"Labels":{"__docker_lens_redacted__":true},"User":{"__docker_lens_redacted__":true},"WorkingDir":{"__docker_lens_redacted__":true},"Hostname":{"__docker_lens_redacted__":true}}}"#,
+    ))
+    .unwrap();
+    let c = &redacted.containers[0];
+    for availability in [
+        c.name.availability,
+        c.labels.availability,
+        c.user.availability,
+        c.working_directory.availability,
+        c.hostname.availability,
+    ] {
+        assert_eq!(availability, Availability::Redacted);
+    }
+    assert!(c.labels.value().is_none());
+
+    let partial = decode_capture(&container(
+        r#"{"Config":{"Labels":{"plain":"value","hidden":{"__docker_lens_redacted__":true},"unavailable":null}}}"#,
+    ))
+    .unwrap();
+    let labels = partial.containers[0].labels.value().unwrap();
+    for (key, expected) in [
+        (b"plain".as_slice(), Availability::Present),
+        (b"hidden".as_slice(), Availability::Redacted),
+        (b"unavailable".as_slice(), Availability::Null),
+    ] {
+        assert_eq!(
+            labels
+                .iter()
+                .find(|label| label.key.as_bytes() == key)
+                .unwrap()
+                .value
+                .availability,
+            expected
+        );
+    }
+}
+
+#[test]
+fn malformed_effective_metadata_fails_without_native_values_in_errors() {
+    for (body, field) in [
+        (r#"{"Name":42}"#, FieldPath::ContainerName),
+        (r#"{"Config":{"Labels":[]}}"#, FieldPath::Label { index: 0 }),
+        (
+            r#"{"Config":{"Labels":{"private-key":42}}}"#,
+            FieldPath::Label { index: 0 },
+        ),
+        (r#"{"Config":{"User":42}}"#, FieldPath::User),
+        (
+            r#"{"Config":{"WorkingDir":false}}"#,
+            FieldPath::WorkingDirectory,
+        ),
+        (r#"{"Config":{"Hostname":[]}}"#, FieldPath::Hostname),
+    ] {
+        let error = decode_capture(&container(body)).err().unwrap();
+        assert_eq!(error, DecodeError::InvalidShape(field));
+        assert!(!format!("{error:?}").contains("private-key"));
+    }
+}
+
+#[test]
+fn oversized_label_object_fails_closed() {
+    let labels: serde_json::Map<String, serde_json::Value> = (0..4097)
+        .map(|index| {
+            (
+                format!("label-{index}"),
+                serde_json::Value::String("private-value".into()),
+            )
+        })
+        .collect();
+    let body = serde_json::json!({ "Config": { "Labels": labels } }).to_string();
+    let error = decode_capture(&container(&body)).err().unwrap();
+    assert_eq!(error, DecodeError::CollectionTooLarge);
+    assert!(!format!("{error:?}").contains("private-value"));
 }
 
 #[test]
