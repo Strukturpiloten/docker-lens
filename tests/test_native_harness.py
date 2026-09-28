@@ -20,6 +20,43 @@ class NativeHarnessTests(unittest.TestCase):
         self.assertIn('"$NATIVE_SOURCE_PROBES_PATH"', source)
         self.assertIn('io.dockerlens.fixture=decoy', source)
 
+    def test_existing_volume_probe_is_exact_and_precedes_manifest_emission(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
+        selected = ('"$(dirname "$0")/run-exact-native-test.sh" native_volume '
+                    'live_existing_volume_prerequisite_matches_engine')
+        manifest = 'python3 "$script_dir/native-evidence.py"'
+        self.assertEqual(source.count(selected), 1)
+        self.assertLess(source.index(selected), source.index(manifest))
+        self.assertIn('export NATIVE_VOLUME_PROBES_PATH="$run_dir/volume-probes.json"', source)
+        self.assertIn('"$NATIVE_VOLUME_PROBES_PATH"', source)
+
+    def test_volume_failure_markers_remain_closed_and_private(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_volume_tests::live_existing_volume_prerequisite_matches_engine: test'
+else
+  echo 'private native volume response' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: volume_missing_precheck' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: volume_private' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: volume_cleanup_unverified' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            result = subprocess.run(
+                [str(ROOT / "scripts/run-exact-native-test.sh"), "native_volume",
+                 "live_existing_volume_prerequisite_matches_engine"],
+                env=env, capture_output=True, text=True, timeout=15, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("DOCKERLENS_NATIVE_CHECK: volume_cleanup_unverified", result.stderr)
+            self.assertNotIn("private", result.stdout + result.stderr)
+
     def test_source_failure_markers_remain_closed_and_private(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             bin_dir = Path(directory)
@@ -618,6 +655,50 @@ fi
         invalid = subprocess.run(
             [str(ROOT / "scripts/run-exact-native-test.sh"),
              "native-target", "live_target_render_matches_engine"],
+            capture_output=True, text=True, timeout=15, check=False,
+        )
+        self.assertEqual(invalid.returncode, 2)
+
+    def test_native_volume_uses_private_library_test_by_exact_name(self) -> None:
+        selected = "native_volume_tests::live_existing_volume_prerequisite_matches_engine"
+        for listed, expected_success in ((0, False), (1, True), (2, False)):
+            with self.subTest(listed=listed), tempfile.TemporaryDirectory() as directory:
+                bin_dir = Path(directory)
+                self._tool(
+                    bin_dir,
+                    "cargo",
+                    """#!/usr/bin/env bash
+set -eu
+printf '%s\n' "$*" >> "$FAKE_NATIVE_INVOCATIONS"
+if [[ $* == *--list* ]]; then
+  for ((i=0; i<FAKE_NATIVE_LISTED; i++)); do
+    echo 'native_volume_tests::live_existing_volume_prerequisite_matches_engine: test'
+  done
+else
+  echo 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;'
+fi
+""",
+                )
+                invocation = bin_dir / "invocations"
+                env = os.environ.copy()
+                env.update(PATH=f"{bin_dir}:{env['PATH']}",
+                           FAKE_NATIVE_INVOCATIONS=str(invocation),
+                           FAKE_NATIVE_LISTED=str(listed))
+                result = subprocess.run(
+                    [str(ROOT / "scripts/run-exact-native-test.sh"), "native_volume",
+                     "live_existing_volume_prerequisite_matches_engine"],
+                    env=env, capture_output=True, text=True, timeout=15, check=False,
+                )
+                self.assertEqual(result.returncode == 0, expected_success)
+                calls = invocation.read_text().splitlines()
+                self.assertEqual(len(calls), 2 if expected_success else 1)
+                self.assertTrue(all("--lib" in call and "--test" not in call for call in calls))
+                if expected_success:
+                    self.assertIn(f"--ignored --exact {selected}", calls[1])
+
+        invalid = subprocess.run(
+            [str(ROOT / "scripts/run-exact-native-test.sh"), "native-volume",
+             "live_existing_volume_prerequisite_matches_engine"],
             capture_output=True, text=True, timeout=15, check=False,
         )
         self.assertEqual(invalid.returncode, 2)
