@@ -44,6 +44,23 @@ roots, and effective user namespace availability.
 They do not extend reviewed profile claims until fresh independent native tests
 cover each new source shape on the exact versions and daemon modes.
 
+The #31 source test runs after the harness creates a selected container, a
+decoy, and a separate two-loopback-binding port fixture in the same isolated
+daemon. It checks discovery names, labels, and image, exact ID and name,
+shorter literal prefix, label, explicit-all, and exact network and volume
+roots against direct Engine GET oracles and fixed CLI fixture settings. The
+Compose-style project label remains advisory metadata. Narrow selectors must
+never inspect unrelated containers. The test checks exact host IPs and both
+bindings, selected identity, mounts, environment, health, restart, and the
+origins and availability of selected effective and runtime-assigned fields.
+Offline tests retain exhaustive missing, null, empty, and redacted boundary
+coverage; the native source list claims only the fields it asserts.
+The lane manifest records an exact closed `source_probes` list only after this
+ignored test passes; it contains no native values and does not add target
+capability admissions. Existing reviewed manifests and the reviewed catalog
+remain historical evidence for their original shapes. The new assertions need
+genuine runs in all four exact lanes before a source compatibility claim.
+
 Each lane reads live Engine API version, info, container, network, and volume
 responses. The harness creates only synthetic test resources and stores live
 responses in a private temporary directory. The Rust integration test checks

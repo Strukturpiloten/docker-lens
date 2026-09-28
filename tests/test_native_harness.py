@@ -11,6 +11,44 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class NativeHarnessTests(unittest.TestCase):
+    def test_source_probe_is_exact_and_precedes_manifest_emission(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
+        selected = '"$(dirname "$0")/run-exact-native-test.sh" native_selection live_native_selection_and_source_observations'
+        manifest = 'python3 "$script_dir/native-evidence.py"'
+        self.assertEqual(source.count(selected), 1)
+        self.assertLess(source.index(selected), source.index(manifest))
+        self.assertIn('"$NATIVE_SOURCE_PROBES_PATH"', source)
+        self.assertIn('io.dockerlens.fixture=decoy', source)
+
+    def test_source_failure_markers_remain_closed_and_private(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'live_native_selection_and_source_observations: test'
+else
+  echo 'private native response' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: source_multiple_bindings' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: source_private' >&2
+  echo 'DOCKERLENS_NATIVE_ERROR: selection' >&2
+  echo 'DOCKERLENS_NATIVE_ERROR: private' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            result = subprocess.run(
+                [str(ROOT / "scripts/run-exact-native-test.sh"), "native_selection",
+                 "live_native_selection_and_source_observations"],
+                env=env, capture_output=True, text=True, timeout=15, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("DOCKERLENS_NATIVE_CHECK: source_multiple_bindings", result.stderr)
+            self.assertIn("DOCKERLENS_NATIVE_ERROR: selection", result.stderr)
+            self.assertNotIn("private", result.stdout + result.stderr)
+
     def test_effective_storage_check_fails_closed_before_native_work(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         block = source.split("\n\napi_get() {", 1)[0].rsplit(

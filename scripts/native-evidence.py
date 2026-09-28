@@ -26,9 +26,17 @@ REQUIRED_SHAPES = {
                       "RestartOnFailureUnlimited", "RestartOnFailureLimited"),
 }
 LANES = ("debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless")
+SOURCE_PROBES = (
+    "DiscoveryMetadata", "ExactContainerId", "ExactContainerName",
+    "LiteralNamePrefix", "ExactLabel", "ExplicitAllContainers",
+    "ExactNetworkRoot", "ExactVolumeRoot", "UnrelatedInspectExcluded",
+    "IdentityFieldsOracle", "PortBindingsOracle",
+    "MultipleHostIpBindingsOracle", "MountEnvironmentOracle",
+    "HealthRestartOracle", "SelectedFieldOrigins",
+)
 
 
-def emit(version_path: Path, shapes_path: Path, destination: Path, lane: str, image: str,
+def emit(version_path: Path, shapes_path: Path, source_path: Path, destination: Path, lane: str, image: str,
          mode: str, package: str, candidate_sha: str) -> None:
     if lane not in LANES or mode != lane.rsplit("-", 1)[1]:
         raise ValueError("invalid native lane or mode")
@@ -88,6 +96,14 @@ def emit(version_path: Path, shapes_path: Path, destination: Path, lane: str, im
                 or set(actual) != set(expected)):
             raise ValueError("native capability shape is incomplete")
 
+    if source_path.stat().st_size > 4096:
+        raise ValueError("native source evidence exceeds closed limit")
+    source_probes = json.loads(source_path.read_text(encoding="utf-8"))
+    if (not isinstance(source_probes, list) or len(source_probes) != len(SOURCE_PROBES)
+            or any(not isinstance(probe, str) for probe in source_probes)
+            or set(source_probes) != set(SOURCE_PROBES)):
+        raise ValueError("native source probe set is incomplete")
+
     record = {
         "schema_version": 1,
         "lane": lane,
@@ -104,15 +120,16 @@ def emit(version_path: Path, shapes_path: Path, destination: Path, lane: str, im
         "capability_version": maximum,
         "capability_outcome": {name: "available" for name in CAPABILITIES},
         "admitted_shapes": {name: list(REQUIRED_SHAPES[name]) for name in CAPABILITIES},
+        "source_probes": list(SOURCE_PROBES),
     }
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(record, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 9:
-        raise SystemExit("usage: native-evidence.py VERSION_JSON SHAPES_JSON DESTINATION LANE IMAGE MODE PACKAGE SHA")
+    if len(sys.argv) != 10:
+        raise SystemExit("usage: native-evidence.py VERSION_JSON SHAPES_JSON SOURCE_JSON DESTINATION LANE IMAGE MODE PACKAGE SHA")
     try:
-        emit(Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]), *sys.argv[4:])
+        emit(Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]), Path(sys.argv[4]), *sys.argv[5:])
     except (ValueError, OSError, json.JSONDecodeError):
         raise SystemExit("native evidence rejected") from None
