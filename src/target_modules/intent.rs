@@ -1,4 +1,7 @@
-use super::{ContainerIntent, RestartPolicy, TargetKind};
+use super::{
+    BridgeOption, ContainerIntent, NetworkDriver, NetworkIntent, NetworkRole, NetworkSource,
+    RestartPolicy, TargetKind,
+};
 use crate::evidence::ProtectedValue;
 use crate::observation::ResourceRef;
 use std::collections::HashSet;
@@ -35,10 +38,7 @@ fn valid_identity(bytes: &[u8]) -> bool {
 
 #[derive(Debug)]
 pub enum TargetResource {
-    Network {
-        reference: ResourceRef,
-        identity: TargetIdentity,
-    },
+    Network(NetworkIntent),
     Volume {
         reference: ResourceRef,
         identity: TargetIdentity,
@@ -50,7 +50,8 @@ impl TargetResource {
     #[must_use]
     pub const fn reference(&self) -> ResourceRef {
         match self {
-            Self::Network { reference, .. } | Self::Volume { reference, .. } => *reference,
+            Self::Network(network) => network.reference,
+            Self::Volume { reference, .. } => *reference,
             Self::Container(container) => container.reference,
         }
     }
@@ -58,7 +59,7 @@ impl TargetResource {
     #[must_use]
     pub const fn kind(&self) -> TargetKind {
         match self {
-            Self::Network { .. } => TargetKind::Network,
+            Self::Network(_) => TargetKind::Network,
             Self::Volume { .. } => TargetKind::Volume,
             Self::Container(_) => TargetKind::Container,
         }
@@ -79,6 +80,20 @@ pub enum IntentError {
     InvalidRestart,
     DuplicatePort,
     DuplicateMount,
+    InvalidNetworkDriver,
+    DuplicateNetworkOption,
+    InvalidNetworkOption,
+    DuplicateNetworkLabel,
+    InvalidNetworkLabel,
+    InvalidNetworkAddress,
+    DuplicateNetworkAddress,
+    InvalidNetworkSubnet,
+    InvalidNetworkIpam,
+    InvalidNetworkAlias,
+    DuplicateNetworkAlias,
+    DuplicateNetworkAttachment,
+    DuplicateDefaultNetwork,
+    InvalidNetworkAttachment,
 }
 
 #[derive(Debug)]
@@ -115,10 +130,19 @@ impl TargetIntent {
             return Err(IntentError::DuplicateResource);
         }
         let mut identities = HashSet::new();
+        let mut default_network = false;
         for resource in &resources {
+            if let TargetResource::Network(network) = resource
+                && network.role == NetworkRole::ApplicationDefault
+            {
+                if default_network {
+                    return Err(IntentError::DuplicateDefaultNetwork);
+                }
+                default_network = true;
+            }
             let identity = match resource {
-                TargetResource::Network { identity, .. }
-                | TargetResource::Volume { identity, .. } => identity,
+                TargetResource::Network(network) => &network.identity,
+                TargetResource::Volume { identity, .. } => identity,
                 TargetResource::Container(container) => &container.identity,
             };
             if !identities.insert((resource.kind(), identity.bytes())) {
@@ -126,6 +150,74 @@ impl TargetIntent {
             }
         }
         for resource in &resources {
+            if let TargetResource::Network(network) = resource {
+                if let NetworkSource::External { expected_driver } = &network.source {
+                    if *expected_driver != NetworkDriver::Bridge {
+                        return Err(IntentError::InvalidNetworkDriver);
+                    }
+                }
+                if let NetworkSource::Create(create) = &network.source {
+                    if create.driver != NetworkDriver::Bridge {
+                        return Err(IntentError::InvalidNetworkDriver);
+                    }
+                    let mut options = HashSet::new();
+                    for option in &create.options {
+                        let key = match option {
+                            BridgeOption::Mtu(_) => 0,
+                            BridgeOption::InterContainerCommunication(_) => 1,
+                            BridgeOption::IpMasquerade(_) => 2,
+                            BridgeOption::HostBindingIp(address) => {
+                                if address.is_ipv6() {
+                                    return Err(IntentError::InvalidNetworkOption);
+                                }
+                                3
+                            }
+                        };
+                        if !options.insert(key) {
+                            return Err(IntentError::DuplicateNetworkOption);
+                        }
+                    }
+                    let mut labels = HashSet::new();
+                    if !create.labels.iter().all(|label| labels.insert(label.key())) {
+                        return Err(IntentError::DuplicateNetworkLabel);
+                    }
+                    if let Some(ipam) = &create.ipam {
+                        if ipam.pools.is_empty() {
+                            return Err(IntentError::InvalidNetworkIpam);
+                        }
+                        for (index, pool) in ipam.pools.iter().enumerate() {
+                            if ipam.pools[..index]
+                                .iter()
+                                .any(|other| pool.subnet.overlaps(other.subnet))
+                                || (pool.subnet.address().is_ipv6() && !create.enable_ipv6)
+                                || pool.gateway.is_some_and(|gateway| {
+                                    !pool.subnet.contains_usable_host(gateway)
+                                })
+                                || pool.ip_range.is_some_and(|range| {
+                                    range.address().is_ipv6() != pool.subnet.address().is_ipv6()
+                                        || range.prefix() < pool.subnet.prefix()
+                                        || !pool.subnet.contains(range.address())
+                                })
+                            {
+                                return Err(IntentError::InvalidNetworkIpam);
+                            }
+                            let mut auxiliary_names = HashSet::new();
+                            let mut reserved_addresses = HashSet::new();
+                            if let Some(gateway) = pool.gateway {
+                                reserved_addresses.insert(gateway.value());
+                            }
+                            for auxiliary in &pool.auxiliary_addresses {
+                                if !auxiliary_names.insert(auxiliary.name.bytes())
+                                    || !pool.subnet.contains_usable_host(auxiliary.address)
+                                    || !reserved_addresses.insert(auxiliary.address.value())
+                                {
+                                    return Err(IntentError::InvalidNetworkIpam);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             if let TargetResource::Container(container) = resource {
                 let mut environment = HashSet::new();
                 if !container
@@ -142,6 +234,65 @@ impl TargetIntent {
                         && host_ports.insert((port.host, port.protocol))
                 }) {
                     return Err(IntentError::DuplicatePort);
+                }
+                let mut networks = HashSet::new();
+                for attachment in &container.networks {
+                    if !networks.insert(attachment.network) {
+                        return Err(IntentError::DuplicateNetworkAttachment);
+                    }
+                    if attachment
+                        .ipv4_address
+                        .is_some_and(|address| address.is_ipv6())
+                        || attachment
+                            .ipv6_address
+                            .is_some_and(|address| !address.is_ipv6())
+                    {
+                        return Err(IntentError::InvalidNetworkAttachment);
+                    }
+                    let mut aliases = HashSet::new();
+                    if !attachment
+                        .aliases
+                        .iter()
+                        .all(|alias| aliases.insert(alias.bytes()))
+                    {
+                        return Err(IntentError::DuplicateNetworkAlias);
+                    }
+                    if let Some(TargetResource::Network(network)) = resources
+                        .iter()
+                        .find(|resource| resource.reference() == attachment.network)
+                    {
+                        match &network.source {
+                            NetworkSource::External { .. }
+                                if attachment.ipv4_address.is_some()
+                                    || attachment.ipv6_address.is_some() =>
+                            {
+                                return Err(IntentError::InvalidNetworkAttachment);
+                            }
+                            NetworkSource::Create(create) => {
+                                if attachment.ipv6_address.is_some() && !create.enable_ipv6 {
+                                    return Err(IntentError::InvalidNetworkAttachment);
+                                }
+                                for address in [attachment.ipv4_address, attachment.ipv6_address]
+                                    .into_iter()
+                                    .flatten()
+                                {
+                                    if create.ipam.as_ref().is_none_or(|ipam| {
+                                        !ipam.pools.iter().any(|pool| {
+                                            pool.subnet.contains_usable_host(address)
+                                                && pool.gateway != Some(address)
+                                                && !pool
+                                                    .auxiliary_addresses
+                                                    .iter()
+                                                    .any(|auxiliary| auxiliary.address == address)
+                                        })
+                                    }) {
+                                        return Err(IntentError::InvalidNetworkAttachment);
+                                    }
+                                }
+                            }
+                            NetworkSource::External { .. } => {}
+                        }
+                    }
                 }
                 let mut mounts = HashSet::new();
                 if !container
@@ -162,6 +313,21 @@ impl TargetIntent {
                 if matches!(container.restart, Some(RestartPolicy::OnFailure { maximum_retries }) if maximum_retries > i32::MAX as u32)
                 {
                     return Err(IntentError::InvalidRestart);
+                }
+            }
+        }
+        let mut static_addresses = HashSet::new();
+        for resource in &resources {
+            if let TargetResource::Container(container) = resource {
+                for attachment in &container.networks {
+                    for address in [attachment.ipv4_address, attachment.ipv6_address]
+                        .into_iter()
+                        .flatten()
+                    {
+                        if !static_addresses.insert((attachment.network, address.value())) {
+                            return Err(IntentError::DuplicateNetworkAddress);
+                        }
+                    }
                 }
             }
         }

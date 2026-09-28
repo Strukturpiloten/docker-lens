@@ -1,7 +1,8 @@
-use super::{RenderError, json_string};
+use super::{RenderError, json_string, percent_encode};
 use crate::observation::ResourceRef;
 use crate::target::{
-    Argument, ContainerIntent, MountSource, PortBinding, Protocol, RestartPolicy, TargetResource,
+    Argument, ContainerIntent, MountSource, NetworkAttachmentIntent, PortBinding, Protocol,
+    RestartPolicy, TargetResource,
 };
 use std::collections::HashMap;
 
@@ -102,15 +103,15 @@ pub(super) fn render_container(
         body.push(']');
         host_field = true;
     }
-    if let Some(network) = container.network {
-        let Some(TargetResource::Network { identity, .. }) = resources.get(&network) else {
+    if let Some(attachment) = container.networks.first() {
+        let Some(TargetResource::Network(network)) = resources.get(&attachment.network) else {
             return Err(RenderError::InvalidGraph);
         };
         if host_field {
             body.push(',');
         }
         body.push_str("\"NetworkMode\":");
-        json_string(&mut body, identity.bytes());
+        json_string(&mut body, network.identity.bytes());
         host_field = true;
     }
     if let Some(restart) = container.restart {
@@ -128,16 +129,75 @@ pub(super) fn render_container(
         body.push_str(&format!(",\"MaximumRetryCount\":{maximum_retries}}}"));
     }
     body.push('}');
-    if let Some(network) = container.network {
-        let Some(TargetResource::Network { identity, .. }) = resources.get(&network) else {
+    if let Some(attachment) = container.networks.first() {
+        let Some(TargetResource::Network(network)) = resources.get(&attachment.network) else {
             return Err(RenderError::InvalidGraph);
         };
         body.push_str(",\"NetworkingConfig\":{\"EndpointsConfig\":{");
-        json_string(&mut body, identity.bytes());
-        body.push_str(":{}}}");
+        json_string(&mut body, network.identity.bytes());
+        body.push(':');
+        render_endpoint(&mut body, attachment);
+        body.push_str("}}");
     }
     body.push('}');
     Ok(body)
+}
+
+pub(super) fn render_secondary_connection(
+    container: &ContainerIntent,
+    attachment: &NetworkAttachmentIntent,
+    resources: &HashMap<ResourceRef, &TargetResource>,
+) -> Result<(String, String), RenderError> {
+    let Some(TargetResource::Network(network)) = resources.get(&attachment.network) else {
+        return Err(RenderError::InvalidGraph);
+    };
+    let path = format!(
+        "networks/{}/connect",
+        percent_encode(network.identity.bytes())
+    );
+    let mut body = String::from("{\"Container\":");
+    json_string(&mut body, container.identity.bytes());
+    body.push_str(",\"EndpointConfig\":");
+    render_endpoint(&mut body, attachment);
+    body.push('}');
+    Ok((path, body))
+}
+
+fn render_endpoint(body: &mut String, attachment: &NetworkAttachmentIntent) {
+    body.push('{');
+    let mut field = false;
+    if !attachment.aliases.is_empty() {
+        body.push_str("\"Aliases\":[");
+        for (index, alias) in attachment.aliases.iter().enumerate() {
+            if index != 0 {
+                body.push(',');
+            }
+            json_string(body, alias.bytes());
+        }
+        body.push(']');
+        field = true;
+    }
+    if attachment.ipv4_address.is_some() || attachment.ipv6_address.is_some() {
+        if field {
+            body.push(',');
+        }
+        body.push_str("\"IPAMConfig\":{");
+        let mut address_field = false;
+        if let Some(address) = attachment.ipv4_address {
+            body.push_str("\"IPv4Address\":");
+            json_string(body, address.value().to_string().as_bytes());
+            address_field = true;
+        }
+        if let Some(address) = attachment.ipv6_address {
+            if address_field {
+                body.push(',');
+            }
+            body.push_str("\"IPv6Address\":");
+            json_string(body, address.value().to_string().as_bytes());
+        }
+        body.push('}');
+    }
+    body.push('}');
 }
 
 fn port_key(port: PortBinding) -> String {

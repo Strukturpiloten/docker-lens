@@ -8,6 +8,8 @@ mod container;
 mod graph;
 #[path = "target_modules/intent.rs"]
 mod intent;
+#[path = "target_modules/network.rs"]
+mod network;
 #[path = "target_modules/render.rs"]
 mod render;
 
@@ -16,11 +18,17 @@ pub use container::{
     MountSource, PortBinding, Protocol, RestartPolicy,
 };
 pub use graph::{
-    DockerPlanner, Operation, OperationGraph, OperationNode, Planner, PlanningCapabilitySet,
-    PlanningContext, PlanningError, TargetField, TargetKind,
+    DockerPlanner, Operation, OperationAction, OperationGraph, OperationNode, OperationStep,
+    OperationStepAction, OperationStepId, Planner, PlanningCapabilitySet, PlanningContext,
+    PlanningError, TargetField, TargetKind,
 };
 pub use intent::{IntentError, Orchestration, TargetIdentity, TargetIntent, TargetResource};
-pub use render::{DockerApiRenderer, RenderError, RenderedArtifact, Renderer};
+pub use network::{
+    BridgeOption, NetworkAddress, NetworkAlias, NetworkAttachmentIntent, NetworkAuxAddress,
+    NetworkCreate, NetworkDriver, NetworkIntent, NetworkIpam, NetworkIpamDriver, NetworkIpamPool,
+    NetworkLabel, NetworkRole, NetworkSource, NetworkSubnet,
+};
+pub use render::{DockerApiRenderer, NetworkPrerequisite, RenderError, RenderedArtifact, Renderer};
 
 #[cfg(test)]
 mod tests {
@@ -64,6 +72,24 @@ mod tests {
         }
     }
 
+    fn bridge(reference: u64, name: &[u8]) -> TargetResource {
+        TargetResource::Network(NetworkIntent {
+            reference: ResourceRef::new(reference),
+            identity: TargetIdentity::new(name.to_vec()).unwrap(),
+            role: NetworkRole::Declared,
+            source: NetworkSource::Create(NetworkCreate::bridge()),
+        })
+    }
+
+    fn attachment(reference: u64) -> NetworkAttachmentIntent {
+        NetworkAttachmentIntent {
+            network: ResourceRef::new(reference),
+            aliases: Vec::new(),
+            ipv4_address: None,
+            ipv6_address: None,
+        }
+    }
+
     fn complete_intent() -> TargetIntent {
         let nz16 = |value| NonZeroU16::new(value).unwrap();
         TargetIntent::new(vec![
@@ -81,7 +107,7 @@ mod tests {
                     protocol: Protocol::Tcp,
                 }],
                 mounts: vec![Mount::volume(ResourceRef::new(2), b"/data".to_vec(), false).unwrap()],
-                network: Some(ResourceRef::new(1)),
+                networks: vec![attachment(1)],
                 entrypoint: Some(vec![Argument::new(b"/bin/app".to_vec()).unwrap()]),
                 command: Some(vec![Argument::new(b"--serve".to_vec()).unwrap()]),
                 healthcheck: Some(
@@ -99,10 +125,7 @@ mod tests {
                 reference: ResourceRef::new(2),
                 identity: TargetIdentity::new(b"app_data".to_vec()).unwrap(),
             },
-            TargetResource::Network {
-                reference: ResourceRef::new(1),
-                identity: TargetIdentity::new(b"app_net".to_vec()).unwrap(),
-            },
+            bridge(1, b"app_net"),
         ])
         .unwrap()
     }
@@ -131,7 +154,7 @@ mod tests {
                 environment: vec![],
                 ports: vec![],
                 mounts: vec![],
-                network: None,
+                networks: vec![],
                 entrypoint: None,
                 command: None,
                 healthcheck: None,
@@ -150,11 +173,7 @@ mod tests {
     fn network_seam_preserves_the_exact_inert_request() {
         let facts = facts(41, DaemonMode::Rootful, &[Capability::BridgeNetwork]);
         let capabilities = ValidatedCapabilities::new(&facts).unwrap();
-        let intent = TargetIntent::new(vec![TargetResource::Network {
-            reference: ResourceRef::new(1),
-            identity: TargetIdentity::new(b"private_net".to_vec()).unwrap(),
-        }])
-        .unwrap();
+        let intent = TargetIntent::new(vec![bridge(1, b"private_net")]).unwrap();
         let graph = DockerPlanner.plan(&intent, &capabilities).unwrap();
         assert_eq!(
             DockerApiRenderer.render(&graph).unwrap().bytes(),
@@ -253,7 +272,7 @@ mod tests {
                 mounts: vec![
                     Mount::bind(b"/host/config".to_vec(), b"/etc/config".to_vec(), true).unwrap(),
                 ],
-                network: None,
+                networks: vec![],
                 entrypoint: None,
                 command: None,
                 healthcheck: None,
@@ -299,7 +318,7 @@ mod tests {
                 environment: vec![],
                 ports: vec![],
                 mounts: vec![],
-                network: None,
+                networks: vec![],
                 entrypoint: None,
                 command: None,
                 healthcheck: None,
@@ -361,7 +380,7 @@ mod tests {
                 mounts: vec![
                     Mount::volume(ResourceRef::new(99), b"/data".to_vec(), false).unwrap(),
                 ],
-                network: None,
+                networks: vec![],
                 entrypoint: None,
                 command: None,
                 healthcheck: None,
@@ -394,7 +413,7 @@ mod tests {
                     protocol: Protocol::Tcp,
                 }],
                 mounts: vec![],
-                network: None,
+                networks: vec![],
                 entrypoint: None,
                 command: None,
                 healthcheck: None,
@@ -490,7 +509,7 @@ mod tests {
             ],
             ports: vec![],
             mounts: vec![],
-            network: None,
+            networks: vec![],
             entrypoint: None,
             command: None,
             healthcheck: None,
@@ -521,10 +540,7 @@ mod tests {
             EnvironmentAssignment::new(b"A=B".to_vec(), vec![]).unwrap_err(),
             IntentError::InvalidEnvironment
         );
-        let make = || TargetResource::Network {
-            reference: ResourceRef::new(7),
-            identity: TargetIdentity::new(b"network".to_vec()).unwrap(),
-        };
+        let make = || bridge(7, b"network");
         assert_eq!(
             TargetIntent::new(vec![make(), make()]).unwrap_err(),
             IntentError::DuplicateResource
@@ -576,10 +592,7 @@ mod tests {
         }
         let capabilities = ValidatedCapabilities::new(&daemon).unwrap();
         let intent = TargetIntent::new(vec![
-            TargetResource::Network {
-                reference: ResourceRef::new(1),
-                identity: TargetIdentity::new(b"network".to_vec()).unwrap(),
-            },
+            bridge(1, b"network"),
             TargetResource::Volume {
                 reference: ResourceRef::new(2),
                 identity: TargetIdentity::new(b"volume".to_vec()).unwrap(),
@@ -591,7 +604,7 @@ mod tests {
                 environment: vec![],
                 ports: vec![],
                 mounts: vec![],
-                network: None,
+                networks: vec![],
                 entrypoint: None,
                 command: None,
                 healthcheck: None,
@@ -603,6 +616,7 @@ mod tests {
             operation: Operation {
                 resource: ResourceRef::new(reference),
                 kind,
+                action: OperationAction::Create,
             },
             depends_on: depends_on.into_iter().map(ResourceRef::new).collect(),
         };
@@ -712,6 +726,7 @@ mod tests {
                 operation: Operation {
                     resource: ResourceRef::new(1),
                     kind: TargetKind::Volume,
+                    action: OperationAction::Create,
                 },
                 depends_on: vec![],
             }],
@@ -723,5 +738,576 @@ mod tests {
         let requests = std::str::from_utf8(artifact.bytes()).unwrap();
         assert!(requests.contains("/v1.41/volumes/create"));
         assert!(!requests.contains("/v1.49/"));
+    }
+
+    fn expanded_network_intent() -> TargetIntent {
+        let v4 = NetworkSubnet::new(NetworkAddress::new("10.25.0.0").unwrap(), 24).unwrap();
+        let v6 = NetworkSubnet::new(NetworkAddress::new("fd00:25::").unwrap(), 64).unwrap();
+        let mut create = NetworkCreate::bridge();
+        create.internal = true;
+        create.enable_ipv6 = true;
+        create.ipam = Some(NetworkIpam {
+            driver: Some(NetworkIpamDriver::Default),
+            pools: vec![
+                NetworkIpamPool {
+                    subnet: v4,
+                    gateway: Some(NetworkAddress::new("10.25.0.1").unwrap()),
+                    ip_range: Some(
+                        NetworkSubnet::new(NetworkAddress::new("10.25.0.128").unwrap(), 25)
+                            .unwrap(),
+                    ),
+                    auxiliary_addresses: vec![NetworkAuxAddress {
+                        name: NetworkAlias::new(b"gateway".to_vec()).unwrap(),
+                        address: NetworkAddress::new("10.25.0.2").unwrap(),
+                    }],
+                },
+                NetworkIpamPool {
+                    subnet: v6,
+                    gateway: None,
+                    ip_range: None,
+                    auxiliary_addresses: vec![],
+                },
+            ],
+        });
+        create.options = vec![
+            BridgeOption::Mtu(NonZeroU32::new(1400).unwrap()),
+            BridgeOption::InterContainerCommunication(false),
+            BridgeOption::IpMasquerade(false),
+            BridgeOption::HostBindingIp(NetworkAddress::new("127.0.0.1").unwrap()),
+        ];
+        create.labels =
+            vec![NetworkLabel::new(b"owner".to_vec(), b"application".to_vec()).unwrap()];
+        TargetIntent::new(vec![
+            TargetResource::Network(NetworkIntent {
+                reference: ResourceRef::new(1),
+                identity: TargetIdentity::new(b"private_net".to_vec()).unwrap(),
+                role: NetworkRole::ApplicationDefault,
+                source: NetworkSource::Create(create),
+            }),
+            TargetResource::Network(NetworkIntent {
+                reference: ResourceRef::new(2),
+                identity: TargetIdentity::new(b"edge".to_vec()).unwrap(),
+                role: NetworkRole::Declared,
+                source: NetworkSource::External {
+                    expected_driver: NetworkDriver::Bridge,
+                },
+            }),
+            TargetResource::Container(Box::new(ContainerIntent {
+                reference: ResourceRef::new(3),
+                identity: TargetIdentity::new(b"app".to_vec()).unwrap(),
+                image: ImageReference::new(b"image:1".to_vec()).unwrap(),
+                environment: vec![],
+                ports: vec![],
+                mounts: vec![],
+                networks: vec![
+                    NetworkAttachmentIntent {
+                        network: ResourceRef::new(1),
+                        aliases: vec![NetworkAlias::new(b"private-app".to_vec()).unwrap()],
+                        ipv4_address: Some(NetworkAddress::new("10.25.0.10").unwrap()),
+                        ipv6_address: None,
+                    },
+                    NetworkAttachmentIntent {
+                        network: ResourceRef::new(2),
+                        aliases: vec![NetworkAlias::new(b"edge-app".to_vec()).unwrap()],
+                        ipv4_address: None,
+                        ipv6_address: None,
+                    },
+                ],
+                entrypoint: None,
+                command: None,
+                healthcheck: None,
+                restart: None,
+            })),
+        ])
+        .unwrap()
+    }
+
+    const EXPANDED_NETWORK_CAPABILITIES: &[Capability] = &[
+        Capability::BridgeNetwork,
+        Capability::StandaloneContainer,
+        Capability::NetworkExternalReference,
+        Capability::NetworkInternal,
+        Capability::NetworkIpv6,
+        Capability::NetworkIpam,
+        Capability::NetworkIpamDriver,
+        Capability::NetworkOptions,
+        Capability::NetworkLabels,
+        Capability::NetworkAliases,
+        Capability::NetworkStaticAddress,
+        Capability::NetworkMultipleAttachment,
+    ];
+
+    fn static_container(
+        reference: u64,
+        name: &[u8],
+        network: u64,
+        address: &str,
+    ) -> TargetResource {
+        TargetResource::Container(Box::new(ContainerIntent {
+            reference: ResourceRef::new(reference),
+            identity: TargetIdentity::new(name.to_vec()).unwrap(),
+            image: ImageReference::new(b"image:1".to_vec()).unwrap(),
+            environment: vec![],
+            ports: vec![],
+            mounts: vec![],
+            networks: vec![NetworkAttachmentIntent {
+                network: ResourceRef::new(network),
+                aliases: vec![],
+                ipv4_address: Some(NetworkAddress::new(address).unwrap()),
+                ipv6_address: None,
+            }],
+            entrypoint: None,
+            command: None,
+            healthcheck: None,
+            restart: None,
+        }))
+    }
+
+    #[test]
+    fn typed_topology_renders_create_then_connect_and_retains_external_prerequisite() {
+        let intent = expanded_network_intent();
+        let daemon = facts(41, DaemonMode::Rootful, EXPANDED_NETWORK_CAPABILITIES);
+        let capabilities = ValidatedCapabilities::new(&daemon).unwrap();
+        let graph = DockerPlanner.plan(&intent, &capabilities).unwrap();
+        assert_eq!(graph.steps().len(), 4);
+        assert_eq!(
+            graph.steps()[1].action,
+            OperationStepAction::RequireExisting(TargetKind::Network)
+        );
+        assert_eq!(
+            graph.steps()[3].action,
+            OperationStepAction::ConnectNetwork {
+                network: ResourceRef::new(2),
+                attachment_index: 1,
+            }
+        );
+        assert_eq!(graph.steps()[3].id.ordinal, 1);
+        let artifact = DockerApiRenderer.render(&graph).unwrap();
+        let lines: Vec<_> = std::str::from_utf8(artifact.bytes())
+            .unwrap()
+            .lines()
+            .collect();
+        assert_eq!(lines.len(), 3);
+        assert!(lines[0].contains("/v1.41/networks/create"));
+        assert!(lines[0].contains("\"Internal\":true,\"EnableIPv6\":true"));
+        assert!(lines[0].contains("\"Subnet\":\"10.25.0.0/24\""));
+        assert!(lines[0].contains("\"IPAM\":{\"Driver\":\"default\""));
+        assert!(lines[0].contains("\"IPRange\":\"10.25.0.128/25\""));
+        assert!(lines[0].contains("com.docker.network.driver.mtu"));
+        assert!(lines[0].contains("\"Labels\":{\"owner\":\"application\"}"));
+        assert!(lines[1].contains("/v1.41/containers/create?name=app"));
+        assert!(lines[1].contains("\"Aliases\":[\"private-app\"]"));
+        assert!(lines[1].contains("\"IPv4Address\":\"10.25.0.10\""));
+        assert!(lines[2].contains("/v1.41/networks/edge/connect"));
+        assert!(lines[2].contains("\"Container\":\"app\""));
+        assert!(lines[2].contains("\"Aliases\":[\"edge-app\"]"));
+        assert_eq!(artifact.network_prerequisites().len(), 1);
+        assert_eq!(
+            artifact.network_prerequisites()[0].reference,
+            ResourceRef::new(2)
+        );
+        assert_eq!(artifact.network_prerequisites()[0].identity(), b"edge");
+        assert_eq!(
+            artifact.network_prerequisites()[0].expected_driver,
+            NetworkDriver::Bridge
+        );
+        for protected in [
+            "private_net",
+            "private-app",
+            "edge-app",
+            "edge",
+            "10.25.0.0",
+            "10.25.0.1",
+            "10.25.0.2",
+            "10.25.0.10",
+            "fd00:25::",
+            "127.0.0.1",
+            "owner",
+            "application",
+        ] {
+            assert!(
+                !format!(
+                    "{intent:?} {graph:?} {artifact:?} {:?}",
+                    artifact.network_prerequisites()
+                )
+                .contains(protected)
+            );
+        }
+        assert_eq!(
+            format!("{:?}", NetworkAddress::new("10.25.0.1").unwrap()),
+            "NetworkAddress([redacted])"
+        );
+        assert_eq!(
+            format!(
+                "{:?}",
+                NetworkSubnet::new(NetworkAddress::new("10.25.0.0").unwrap(), 24).unwrap()
+            ),
+            "NetworkSubnet([redacted])"
+        );
+    }
+
+    #[test]
+    fn network_intent_rejects_invalid_or_unsupported_topology() {
+        assert_eq!(
+            NetworkAlias::new(vec![]).unwrap_err(),
+            IntentError::InvalidNetworkAlias
+        );
+        let invalid_alias = NetworkAlias::new(b"private/secret".to_vec()).unwrap_err();
+        assert!(!format!("{invalid_alias:?}").contains("private/secret"));
+        assert_eq!(
+            NetworkSubnet::new(NetworkAddress::new("10.25.0.1").unwrap(), 24).unwrap_err(),
+            IntentError::InvalidNetworkSubnet
+        );
+        let unsupported = TargetResource::Network(NetworkIntent {
+            reference: ResourceRef::new(1),
+            identity: TargetIdentity::new(b"host".to_vec()).unwrap(),
+            role: NetworkRole::Declared,
+            source: NetworkSource::Create(NetworkCreate {
+                driver: NetworkDriver::Host,
+                ..NetworkCreate::bridge()
+            }),
+        });
+        assert_eq!(
+            TargetIntent::new(vec![unsupported]).unwrap_err(),
+            IntentError::InvalidNetworkDriver
+        );
+        let nonbridge_external = TargetResource::Network(NetworkIntent {
+            reference: ResourceRef::new(1),
+            identity: TargetIdentity::new(b"edge".to_vec()).unwrap(),
+            role: NetworkRole::Declared,
+            source: NetworkSource::External {
+                expected_driver: NetworkDriver::Overlay,
+            },
+        });
+        assert_eq!(
+            TargetIntent::new(vec![nonbridge_external]).unwrap_err(),
+            IntentError::InvalidNetworkDriver
+        );
+        let default_network = |reference, name: &[u8]| {
+            TargetResource::Network(NetworkIntent {
+                reference: ResourceRef::new(reference),
+                identity: TargetIdentity::new(name.to_vec()).unwrap(),
+                role: NetworkRole::ApplicationDefault,
+                source: NetworkSource::External {
+                    expected_driver: NetworkDriver::Bridge,
+                },
+            })
+        };
+        assert_eq!(
+            TargetIntent::new(vec![
+                default_network(1, b"first"),
+                default_network(2, b"second"),
+            ])
+            .unwrap_err(),
+            IntentError::DuplicateDefaultNetwork
+        );
+        let invalid_ipam = TargetResource::Network(NetworkIntent {
+            reference: ResourceRef::new(1),
+            identity: TargetIdentity::new(b"private".to_vec()).unwrap(),
+            role: NetworkRole::Declared,
+            source: NetworkSource::Create(NetworkCreate {
+                ipam: Some(NetworkIpam {
+                    driver: None,
+                    pools: vec![],
+                }),
+                ..NetworkCreate::bridge()
+            }),
+        });
+        assert_eq!(
+            TargetIntent::new(vec![invalid_ipam]).unwrap_err(),
+            IntentError::InvalidNetworkIpam
+        );
+        let pool = NetworkIpamPool {
+            subnet: NetworkSubnet::new(NetworkAddress::new("10.25.0.0").unwrap(), 24).unwrap(),
+            gateway: Some(NetworkAddress::new("10.25.0.1").unwrap()),
+            ip_range: None,
+            auxiliary_addresses: vec![],
+        };
+        let overlap = NetworkIpamPool {
+            subnet: NetworkSubnet::new(NetworkAddress::new("10.25.0.128").unwrap(), 25).unwrap(),
+            gateway: None,
+            ip_range: None,
+            auxiliary_addresses: vec![],
+        };
+        let network_with = |pools| {
+            TargetResource::Network(NetworkIntent {
+                reference: ResourceRef::new(1),
+                identity: TargetIdentity::new(b"private".to_vec()).unwrap(),
+                role: NetworkRole::Declared,
+                source: NetworkSource::Create(NetworkCreate {
+                    ipam: Some(NetworkIpam {
+                        driver: None,
+                        pools,
+                    }),
+                    ..NetworkCreate::bridge()
+                }),
+            })
+        };
+        assert_eq!(
+            TargetIntent::new(vec![network_with(vec![pool, overlap])]).unwrap_err(),
+            IntentError::InvalidNetworkIpam
+        );
+        let pool = NetworkIpamPool {
+            subnet: NetworkSubnet::new(NetworkAddress::new("10.25.0.0").unwrap(), 24).unwrap(),
+            gateway: Some(NetworkAddress::new("10.25.0.1").unwrap()),
+            ip_range: None,
+            auxiliary_addresses: vec![NetworkAuxAddress {
+                name: NetworkAlias::new(b"reserved".to_vec()).unwrap(),
+                address: NetworkAddress::new("10.25.0.1").unwrap(),
+            }],
+        };
+        assert_eq!(
+            TargetIntent::new(vec![network_with(vec![pool])]).unwrap_err(),
+            IntentError::InvalidNetworkIpam
+        );
+        let pool = NetworkIpamPool {
+            subnet: NetworkSubnet::new(NetworkAddress::new("10.25.0.0").unwrap(), 24).unwrap(),
+            gateway: Some(NetworkAddress::new("10.25.0.1").unwrap()),
+            ip_range: None,
+            auxiliary_addresses: vec![],
+        };
+        assert_eq!(
+            TargetIntent::new(vec![
+                network_with(vec![pool]),
+                static_container(2, b"first", 1, "10.25.0.10"),
+                static_container(3, b"second", 1, "10.25.0.10"),
+            ])
+            .unwrap_err(),
+            IntentError::DuplicateNetworkAddress
+        );
+        let external = TargetResource::Network(NetworkIntent {
+            reference: ResourceRef::new(1),
+            identity: TargetIdentity::new(b"edge".to_vec()).unwrap(),
+            role: NetworkRole::Declared,
+            source: NetworkSource::External {
+                expected_driver: NetworkDriver::Bridge,
+            },
+        });
+        assert_eq!(
+            TargetIntent::new(vec![external, static_container(2, b"app", 1, "10.25.0.10"),])
+                .unwrap_err(),
+            IntentError::InvalidNetworkAttachment
+        );
+        let duplicate = TargetResource::Container(Box::new(ContainerIntent {
+            reference: ResourceRef::new(3),
+            identity: TargetIdentity::new(b"app".to_vec()).unwrap(),
+            image: ImageReference::new(b"image:1".to_vec()).unwrap(),
+            environment: vec![],
+            ports: vec![],
+            mounts: vec![],
+            networks: vec![attachment(1), attachment(1)],
+            entrypoint: None,
+            command: None,
+            healthcheck: None,
+            restart: None,
+        }));
+        assert_eq!(
+            TargetIntent::new(vec![duplicate]).unwrap_err(),
+            IntentError::DuplicateNetworkAttachment
+        );
+    }
+
+    #[test]
+    fn ipv4_pool_slots_are_checked_for_gateways_auxiliary_and_static_addresses() {
+        let subnet = NetworkSubnet::new(NetworkAddress::new("10.25.0.0").unwrap(), 24).unwrap();
+        let network = |gateway, auxiliary_addresses| {
+            TargetResource::Network(NetworkIntent {
+                reference: ResourceRef::new(1),
+                identity: TargetIdentity::new(b"private".to_vec()).unwrap(),
+                role: NetworkRole::Declared,
+                source: NetworkSource::Create(NetworkCreate {
+                    ipam: Some(NetworkIpam {
+                        driver: None,
+                        pools: vec![NetworkIpamPool {
+                            subnet,
+                            gateway,
+                            ip_range: None,
+                            auxiliary_addresses,
+                        }],
+                    }),
+                    ..NetworkCreate::bridge()
+                }),
+            })
+        };
+        for address in ["10.25.0.0", "10.25.0.255"] {
+            let address = NetworkAddress::new(address).unwrap();
+            assert_eq!(
+                TargetIntent::new(vec![network(Some(address), vec![])]).unwrap_err(),
+                IntentError::InvalidNetworkIpam
+            );
+            assert_eq!(
+                TargetIntent::new(vec![network(
+                    None,
+                    vec![NetworkAuxAddress {
+                        name: NetworkAlias::new(b"reserved".to_vec()).unwrap(),
+                        address,
+                    }],
+                )])
+                .unwrap_err(),
+                IntentError::InvalidNetworkIpam
+            );
+            assert_eq!(
+                TargetIntent::new(vec![
+                    network(None, vec![]),
+                    static_container(2, b"app", 1, &address.value().to_string()),
+                ])
+                .unwrap_err(),
+                IntentError::InvalidNetworkAttachment
+            );
+        }
+    }
+
+    #[test]
+    fn narrow_ipv4_subnets_keep_their_host_slots_without_native_admission() {
+        let daemon = facts(
+            41,
+            DaemonMode::Rootful,
+            &[Capability::BridgeNetwork, Capability::NetworkIpam],
+        );
+        let capabilities = ValidatedCapabilities::new(&daemon).unwrap();
+        for (base, prefix, addresses) in [
+            ("10.25.0.0", 31, ["10.25.0.0", "10.25.0.1"]),
+            ("10.25.0.7", 32, ["10.25.0.7", "10.25.0.7"]),
+        ] {
+            let subnet = NetworkSubnet::new(NetworkAddress::new(base).unwrap(), prefix).unwrap();
+            for address in addresses {
+                assert!(subnet.contains_usable_host(NetworkAddress::new(address).unwrap()));
+            }
+            let intent = TargetIntent::new(vec![TargetResource::Network(NetworkIntent {
+                reference: ResourceRef::new(1),
+                identity: TargetIdentity::new(b"private".to_vec()).unwrap(),
+                role: NetworkRole::Declared,
+                source: NetworkSource::Create(NetworkCreate {
+                    ipam: Some(NetworkIpam {
+                        driver: None,
+                        pools: vec![NetworkIpamPool {
+                            subnet,
+                            gateway: None,
+                            ip_range: None,
+                            auxiliary_addresses: vec![],
+                        }],
+                    }),
+                    ..NetworkCreate::bridge()
+                }),
+            })])
+            .unwrap();
+            assert_eq!(
+                DockerPlanner.plan(&intent, &capabilities).unwrap_err(),
+                PlanningError::UnsupportedNetworkIpam {
+                    resource: ResourceRef::new(1),
+                }
+            );
+        }
+        for prefix in [31, 32] {
+            let intent = TargetIntent::new(vec![TargetResource::Network(NetworkIntent {
+                reference: ResourceRef::new(1),
+                identity: TargetIdentity::new(b"private".to_vec()).unwrap(),
+                role: NetworkRole::Declared,
+                source: NetworkSource::Create(NetworkCreate {
+                    ipam: Some(NetworkIpam {
+                        driver: None,
+                        pools: vec![NetworkIpamPool {
+                            subnet: NetworkSubnet::new(
+                                NetworkAddress::new("10.25.0.0").unwrap(),
+                                24,
+                            )
+                            .unwrap(),
+                            gateway: None,
+                            ip_range: Some(
+                                NetworkSubnet::new(
+                                    NetworkAddress::new("10.25.0.10").unwrap(),
+                                    prefix,
+                                )
+                                .unwrap(),
+                            ),
+                            auxiliary_addresses: vec![],
+                        }],
+                    }),
+                    ..NetworkCreate::bridge()
+                }),
+            })])
+            .unwrap();
+            assert!(DockerPlanner.plan(&intent, &capabilities).is_ok());
+        }
+        let ordinary = NetworkSubnet::new(NetworkAddress::new("10.25.0.0").unwrap(), 24).unwrap();
+        assert!(!ordinary.contains_usable_host(NetworkAddress::new("10.25.0.0").unwrap()));
+        assert!(!ordinary.contains_usable_host(NetworkAddress::new("10.25.0.255").unwrap()));
+        assert!(ordinary.contains_usable_host(NetworkAddress::new("10.25.0.1").unwrap()));
+    }
+
+    #[test]
+    fn network_capabilities_and_api_boundaries_fail_closed() {
+        let intent = expanded_network_intent();
+        for (missing, resource, field) in [
+            (Capability::NetworkInternal, 1, TargetField::NetworkInternal),
+            (Capability::NetworkIpv6, 1, TargetField::NetworkIpv6),
+            (Capability::NetworkIpam, 1, TargetField::NetworkIpam),
+            (
+                Capability::NetworkIpamDriver,
+                1,
+                TargetField::NetworkIpamDriver,
+            ),
+            (Capability::NetworkOptions, 1, TargetField::NetworkOptions),
+            (Capability::NetworkLabels, 1, TargetField::NetworkLabels),
+            (
+                Capability::NetworkExternalReference,
+                2,
+                TargetField::NetworkExternalReference,
+            ),
+            (
+                Capability::NetworkMultipleAttachment,
+                3,
+                TargetField::NetworkMultipleAttachment,
+            ),
+            (Capability::NetworkAliases, 3, TargetField::NetworkAliases),
+            (
+                Capability::NetworkStaticAddress,
+                3,
+                TargetField::NetworkStaticAddress,
+            ),
+        ] {
+            let available: Vec<_> = EXPANDED_NETWORK_CAPABILITIES
+                .iter()
+                .copied()
+                .filter(|capability| *capability != missing)
+                .collect();
+            let daemon = facts(41, DaemonMode::Rootful, &available);
+            let capabilities = ValidatedCapabilities::new(&daemon).unwrap();
+            assert_eq!(
+                DockerPlanner.plan(&intent, &capabilities).unwrap_err(),
+                PlanningError::MissingCapability {
+                    resource: ResourceRef::new(resource),
+                    field,
+                    capability: missing,
+                }
+            );
+        }
+        let missing_multi: Vec<_> = EXPANDED_NETWORK_CAPABILITIES
+            .iter()
+            .copied()
+            .filter(|capability| *capability != Capability::NetworkMultipleAttachment)
+            .collect();
+        let daemon = facts(41, DaemonMode::Rootless, &missing_multi);
+        let capabilities = ValidatedCapabilities::new(&daemon).unwrap();
+        assert_eq!(
+            DockerPlanner.plan(&intent, &capabilities).unwrap_err(),
+            PlanningError::MissingCapability {
+                resource: ResourceRef::new(3),
+                field: TargetField::NetworkMultipleAttachment,
+                capability: Capability::NetworkMultipleAttachment,
+            }
+        );
+        let daemon = facts(40, DaemonMode::Rootful, EXPANDED_NETWORK_CAPABILITIES);
+        let capabilities = ValidatedCapabilities::new(&daemon).unwrap();
+        assert!(matches!(
+            DockerPlanner.plan(&intent, &capabilities),
+            Err(PlanningError::UnsupportedApi { .. })
+        ));
+        let catalog = TargetCapabilityCatalog::reviewed();
+        for profile in catalog.profiles() {
+            let capabilities = catalog.resolve(profile).unwrap();
+            assert!(!capabilities.supports(Capability::NetworkMultipleAttachment));
+            assert!(!capabilities.supports(Capability::NetworkInternal));
+        }
     }
 }

@@ -8,6 +8,35 @@ target contracts are separate. A captured effective `Config.*` value does not
 prove authored intent, and a target field is never inferred from it without a
 BoxFerry loss decision.
 
+DockerLens #29 now has typed bridge creation, application-default identity,
+external-reference prerequisites, independent per-container aliases and
+addresses, and ordered secondary connect requests. These are inert target
+contracts only. The historical four-profile catalog still admits no new
+network shape; #31's independent native evidence and BoxFerry's six-scenario
+consumer checks remain required before a full migration claim.
+
+The following authored topology anchors are read from BoxFerry's
+`fixtures/conformance/{forgejo,nextcloud,paperless-ngx,immich,observability,supabase}-application/compose.yaml`
+(and Supabase's `graph.tsv`).
+They define required target shapes, not evidence that DockerLens or BoxFerry
+already reproduces the running applications:
+
+| Scenario | Required network graph and ownership boundary | DockerLens target contract |
+| --- | --- | --- |
+| Forgejo | `db` uses the created internal backend; `forgejo` joins backend and the external edge with independent `forgejo` aliases. The fixture peer is separately owned on edge. | `NetworkIntent` with `NetworkSource::Create` and `internal`, `NetworkSource::External` prerequisite, and two `NetworkAttachmentIntent` values for Forgejo; the second emits a connect step. |
+| Nextcloud | Database, cache, app, init and cron remain on the created internal backend; frontend joins backend and external edge with aliases on both. Shared proxy and second app on edge are boundary resources, not implicit members of the Nextcloud application. | Created internal backend, external edge prerequisite, and frontend's two independent alias-bearing attachments; proxy and second are excluded. |
+| Paperless-ngx | Database, broker, Gotenberg and Tika remain on the created internal backend; webserver joins backend and a created edge with `webserver` and `paperless` endpoint aliases. | Two created bridges, internal backend, and webserver attachments with distinct aliases and an ordered edge connect step. |
+| Immich | Database, Redis and machine learning remain on the created internal backend; server joins backend and a created edge with its own alias. | Two created bridges, internal backend, and server's second attachment with its own alias. |
+| Observability | Metrics/log producers, Prometheus, Loki and Alloy remain on the created internal backend; Grafana joins backend and external edge with its edge alias. | Created internal backend, external edge prerequisite, and Grafana's two attachments with an edge-only alias. |
+| Supabase | All eleven application services remain in scope: `db`, `auth`, `rest`, `realtime`, `imgproxy`, `storage`, `meta`, `supavisor`, `functions` and `studio` are backend-only; Kong joins internal backend and external edge with independent aliases. The `boundary-peer` from `peer.compose.yaml` is an external-edge probe, excluded from the application target graph. | Created internal backend, external edge prerequisite, ten backend-only attachments, and Kong's backend `kong` plus edge `supabase` aliases; Kong's edge connect is ordered after create. |
+
+This map identifies available inert types, not a completed BoxFerry consumer
+mapping or a native compatibility claim. None of these six fixtures authors
+IPAM or static endpoint addresses; those typed branches need separate small
+native probes. IPv4 `/31` and `/32` bridge subnet pools remain explicitly
+unsupported by planning until #31 verifies their Engine behavior per exact
+API and mode.
+
 The required migration set is the six repository-owned application scenarios
 (Forgejo, Immich, Nextcloud, Observability, Paperless-ngx, and Supabase),
 plus a small four-lane standalone
@@ -82,8 +111,11 @@ owns native assertions/harness extensions; the integrator alone wires reviewed
 catalog, capability vocabulary and evidence records after independent review.
 The BoxFerry issues own only their own checkout. No two writers share a checkout.
 
-Existing public `docker_lens::target::*` paths and struct-literal shapes remain
-unchanged at this checkpoint. New target fields, constructors, capability names,
-or cross-repository API changes require an explicit reviewed contract before
-parallel edits. The historical four catalog profiles and native harness
-definitions are untouched. DockerLens #3 remains open after this checkpoint.
+The initial module checkpoint preserved public `docker_lens::target::*` paths
+and struct-literal shapes. The subsequent #29 contract intentionally replaces
+the single network field with typed network resources and attachments under
+ADR 0006; native baseline test constructors follow the new contract. Further
+target fields, constructors, capability names, or cross-repository API changes
+require explicit reviewed contracts before parallel edits. Historical catalog
+records remain unchanged, and new network shapes remain unadmitted. DockerLens
+#3 remains open after this checkpoint.

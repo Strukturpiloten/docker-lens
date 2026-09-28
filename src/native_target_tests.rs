@@ -18,7 +18,8 @@ use crate::evidence::CaptureRoute;
 use crate::observation::ResourceRef;
 use crate::target::{
     Argument, ContainerIntent, DockerApiRenderer, DockerPlanner, EnvironmentAssignment,
-    Healthcheck, ImageReference, Mount, Planner, PortBinding, Protocol, Renderer, RestartPolicy,
+    Healthcheck, ImageReference, Mount, NetworkAttachmentIntent, NetworkCreate, NetworkIntent,
+    NetworkRole, NetworkSource, Planner, PortBinding, Protocol, Renderer, RestartPolicy,
     TargetIdentity, TargetIntent, TargetResource,
 };
 use crate::version::{
@@ -481,7 +482,7 @@ fn render_and_inspect_variant(
         environment: vec![],
         ports: vec![],
         mounts,
-        network: None,
+        networks: vec![],
         entrypoint: None,
         command: Some(vec![argument("sh"), argument("-c"), argument("sleep 30")]),
         healthcheck: None,
@@ -726,10 +727,12 @@ fn live_target_render_matches_engine() {
     let target_container = format!("dl-target-{run_id}-box");
     let service = "httpd -f -p 8080 -h /readonly & nc -u -l -p 8081 > /data/udp-received & wait";
     let intent = TargetIntent::new(vec![
-        TargetResource::Network {
+        TargetResource::Network(NetworkIntent {
             reference: ResourceRef::new(1),
             identity: TargetIdentity::new(target_network.as_bytes().to_vec()).unwrap(),
-        },
+            role: NetworkRole::Declared,
+            source: NetworkSource::Create(NetworkCreate::bridge()),
+        }),
         TargetResource::Volume {
             reference: ResourceRef::new(2),
             identity: TargetIdentity::new(target_volume.as_bytes().to_vec()).unwrap(),
@@ -763,7 +766,12 @@ fn live_target_render_matches_engine() {
                 .unwrap(),
                 Mount::volume(ResourceRef::new(2), b"/data".to_vec(), false).unwrap(),
             ],
-            network: Some(ResourceRef::new(1)),
+            networks: vec![NetworkAttachmentIntent {
+                network: ResourceRef::new(1),
+                aliases: vec![],
+                ipv4_address: None,
+                ipv6_address: None,
+            }],
             entrypoint: Some(vec![argument("/bin/sh")]),
             command: Some(vec![argument("-c"), argument(service)]),
             healthcheck: Some(

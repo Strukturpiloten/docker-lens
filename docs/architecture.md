@@ -29,8 +29,9 @@
    Findings contain no raw values. A caller-provided capture is not proof of
    daemon contact.
 4. Target intent carries explicit identities and typed standalone container
-   settings: image, ports, mounts, bridge network, environment, exec-form
-   command and health check, and restart policy. The public planner admits
+   settings: image, ports, mounts, typed bridge networks and attachments,
+   environment, exec-form command and health check, and restart policy.
+   The public planner admits
    only profiles resolved from the reviewed catalog; caller-authored positive
    daemon claims cannot authorize planning. A profile distinguishes upstream
    from an exact Debian package revision, the reported Engine release,
@@ -54,10 +55,19 @@ protected values and captures; `src/observation.rs` owns availability and origin
 mode, and capability facts; `src/target.rs` preserves public target paths while
 `src/target_modules/intent.rs` owns shared intent and validation,
 `src/target_modules/container.rs` owns container types,
+`src/target_modules/network.rs` owns typed bridge and attachment intent,
 `src/target_modules/graph.rs` owns planning, and
 `src/target_modules/render.rs` dispatches inert rendering to separate
 container and network modules. The [migration ledger](standalone-migration-ledger.md)
 defines subsequent ownership and evidence requirements.
+
+Created network resources emit inert bridge-create requests. External network
+resources remain explicit `RequireExisting` graph steps and protected
+artifact prerequisites; they emit no create request and do not claim
+existence. A container's first attachment is in its create request, while
+each later attachment has its own step ID and inert network-connect request.
+New network capability facts are absent from the four historical profiles
+until exact-lane native conformance and independent evidence review.
 These modules define independent ownership boundaries for later native work.
 
 ## Decoder evidence boundary

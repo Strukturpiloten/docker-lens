@@ -4,6 +4,20 @@ Run `./scripts/format-lint.sh --fix` for local formatting and lint feedback.
 The target-module checkpoint has an exact network request regression alongside
 the existing container and graph tests. These offline checks preserve the
 0.1.0 contract; they do not prove new migration shapes or native compatibility.
+The typed-network offline cases exercise create/external separation, multiple
+attachment request order, alias and IPAM encoding, redacted prerequisites,
+invalid topology, missing capabilities and the API floor. The native #31
+negative cases must include overlapping IPAM pools, subnet-base and broadcast
+gateway/auxiliary/static addresses, and static-address collisions. IPv4 `/31`
+and `/32` bridge parent subnets remain an explicit planning rejection until #31 tests
+their precise Engine behavior on each claimed API and daemon mode.
+The native #31
+extension must independently create and inspect both networks, connect the
+second endpoint, probe alias DNS and traffic, prove internal isolation and
+non-membership, and verify that the external network was never created by the
+target artifact on every exact rootful/rootless lane. The existing native
+request allowlist needs an explicit `networks/{id}/connect` branch before
+those requests can be exercised; no new shape is admitted by offline checks.
 Run `./scripts/check-all.sh --check` for the complete offline gate: format,
 Clippy, unit and documentation tests, policy tests, and documentation build.
 `--fix` runs the same checks after formatting. The VS Code task calls the fast

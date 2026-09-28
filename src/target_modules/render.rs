@@ -1,4 +1,6 @@
-use super::{OperationGraph, PlanningContext, TargetResource};
+use super::{NetworkSource, OperationGraph, OperationStepAction, PlanningContext, TargetResource};
+use crate::evidence::ProtectedValue;
+use crate::observation::ResourceRef;
 use std::collections::{HashMap, HashSet};
 
 #[path = "render/container.rs"]
@@ -7,17 +9,51 @@ mod container;
 mod network;
 
 /// Inert bytes require an explicit caller decision before any file write.
-pub struct RenderedArtifact(Vec<u8>);
+pub struct RenderedArtifact {
+    bytes: Vec<u8>,
+    network_prerequisites: Vec<NetworkPrerequisite>,
+}
+
+/// A declared external network must be checked by the consumer before use.
+pub struct NetworkPrerequisite {
+    pub reference: ResourceRef,
+    pub expected_driver: super::NetworkDriver,
+    identity: ProtectedValue,
+}
+
+impl NetworkPrerequisite {
+    #[must_use]
+    pub fn identity(&self) -> &[u8] {
+        self.identity.as_bytes()
+    }
+}
+
+impl std::fmt::Debug for NetworkPrerequisite {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NetworkPrerequisite")
+            .field("reference", &self.reference)
+            .field("identity", &"[redacted]")
+            .finish()
+    }
+}
 
 impl RenderedArtifact {
     #[must_use]
     pub fn new(bytes: Vec<u8>) -> Self {
-        Self(bytes)
+        Self {
+            bytes,
+            network_prerequisites: Vec::new(),
+        }
     }
 
     #[must_use]
     pub fn bytes(&self) -> &[u8] {
-        &self.0
+        &self.bytes
+    }
+
+    #[must_use]
+    pub fn network_prerequisites(&self) -> &[NetworkPrerequisite] {
+        &self.network_prerequisites
     }
 }
 
@@ -54,6 +90,7 @@ impl Renderer for DockerApiRenderer {
             .collect();
         let mut emitted = HashSet::new();
         let mut lines = String::new();
+        let mut network_prerequisites = Vec::new();
         while emitted.len() < graph.nodes().len() {
             let node = graph
                 .nodes()
@@ -69,34 +106,73 @@ impl Renderer for DockerApiRenderer {
             let resource = resources
                 .get(&node.operation.resource)
                 .ok_or(RenderError::InvalidGraph)?;
-            let (path, body) = match resource {
-                TargetResource::Network { identity, .. } => (
-                    format!("{prefix}networks/create"),
-                    network::render_network(identity),
-                ),
+            let request = match resource {
+                TargetResource::Network(network) => match &network.source {
+                    NetworkSource::Create(_) => Some((
+                        format!("{prefix}networks/create"),
+                        network::render_network(network),
+                    )),
+                    NetworkSource::External { expected_driver } => {
+                        network_prerequisites.push(NetworkPrerequisite {
+                            reference: network.reference,
+                            expected_driver: *expected_driver,
+                            identity: ProtectedValue::new(network.identity.bytes().to_vec()),
+                        });
+                        None
+                    }
+                },
                 TargetResource::Volume { identity, .. } => {
                     let mut body = String::from("{\"Name\":");
                     json_string(&mut body, identity.bytes());
                     body.push('}');
-                    (format!("{prefix}volumes/create"), body)
+                    Some((format!("{prefix}volumes/create"), body))
                 }
-                TargetResource::Container(container) => (
+                TargetResource::Container(container) => Some((
                     format!(
                         "{prefix}containers/create?name={}",
                         percent_encode(container.identity.bytes())
                     ),
                     container::render_container(container, &resources)?,
-                ),
+                )),
             };
-            lines.push_str("{\"method\":\"POST\",\"path\":");
-            json_string(&mut lines, path.as_bytes());
-            lines.push_str(",\"body\":");
-            lines.push_str(&body);
-            lines.push_str("}\n");
+            if let Some((path, body)) = request {
+                append_request(&mut lines, &path, &body);
+            }
+            if let TargetResource::Container(container) = resource {
+                for step in graph.steps().iter().filter(|step| {
+                    step.id.resource == node.operation.resource
+                        && matches!(step.action, OperationStepAction::ConnectNetwork { .. })
+                }) {
+                    let OperationStepAction::ConnectNetwork {
+                        attachment_index, ..
+                    } = step.action
+                    else {
+                        unreachable!("filtered to network connections")
+                    };
+                    let attachment = container
+                        .networks
+                        .get(attachment_index)
+                        .ok_or(RenderError::InvalidGraph)?;
+                    let (path, body) =
+                        container::render_secondary_connection(container, attachment, &resources)?;
+                    append_request(&mut lines, &format!("{prefix}{path}"), &body);
+                }
+            }
             emitted.insert(node.operation.resource);
         }
-        Ok(RenderedArtifact::new(lines.into_bytes()))
+        Ok(RenderedArtifact {
+            bytes: lines.into_bytes(),
+            network_prerequisites,
+        })
     }
+}
+
+fn append_request(lines: &mut String, path: &str, body: &str) {
+    lines.push_str("{\"method\":\"POST\",\"path\":");
+    json_string(lines, path.as_bytes());
+    lines.push_str(",\"body\":");
+    lines.push_str(body);
+    lines.push_str("}\n");
 }
 
 fn json_string(output: &mut String, bytes: &[u8]) {

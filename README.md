@@ -9,6 +9,9 @@ release must pass fresh complete and four-lane native gates before a
 compatibility claim.
 
 The planned native work is tracked in [DockerLens #3](https://github.com/Strukturpiloten/docker-lens/issues/3).
+Typed multi-network target intent, external prerequisites and secondary
+connect requests are available as inert data. The four historical profiles
+do not admit these new shapes until independent native evidence is reviewed.
 The [standalone migration ledger](docs/standalone-migration-ledger.md) records
 the finite remaining shapes, evidence, and implementation owners; the current
 0.1.0 surface is the foundation, not completion of that ledger.
@@ -54,8 +57,10 @@ Compose compatibility and Swarm mode are separate discussion topics.
   a live observation. The operation graph retains the resolved context and
   checks capabilities for each requested standalone shape.
 - Target intent includes explicit resource identities, container image, ports,
-  mounts, bridge network, protected environment assignments, exec-form command,
-  health check, and restart policy. Unsupported settings remain explicit.
+  mounts, typed bridge-network resources and per-container attachments,
+  protected environment assignments, exec-form command, health check, and
+  restart policy. New network shapes remain capability-unadmitted.
+  Unsupported settings remain explicit.
   Target intent, operation graph, and rendered artifact are inert data. The
   crate has no executor, deployment API, or file writer.
 
