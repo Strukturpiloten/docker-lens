@@ -258,7 +258,10 @@ fn container_identity_and_effective_config_are_typed_and_private() {
             )
         )
     }));
-    let debug = format!("{decoded:?} {:?} {:?}", c.name, c.labels);
+    let debug = format!(
+        "{decoded:?} {:?} {:?} {:?} {:?} {:?}",
+        c.name, c.labels, c.user, c.working_directory, c.hostname
+    );
     for private in [
         "/private-app",
         "secret.key",
@@ -375,6 +378,22 @@ fn malformed_effective_metadata_fails_without_native_values_in_errors() {
         assert_eq!(error, DecodeError::InvalidShape(field));
         assert!(!format!("{error:?}").contains("private-key"));
     }
+}
+
+#[test]
+fn oversized_label_object_fails_closed() {
+    let labels: serde_json::Map<String, serde_json::Value> = (0..4097)
+        .map(|index| {
+            (
+                format!("label-{index}"),
+                serde_json::Value::String("private-value".into()),
+            )
+        })
+        .collect();
+    let body = serde_json::json!({ "Config": { "Labels": labels } }).to_string();
+    let error = decode_capture(&container(&body)).err().unwrap();
+    assert_eq!(error, DecodeError::CollectionTooLarge);
+    assert!(!format!("{error:?}").contains("private-value"));
 }
 
 #[test]

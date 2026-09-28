@@ -697,8 +697,19 @@ fn live_read_only_acquisition_matches_oracle() {
         container.working_directory,
         container.hostname
     );
-    assert!(!debug.contains(direct_name));
-    assert!(!debug.contains(direct_hostname));
+    for private in [
+        direct_name,
+        "0:0",
+        "/tmp",
+        direct_hostname,
+        "io.dockerlens.fixture",
+        "synthetic",
+    ] {
+        assert!(
+            !debug.contains(private),
+            "native identity leaked through Debug"
+        );
+    }
     let oracle_env = oracle_container["Config"]["Env"].as_array().unwrap();
     let synthetic = oracle_env
         .iter()
