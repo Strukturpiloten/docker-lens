@@ -55,3 +55,5 @@ mod reviewed_catalog;
 // The ignored live test runs by exact name in the isolated native harness.
 #[cfg(test)]
 mod native_target_tests;
+#[cfg(test)]
+mod native_volume_tests;

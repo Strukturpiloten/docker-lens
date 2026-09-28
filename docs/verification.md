@@ -148,7 +148,7 @@ API-created container uses the independent CLI start probe to report both a
 closed component category and a separate closed errno/reason token for a
 failed start before checking the live read-only mount behavior.
 
-After all three native Rust tests pass, a workflow lane writes one
+After every required native Rust test passes, a workflow lane writes one
 sanitized JSON manifest containing the exact candidate SHA, image
 tag and digest, observed Engine release and advertised API bounds, the
 selected acquisition API, rendering API, reported containerd and runc
@@ -239,6 +239,23 @@ isolated native Engine harness. It reads that harness's explicit socket and
 private direct-API oracle files to compare selected container, network, volume,
 version, and mode semantics. A fake-socket pass is not rootful or rootless
 Engine compatibility evidence.
+
+The ignored `live_existing_volume_prerequisite_matches_engine` library test
+adds a separate, exact native lane check for ADR 0008's existing named-volume
+target. It seeds a task-owned, labeled volume, checks the rendered external
+prerequisite and exact read-only/read-write mount requests, and verifies seeded
+data access, write rejection on the read-only mount, and persistence after a
+consumer container is removed and recreated. A missing volume must fail the
+harness's direct Engine GET preflight before any rendered POST; Engine container
+creation can otherwise create a missing named volume implicitly. The test
+uses only synthetic resources and label-verified cleanup. Each passing lane
+records six closed `volume_probes` in its sanitized manifest, sourced from a
+bounded private test file; raw volume names, data, and API responses remain
+private. These probes are non-admission evidence: they do not modify the
+historical reviewed catalog or its schema, establish that an arbitrary
+destination volume exists or is populated, or authorize copying or applying
+data. Fresh, independently reviewed rootful and rootless runs on every claimed
+Engine profile remain necessary before an existing-volume compatibility claim.
 
 ## Reviewed target-profile records
 
