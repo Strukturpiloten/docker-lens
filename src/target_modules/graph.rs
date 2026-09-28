@@ -1,4 +1,4 @@
-use super::{MountSource, TargetIntent, TargetResource};
+use super::{MountSource, NetworkSource, TargetIntent, TargetResource};
 use crate::observation::ResourceRef;
 use crate::version::{
     ApiVersion, Capability, CapabilityScope, DaemonMode, TargetCapabilities, TargetProfile,
@@ -18,6 +18,13 @@ pub enum TargetKind {
 pub struct Operation {
     pub resource: ResourceRef,
     pub kind: TargetKind,
+    pub action: OperationAction,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OperationAction {
+    Create,
+    RequireExisting,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -26,11 +33,35 @@ pub struct OperationNode {
     pub depends_on: Vec<ResourceRef>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct OperationStepId {
+    pub resource: ResourceRef,
+    pub ordinal: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OperationStepAction {
+    Create(TargetKind),
+    RequireExisting(TargetKind),
+    ConnectNetwork {
+        network: ResourceRef,
+        attachment_index: usize,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OperationStep {
+    pub id: OperationStepId,
+    pub action: OperationStepAction,
+    pub depends_on: Vec<OperationStepId>,
+}
+
 #[derive(Debug)]
 pub struct OperationGraph<'a> {
     intent: &'a TargetIntent,
     context: PlanningContext,
     nodes: Vec<OperationNode>,
+    steps: Vec<OperationStep>,
 }
 
 /// The validated source of capability claims used for this inert graph.
@@ -97,6 +128,10 @@ pub enum PlanningError {
         resource: ResourceRef,
         mode: DaemonMode,
     },
+    /// IPv4 /31 and /32 bridge pools await independent Engine evidence.
+    UnsupportedNetworkIpam {
+        resource: ResourceRef,
+    },
     InvalidDependency,
     DependencyMismatch {
         resource: ResourceRef,
@@ -113,6 +148,16 @@ pub enum TargetField {
     BindMount,
     NamedVolume,
     Network,
+    NetworkInternal,
+    NetworkIpv6,
+    NetworkIpam,
+    NetworkIpamDriver,
+    NetworkOptions,
+    NetworkLabels,
+    NetworkAliases,
+    NetworkStaticAddress,
+    NetworkMultipleAttachment,
+    NetworkExternalReference,
     Environment,
     Command,
     Entrypoint,
@@ -137,8 +182,17 @@ impl<'a> OperationGraph<'a> {
         }
         if nodes.iter().any(|node| {
             !intent.resources().iter().any(|resource| {
+                let action = match resource {
+                    TargetResource::Network(network)
+                        if matches!(&network.source, NetworkSource::External { .. }) =>
+                    {
+                        OperationAction::RequireExisting
+                    }
+                    _ => OperationAction::Create,
+                };
                 resource.reference() == node.operation.resource
                     && resource.kind() == node.operation.kind
+                    && node.operation.action == action
             })
         }) {
             return Err(PlanningError::InvalidDependency);
@@ -161,9 +215,9 @@ impl<'a> OperationGraph<'a> {
                 resources.get(&node.operation.resource)
             {
                 let required = container
-                    .network
-                    .into_iter()
-                    .map(|reference| (reference, TargetKind::Network))
+                    .networks
+                    .iter()
+                    .map(|attachment| (attachment.network, TargetKind::Network))
                     .chain(
                         container
                             .mounts
@@ -253,9 +307,49 @@ impl<'a> OperationGraph<'a> {
                 )
             };
             match resource {
-                TargetResource::Network { .. } => {
-                    require(TargetField::Resource, Capability::BridgeNetwork)?
-                }
+                TargetResource::Network(network) => match &network.source {
+                    NetworkSource::Create(create) => {
+                        require(TargetField::Resource, Capability::BridgeNetwork)?;
+                        if create.ipam.as_ref().is_some_and(|ipam| {
+                            ipam.pools.iter().any(|pool| {
+                                !pool.subnet.address().is_ipv6() && pool.subnet.prefix() >= 31
+                            })
+                        }) {
+                            return Err(PlanningError::UnsupportedNetworkIpam {
+                                resource: reference,
+                            });
+                        }
+                        if create.internal {
+                            require(TargetField::NetworkInternal, Capability::NetworkInternal)?;
+                        }
+                        if create.enable_ipv6 {
+                            require(TargetField::NetworkIpv6, Capability::NetworkIpv6)?;
+                        }
+                        if create.ipam.is_some() {
+                            require(TargetField::NetworkIpam, Capability::NetworkIpam)?;
+                        }
+                        if create
+                            .ipam
+                            .as_ref()
+                            .is_some_and(|ipam| ipam.driver.is_some())
+                        {
+                            require(
+                                TargetField::NetworkIpamDriver,
+                                Capability::NetworkIpamDriver,
+                            )?;
+                        }
+                        if !create.options.is_empty() {
+                            require(TargetField::NetworkOptions, Capability::NetworkOptions)?;
+                        }
+                        if !create.labels.is_empty() {
+                            require(TargetField::NetworkLabels, Capability::NetworkLabels)?;
+                        }
+                    }
+                    NetworkSource::External { .. } => require(
+                        TargetField::NetworkExternalReference,
+                        Capability::NetworkExternalReference,
+                    )?,
+                },
                 TargetResource::Volume { .. } => {
                     require(TargetField::Resource, Capability::NamedVolume)?
                 }
@@ -282,8 +376,25 @@ impl<'a> OperationGraph<'a> {
                             }
                         }
                     }
-                    if container.network.is_some() {
+                    if !container.networks.is_empty() {
                         require(TargetField::Network, Capability::BridgeNetwork)?;
+                    }
+                    if container.networks.len() > 1 {
+                        require(
+                            TargetField::NetworkMultipleAttachment,
+                            Capability::NetworkMultipleAttachment,
+                        )?;
+                    }
+                    for attachment in &container.networks {
+                        if !attachment.aliases.is_empty() {
+                            require(TargetField::NetworkAliases, Capability::NetworkAliases)?;
+                        }
+                        if attachment.ipv4_address.is_some() || attachment.ipv6_address.is_some() {
+                            require(
+                                TargetField::NetworkStaticAddress,
+                                Capability::NetworkStaticAddress,
+                            )?;
+                        }
                     }
                     if !container.environment.is_empty() {
                         require(TargetField::Environment, Capability::EnvironmentAssignment)?;
@@ -303,16 +414,70 @@ impl<'a> OperationGraph<'a> {
                 }
             }
         }
+        let mut steps = Vec::new();
+        for node in &nodes {
+            let base_id = OperationStepId {
+                resource: node.operation.resource,
+                ordinal: 0,
+            };
+            steps.push(OperationStep {
+                id: base_id,
+                action: match node.operation.action {
+                    OperationAction::Create => OperationStepAction::Create(node.operation.kind),
+                    OperationAction::RequireExisting => {
+                        OperationStepAction::RequireExisting(node.operation.kind)
+                    }
+                },
+                depends_on: node
+                    .depends_on
+                    .iter()
+                    .map(|reference| OperationStepId {
+                        resource: *reference,
+                        ordinal: 0,
+                    })
+                    .collect(),
+            });
+            if let Some(TargetResource::Container(container)) =
+                resources.get(&node.operation.resource)
+            {
+                for (attachment_index, attachment) in container.networks.iter().enumerate().skip(1)
+                {
+                    steps.push(OperationStep {
+                        id: OperationStepId {
+                            resource: node.operation.resource,
+                            ordinal: attachment_index,
+                        },
+                        action: OperationStepAction::ConnectNetwork {
+                            network: attachment.network,
+                            attachment_index,
+                        },
+                        depends_on: vec![
+                            base_id,
+                            OperationStepId {
+                                resource: attachment.network,
+                                ordinal: 0,
+                            },
+                        ],
+                    });
+                }
+            }
+        }
         Ok(Self {
             intent,
             context,
             nodes,
+            steps,
         })
     }
 
     #[must_use]
     pub fn nodes(&self) -> &[OperationNode] {
         &self.nodes
+    }
+
+    #[must_use]
+    pub fn steps(&self) -> &[OperationStep] {
+        &self.steps
     }
 
     #[must_use]
@@ -351,8 +516,10 @@ impl Planner for DockerPlanner {
                 let depends_on = match resource {
                     TargetResource::Container(container) => {
                         let mut references = Vec::new();
-                        if let Some(network) = container.network {
-                            references.push(network);
+                        for attachment in &container.networks {
+                            if !references.contains(&attachment.network) {
+                                references.push(attachment.network);
+                            }
                         }
                         for mount in &container.mounts {
                             if let MountSource::Volume(reference) = mount.source()
@@ -363,12 +530,20 @@ impl Planner for DockerPlanner {
                         }
                         references
                     }
-                    TargetResource::Network { .. } | TargetResource::Volume { .. } => Vec::new(),
+                    TargetResource::Network(_) | TargetResource::Volume { .. } => Vec::new(),
                 };
                 OperationNode {
                     operation: Operation {
                         resource: resource.reference(),
                         kind: resource.kind(),
+                        action: match resource {
+                            TargetResource::Network(network)
+                                if matches!(&network.source, NetworkSource::External { .. }) =>
+                            {
+                                OperationAction::RequireExisting
+                            }
+                            _ => OperationAction::Create,
+                        },
                     },
                     depends_on,
                 }

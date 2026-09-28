@@ -95,6 +95,16 @@ pub enum Capability {
     BindMount,
     NamedVolume,
     BridgeNetwork,
+    NetworkExternalReference,
+    NetworkInternal,
+    NetworkIpv6,
+    NetworkIpam,
+    NetworkIpamDriver,
+    NetworkOptions,
+    NetworkLabels,
+    NetworkAliases,
+    NetworkStaticAddress,
+    NetworkMultipleAttachment,
     HostNetwork,
     PortPublish,
     UserNamespace,
@@ -496,6 +506,25 @@ pub(crate) enum NativeCapabilityShape {
     NamedVolumeMountReadOnly,
     BridgeNetworkCreate,
     BridgeNetworkAttach,
+    ExternalNetworkReference,
+    InternalBridgeNetworkCreate,
+    Ipv6BridgeNetworkCreate,
+    NetworkIpamV4,
+    NetworkIpamV6,
+    NetworkIpamGateway,
+    NetworkIpamRange,
+    NetworkIpamAuxiliary,
+    NetworkIpamDefaultDriver,
+    NetworkBridgeMtu,
+    NetworkBridgeIcc,
+    NetworkBridgeMasquerade,
+    NetworkBridgeHostBindingIp,
+    NetworkCreateLabels,
+    NetworkPrimaryAliases,
+    NetworkSecondaryAliases,
+    NetworkStaticIpv4,
+    NetworkStaticIpv6,
+    NetworkSecondaryConnect,
     FixedTcpPort,
     FixedUdpPort,
     BindMountReadWrite,
@@ -520,6 +549,25 @@ impl NativeCapabilityShape {
             | Self::NamedVolumeMountReadWrite
             | Self::NamedVolumeMountReadOnly => Capability::NamedVolume,
             Self::BridgeNetworkCreate | Self::BridgeNetworkAttach => Capability::BridgeNetwork,
+            Self::ExternalNetworkReference => Capability::NetworkExternalReference,
+            Self::InternalBridgeNetworkCreate => Capability::NetworkInternal,
+            Self::Ipv6BridgeNetworkCreate => Capability::NetworkIpv6,
+            Self::NetworkIpamV4
+            | Self::NetworkIpamV6
+            | Self::NetworkIpamGateway
+            | Self::NetworkIpamRange
+            | Self::NetworkIpamAuxiliary => Capability::NetworkIpam,
+            Self::NetworkIpamDefaultDriver => Capability::NetworkIpamDriver,
+            Self::NetworkBridgeMtu
+            | Self::NetworkBridgeIcc
+            | Self::NetworkBridgeMasquerade
+            | Self::NetworkBridgeHostBindingIp => Capability::NetworkOptions,
+            Self::NetworkCreateLabels => Capability::NetworkLabels,
+            Self::NetworkPrimaryAliases | Self::NetworkSecondaryAliases => {
+                Capability::NetworkAliases
+            }
+            Self::NetworkStaticIpv4 | Self::NetworkStaticIpv6 => Capability::NetworkStaticAddress,
+            Self::NetworkSecondaryConnect => Capability::NetworkMultipleAttachment,
             Self::FixedTcpPort | Self::FixedUdpPort => Capability::PortPublish,
             Self::BindMountReadWrite | Self::BindMountReadOnly => Capability::BindMount,
             Self::EnvironmentValue | Self::EnvironmentEmptyValue => {
@@ -547,6 +595,31 @@ impl NativeCapabilityShape {
             Capability::BridgeNetwork => {
                 Some(&[Self::BridgeNetworkCreate, Self::BridgeNetworkAttach])
             }
+            Capability::NetworkExternalReference => Some(&[Self::ExternalNetworkReference]),
+            Capability::NetworkInternal => Some(&[Self::InternalBridgeNetworkCreate]),
+            Capability::NetworkIpv6 => Some(&[Self::Ipv6BridgeNetworkCreate]),
+            Capability::NetworkIpam => Some(&[
+                Self::NetworkIpamV4,
+                Self::NetworkIpamV6,
+                Self::NetworkIpamGateway,
+                Self::NetworkIpamRange,
+                Self::NetworkIpamAuxiliary,
+            ]),
+            Capability::NetworkIpamDriver => Some(&[Self::NetworkIpamDefaultDriver]),
+            Capability::NetworkOptions => Some(&[
+                Self::NetworkBridgeMtu,
+                Self::NetworkBridgeIcc,
+                Self::NetworkBridgeMasquerade,
+                Self::NetworkBridgeHostBindingIp,
+            ]),
+            Capability::NetworkLabels => Some(&[Self::NetworkCreateLabels]),
+            Capability::NetworkAliases => {
+                Some(&[Self::NetworkPrimaryAliases, Self::NetworkSecondaryAliases])
+            }
+            Capability::NetworkStaticAddress => {
+                Some(&[Self::NetworkStaticIpv4, Self::NetworkStaticIpv6])
+            }
+            Capability::NetworkMultipleAttachment => Some(&[Self::NetworkSecondaryConnect]),
             Capability::PortPublish => Some(&[Self::FixedTcpPort, Self::FixedUdpPort]),
             Capability::BindMount => Some(&[Self::BindMountReadWrite, Self::BindMountReadOnly]),
             Capability::EnvironmentAssignment => {

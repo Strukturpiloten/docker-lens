@@ -1,4 +1,4 @@
-use super::{IntentError, TargetIdentity};
+use super::{IntentError, NetworkAttachmentIntent, TargetIdentity};
 use crate::evidence::ProtectedValue;
 use crate::observation::ResourceRef;
 use std::num::{NonZeroU16, NonZeroU32, NonZeroU64};
@@ -269,7 +269,7 @@ pub struct ContainerIntent {
     pub environment: Vec<EnvironmentAssignment>,
     pub ports: Vec<PortBinding>,
     pub mounts: Vec<Mount>,
-    pub network: Option<ResourceRef>,
+    pub networks: Vec<NetworkAttachmentIntent>,
     pub entrypoint: Option<Vec<Argument>>,
     pub command: Option<Vec<Argument>>,
     pub healthcheck: Option<Healthcheck>,

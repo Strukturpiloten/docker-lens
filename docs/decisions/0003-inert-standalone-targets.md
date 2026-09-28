@@ -5,6 +5,8 @@ complete and native gates for each changed candidate and release.
 
 This supersedes the target-setting and renderer placeholders in ADR 0002;
 its capture and offline-evidence boundaries remain in force.
+ADR 0006 supersedes this decision's one-network/basic-bridge target shape;
+its remaining inert-rendering and evidence rules stay in force.
 
 DockerLens accepts caller-authored target intent with named networks, named
 volumes, and standalone containers. Container settings are typed: fixed TCP/UDP

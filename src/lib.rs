@@ -26,7 +26,7 @@
 //!     environment: vec![],
 //!     ports: vec![],
 //!     mounts: vec![],
-//!     network: None,
+//!     networks: vec![],
 //!     entrypoint: None,
 //!     command: None,
 //!     healthcheck: None,
