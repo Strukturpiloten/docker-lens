@@ -50,7 +50,8 @@ daemon; rootless outer Podman nesting is not assumed.
 The #28 selector and typed-observation fixtures are offline contract checks.
 They cover protected predicate replay closure, canonical list identities,
 inspect response binding (including network-name fallback), explicit resource
-roots, and effective user namespace availability.
+roots, typed inspected network IDs distinct from fallback names and empty
+endpoint IDs, and effective user namespace availability.
 They do not extend reviewed profile claims until fresh independent native tests
 cover each new source shape on the exact versions and daemon modes.
 

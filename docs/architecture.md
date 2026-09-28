@@ -108,6 +108,9 @@ image defaults and runtime normalization can contribute to them. Observed
 `NetworkSettings.Ports`, network addresses, image IDs, and volume mountpoints
 have runtime-assigned origin. Network endpoint aliases are retained as
 protected effective values with missing, null, empty, and redacted states.
+An inspected network's validated native `Id` is separately exposed as a protected,
+runtime-assigned typed observation. A name-fallback request does not turn its
+selector or an empty endpoint `NetworkID` into that identity.
 A single-field redaction envelope
 `{"__docker_lens_redacted__":true}` denotes unavailable data and never yields a
 value. Native JSON with that exact shape is also conservatively unavailable.

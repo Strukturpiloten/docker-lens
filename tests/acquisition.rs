@@ -177,7 +177,17 @@ fn bounded_socket_capture_keeps_closed_gets_versions_and_private_values() {
             .iter()
             .all(|exchange| exchange.api_version().unwrap().minor == 49)
     );
-    assert_eq!(decode_capture(&capture).unwrap().containers.len(), 1);
+    let decoded = decode_capture(&capture).unwrap();
+    assert_eq!(decoded.containers.len(), 1);
+    let attachment_id = &decoded.containers[0].networks.value().unwrap()[0].network_id;
+    let inspected_id = &decoded.networks[0].id;
+    assert_eq!(attachment_id.origin, Origin::RuntimeAssigned);
+    assert_eq!(inspected_id.origin, Origin::RuntimeAssigned);
+    assert_eq!(
+        attachment_id.value().unwrap().as_bytes(),
+        inspected_id.value().unwrap().as_bytes()
+    );
+    assert_eq!(inspected_id.value().unwrap().as_bytes(), b"net/id");
     assert!(!format!("{capture:?}").contains("private-secret"));
     assert!(
         !format!("{capture:?}")
@@ -340,7 +350,20 @@ fn explicit_network_and_volume_roots_do_not_discover_containers() {
         &AtomicBool::new(false),
     )
     .unwrap();
-    assert_eq!(decode_capture(&network).unwrap().networks.len(), 1);
+    let decoded_network = decode_capture(&network).unwrap();
+    assert_eq!(decoded_network.networks.len(), 1);
+    assert_eq!(
+        decoded_network.networks[0].id.availability,
+        Availability::Present
+    );
+    assert_eq!(
+        decoded_network.networks[0].id.origin,
+        Origin::RuntimeAssigned
+    );
+    assert_eq!(
+        decoded_network.networks[0].id.value().unwrap().as_bytes(),
+        network_id.as_bytes()
+    );
     let volume = acquire(
         &server.endpoint(),
         Selector::VolumeNames(vec![NativeId::new("data".to_owned()).unwrap()]),
@@ -389,7 +412,16 @@ fn hex_looking_network_name_fallback_checks_name_identity() {
         &AtomicBool::new(false),
     )
     .unwrap();
-    assert_eq!(decode_capture(&capture).unwrap().networks.len(), 1);
+    let decoded = decode_capture(&capture).unwrap();
+    assert_eq!(decoded.networks.len(), 1);
+    let network_id = &decoded.networks[0].id;
+    assert_eq!(network_id.availability, Availability::Present);
+    assert_eq!(network_id.origin, Origin::RuntimeAssigned);
+    assert_eq!(
+        network_id.value().unwrap().as_bytes(),
+        b"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    );
+    assert!(!format!("{network_id:?}").contains("dddddddd"));
 }
 
 #[test]
@@ -675,6 +707,18 @@ fn empty_network_id_uses_independent_endpoint_name_for_inspection() {
     )
     .unwrap();
     assert_eq!(capture.bounds().expansions, 2);
+    let decoded = decode_capture(&capture).unwrap();
+    let attachment_id = &decoded.containers[0].networks.value().unwrap()[0].network_id;
+    assert_eq!(attachment_id.availability, Availability::Empty);
+    assert_eq!(attachment_id.origin, Origin::RuntimeAssigned);
+    assert_eq!(attachment_id.value().unwrap().as_bytes(), b"");
+    let inspected_id = &decoded.networks[0].id;
+    assert_eq!(inspected_id.availability, Availability::Present);
+    assert_eq!(inspected_id.origin, Origin::RuntimeAssigned);
+    assert_eq!(
+        inspected_id.value().unwrap().as_bytes(),
+        b"canonical-network-id"
+    );
     assert!(capture.exchanges().iter().any(|exchange| {
         matches!(exchange.request(), ReadRequest::InspectNetwork(id) if id.as_str() == "named-bridge")
     }));

@@ -598,6 +598,13 @@ fn live_native_selection_and_source_observations() {
     assert_eq!(restart.maximum_retry_count.value(), Some(&3));
     assert_eq!(inventory.networks.len(), 1);
     assert_eq!(inventory.volumes.len(), 1);
+    assert_eq!(inventory.networks[0].id.origin, Origin::RuntimeAssigned);
+    assert_eq!(inventory.networks[0].id.availability, Availability::Present);
+    assert!(inventory.networks[0].id.value().is_some_and(|value| {
+        oracle_network["Id"]
+            .as_str()
+            .is_some_and(|id| value.as_bytes() == id.as_bytes())
+    }));
     assert!(inventory.networks[0].name.value().is_some_and(|value| {
         oracle_network["Name"]
             .as_str()
