@@ -277,6 +277,8 @@ pub struct RestartPolicy {
 
 pub struct NetworkObservation {
     pub reference: ResourceRef,
+    /// Validated native inspect `Id`, not the request selector or an authored name.
+    pub id: Observed<ProtectedValue>,
     pub name: Observed<ProtectedValue>,
     pub driver: Observed<ProtectedValue>,
     pub internal: Observed<bool>,
@@ -1211,6 +1213,12 @@ fn network(root: &Value, reference: ResourceRef) -> Result<NetworkObservation, D
     object(root, FieldPath::Other)?;
     Ok(NetworkObservation {
         reference,
+        id: string_field(
+            root,
+            &["Id"],
+            FieldPath::Network { index: 0 },
+            Origin::RuntimeAssigned,
+        )?,
         name: string_field(
             root,
             &["Name"],
@@ -1789,5 +1797,74 @@ mod selector_replay_tests {
             decode_capture(&capture),
             Err(DecodeError::DuplicateResource)
         ));
+    }
+
+    #[test]
+    fn name_fallback_never_invents_a_missing_or_unavailable_network_id() {
+        let api = ApiVersion::new(NonZeroU16::new(1).unwrap(), 49);
+        for body in [
+            r#"{"Name":"shared"}"#,
+            r#"{"Name":"shared","Id":null}"#,
+            r#"{"Name":"shared","Id":{"__docker_lens_redacted__":true}}"#,
+            r#"{"Name":"shared","Id":""}"#,
+        ] {
+            let mut budget = Budget::new(Limits {
+                max_requests: 1,
+                max_selected_resources: 1,
+                max_expansions: 1,
+                max_response_bytes: 4096,
+                max_total_bytes: 4096,
+                max_elapsed: Duration::from_secs(2),
+            })
+            .unwrap();
+            budget
+                .record_request(
+                    ReadRequest::InspectNetwork(NativeId::new("shared".to_owned()).unwrap()),
+                    Some(ResourceRef::new(1)),
+                    Some(api),
+                )
+                .unwrap();
+            budget
+                .read_response(HttpStatus::new(200).unwrap(), body.as_bytes())
+                .unwrap();
+            let capture = budget
+                .into_capture()
+                .unwrap()
+                .with_network_name_fallbacks(HashSet::from([ResourceRef::new(1)]));
+            assert_eq!(
+                decode_capture(&capture).err(),
+                Some(DecodeError::InvalidShape(FieldPath::Other))
+            );
+        }
+        let mut budget = Budget::new(Limits {
+            max_requests: 1,
+            max_selected_resources: 1,
+            max_expansions: 1,
+            max_response_bytes: 4096,
+            max_total_bytes: 4096,
+            max_elapsed: Duration::from_secs(2),
+        })
+        .unwrap();
+        budget
+            .record_request(
+                ReadRequest::InspectNetwork(NativeId::new("shared".to_owned()).unwrap()),
+                Some(ResourceRef::new(1)),
+                Some(api),
+            )
+            .unwrap();
+        budget
+            .read_response(
+                HttpStatus::new(200).unwrap(),
+                &br#"{"Name":"other","Id":"canonical"}"#[..],
+            )
+            .unwrap();
+        let capture = budget
+            .into_capture()
+            .unwrap()
+            .with_network_name_fallbacks(HashSet::from([ResourceRef::new(1)]));
+        assert_eq!(
+            decode_capture(&capture).err(),
+            Some(DecodeError::ConflictingFacts)
+        );
     }
 }

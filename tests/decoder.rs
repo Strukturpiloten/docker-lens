@@ -102,6 +102,46 @@ fn inspect_identity_must_match_closed_request() {
 }
 
 #[test]
+fn inspected_network_id_is_typed_runtime_identity_and_private() {
+    let fixture = capture(vec![(
+        ReadRequest::InspectNetwork(NativeId::new("private-network-id".into()).unwrap()),
+        Some(ResourceRef::new(2)),
+        Some(api(41)),
+        200,
+        r#"{"Id":"private-network-id","Name":"backend"}"#,
+    )]);
+    let decoded = decode_capture(&fixture).unwrap();
+    let id = &decoded.networks[0].id;
+    assert_eq!(id.availability, Availability::Present);
+    assert_eq!(id.origin, Origin::RuntimeAssigned);
+    assert_eq!(id.value().unwrap().as_bytes(), b"private-network-id");
+    assert!(!format!("{id:?}").contains("private-network-id"));
+    assert!(!format!("{decoded:?}").contains("private-network-id"));
+}
+
+#[test]
+fn inspected_network_id_cannot_be_null_redacted_empty_or_mismatched() {
+    for body in [
+        r#"{"Id":null}"#,
+        r#"{"Id":{"__docker_lens_redacted__":true}}"#,
+        r#"{"Id":""}"#,
+        r#"{"Id":"other-network"}"#,
+    ] {
+        let fixture = capture(vec![(
+            ReadRequest::InspectNetwork(NativeId::new("private-network-id".into()).unwrap()),
+            Some(ResourceRef::new(2)),
+            Some(api(41)),
+            200,
+            body,
+        )]);
+        assert_eq!(
+            decode_capture(&fixture).err(),
+            Some(DecodeError::ConflictingFacts)
+        );
+    }
+}
+
+#[test]
 fn literal_missing_inspect_identity_is_rejected() {
     for request in [
         ReadRequest::InspectContainer(NativeId::new("a".repeat(64)).unwrap()),
