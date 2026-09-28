@@ -525,16 +525,32 @@ run_inert_probe bridge || probe_failed=1
 network_id=$(timeout 30 "${inner_docker[@]}" network create --driver bridge "dl-${run_id}-net")
 volume_name="dl-${run_id}-vol"
 timeout 30 "${inner_docker[@]}" volume create "$volume_name" >/dev/null
-container_id=$(timeout 30 "${inner_docker[@]}" container create --name "dl-${run_id}-box" \
+selected_name="dl-${run_id}-box"
+peer_name="dl-${run_id}-peer"
+ports_name="dl-${run_id}-ports"
+container_id=$(timeout 30 "${inner_docker[@]}" container create --name "$selected_name" \
   --user 0:0 --workdir /tmp --hostname dockerlens-native \
-  --label io.dockerlens.fixture=synthetic \
+  --label io.dockerlens.fixture=synthetic --label com.docker.compose.project=source-app \
   --network "dl-${run_id}-net" --mount "type=volume,source=$volume_name,target=/data" \
   --mount 'type=bind,source=/dockerlens-native/native-bind,target=/readonly,readonly' \
   -p 18080:8080/tcp -p 18081:8081/udp \
   -e DL_CONFORMANCE=synthetic-secret -e EMPTY= -e 'QUOTED=a"b\c' \
   --health-cmd 'true' --restart on-failure:3 --entrypoint /bin/sh \
   "$FIXTURE_IMAGE" -c 'httpd -f -p 8080 -h /readonly & nc -u -l -p 8081 > /data/udp-received & wait')
+peer_id=$(timeout 30 "${inner_docker[@]}" container create --name "$peer_name" \
+  --label io.dockerlens.fixture=decoy -e DL_PRIVATE_CANARY=decoy-secret \
+  "$FIXTURE_IMAGE" true)
+ports_id=$(timeout 30 "${inner_docker[@]}" container create --name "$ports_name" \
+  --label io.dockerlens.fixture=ports \
+  -p 127.0.0.1:18082:8080/tcp -p 127.0.0.2:18083:8080/tcp \
+  "$FIXTURE_IMAGE" true)
+[[ $peer_id =~ ^[0-9a-f]{64}$ && $ports_id =~ ^[0-9a-f]{64}$ && $container_id =~ ^[0-9a-f]{64}$ ]] || {
+  echo 'native source fixtures have invalid container IDs' >&2
+  exit 1
+}
 api_get "/v$api_version/containers/$container_id/json" "$run_dir/container.json"
+api_get "/v$api_version/containers/$ports_id/json" "$run_dir/ports-container.json"
+api_get "/v$api_version/containers/json?all=1" "$run_dir/list.json"
 api_get "/v$api_version/networks/$network_id" "$run_dir/network.json"
 api_get "/v$api_version/volumes/$volume_name" "$run_dir/volume.json"
 
@@ -547,15 +563,19 @@ fi
 
 export NATIVE_ENGINE_SOCKET="$socket" NATIVE_CAPTURE_DIR="$run_dir" NATIVE_CONTAINER_ID="$container_id"
 export NATIVE_NETWORK_ID="$network_id" NATIVE_VOLUME_NAME="$volume_name"
+export NATIVE_SELECTED_NAME="$selected_name" NATIVE_PEER_NAME="$peer_name" NATIVE_PEER_ID="$peer_id"
+export NATIVE_PORTS_NAME="$ports_name" NATIVE_PORTS_ID="$ports_id"
 export NATIVE_ENGINE_VERSION="$server_version" NATIVE_DAEMON_MODE="$expected_mode"
 export NATIVE_API_VERSION="$api_version"
 export NATIVE_LANE="$lane" NATIVE_DOCKER_PACKAGE="$installed_docker_package"
 export NATIVE_FIXTURE_IMAGE="$FIXTURE_IMAGE" NATIVE_OUTER_CONTAINER="$container"
 export NATIVE_BIND_SOURCE=/dockerlens-native/native-bind
 export NATIVE_SHAPES_PATH="$run_dir/target-shapes.json"
+export NATIVE_SOURCE_PROBES_PATH="$run_dir/source-probes.json"
 if [[ $EUID == 0 ]]; then export NATIVE_PODMAN_USE_SUDO=0; else export NATIVE_PODMAN_USE_SUDO=1; fi
 "$(dirname "$0")/run-exact-native-test.sh" native_capture live_engine_capture_decodes
 "$(dirname "$0")/run-exact-native-test.sh" acquisition live_read_only_acquisition_matches_oracle
+"$(dirname "$0")/run-exact-native-test.sh" native_selection live_native_selection_and_source_observations
 "$(dirname "$0")/run-exact-native-test.sh" native_target live_target_render_matches_engine
 
 if [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]; then
@@ -568,7 +588,7 @@ if [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]; then
     echo 'native evidence requires a clean candidate checkout' >&2
     exit 1
   }
-  python3 "$script_dir/native-evidence.py" "$run_dir/version.json" "$NATIVE_SHAPES_PATH" \
+  python3 "$script_dir/native-evidence.py" "$run_dir/version.json" "$NATIVE_SHAPES_PATH" "$NATIVE_SOURCE_PROBES_PATH" \
     "$DOCKERLENS_NATIVE_EVIDENCE_DIR/$lane.json" "$lane" "$image" "$expected_mode" \
     "$installed_docker_package" "$candidate_sha"
 fi

@@ -24,6 +24,14 @@ SHAPES = {
     "RestartPolicy": ["RestartNo", "RestartAlways", "RestartUnlessStopped",
                       "RestartOnFailureUnlimited", "RestartOnFailureLimited"],
 }
+SOURCE_PROBES = [
+    "DiscoveryMetadata", "ExactContainerId", "ExactContainerName",
+    "LiteralNamePrefix", "ExactLabel", "ExplicitAllContainers",
+    "ExactNetworkRoot", "ExactVolumeRoot", "UnrelatedInspectExcluded",
+    "IdentityFieldsOracle", "PortBindingsOracle",
+    "MultipleHostIpBindingsOracle", "MountEnvironmentOracle",
+    "HealthRestartOracle", "SelectedFieldOrigins",
+]
 
 
 class NativeEvidenceTests(unittest.TestCase):
@@ -43,17 +51,20 @@ class NativeEvidenceTests(unittest.TestCase):
 
     def run_emit(self, version: dict, image: str = IMAGE, sha: str = SHA,
                  lane: str = "upstream-rootful", mode: str = "rootful",
-                 package: str = "", shapes: dict | None = None) -> tuple[subprocess.CompletedProcess[str], Path]:
+                 package: str = "", shapes: dict | None = None,
+                 source_probes: list[str] | None = None) -> tuple[subprocess.CompletedProcess[str], Path]:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
         version_path = root / "version.json"
         shapes_path = root / "shapes.json"
+        source_path = root / "source.json"
         destination = root / "out" / f"{lane}.json"
         version_path.write_text(json.dumps(version), encoding="utf-8")
         shapes_path.write_text(json.dumps(SHAPES if shapes is None else shapes), encoding="utf-8")
+        source_path.write_text(json.dumps(SOURCE_PROBES if source_probes is None else source_probes), encoding="utf-8")
         result = subprocess.run(
-            ["python3", str(SCRIPT), str(version_path), str(shapes_path), str(destination),
+            ["python3", str(SCRIPT), str(version_path), str(shapes_path), str(source_path), str(destination),
              lane, image, mode, package, sha],
             capture_output=True, text=True, check=False,
         )
@@ -76,6 +87,7 @@ class NativeEvidenceTests(unittest.TestCase):
         self.assertEqual(len(evidence["capability_outcome"]), 10)
         self.assertEqual(set(evidence["capability_outcome"].values()), {"available"})
         self.assertEqual(evidence["admitted_shapes"], SHAPES)
+        self.assertEqual(evidence["source_probes"], SOURCE_PROBES)
         self.assertNotIn("protected-secret", path.read_text(encoding="utf-8"))
 
     def test_rejects_unreviewed_identity_and_unacquirable_api(self) -> None:
@@ -133,6 +145,16 @@ class NativeEvidenceTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(path.exists())
         self.assertNotIn("protected-secret", result.stdout + result.stderr)
+
+    def test_source_probes_are_exact_closed_non_admission_evidence(self) -> None:
+        version = {"Version": "29.8.1", "ApiVersion": "1.56", "MinAPIVersion": "1.44"}
+        for probes in (SOURCE_PROBES[:-1], SOURCE_PROBES + ["private-canary"],
+                       SOURCE_PROBES[:-1] + [SOURCE_PROBES[0]]):
+            with self.subTest(probes=probes):
+                result, path = self.run_emit(version, source_probes=probes)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(path.exists())
+                self.assertNotIn("private-canary", result.stdout + result.stderr)
 
 
 if __name__ == "__main__":
