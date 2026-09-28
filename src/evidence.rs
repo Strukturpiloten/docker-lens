@@ -20,9 +20,10 @@ impl ProtectedValue {
     }
 }
 
-use crate::acquisition::ReadRequest;
+use crate::acquisition::{ReadRequest, SelectedRoot, Selector};
 use crate::observation::ResourceRef;
 use crate::version::{ApiVersion, ObservationId};
+use std::collections::HashSet;
 
 /// Value-free accounting. It does not prove daemon contact or an atomic sample.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -117,6 +118,10 @@ pub struct Capture {
     bounds: CaptureBounds,
     exchanges: Vec<CapturedExchange>,
     route: CaptureRoute,
+    selected_roots: Vec<SelectedRoot>,
+    selector: Option<Selector>,
+    network_name_fallbacks: HashSet<ResourceRef>,
+    discovery_only: bool,
 }
 
 /// How this in-memory capture was assembled. A socket route does not
@@ -150,12 +155,54 @@ impl Capture {
             bounds,
             exchanges,
             route: CaptureRoute::CallerAssembled,
+            selected_roots: Vec::new(),
+            selector: None,
+            network_name_fallbacks: HashSet::new(),
+            discovery_only: false,
         })
     }
 
     pub(crate) fn with_explicit_socket(mut self) -> Self {
         self.route = CaptureRoute::ExplicitUnixSocket;
         self
+    }
+
+    pub(crate) fn with_selected_roots(mut self, roots: Vec<SelectedRoot>) -> Self {
+        self.selected_roots = roots;
+        self
+    }
+
+    pub(crate) fn with_selector(mut self, selector: Selector) -> Self {
+        self.selector = Some(selector);
+        self
+    }
+
+    pub(crate) fn selector(&self) -> Option<&Selector> {
+        self.selector.as_ref()
+    }
+
+    pub(crate) fn with_network_name_fallbacks(mut self, references: HashSet<ResourceRef>) -> Self {
+        self.network_name_fallbacks = references;
+        self
+    }
+
+    pub(crate) fn network_name_fallbacks(&self) -> &HashSet<ResourceRef> {
+        &self.network_name_fallbacks
+    }
+
+    pub(crate) fn with_discovery_only(mut self) -> Self {
+        self.discovery_only = true;
+        self
+    }
+
+    #[must_use]
+    pub const fn discovery_only(&self) -> bool {
+        self.discovery_only
+    }
+
+    #[must_use]
+    pub fn selected_roots(&self) -> &[SelectedRoot] {
+        &self.selected_roots
     }
 
     #[must_use]
@@ -186,6 +233,7 @@ impl std::fmt::Debug for Capture {
             .field("observation_id", &self.observation_id)
             .field("exchanges", &self.exchanges.len())
             .field("route", &self.route)
+            .field("selected_roots", &self.selected_roots.len())
             .finish()
     }
 }

@@ -4,12 +4,12 @@
 //! part of the input contract. No JSON field can establish Compose authorship
 //! or a positive target capability. Decoder errors contain no native values.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU16;
 
 use serde_json::Value;
 
-use crate::acquisition::ReadRequest;
+use crate::acquisition::{ReadRequest, RootKind, SelectedRoot, Selector, selected_ids};
 use crate::evidence::{Capture, ProtectedValue};
 use crate::finding::{Finding, FindingCode, Severity};
 use crate::observation::{Availability, FieldPath, Observed, Origin, ResourceRef};
@@ -47,6 +47,10 @@ pub struct DecodedInventory {
     pub observation_id: ObservationId,
     pub version: DecodedVersion,
     pub containers: Vec<ContainerObservation>,
+    /// Bounded list metadata; names, labels and image remain protected.
+    pub discovered_containers: Vec<ContainerSummary>,
+    /// Explicit inspected roots and selection reasons, with opaque references.
+    pub selected_roots: Vec<SelectedRoot>,
     pub networks: Vec<NetworkObservation>,
     pub volumes: Vec<VolumeObservation>,
     pub findings: Vec<Finding>,
@@ -57,10 +61,30 @@ impl std::fmt::Debug for DecodedInventory {
         f.debug_struct("DecodedInventory")
             .field("observation_id", &self.observation_id)
             .field("containers", &self.containers.len())
+            .field("discovered_containers", &self.discovered_containers.len())
             .field("networks", &self.networks.len())
             .field("volumes", &self.volumes.len())
             .field("findings", &self.findings)
             .finish_non_exhaustive()
+    }
+}
+
+/// List metadata is not an inspected container or proof of authored intent.
+pub struct ContainerSummary {
+    pub id: ProtectedValue,
+    pub names: Observed<Vec<ProtectedValue>>,
+    pub labels: Observed<Vec<LabelObservation>>,
+    pub image: Observed<ProtectedValue>,
+}
+
+impl std::fmt::Debug for ContainerSummary {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ContainerSummary")
+            .field("id", &"[redacted]")
+            .field("names", &self.names)
+            .field("labels", &self.labels)
+            .field("image", &self.image)
+            .finish()
     }
 }
 
@@ -85,6 +109,67 @@ pub struct ContainerObservation {
     pub entrypoint: Observed<CommandValue>,
     pub healthcheck: Observed<Healthcheck>,
     pub restart_policy: Observed<RestartPolicy>,
+    pub runtime: RuntimeObservation,
+}
+
+/// Effective runtime configuration from inspect, never proof of original authorship.
+pub struct RuntimeObservation {
+    pub read_only_rootfs: Observed<bool>,
+    pub memory_bytes: Observed<i64>,
+    pub pids_limit: Observed<i64>,
+    pub shm_size_bytes: Observed<i64>,
+    pub ulimits: Observed<Vec<UlimitObservation>>,
+    pub cap_add: Observed<Vec<ProtectedValue>>,
+    pub cap_drop: Observed<Vec<ProtectedValue>>,
+    pub security_options: Observed<Vec<ProtectedValue>>,
+    pub userns_mode: Observed<ProtectedValue>,
+    pub supplementary_groups: Observed<Vec<ProtectedValue>>,
+    pub sysctls: Observed<Vec<MapEntryObservation>>,
+    pub dns_servers: Observed<Vec<ProtectedValue>>,
+    pub dns_options: Observed<Vec<ProtectedValue>>,
+    pub dns_search: Observed<Vec<ProtectedValue>>,
+    pub extra_hosts: Observed<Vec<ProtectedValue>>,
+    pub init: Observed<bool>,
+    pub stop_signal: Observed<ProtectedValue>,
+    pub stop_timeout: Observed<i64>,
+    pub logging: Observed<LoggingObservation>,
+    pub tmpfs: Observed<Vec<MapEntryObservation>>,
+    pub binds: Observed<Vec<ProtectedValue>>,
+    pub configured_mounts: Observed<Vec<ConfiguredMountObservation>>,
+    pub volumes_from: Observed<Vec<ProtectedValue>>,
+    pub devices: Observed<Vec<DeviceObservation>>,
+}
+
+pub struct ConfiguredMountObservation {
+    pub kind: Observed<ProtectedValue>,
+    pub source: Observed<ProtectedValue>,
+    pub target: Observed<ProtectedValue>,
+    pub read_only: Observed<bool>,
+    pub bind_propagation: Observed<ProtectedValue>,
+    pub volume_no_copy: Observed<bool>,
+    pub tmpfs_size_bytes: Observed<i64>,
+}
+
+pub struct UlimitObservation {
+    pub name: Observed<ProtectedValue>,
+    pub soft: Observed<i64>,
+    pub hard: Observed<i64>,
+}
+
+pub struct MapEntryObservation {
+    pub key: ProtectedValue,
+    pub value: Observed<ProtectedValue>,
+}
+
+pub struct LoggingObservation {
+    pub driver: Observed<ProtectedValue>,
+    pub options: Observed<Vec<MapEntryObservation>>,
+}
+
+pub struct DeviceObservation {
+    pub host_path: Observed<ProtectedValue>,
+    pub container_path: Observed<ProtectedValue>,
+    pub permissions: Observed<ProtectedValue>,
 }
 
 /// A native label key and its independently available value. Both are private.
@@ -135,11 +220,17 @@ pub struct MountObservation {
     pub destination: Observed<ProtectedValue>,
     pub name: Observed<ProtectedValue>,
     pub read_write: Observed<bool>,
+    pub mode: Observed<ProtectedValue>,
+    pub propagation: Observed<ProtectedValue>,
 }
 
 pub struct NetworkAttachment {
     pub name: ProtectedValue,
+    pub network_id: Observed<ProtectedValue>,
     pub ip_address: Observed<ProtectedValue>,
+    pub ipv6_address: Observed<ProtectedValue>,
+    pub requested_ipv4_address: Observed<ProtectedValue>,
+    pub requested_ipv6_address: Observed<ProtectedValue>,
     pub aliases: Observed<Vec<ProtectedValue>>,
 }
 
@@ -189,6 +280,18 @@ pub struct NetworkObservation {
     pub name: Observed<ProtectedValue>,
     pub driver: Observed<ProtectedValue>,
     pub internal: Observed<bool>,
+    pub enable_ipv6: Observed<bool>,
+    pub ipam_driver: Observed<ProtectedValue>,
+    pub ipam_configs: Observed<Vec<IpamConfigObservation>>,
+    pub options: Observed<Vec<MapEntryObservation>>,
+    pub labels: Observed<Vec<LabelObservation>>,
+}
+
+pub struct IpamConfigObservation {
+    pub subnet: Observed<ProtectedValue>,
+    pub gateway: Observed<ProtectedValue>,
+    pub ip_range: Observed<ProtectedValue>,
+    pub auxiliary_addresses: Observed<Vec<MapEntryObservation>>,
 }
 
 pub struct VolumeObservation {
@@ -196,6 +299,8 @@ pub struct VolumeObservation {
     pub name: Observed<ProtectedValue>,
     pub driver: Observed<ProtectedValue>,
     pub mountpoint: Observed<ProtectedValue>,
+    pub options: Observed<Vec<MapEntryObservation>>,
+    pub labels: Observed<Vec<LabelObservation>>,
 }
 
 /// Only the decoder's explicit redaction envelope is recognized. Native
@@ -486,6 +591,174 @@ fn labels(value: &Value) -> Result<Vec<LabelObservation>, DecodeError> {
         .collect()
 }
 
+fn signed_field(
+    root: &Value,
+    path: &[&str],
+    field: FieldPath,
+    origin: Origin,
+) -> Result<Observed<i64>, DecodeError> {
+    observed(root, path, field, origin, |value| {
+        value.as_i64().ok_or(DecodeError::InvalidShape(field))
+    })
+}
+
+fn string_list(value: &Value, field: FieldPath) -> Result<Vec<ProtectedValue>, DecodeError> {
+    array(value, field)?
+        .iter()
+        .map(|item| string(item, field))
+        .collect()
+}
+
+fn map_entries(value: &Value, field: FieldPath) -> Result<Vec<MapEntryObservation>, DecodeError> {
+    object(value, field)?
+        .iter()
+        .map(|(key, value)| {
+            Ok(MapEntryObservation {
+                key: ProtectedValue::new(key.as_bytes().to_vec()),
+                value: observed(value, &[], field, Origin::Effective, |item| {
+                    string(item, field)
+                })?,
+            })
+        })
+        .collect()
+}
+
+fn ulimits(value: &Value) -> Result<Vec<UlimitObservation>, DecodeError> {
+    array(value, FieldPath::ResourceLimit)?
+        .iter()
+        .map(|item| {
+            object(item, FieldPath::ResourceLimit)?;
+            Ok(UlimitObservation {
+                name: string_field(item, &["Name"], FieldPath::ResourceLimit, Origin::Effective)?,
+                soft: signed_field(item, &["Soft"], FieldPath::ResourceLimit, Origin::Effective)?,
+                hard: signed_field(item, &["Hard"], FieldPath::ResourceLimit, Origin::Effective)?,
+            })
+        })
+        .collect()
+}
+
+fn devices(value: &Value) -> Result<Vec<DeviceObservation>, DecodeError> {
+    array(value, FieldPath::Device)?
+        .iter()
+        .map(|item| {
+            object(item, FieldPath::Device)?;
+            Ok(DeviceObservation {
+                host_path: string_field(
+                    item,
+                    &["PathOnHost"],
+                    FieldPath::Device,
+                    Origin::Effective,
+                )?,
+                container_path: string_field(
+                    item,
+                    &["PathInContainer"],
+                    FieldPath::Device,
+                    Origin::Effective,
+                )?,
+                permissions: string_field(
+                    item,
+                    &["CgroupPermissions"],
+                    FieldPath::Device,
+                    Origin::Effective,
+                )?,
+            })
+        })
+        .collect()
+}
+
+fn configured_mounts(value: &Value) -> Result<Vec<ConfiguredMountObservation>, DecodeError> {
+    array(value, FieldPath::RuntimeMount)?
+        .iter()
+        .map(|item| {
+            object(item, FieldPath::RuntimeMount)?;
+            Ok(ConfiguredMountObservation {
+                kind: string_field(item, &["Type"], FieldPath::RuntimeMount, Origin::Effective)?,
+                source: string_field(
+                    item,
+                    &["Source"],
+                    FieldPath::RuntimeMount,
+                    Origin::Effective,
+                )?,
+                target: string_field(
+                    item,
+                    &["Target"],
+                    FieldPath::RuntimeMount,
+                    Origin::Effective,
+                )?,
+                read_only: bool_field(
+                    item,
+                    &["ReadOnly"],
+                    FieldPath::RuntimeMount,
+                    Origin::Effective,
+                )?,
+                bind_propagation: string_field(
+                    item,
+                    &["BindOptions", "Propagation"],
+                    FieldPath::RuntimeMount,
+                    Origin::Effective,
+                )?,
+                volume_no_copy: bool_field(
+                    item,
+                    &["VolumeOptions", "NoCopy"],
+                    FieldPath::RuntimeMount,
+                    Origin::Effective,
+                )?,
+                tmpfs_size_bytes: signed_field(
+                    item,
+                    &["TmpfsOptions", "SizeBytes"],
+                    FieldPath::RuntimeMount,
+                    Origin::Effective,
+                )?,
+            })
+        })
+        .collect()
+}
+
+fn logging(value: &Value) -> Result<LoggingObservation, DecodeError> {
+    object(value, FieldPath::Logging)?;
+    Ok(LoggingObservation {
+        driver: string_field(value, &["Type"], FieldPath::Logging, Origin::Effective)?,
+        options: observed(
+            value,
+            &["Config"],
+            FieldPath::Logging,
+            Origin::Effective,
+            |item| map_entries(item, FieldPath::Logging),
+        )?,
+    })
+}
+
+fn ipam_configs(value: &Value) -> Result<Vec<IpamConfigObservation>, DecodeError> {
+    array(value, FieldPath::NetworkIpam)?
+        .iter()
+        .map(|item| {
+            object(item, FieldPath::NetworkIpam)?;
+            Ok(IpamConfigObservation {
+                subnet: string_field(item, &["Subnet"], FieldPath::NetworkIpam, Origin::Effective)?,
+                gateway: string_field(
+                    item,
+                    &["Gateway"],
+                    FieldPath::NetworkIpam,
+                    Origin::Effective,
+                )?,
+                ip_range: string_field(
+                    item,
+                    &["IPRange"],
+                    FieldPath::NetworkIpam,
+                    Origin::Effective,
+                )?,
+                auxiliary_addresses: observed(
+                    item,
+                    &["AuxiliaryAddresses"],
+                    FieldPath::NetworkIpam,
+                    Origin::Effective,
+                    |value| map_entries(value, FieldPath::NetworkIpam),
+                )?,
+            })
+        })
+        .collect()
+}
+
 fn mounts(value: &Value) -> Result<Vec<MountObservation>, DecodeError> {
     array(value, FieldPath::Mount { index: 0 })?
         .iter()
@@ -505,6 +778,8 @@ fn mounts(value: &Value) -> Result<Vec<MountObservation>, DecodeError> {
                 destination: string_field(item, &["Destination"], field, Origin::Effective)?,
                 name: string_field(item, &["Name"], field, Origin::Effective)?,
                 read_write: bool_field(item, &["RW"], field, Origin::Effective)?,
+                mode: string_field(item, &["Mode"], field, Origin::Effective)?,
+                propagation: string_field(item, &["Propagation"], field, Origin::Effective)?,
             })
         })
         .collect()
@@ -519,7 +794,26 @@ fn networks(value: &Value) -> Result<Vec<NetworkAttachment>, DecodeError> {
             object(item, field)?;
             Ok(NetworkAttachment {
                 name: ProtectedValue::new(name.as_bytes().to_vec()),
+                network_id: string_field(item, &["NetworkID"], field, Origin::RuntimeAssigned)?,
                 ip_address: string_field(item, &["IPAddress"], field, Origin::RuntimeAssigned)?,
+                ipv6_address: string_field(
+                    item,
+                    &["GlobalIPv6Address"],
+                    field,
+                    Origin::RuntimeAssigned,
+                )?,
+                requested_ipv4_address: string_field(
+                    item,
+                    &["IPAMConfig", "IPv4Address"],
+                    field,
+                    Origin::Effective,
+                )?,
+                requested_ipv6_address: string_field(
+                    item,
+                    &["IPAMConfig", "IPv6Address"],
+                    field,
+                    Origin::Effective,
+                )?,
                 aliases: observed(item, &["Aliases"], field, Origin::Effective, |aliases| {
                     array(aliases, field)?
                         .iter()
@@ -648,6 +942,148 @@ fn restart_policy(value: &Value) -> Result<RestartPolicy, DecodeError> {
     })
 }
 
+fn runtime(root: &Value) -> Result<RuntimeObservation, DecodeError> {
+    let effective = Origin::Effective;
+    let string_array = |path: &[&str], field| {
+        observed(root, path, field, effective, |value| {
+            string_list(value, field)
+        })
+    };
+    Ok(RuntimeObservation {
+        read_only_rootfs: bool_field(
+            root,
+            &["HostConfig", "ReadonlyRootfs"],
+            FieldPath::RuntimeMount,
+            effective,
+        )?,
+        memory_bytes: signed_field(
+            root,
+            &["HostConfig", "Memory"],
+            FieldPath::ResourceLimit,
+            effective,
+        )?,
+        pids_limit: signed_field(
+            root,
+            &["HostConfig", "PidsLimit"],
+            FieldPath::ResourceLimit,
+            effective,
+        )?,
+        shm_size_bytes: signed_field(
+            root,
+            &["HostConfig", "ShmSize"],
+            FieldPath::ResourceLimit,
+            effective,
+        )?,
+        ulimits: observed(
+            root,
+            &["HostConfig", "Ulimits"],
+            FieldPath::ResourceLimit,
+            effective,
+            ulimits,
+        )?,
+        cap_add: string_array(&["HostConfig", "CapAdd"], FieldPath::SecuritySetting)?,
+        cap_drop: string_array(&["HostConfig", "CapDrop"], FieldPath::SecuritySetting)?,
+        security_options: string_array(&["HostConfig", "SecurityOpt"], FieldPath::SecuritySetting)?,
+        userns_mode: string_field(
+            root,
+            &["HostConfig", "UsernsMode"],
+            FieldPath::SecuritySetting,
+            effective,
+        )?,
+        supplementary_groups: string_array(
+            &["HostConfig", "GroupAdd"],
+            FieldPath::SecuritySetting,
+        )?,
+        sysctls: observed(
+            root,
+            &["HostConfig", "Sysctls"],
+            FieldPath::SecuritySetting,
+            effective,
+            |value| map_entries(value, FieldPath::SecuritySetting),
+        )?,
+        dns_servers: string_array(&["HostConfig", "Dns"], FieldPath::NameResolution)?,
+        dns_options: string_array(&["HostConfig", "DnsOptions"], FieldPath::NameResolution)?,
+        dns_search: string_array(&["HostConfig", "DnsSearch"], FieldPath::NameResolution)?,
+        extra_hosts: string_array(&["HostConfig", "ExtraHosts"], FieldPath::NameResolution)?,
+        init: bool_field(
+            root,
+            &["HostConfig", "Init"],
+            FieldPath::StopBehavior,
+            effective,
+        )?,
+        stop_signal: string_field(
+            root,
+            &["Config", "StopSignal"],
+            FieldPath::StopBehavior,
+            effective,
+        )?,
+        stop_timeout: signed_field(
+            root,
+            &["Config", "StopTimeout"],
+            FieldPath::StopBehavior,
+            effective,
+        )?,
+        logging: observed(
+            root,
+            &["HostConfig", "LogConfig"],
+            FieldPath::Logging,
+            effective,
+            logging,
+        )?,
+        tmpfs: observed(
+            root,
+            &["HostConfig", "Tmpfs"],
+            FieldPath::RuntimeMount,
+            effective,
+            |value| map_entries(value, FieldPath::RuntimeMount),
+        )?,
+        binds: string_array(&["HostConfig", "Binds"], FieldPath::RuntimeMount)?,
+        configured_mounts: observed(
+            root,
+            &["HostConfig", "Mounts"],
+            FieldPath::RuntimeMount,
+            effective,
+            configured_mounts,
+        )?,
+        volumes_from: string_array(&["HostConfig", "VolumesFrom"], FieldPath::RuntimeMount)?,
+        devices: observed(
+            root,
+            &["HostConfig", "Devices"],
+            FieldPath::Device,
+            effective,
+            devices,
+        )?,
+    })
+}
+
+fn container_summary(root: &Value) -> Result<ContainerSummary, DecodeError> {
+    object(root, FieldPath::Other)?;
+    let id = listed_id(root, FieldPath::Other, "Id")?;
+    Ok(ContainerSummary {
+        id: ProtectedValue::new(id.into_bytes()),
+        names: observed(
+            root,
+            &["Names"],
+            FieldPath::ContainerName,
+            Origin::Effective,
+            |value| {
+                array(value, FieldPath::ContainerName)?
+                    .iter()
+                    .map(|name| string(name, FieldPath::ContainerName))
+                    .collect()
+            },
+        )?,
+        labels: observed(
+            root,
+            &["Labels"],
+            FieldPath::Label { index: 0 },
+            Origin::Effective,
+            labels,
+        )?,
+        image: string_field(root, &["Image"], FieldPath::Image, Origin::Effective)?,
+    })
+}
+
 fn container(root: &Value, reference: ResourceRef) -> Result<ContainerObservation, DecodeError> {
     object(root, FieldPath::Other)?;
     Ok(ContainerObservation {
@@ -767,6 +1203,7 @@ fn container(root: &Value, reference: ResourceRef) -> Result<ContainerObservatio
             Origin::Effective,
             restart_policy,
         )?,
+        runtime: runtime(root)?,
     })
 }
 
@@ -792,6 +1229,39 @@ fn network(root: &Value, reference: ResourceRef) -> Result<NetworkObservation, D
             FieldPath::Network { index: 0 },
             Origin::Effective,
         )?,
+        enable_ipv6: bool_field(
+            root,
+            &["EnableIPv6"],
+            FieldPath::NetworkOption,
+            Origin::Effective,
+        )?,
+        ipam_driver: string_field(
+            root,
+            &["IPAM", "Driver"],
+            FieldPath::NetworkIpam,
+            Origin::Effective,
+        )?,
+        ipam_configs: observed(
+            root,
+            &["IPAM", "Config"],
+            FieldPath::NetworkIpam,
+            Origin::Effective,
+            ipam_configs,
+        )?,
+        options: observed(
+            root,
+            &["Options"],
+            FieldPath::NetworkOption,
+            Origin::Effective,
+            |value| map_entries(value, FieldPath::NetworkOption),
+        )?,
+        labels: observed(
+            root,
+            &["Labels"],
+            FieldPath::Label { index: 0 },
+            Origin::Effective,
+            labels,
+        )?,
     })
 }
 
@@ -816,6 +1286,20 @@ fn volume(root: &Value, reference: ResourceRef) -> Result<VolumeObservation, Dec
             &["Mountpoint"],
             FieldPath::Volume { index: 0 },
             Origin::RuntimeAssigned,
+        )?,
+        options: observed(
+            root,
+            &["Options"],
+            FieldPath::Volume { index: 0 },
+            Origin::Effective,
+            |value| map_entries(value, FieldPath::Volume { index: 0 }),
+        )?,
+        labels: observed(
+            root,
+            &["Labels"],
+            FieldPath::Label { index: 0 },
+            Origin::Effective,
+            labels,
         )?,
     })
 }
@@ -876,6 +1360,8 @@ pub fn decode_capture(capture: &Capture) -> Result<DecodedInventory, DecodeError
             requested_api_versions: Vec::new(),
         },
         containers: Vec::new(),
+        discovered_containers: Vec::new(),
+        selected_roots: capture.selected_roots().to_vec(),
         networks: Vec::new(),
         volumes: Vec::new(),
         findings: Vec::new(),
@@ -883,6 +1369,10 @@ pub fn decode_capture(capture: &Capture) -> Result<DecodedInventory, DecodeError
     let mut seen_resources = HashSet::new();
     let mut listed_ids: [HashSet<String>; 3] = std::array::from_fn(|_| HashSet::new());
     let mut inspected_ids: [HashSet<String>; 3] = std::array::from_fn(|_| HashSet::new());
+    let mut inspected_native_objects: [HashSet<String>; 3] =
+        std::array::from_fn(|_| HashSet::new());
+    let mut inspected_containers_by_ref = HashMap::new();
+    let mut selected_from_list: Option<HashSet<String>> = None;
     let mut version_seen = false;
     let mut info_seen = false;
     for exchange in capture.exchanges() {
@@ -979,8 +1469,27 @@ pub fn decode_capture(capture: &Capture) -> Result<DecodedInventory, DecodeError
                 }
             }
             ReadRequest::ListContainers => {
+                if selected_from_list.is_some() {
+                    return Err(DecodeError::ConflictingFacts);
+                }
+                if let Some(
+                    selector @ (Selector::ContainerNames(_)
+                    | Selector::NamePrefix(_)
+                    | Selector::Label { .. }
+                    | Selector::AllContainers),
+                ) = capture.selector()
+                {
+                    selected_from_list = Some(
+                        selected_ids(exchange.body().as_bytes(), selector)
+                            .map_err(|_| DecodeError::IncompleteInventory)?
+                            .into_iter()
+                            .map(|id| id.as_str().to_owned())
+                            .collect(),
+                    );
+                }
                 for item in array(&body, FieldPath::Other)? {
                     listed_ids[0].insert(listed_id(item, FieldPath::Other, "Id")?);
+                    result.discovered_containers.push(container_summary(item)?);
                 }
             }
             ReadRequest::ListNetworks => {
@@ -1016,10 +1525,32 @@ pub fn decode_capture(capture: &Capture) -> Result<DecodedInventory, DecodeError
                     ReadRequest::InspectVolume(id) => (2, id.as_str()),
                     _ => unreachable!("inspect request matched above"),
                 };
+                let identity_key = if kind == 2
+                    || (kind == 1 && capture.network_name_fallbacks().contains(&reference))
+                {
+                    "Name"
+                } else {
+                    "Id"
+                };
+                if body.get(identity_key).and_then(Value::as_str) != Some(id) {
+                    return Err(DecodeError::ConflictingFacts);
+                }
+                let native_key = if kind == 2 { "Name" } else { "Id" };
+                let native_id = body
+                    .get(native_key)
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+                    .ok_or(DecodeError::InvalidShape(FieldPath::Other))?;
+                if !inspected_native_objects[kind].insert(native_id.to_owned()) {
+                    return Err(DecodeError::DuplicateResource);
+                }
                 if !seen_resources.insert((kind, reference)) {
                     return Err(DecodeError::DuplicateResource);
                 }
                 inspected_ids[kind].insert(id.to_owned());
+                if kind == 0 {
+                    inspected_containers_by_ref.insert(reference, id.to_owned());
+                }
                 match kind {
                     0 => {
                         let container = container(&body, reference)?;
@@ -1066,9 +1597,70 @@ pub fn decode_capture(capture: &Capture) -> Result<DecodedInventory, DecodeError
             }
         }
     }
+    let mut selected_references = HashSet::new();
+    if capture
+        .network_name_fallbacks()
+        .iter()
+        .any(|reference| !seen_resources.contains(&(1, *reference)))
+    {
+        return Err(DecodeError::IncompleteInventory);
+    }
+    if let Some(expected) = selected_from_list {
+        let selected: HashSet<_> = capture
+            .selected_roots()
+            .iter()
+            .filter(|root| root.kind == RootKind::Container)
+            .filter_map(|root| inspected_containers_by_ref.get(&root.resource).cloned())
+            .collect();
+        if expected != selected {
+            return Err(DecodeError::IncompleteInventory);
+        }
+    } else if matches!(
+        capture.selector(),
+        Some(
+            Selector::ContainerNames(_)
+                | Selector::NamePrefix(_)
+                | Selector::Label { .. }
+                | Selector::AllContainers
+        )
+    ) {
+        return Err(DecodeError::IncompleteInventory);
+    }
+    if capture.selected_roots().len() != capture.bounds().selected_resources
+        && !capture.selected_roots().is_empty()
+    {
+        return Err(DecodeError::IncompleteInventory);
+    }
+    if capture.selected_roots().iter().any(|root| {
+        !selected_references.insert(root.resource)
+            || !match root.kind {
+                RootKind::Container => result
+                    .containers
+                    .iter()
+                    .any(|container| container.reference == root.resource),
+                RootKind::Network => result
+                    .networks
+                    .iter()
+                    .any(|network| network.reference == root.resource),
+                RootKind::Volume => result
+                    .volumes
+                    .iter()
+                    .any(|volume| volume.reference == root.resource),
+            }
+            || (root.kind == RootKind::Container
+                && root.reason != crate::acquisition::SelectionReason::ExactId
+                && inspected_containers_by_ref
+                    .get(&root.resource)
+                    .is_none_or(|id| !listed_ids[0].contains(id)))
+    }) {
+        return Err(DecodeError::IncompleteInventory);
+    }
     if (0..3).any(|kind| {
-        !listed_ids[kind].is_empty() && listed_ids[kind].is_disjoint(&inspected_ids[kind])
-    }) || capture.bounds().selected_resources > result.containers.len()
+        !(capture.discovery_only() && kind == 0)
+            && !listed_ids[kind].is_empty()
+            && listed_ids[kind].is_disjoint(&inspected_ids[kind])
+    }) || (capture.selected_roots().is_empty()
+        && capture.bounds().selected_resources > result.containers.len())
     {
         return Err(DecodeError::IncompleteInventory);
     }
@@ -1101,4 +1693,101 @@ pub fn decode_capture(capture: &Capture) -> Result<DecodedInventory, DecodeError
         });
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod selector_replay_tests {
+    use super::*;
+    use crate::acquisition::{Budget, Limits, NativeId, SelectionReason};
+    use crate::evidence::HttpStatus;
+    use std::time::Duration;
+
+    #[test]
+    fn replay_rejects_uninspected_matching_prefix_peer() {
+        let mut budget = Budget::new(Limits {
+            max_requests: 3,
+            max_selected_resources: 2,
+            max_expansions: 1,
+            max_response_bytes: 4096,
+            max_total_bytes: 8192,
+            max_elapsed: Duration::from_secs(2),
+        })
+        .unwrap();
+        budget.record_selection(1).unwrap();
+        let api = ApiVersion::new(NonZeroU16::new(1).unwrap(), 49);
+        let selected = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let peer = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        budget
+            .record_request(ReadRequest::ListContainers, None, Some(api))
+            .unwrap();
+        let list = format!(
+            r#"[{{"Id":"{selected}","Names":["/app-one"]}},{{"Id":"{peer}","Names":["/app-two"]}}]"#
+        );
+        budget
+            .read_response(HttpStatus::new(200).unwrap(), list.as_bytes())
+            .unwrap();
+        let reference = ResourceRef::new(1);
+        budget
+            .record_request(
+                ReadRequest::InspectContainer(NativeId::new(selected.to_owned()).unwrap()),
+                Some(reference),
+                Some(api),
+            )
+            .unwrap();
+        let inspect = format!(r#"{{"Id":"{selected}"}}"#);
+        budget
+            .read_response(HttpStatus::new(200).unwrap(), inspect.as_bytes())
+            .unwrap();
+        let capture = budget
+            .into_capture()
+            .unwrap()
+            .with_selected_roots(vec![SelectedRoot {
+                resource: reference,
+                kind: RootKind::Container,
+                reason: SelectionReason::NamePrefix,
+            }])
+            .with_selector(Selector::NamePrefix(
+                NativeId::new("app-".to_owned()).unwrap(),
+            ));
+        assert!(matches!(
+            decode_capture(&capture),
+            Err(DecodeError::IncompleteInventory)
+        ));
+    }
+
+    #[test]
+    fn replay_rejects_one_network_under_name_and_id() {
+        let mut budget = Budget::new(Limits {
+            max_requests: 2,
+            max_selected_resources: 1,
+            max_expansions: 2,
+            max_response_bytes: 4096,
+            max_total_bytes: 8192,
+            max_elapsed: Duration::from_secs(2),
+        })
+        .unwrap();
+        let api = ApiVersion::new(NonZeroU16::new(1).unwrap(), 49);
+        let canonical = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+        let body = format!(r#"{{"Id":"{canonical}","Name":"shared"}}"#);
+        for (id, reference) in [("shared", 1), (canonical, 2)] {
+            budget
+                .record_request(
+                    ReadRequest::InspectNetwork(NativeId::new(id.to_owned()).unwrap()),
+                    Some(ResourceRef::new(reference)),
+                    Some(api),
+                )
+                .unwrap();
+            budget
+                .read_response(HttpStatus::new(200).unwrap(), body.as_bytes())
+                .unwrap();
+        }
+        let capture = budget
+            .into_capture()
+            .unwrap()
+            .with_network_name_fallbacks(HashSet::from([ResourceRef::new(1)]));
+        assert!(matches!(
+            decode_capture(&capture),
+            Err(DecodeError::DuplicateResource)
+        ));
+    }
 }

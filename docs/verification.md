@@ -19,6 +19,13 @@ the Debian lanes allow only the Debian `+dfsg1` suffix, not a version prefix.
 The rootless lane runs a rootless inner
 daemon; rootless outer Podman nesting is not assumed.
 
+The #28 selector and typed-observation fixtures are offline contract checks.
+They cover protected predicate replay closure, canonical list identities,
+inspect response binding (including network-name fallback), explicit resource
+roots, and effective user namespace availability.
+They do not extend reviewed profile claims until fresh independent native tests
+cover each new source shape on the exact versions and daemon modes.
+
 Each lane reads live Engine API version, info, container, network, and volume
 responses. The harness creates only synthetic test resources and stores live
 responses in a private temporary directory. The Rust integration test checks

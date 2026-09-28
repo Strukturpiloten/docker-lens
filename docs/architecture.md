@@ -68,8 +68,23 @@ API versions; it does not contact or authenticate a daemon. Discovery lists
 may include resources outside a bounded selection. A nonempty list with no
 matching inspection of its kind fails as incomplete; when acquisition records
 a selected-container count, fewer inspections than selected containers also
-fail. Unselected list entries do not force extra inspections. Matching uses
+fail. Unselected list entries do not force extra inspections. Socket captures
+retain the protected selection predicate; replay recomputes every matching
+canonical container ID from bounded list metadata and requires that exact set
+of root inspections. List IDs must be 64 hexadecimal characters before any
+inspect. Inspect bodies must bind to the requested container ID, network ID
+or recorded network-name fallback, or volume name. Two network lookups that
+resolve to the same native ID fail as conflicting capture evidence. Matching uses
 canonical native IDs or volume names from the closed inspect requests.
+Discovery-only captures contain bounded, protected list metadata and no
+container inspections. Literal name, name-prefix, and label selectors inspect
+only matching container IDs from that metadata. Direct container-ID selection
+requires a full 64-character hexadecimal ID and does not list ambient
+containers. A completed socket capture retains opaque selected-root references
+and closed selection reasons; replay checks their inspect and list closure.
+Unmatched peer metadata stays protected. Effective runtime, network IPAM, and
+mount observations are not authored target intent. Unmapped native bytes remain
+in the protected capture for an explicit downstream loss decision.
 Container `Config.*` and `HostConfig.*` values have effective origin, because
 image defaults and runtime normalization can contribute to them. Observed
 `NetworkSettings.Ports`, network addresses, image IDs, and volume mountpoints
@@ -78,7 +93,8 @@ protected effective values with missing, null, empty, and redacted states.
 A single-field redaction envelope
 `{"__docker_lens_redacted__":true}` denotes unavailable data and never yields a
 value. Native JSON with that exact shape is also conservatively unavailable.
-`HostConfig.NetworkMode` retains the native alias and distinguishes default,
+`HostConfig.UsernsMode` retains an independently available effective runtime
+value. `HostConfig.NetworkMode` retains the native alias and distinguishes default,
 bridge, host, none, container sharing, and named modes. Non-bridge modes receive
 a value-free unsupported-setting finding pending target review. Healthcheck
 tests distinguish `CMD`, `CMD-SHELL`, `NONE`, and unknown forms; start period

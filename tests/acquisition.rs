@@ -61,9 +61,13 @@ struct Server {
 impl Server {
     fn new(handler: impl Fn(&str) -> Option<Vec<u8>> + Send + 'static) -> Self {
         let directory = std::env::temp_dir().join(format!(
-            "docker-lens-acquisition-{}-{}",
+            "docker-lens-acquisition-{}-{}-{}",
             std::process::id(),
-            NEXT_SERVER.fetch_add(1, Ordering::Relaxed)
+            NEXT_SERVER.fetch_add(1, Ordering::Relaxed),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         let mut builder = fs::DirBuilder::new();
         builder.mode(0o700).create(&directory).unwrap();
@@ -139,11 +143,17 @@ fn bounded_socket_capture_keeps_closed_gets_versions_and_private_values() {
         Some(match path {
             "/version" => version(),
             "/v1.49/info" => response(r#"{"ServerVersion":"28.0.0","Rootless":true}"#),
-            "/v1.49/containers/json?all=1" => response(r#"[{"Id":"private/container"}]"#),
-            "/v1.49/containers/private%2Fcontainer/json" => response(
-                r#"{"Config":{"Env":["TOKEN=private-secret"]},"NetworkSettings":{"Networks":{"private-net":{"NetworkID":"net/id"}}},"Mounts":[{"Type":"volume","Name":"private-volume"}]}"#,
+            "/v1.49/containers/json?all=1" => response(
+                r#"[{"Id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]"#,
             ),
-            "/v1.49/networks/net%2Fid" => response(r#"{"Name":"private-net","Driver":"bridge"}"#),
+            "/v1.49/containers/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/json" => {
+                response(
+                    r#"{"Id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","Config":{"Env":["TOKEN=private-secret"]},"NetworkSettings":{"Networks":{"private-net":{"NetworkID":"net/id"}}},"Mounts":[{"Type":"volume","Name":"private-volume"}]}"#,
+                )
+            }
+            "/v1.49/networks/net%2Fid" => {
+                response(r#"{"Id":"net/id","Name":"private-net","Driver":"bridge"}"#)
+            }
             "/v1.49/volumes/private-volume" => {
                 response(r#"{"Name":"private-volume","Driver":"local"}"#)
             }
@@ -169,15 +179,16 @@ fn bounded_socket_capture_keeps_closed_gets_versions_and_private_values() {
     );
     assert_eq!(decode_capture(&capture).unwrap().containers.len(), 1);
     assert!(!format!("{capture:?}").contains("private-secret"));
-    assert!(!format!("{capture:?}").contains("private/container"));
+    assert!(
+        !format!("{capture:?}")
+            .contains("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    );
     let requests = server.requests();
     assert_eq!(requests.len(), 6);
     assert!(requests.iter().all(|request| request.starts_with("GET ")));
-    assert!(
-        requests
-            .iter()
-            .any(|request| request.contains("private%2Fcontainer"))
-    );
+    assert!(requests.iter().any(|request| {
+        request.contains("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    }));
 }
 
 #[test]
@@ -187,13 +198,22 @@ fn explicit_selection_never_discovers_ambient_containers() {
         Some(match path {
             "/version" => version(),
             "/v1.49/info" => response("{}"),
-            "/v1.49/containers/selected/json" => response("{}"),
+            "/v1.49/containers/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/json" => {
+                response(
+                    r#"{"Id":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}"#,
+                )
+            }
             _ => return None,
         })
     });
     let capture = acquire(
         &server.endpoint(),
-        Selector::ContainerIds(vec![NativeId::new("selected".into()).unwrap()]),
+        Selector::ContainerIds(vec![
+            NativeId::new(
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+            )
+            .unwrap(),
+        ]),
         limits(),
         &AtomicBool::new(false),
     )
@@ -205,6 +225,218 @@ fn explicit_selection_never_discovers_ambient_containers() {
             .iter()
             .all(|request| !request.contains("containers/json"))
     );
+}
+
+#[test]
+fn stale_inspect_identity_cannot_expand_related_resources() {
+    let server = Server::new(|request| {
+        let path = request.split_ascii_whitespace().nth(1)?;
+        Some(match path {
+            "/version" => version(),
+            "/v1.49/info" => response("{}"),
+            "/v1.49/containers/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/json" => {
+                response(
+                    r#"{"Id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","NetworkSettings":{"Networks":{"peer":{"NetworkID":"peer-network"}}}}"#,
+                )
+            }
+            _ => return None,
+        })
+    });
+    assert!(matches!(
+        acquire(
+            &server.endpoint(),
+            Selector::ContainerIds(vec![
+                NativeId::new(
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned()
+                )
+                .unwrap()
+            ]),
+            limits(),
+            &AtomicBool::new(false)
+        ),
+        Err(AcquisitionError::Shape)
+    ));
+    assert_eq!(server.requests().len(), 3);
+}
+
+#[test]
+fn name_selection_and_discovery_keep_peer_inspects_out_of_scope() {
+    let server = Server::new(|request| {
+        let path = request.split_ascii_whitespace().nth(1)?;
+        Some(match path {
+            "/version" => version(),
+            "/v1.49/info" => response("{}"),
+            "/v1.49/containers/json?all=1" => response(
+                r#"[{"Id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","Names":["/app"],"Labels":{"project":"selected"},"Image":"private-app"},{"Id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","Names":["/peer"],"Labels":{"project":"other"},"Image":"private-peer"}]"#,
+            ),
+            "/v1.49/containers/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/json" => {
+                response(
+                    r#"{"Id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","Name":"/app","Config":{"Image":"private-app"}}"#,
+                )
+            }
+            _ => return None,
+        })
+    });
+    let capture = acquire(
+        &server.endpoint(),
+        Selector::ContainerNames(vec![NativeId::new("app".into()).unwrap()]),
+        limits(),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(capture.bounds().selected_resources, 1);
+    assert_eq!(capture.selected_roots().len(), 1);
+    assert_eq!(
+        capture.selected_roots()[0].reason,
+        docker_lens::acquisition::SelectionReason::ExactName
+    );
+    let decoded = decode_capture(&capture).unwrap();
+    assert_eq!(decoded.containers.len(), 1);
+    assert_eq!(decoded.discovered_containers.len(), 2);
+    assert_eq!(
+        decoded.selected_roots[0].resource,
+        decoded.containers[0].reference
+    );
+    assert!(!format!("{decoded:?}").contains("private-peer"));
+    assert!(server.requests().iter().all(|request| {
+        !request.contains("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/json")
+    }));
+
+    let discovery = acquire(
+        &server.endpoint(),
+        Selector::Discovery,
+        limits(),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert!(discovery.discovery_only());
+    assert!(discovery.selected_roots().is_empty());
+    let inventory = decode_capture(&discovery).unwrap();
+    assert_eq!(inventory.discovered_containers.len(), 2);
+    assert!(inventory.containers.is_empty());
+}
+
+#[test]
+fn explicit_network_and_volume_roots_do_not_discover_containers() {
+    let network_id = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+    let server = Server::new(|request| {
+        let path = request.split_ascii_whitespace().nth(1)?;
+        Some(match path {
+            "/version" => version(),
+            "/v1.49/info" => response("{}"),
+            "/v1.49/networks/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" => {
+                response(
+                    r#"{"Id":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","Name":"backend"}"#,
+                )
+            }
+            "/v1.49/volumes/data" => response(r#"{"Name":"data","Driver":"local"}"#),
+            _ => return None,
+        })
+    });
+    let network = acquire(
+        &server.endpoint(),
+        Selector::NetworkIds(vec![NativeId::new(network_id.to_owned()).unwrap()]),
+        limits(),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(decode_capture(&network).unwrap().networks.len(), 1);
+    let volume = acquire(
+        &server.endpoint(),
+        Selector::VolumeNames(vec![NativeId::new("data".to_owned()).unwrap()]),
+        limits(),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(decode_capture(&volume).unwrap().volumes.len(), 1);
+    assert!(
+        server
+            .requests()
+            .iter()
+            .all(|request| !request.contains("containers/"))
+    );
+}
+
+#[test]
+fn hex_looking_network_name_fallback_checks_name_identity() {
+    let server = Server::new(|request| {
+        let path = request.split_ascii_whitespace().nth(1)?;
+        Some(match path {
+            "/version" => version(),
+            "/v1.49/info" => response("{}"),
+            "/v1.49/containers/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/json" => {
+                response(
+                    r#"{"Id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","NetworkSettings":{"Networks":{"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc":{"NetworkID":""}}}}"#,
+                )
+            }
+            "/v1.49/networks/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" => {
+                response(
+                    r#"{"Id":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","Name":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}"#,
+                )
+            }
+            _ => return None,
+        })
+    });
+    let capture = acquire(
+        &server.endpoint(),
+        Selector::ContainerIds(vec![
+            NativeId::new(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+            )
+            .unwrap(),
+        ]),
+        limits(),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(decode_capture(&capture).unwrap().networks.len(), 1);
+}
+
+#[test]
+fn mixed_network_name_and_id_references_cannot_duplicate_native_network() {
+    let server = Server::new(|request| {
+        let path = request.split_ascii_whitespace().nth(1)?;
+        Some(match path {
+            "/version" => version(),
+            "/v1.49/info" => response("{}"),
+            "/v1.49/containers/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/json" => {
+                response(
+                    r#"{"Id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","NetworkSettings":{"Networks":{"shared":{"NetworkID":""}}}}"#,
+                )
+            }
+            "/v1.49/containers/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/json" => {
+                response(
+                    r#"{"Id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","NetworkSettings":{"Networks":{"shared":{"NetworkID":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}}}}"#,
+                )
+            }
+            "/v1.49/networks/shared"
+            | "/v1.49/networks/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" => {
+                response(
+                    r#"{"Id":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","Name":"shared"}"#,
+                )
+            }
+            _ => return None,
+        })
+    });
+    let roots = vec![
+        NativeId::new(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+        )
+        .unwrap(),
+        NativeId::new(
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned(),
+        )
+        .unwrap(),
+    ];
+    assert!(matches!(
+        acquire(
+            &server.endpoint(),
+            Selector::ContainerIds(roots),
+            limits(),
+            &AtomicBool::new(false)
+        ),
+        Err(AcquisitionError::Shape)
+    ));
 }
 
 #[test]
@@ -383,10 +615,13 @@ fn duplicate_related_native_ids_consume_one_expansion_each() {
         Some(match path {
             "/version" => version(),
             "/v1.49/info" => response("{}"),
-            "/v1.49/containers/selected/json" => response(
-                r#"{"NetworkSettings":{"Networks":{"first":{"NetworkID":"same-net"},"second":{"NetworkID":"same-net"}}},"Mounts":[{"Type":"volume","Name":"same-volume"},{"Type":"volume","Name":"same-volume"}]}"#,
-            ),
-            "/v1.49/networks/same-net" | "/v1.49/volumes/same-volume" => response("{}"),
+            "/v1.49/containers/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/json" => {
+                response(
+                    r#"{"Id":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","NetworkSettings":{"Networks":{"first":{"NetworkID":"same-net"},"second":{"NetworkID":"same-net"}}},"Mounts":[{"Type":"volume","Name":"same-volume"},{"Type":"volume","Name":"same-volume"}]}"#,
+                )
+            }
+            "/v1.49/networks/same-net" => response(r#"{"Id":"same-net"}"#),
+            "/v1.49/volumes/same-volume" => response(r#"{"Name":"same-volume"}"#),
             _ => return None,
         })
     });
@@ -394,7 +629,12 @@ fn duplicate_related_native_ids_consume_one_expansion_each() {
     exact.max_expansions = 3;
     let capture = acquire(
         &server.endpoint(),
-        Selector::ContainerIds(vec![NativeId::new("selected".into()).unwrap()]),
+        Selector::ContainerIds(vec![
+            NativeId::new(
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+            )
+            .unwrap(),
+        ]),
         exact,
         &AtomicBool::new(false),
     )
@@ -411,8 +651,10 @@ fn empty_network_id_uses_independent_endpoint_name_for_inspection() {
         Some(match path {
             "/version" => version(),
             "/v1.49/info" => response("{}"),
-            "/v1.49/containers/selected/json" => {
-                response(r#"{"NetworkSettings":{"Networks":{"named-bridge":{"NetworkID":""}}}}"#)
+            "/v1.49/containers/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/json" => {
+                response(
+                    r#"{"Id":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","NetworkSettings":{"Networks":{"named-bridge":{"NetworkID":""}}}}"#,
+                )
             }
             "/v1.49/networks/named-bridge" => {
                 response(r#"{"Id":"canonical-network-id","Name":"named-bridge"}"#)
@@ -422,7 +664,12 @@ fn empty_network_id_uses_independent_endpoint_name_for_inspection() {
     });
     let capture = acquire(
         &server.endpoint(),
-        Selector::ContainerIds(vec![NativeId::new("selected".into()).unwrap()]),
+        Selector::ContainerIds(vec![
+            NativeId::new(
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+            )
+            .unwrap(),
+        ]),
         limits(),
         &AtomicBool::new(false),
     )
@@ -449,6 +696,7 @@ fn acquisition_category(error: AcquisitionError) -> &'static str {
         AcquisitionError::Status => "status",
         AcquisitionError::Version => "version",
         AcquisitionError::Shape => "shape",
+        AcquisitionError::Selection => "selection",
         AcquisitionError::Budget(_) => "budget",
     }
 }
