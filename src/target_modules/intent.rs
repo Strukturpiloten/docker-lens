@@ -132,13 +132,13 @@ impl TargetIntent {
         let mut identities = HashSet::new();
         let mut default_network = false;
         for resource in &resources {
-            if let TargetResource::Network(network) = resource
-                && network.role == NetworkRole::ApplicationDefault
-            {
-                if default_network {
-                    return Err(IntentError::DuplicateDefaultNetwork);
+            if let TargetResource::Network(network) = resource {
+                if network.role == NetworkRole::ApplicationDefault {
+                    if default_network {
+                        return Err(IntentError::DuplicateDefaultNetwork);
+                    }
+                    default_network = true;
                 }
-                default_network = true;
             }
             let identity = match resource {
                 TargetResource::Network(network) => &network.identity,
