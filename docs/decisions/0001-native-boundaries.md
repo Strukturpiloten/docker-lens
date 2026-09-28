@@ -1,6 +1,7 @@
 # ADR 0001: Separate native evidence, inventory, and target planning
 
-Status: accepted; independent native conformance remains pending.
+Status: accepted; historical four-lane source evidence reviewed. Each changed
+candidate and release requires fresh complete and native gates.
 
 The library separates capture, observed inventory, desired target intent,
 operation graph, and rendered artifact. Origin and availability are independent

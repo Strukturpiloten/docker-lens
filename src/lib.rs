@@ -47,3 +47,10 @@ pub mod finding;
 pub mod observation;
 pub mod target;
 pub mod version;
+
+mod reviewed_catalog;
+
+// Only the crate's own test build can construct observed positive capabilities.
+// The ignored live test runs by exact name in the isolated native harness.
+#[cfg(test)]
+mod native_target_tests;

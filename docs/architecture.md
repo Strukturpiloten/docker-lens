@@ -30,13 +30,16 @@
    daemon contact.
 4. Target intent carries explicit identities and typed standalone container
    settings: image, ports, mounts, bridge network, environment, exec-form
-   command and health check, and restart policy. The planner accepts
-   either validated observed-daemon capabilities or a distinct offline target
-   profile. The offline profile names an exact Engine release, API version,
-   daemon mode, and SHA-256 key of reviewed capability evidence; it must match
-   an entry in the reviewed catalog. The public catalog is empty until native
-   conformance supplies reviewed records, so callers cannot admit arbitrary
-   positive capabilities. The operation graph retains the chosen context and
+   command and health check, and restart policy. The public planner admits
+   only profiles resolved from the reviewed catalog; caller-authored positive
+   daemon claims cannot authorize planning. A profile distinguishes upstream
+   from an exact Debian package revision, the reported Engine release,
+   advertised maximum API, negotiated acquisition API, tested rendering API,
+   and daemon mode. Catalog discovery returns its SHA-256 evidence key. The
+   public catalog contains four exact records from a reviewed historical native
+   run. Each changed candidate and release needs fresh complete and four-lane
+   native gates before a compatibility claim. The operation graph
+   retains the chosen context and
    checks standalone containers, named volumes, bridge networks, and each
    requested setting. Other network modes await explicit native review.
    Offline targets never receive a fabricated observation ID. The renderer

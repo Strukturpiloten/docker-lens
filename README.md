@@ -3,12 +3,15 @@
 DockerLens is a native Docker Engine library under construction. The current
 crate establishes privacy, observation, bounded explicit Unix-socket acquisition,
 pure Engine JSON decoding, and inert standalone target planning and rendering.
-It does **not** establish native compatibility or execute a target.
+It does not execute a target. Four exact profiles backed by reviewed native
+source records are available for inert rendering. Each changed candidate and
+release must pass fresh complete and four-lane native gates before a
+compatibility claim.
 
 The planned native work is tracked in [DockerLens #3](https://github.com/Strukturpiloten/docker-lens/issues/3).
 BoxFerry integration is a separate stream in
 [BoxFerry #343](https://github.com/Strukturpiloten/boxferry/issues/343).
-Debian 11 Docker Engine support needs independent native evidence; Debian 11
+Debian 11 Docker Engine support is bounded by exact reviewed native evidence; Debian 11
 Compose compatibility and Swarm mode are separate discussion topics.
 
 ## Contract boundaries
@@ -39,12 +42,14 @@ Compose compatibility and Swarm mode are separate discussion topics.
 - Engine release, API version, daemon mode, and capability facts are separate.
   Capability claims are tied to an opaque acquisition identity as well as the
   exact daemon facts; caller-declared provenance is not proof of conformance.
-- An offline target profile uses an exact Engine release, API version, mode and
-  immutable capability-evidence digest. It must match a reviewed catalog entry;
-  the public catalog remains empty until independent native review supplies
-  records. Offline planning does not invent a live observation. The operation
-  graph checks capabilities for the current standalone container, named volume,
-  and bridge network shapes, then retains its planning context.
+- An offline target profile distinguishes upstream builds from an exact Debian
+  package revision, the reported Engine release, advertised maximum API,
+  negotiated acquisition API, tested rendering API, and daemon mode. The
+  reviewed catalog exposes exact profiles and their immutable evidence digests;
+  callers cannot manufacture positive planning claims. It contains four exact
+  profiles backed by reviewed native source records. Offline planning does not invent
+  a live observation. The operation graph retains the resolved context and
+  checks capabilities for each requested standalone shape.
 - Target intent includes explicit resource identities, container image, ports,
   mounts, bridge network, protected environment assignments, exec-form command,
   health check, and restart policy. Unsupported settings remain explicit.

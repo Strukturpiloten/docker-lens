@@ -54,9 +54,12 @@ volume="dl-native-data-${run_id}"
 socket_dir="$run_dir/socket"
 socket="$socket_dir/docker.sock"
 mkdir -m 0777 "$socket_dir"
-mkdir -m 0755 "$socket_dir/native-bind"
+# The parent remains private; the synthetic bind source must be writable by
+# both rootful and rootless mapped inner-container UIDs for the RW probe.
+mkdir -m 0777 "$socket_dir/native-bind"
 printf 'native-bind-canary\n' > "$socket_dir/native-bind/canary"
 printf 'native-tcp-canary\n' > "$socket_dir/native-bind/index.html"
+chmod 0644 "$socket_dir/native-bind/canary" "$socket_dir/native-bind/index.html"
 chmod 0700 "$run_dir"
 watchdog_pid=
 cleanup() {
@@ -195,11 +198,19 @@ watchdog() {
   done
 }
 storage_mount="$volume:$(if [[ $expected_mode == rootless ]]; then printf /home/docker/.local/share/docker; else printf /var/lib/docker; fi):U"
+if [[ $lane == debian11-rootless ]]; then
+  # Historical Debian rootless runc cannot RO-remount the named volume when
+  # its outer data store inherits nosuid,nodev. Scope this to the disposable
+  # privileged nesting volume; do not change host mount or AppArmor policy.
+  storage_mount+=,suid,dev
+fi
 # Keep the image's native daemon launcher. Its second Unix listener is bind-mounted
 # for explicit local test capture; neither listener is exposed over TCP.
 start=(/usr/local/bin/start-dockerd --host=unix:///dockerlens-native/docker.sock)
 run_flags=(--image-volume=ignore)
-if [[ $lane == debian11-rootless ]]; then run_flags+=(--oom-score-adj=0); fi
+if [[ $lane == debian11-rootless ]]; then
+  run_flags+=(--oom-score-adj=0 --security-opt apparmor=unconfined)
+fi
 watchdog &
 watchdog_pid=$!
 # Pull only the reviewed digest under the lane's time and free-space budget.
@@ -212,8 +223,7 @@ timeout 120 "${podman_cmd[@]}" run --pull=never -d --name "$container" --label "
 privileged=$("${podman_cmd[@]}" inspect --format '{{.HostConfig.Privileged}}' "$container")
 [[ $privileged == true ]] || { echo 'outer container does not have reviewed nesting privilege' >&2; exit 1; }
 volume_mounts=$("${podman_cmd[@]}" inspect --format '{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}}:{{.Destination}}{{"\n"}}{{end}}{{end}}' "$container")
-expected_mount=${storage_mount%%:*}:${storage_mount#*:}
-expected_mount=${expected_mount%:U}
+expected_mount=${storage_mount%:*}
 [[ $volume_mounts == "$expected_mount" ]] || {
   echo 'outer container has unexpected image or data-root volumes' >&2
   exit 1
@@ -238,6 +248,15 @@ done
   diagnose_native_startup
   exit 1
 }
+if [[ $lane == debian11-rootless ]]; then
+  # Linux mountinfo reports suid/dev by absence of nosuid/nodev. Check the
+  # effective mount, not merely the requested Podman volume options.
+  if ! timeout 15 "${podman_cmd[@]}" exec "$container" cat /proc/self/mountinfo 2>/dev/null |
+    python3 "$script_dir/native-storage-options.py" /home/docker/.local/share/docker; then
+    echo 'Debian rootless outer data-root mount lacks required effective options' >&2
+    exit 1
+  fi
+fi
 
 api_get() {
   local path=$1 target=$2
@@ -530,8 +549,10 @@ export NATIVE_ENGINE_SOCKET="$socket" NATIVE_CAPTURE_DIR="$run_dir" NATIVE_CONTA
 export NATIVE_NETWORK_ID="$network_id" NATIVE_VOLUME_NAME="$volume_name"
 export NATIVE_ENGINE_VERSION="$server_version" NATIVE_DAEMON_MODE="$expected_mode"
 export NATIVE_API_VERSION="$api_version"
+export NATIVE_LANE="$lane" NATIVE_DOCKER_PACKAGE="$installed_docker_package"
 export NATIVE_FIXTURE_IMAGE="$FIXTURE_IMAGE" NATIVE_OUTER_CONTAINER="$container"
 export NATIVE_BIND_SOURCE=/dockerlens-native/native-bind
+export NATIVE_SHAPES_PATH="$run_dir/target-shapes.json"
 if [[ $EUID == 0 ]]; then export NATIVE_PODMAN_USE_SUDO=0; else export NATIVE_PODMAN_USE_SUDO=1; fi
 "$(dirname "$0")/run-exact-native-test.sh" native_capture live_engine_capture_decodes
 "$(dirname "$0")/run-exact-native-test.sh" acquisition live_read_only_acquisition_matches_oracle
@@ -547,7 +568,7 @@ if [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]; then
     echo 'native evidence requires a clean candidate checkout' >&2
     exit 1
   }
-  python3 "$script_dir/native-evidence.py" "$run_dir/version.json" \
+  python3 "$script_dir/native-evidence.py" "$run_dir/version.json" "$NATIVE_SHAPES_PATH" \
     "$DOCKERLENS_NATIVE_EVIDENCE_DIR/$lane.json" "$lane" "$image" "$expected_mode" \
     "$installed_docker_package" "$candidate_sha"
 fi

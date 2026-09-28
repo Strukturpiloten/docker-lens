@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "lane": "debian11-rootful",
+  "candidate_sha": "d51d7dbfda5ee6f8fefe92605afe8baea3dc504e",
+  "run_url": "https://github.com/Strukturpiloten/docker-lens/actions/runs/36451790131/attempts/1",
+  "native_manifest_artifact_name": "dockerlens-native-debian11-rootful",
+  "native_manifest_sha256": "3d7f161903d03c9dd6c11105ba74897c80e4b2514358231e97ce550c73ef900b",
+  "identity": {
+    "build": {
+      "kind": "debian-package",
+      "distribution": "debian11",
+      "package_name": "docker.io",
+      "package_revision": "20.10.5+dfsg1-1+deb11u2"
+    },
+    "engine_release": "20.10.5+dfsg1",
+    "advertised_api": "1.41",
+    "acquisition_api": "1.41",
+    "rendering_api": "1.41",
+    "mode": "rootful"
+  },
+  "capabilities": [
+    {
+      "name": "BindMount",
+      "state": "available",
+      "admitted_shapes": [
+        "BindMountReadWrite",
+        "BindMountReadOnly"
+      ]
+    },
+    {
+      "name": "BridgeNetwork",
+      "state": "available",
+      "admitted_shapes": [
+        "BridgeNetworkCreate",
+        "BridgeNetworkAttach"
+      ]
+    },
+    {
+      "name": "Command",
+      "state": "available",
+      "admitted_shapes": [
+        "ExecCommand"
+      ]
+    },
+    {
+      "name": "Entrypoint",
+      "state": "available",
+      "admitted_shapes": [
+        "ExecEntrypoint"
+      ]
+    },
+    {
+      "name": "EnvironmentAssignment",
+      "state": "available",
+      "admitted_shapes": [
+        "EnvironmentValue",
+        "EnvironmentEmptyValue"
+      ]
+    },
+    {
+      "name": "Healthcheck",
+      "state": "available",
+      "admitted_shapes": [
+        "ExecHealthcheck"
+      ]
+    },
+    {
+      "name": "NamedVolume",
+      "state": "available",
+      "admitted_shapes": [
+        "NamedVolumeCreate",
+        "NamedVolumeMountReadWrite",
+        "NamedVolumeMountReadOnly"
+      ]
+    },
+    {
+      "name": "PortPublish",
+      "state": "available",
+      "admitted_shapes": [
+        "FixedTcpPort",
+        "FixedUdpPort"
+      ]
+    },
+    {
+      "name": "RestartPolicy",
+      "state": "available",
+      "admitted_shapes": [
+        "RestartNo",
+        "RestartAlways",
+        "RestartUnlessStopped",
+        "RestartOnFailureUnlimited",
+        "RestartOnFailureLimited"
+      ]
+    },
+    {
+      "name": "StandaloneContainer",
+      "state": "available",
+      "admitted_shapes": [
+        "StandaloneCreate"
+      ]
+    }
+  ]
+}

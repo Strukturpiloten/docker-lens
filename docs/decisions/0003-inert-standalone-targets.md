@@ -1,6 +1,7 @@
 # ADR 0003: Render explicit standalone intent as inert Engine requests
 
-Status: accepted implementation contract; native compatibility remains unproven.
+Status: accepted implementation contract; compatibility claims require fresh
+complete and native gates for each changed candidate and release.
 
 This supersedes the target-setting and renderer placeholders in ADR 0002;
 its capture and offline-evidence boundaries remain in force.
@@ -16,8 +17,15 @@ inferred from a captured `Config.*` value. Swarm services, images built from a
 context, start operations, and deployment are outside this contract.
 An explicit Swarm orchestration request returns `UnsupportedOrchestration`.
 
-The planner requires an exact validated daemon context or an exact offline
-profile admitted by the reviewed capability catalog. Every used setting has a
+The planner requires a capability source admitted by the reviewed catalog.
+The observed daemon context type remains internal until native review provides
+a construction path, so callers cannot assert `NativeConformance` themselves.
+An offline identity distinguishes Debian package revision from the reported
+Engine release, and the advertised, acquisition, and tested rendering APIs
+from one another. Rendering uses only the reviewed rendering API. Callers can
+discover exact catalog profiles and the matching evidence digest; four now ship
+from a reviewed historical four-lane run. Each changed candidate and release
+requires fresh complete and native validation. Every used setting has a
 distinct positive capability fact; missing, unknown, or unavailable facts
 produce a value-free error identifying the resource, field, and capability.
 The operation graph validates kinds, required references, and cycles. It
@@ -39,6 +47,7 @@ read of `bytes()` reveals authored values. This crate has no executor,
 transport, file writer, image builder, or deployment method.
 
 Independent native conformance must verify these request shapes against each
-claimed Engine release, API version, and daemon mode before compatibility is
-claimed or a release gate is enabled. The public offline capability catalog
-stays empty until reviewed native records are integrated.
+claimed package build, Engine release, advertised/acquisition/rendering API
+combination, and daemon mode before compatibility is claimed or a release gate
+is enabled. The public offline capability catalog admits only the four
+integrated reviewed records and no caller-supplied positive facts.

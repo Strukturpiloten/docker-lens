@@ -676,7 +676,7 @@ impl<'a> OperationGraph<'a> {
         let context = capabilities.context();
         let api = match &context {
             PlanningContext::Observed(scope) => scope.api_version,
-            PlanningContext::Target(profile) => profile.api_version(),
+            PlanningContext::Target(profile) => profile.rendering_api_version(),
         };
         let mode = match &context {
             PlanningContext::Observed(scope) => scope.mode,
@@ -863,7 +863,7 @@ impl Renderer for DockerApiRenderer {
     fn render(&self, graph: &OperationGraph<'_>) -> Result<RenderedArtifact, RenderError> {
         let api = match graph.context() {
             PlanningContext::Observed(scope) => scope.api_version,
-            PlanningContext::Target(profile) => profile.api_version(),
+            PlanningContext::Target(profile) => profile.rendering_api_version(),
         };
         let prefix = format!("/v{}.{}/", api.major.get(), api.minor);
         let resources: HashMap<_, _> = graph
@@ -1105,8 +1105,9 @@ mod tests {
     use super::*;
     use crate::version::{
         ApiVersion, CapabilityEvidenceKey, CapabilityFact, CapabilityScope, CapabilityState,
-        DaemonFacts, DaemonMode, EngineRelease, FactProvenance, ObservationId,
-        TargetCapabilityCatalog, TargetCapabilityFact, TargetCapabilityRecord,
+        DaemonFacts, DaemonMode, EngineRelease, FactProvenance, NativeCapabilityShape,
+        NativeEvidenceLane, NativeEvidenceReference, ObservationId, TargetCapabilityCatalog,
+        TargetCapabilityFact, TargetCapabilityRecord,
     };
     use std::num::NonZeroU16;
 
@@ -1723,20 +1724,35 @@ mod tests {
     #[test]
     fn offline_target_context_is_retained_without_live_observation() {
         let api = ApiVersion::new(NonZeroU16::new(1).unwrap(), 41);
-        let profile = TargetProfile::new(
-            EngineRelease::new("20.10.24".into()).unwrap(),
+        let identity = crate::version::TargetProfileIdentity::new(
+            crate::version::EngineBuild::Upstream,
+            EngineRelease::new("29.8.1".into()).unwrap(),
+            ApiVersion::new(NonZeroU16::new(1).unwrap(), 50),
+            ApiVersion::new(NonZeroU16::new(1).unwrap(), 49),
             api,
             DaemonMode::Rootless,
-            CapabilityEvidenceKey::sha256([7; 32]).unwrap(),
         )
         .unwrap();
-        // Fabricated test record; production catalog is empty until native review.
+        let profile = TargetProfile::new(identity, CapabilityEvidenceKey::sha256([7; 32]).unwrap());
+        // Fabricated test record; the production catalog admits only reviewed records.
         let catalog = TargetCapabilityCatalog::from_test_records(vec![TargetCapabilityRecord {
             profile: profile.clone(),
+            evidence: NativeEvidenceReference::new(
+                NativeEvidenceLane::UpstreamRootless,
+                "https://github.com/Strukturpiloten/docker-lens/actions/runs/123/attempts/1".into(),
+                "0123456789abcdef0123456789abcdef01234567".into(),
+                NativeEvidenceLane::UpstreamRootless.artifact_name().into(),
+                profile.evidence_key().clone(),
+                profile.evidence_key().clone(),
+            )
+            .unwrap(),
             capabilities: vec![TargetCapabilityFact {
                 capability: Capability::NamedVolume,
                 state: CapabilityState::Available,
             }],
+            admitted_shapes: NativeCapabilityShape::required_for(Capability::NamedVolume)
+                .unwrap()
+                .to_vec(),
         }])
         .unwrap();
         let capabilities = catalog.resolve(&profile).unwrap();
@@ -1763,5 +1779,9 @@ mod tests {
         .unwrap();
         assert_eq!(graph.context(), &PlanningContext::Target(profile));
         assert!(!format!("{graph:?}").contains("private-volume"));
+        let artifact = DockerApiRenderer.render(&graph).unwrap();
+        let requests = std::str::from_utf8(artifact.bytes()).unwrap();
+        assert!(requests.contains("/v1.41/volumes/create"));
+        assert!(!requests.contains("/v1.49/"));
     }
 }

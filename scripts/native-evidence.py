@@ -12,10 +12,23 @@ CAPABILITIES = (
     "BindMount", "EnvironmentAssignment", "Command", "Entrypoint",
     "Healthcheck", "RestartPolicy",
 )
+REQUIRED_SHAPES = {
+    "StandaloneContainer": ("StandaloneCreate",),
+    "NamedVolume": ("NamedVolumeCreate", "NamedVolumeMountReadWrite", "NamedVolumeMountReadOnly"),
+    "BridgeNetwork": ("BridgeNetworkCreate", "BridgeNetworkAttach"),
+    "PortPublish": ("FixedTcpPort", "FixedUdpPort"),
+    "BindMount": ("BindMountReadWrite", "BindMountReadOnly"),
+    "EnvironmentAssignment": ("EnvironmentValue", "EnvironmentEmptyValue"),
+    "Command": ("ExecCommand",),
+    "Entrypoint": ("ExecEntrypoint",),
+    "Healthcheck": ("ExecHealthcheck",),
+    "RestartPolicy": ("RestartNo", "RestartAlways", "RestartUnlessStopped",
+                      "RestartOnFailureUnlimited", "RestartOnFailureLimited"),
+}
 LANES = ("debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless")
 
 
-def emit(version_path: Path, destination: Path, lane: str, image: str,
+def emit(version_path: Path, shapes_path: Path, destination: Path, lane: str, image: str,
          mode: str, package: str, candidate_sha: str) -> None:
     if lane not in LANES or mode != lane.rsplit("-", 1)[1]:
         raise ValueError("invalid native lane or mode")
@@ -63,6 +76,18 @@ def emit(version_path: Path, destination: Path, lane: str, image: str,
             raise ValueError("invalid runtime component version")
         runtime_components[name] = value
 
+    if shapes_path.stat().st_size > 4096:
+        raise ValueError("native shape evidence exceeds closed limit")
+    shapes = json.loads(shapes_path.read_text(encoding="utf-8"))
+    if not isinstance(shapes, dict) or set(shapes) != set(CAPABILITIES):
+        raise ValueError("native capability shape set is incomplete")
+    for name, expected in REQUIRED_SHAPES.items():
+        actual = shapes[name]
+        if (not isinstance(actual, list) or len(actual) != len(expected)
+                or any(not isinstance(item, str) for item in actual)
+                or set(actual) != set(expected)):
+            raise ValueError("native capability shape is incomplete")
+
     record = {
         "schema_version": 1,
         "lane": lane,
@@ -78,15 +103,16 @@ def emit(version_path: Path, destination: Path, lane: str, image: str,
         "runtime_components": runtime_components,
         "capability_version": maximum,
         "capability_outcome": {name: "available" for name in CAPABILITIES},
+        "admitted_shapes": {name: list(REQUIRED_SHAPES[name]) for name in CAPABILITIES},
     }
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(record, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 8:
-        raise SystemExit("usage: native-evidence.py VERSION_JSON DESTINATION LANE IMAGE MODE PACKAGE SHA")
+    if len(sys.argv) != 9:
+        raise SystemExit("usage: native-evidence.py VERSION_JSON SHAPES_JSON DESTINATION LANE IMAGE MODE PACKAGE SHA")
     try:
-        emit(Path(sys.argv[1]), Path(sys.argv[2]), *sys.argv[3:])
+        emit(Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]), *sys.argv[4:])
     except (ValueError, OSError, json.JSONDecodeError):
         raise SystemExit("native evidence rejected") from None
