@@ -14,8 +14,12 @@ mod network;
 mod render;
 
 pub use container::{
-    Argument, ContainerIntent, EnvironmentAssignment, Healthcheck, ImageReference, Mount,
-    MountSource, PortBinding, Protocol, RestartPolicy,
+    Argument, ContainerHostname, ContainerIntent, ContainerLabel, ContainerSettings,
+    ContainerToken, ContainerUser, DeviceMapping, DevicePermissions, EnvironmentAssignment,
+    ExtraHost, HealthTest, Healthcheck, HostBinding, ImageCommand, ImageReference, LogConfig,
+    LogDriver, MemoryLimit, Mount, MountSource, PidsLimit, PortBinding, PortHostIp, PortHostPort,
+    PortPublication, Protocol, RestartPolicy, SecurityOption, TmpfsOptions, Ulimit, UlimitValue,
+    UserNamespaceMode, WorkingDirectory,
 };
 pub use graph::{
     DockerPlanner, Operation, OperationAction, OperationGraph, OperationNode, OperationStep,
@@ -101,15 +105,18 @@ mod tests {
                     EnvironmentAssignment::new(b"TOKEN".to_vec(), b"secret\"\\\nvalue".to_vec())
                         .unwrap(),
                 ],
-                ports: vec![PortBinding {
-                    host: nz16(8080),
-                    container: nz16(80),
-                    protocol: Protocol::Tcp,
-                }],
+                ports: vec![
+                    PortBinding {
+                        host: nz16(8080),
+                        container: nz16(80),
+                        protocol: Protocol::Tcp,
+                    }
+                    .into(),
+                ],
                 mounts: vec![Mount::volume(ResourceRef::new(2), b"/data".to_vec(), false).unwrap()],
                 networks: vec![attachment(1)],
-                entrypoint: Some(vec![Argument::new(b"/bin/app".to_vec()).unwrap()]),
-                command: Some(vec![Argument::new(b"--serve".to_vec()).unwrap()]),
+                entrypoint: ImageCommand::Exec(vec![Argument::new(b"/bin/app".to_vec()).unwrap()]),
+                command: ImageCommand::Exec(vec![Argument::new(b"--serve".to_vec()).unwrap()]),
                 healthcheck: Some(
                     Healthcheck::new(
                         vec![Argument::new(b"/bin/health".to_vec()).unwrap()],
@@ -120,6 +127,7 @@ mod tests {
                     .unwrap(),
                 ),
                 restart: Some(RestartPolicy::OnFailure { maximum_retries: 2 }),
+                settings: ContainerSettings::default(),
             })),
             TargetResource::Volume {
                 reference: ResourceRef::new(2),
@@ -155,10 +163,11 @@ mod tests {
                 ports: vec![],
                 mounts: vec![],
                 networks: vec![],
-                entrypoint: None,
-                command: None,
+                entrypoint: ImageCommand::Inherit,
+                command: ImageCommand::Inherit,
                 healthcheck: None,
                 restart: None,
+                settings: ContainerSettings::default(),
             }))])
             .unwrap();
         let graph = DockerPlanner.plan(&intent, &capabilities).unwrap();
@@ -264,19 +273,23 @@ mod tests {
                 identity: TargetIdentity::new(b"dns".to_vec()).unwrap(),
                 image: ImageReference::new(b"dns:1".to_vec()).unwrap(),
                 environment: vec![EnvironmentAssignment::new(b"EMPTY".to_vec(), vec![]).unwrap()],
-                ports: vec![PortBinding {
-                    host: NonZeroU16::new(5353).unwrap(),
-                    container: NonZeroU16::new(53).unwrap(),
-                    protocol: Protocol::Udp,
-                }],
+                ports: vec![
+                    PortBinding {
+                        host: NonZeroU16::new(5353).unwrap(),
+                        container: NonZeroU16::new(53).unwrap(),
+                        protocol: Protocol::Udp,
+                    }
+                    .into(),
+                ],
                 mounts: vec![
                     Mount::bind(b"/host/config".to_vec(), b"/etc/config".to_vec(), true).unwrap(),
                 ],
                 networks: vec![],
-                entrypoint: None,
-                command: None,
+                entrypoint: ImageCommand::Inherit,
+                command: ImageCommand::Inherit,
                 healthcheck: None,
                 restart: Some(RestartPolicy::UnlessStopped),
+                settings: ContainerSettings::default(),
             }))])
             .unwrap();
         let graph = DockerPlanner.plan(&intent, &capabilities).unwrap();
@@ -319,10 +332,11 @@ mod tests {
                 ports: vec![],
                 mounts: vec![],
                 networks: vec![],
-                entrypoint: None,
-                command: None,
+                entrypoint: ImageCommand::Inherit,
+                command: ImageCommand::Inherit,
                 healthcheck: None,
                 restart: Some(RestartPolicy::OnFailure { maximum_retries }),
+                settings: ContainerSettings::default(),
             }))])
         };
         let intent = make(0).unwrap();
@@ -381,10 +395,11 @@ mod tests {
                     Mount::volume(ResourceRef::new(99), b"/data".to_vec(), false).unwrap(),
                 ],
                 networks: vec![],
-                entrypoint: None,
-                command: None,
+                entrypoint: ImageCommand::Inherit,
+                command: ImageCommand::Inherit,
                 healthcheck: None,
                 restart: None,
+                settings: ContainerSettings::default(),
             }))])
             .unwrap();
         assert_eq!(
@@ -407,17 +422,21 @@ mod tests {
                 identity: TargetIdentity::new(b"web".to_vec()).unwrap(),
                 image: ImageReference::new(b"web:1".to_vec()).unwrap(),
                 environment: vec![],
-                ports: vec![PortBinding {
-                    host: NonZeroU16::new(987).unwrap(),
-                    container: NonZeroU16::new(80).unwrap(),
-                    protocol: Protocol::Tcp,
-                }],
+                ports: vec![
+                    PortBinding {
+                        host: NonZeroU16::new(987).unwrap(),
+                        container: NonZeroU16::new(80).unwrap(),
+                        protocol: Protocol::Tcp,
+                    }
+                    .into(),
+                ],
                 mounts: vec![],
                 networks: vec![],
-                entrypoint: None,
-                command: None,
+                entrypoint: ImageCommand::Inherit,
+                command: ImageCommand::Inherit,
                 healthcheck: None,
                 restart: None,
+                settings: ContainerSettings::default(),
             }))])
             .unwrap();
         let error = DockerPlanner.plan(&intent, &capabilities).unwrap_err();
@@ -510,10 +529,11 @@ mod tests {
             ports: vec![],
             mounts: vec![],
             networks: vec![],
-            entrypoint: None,
-            command: None,
+            entrypoint: ImageCommand::Inherit,
+            command: ImageCommand::Inherit,
             healthcheck: None,
             restart: None,
+            settings: ContainerSettings::default(),
         };
         let intent =
             TargetIntent::new(vec![TargetResource::Container(Box::new(container))]).unwrap();
@@ -605,10 +625,11 @@ mod tests {
                 ports: vec![],
                 mounts: vec![],
                 networks: vec![],
-                entrypoint: None,
-                command: None,
+                entrypoint: ImageCommand::Inherit,
+                command: ImageCommand::Inherit,
                 healthcheck: None,
                 restart: None,
+                settings: ContainerSettings::default(),
             })),
         ])
         .unwrap();
@@ -813,10 +834,11 @@ mod tests {
                         ipv6_address: None,
                     },
                 ],
-                entrypoint: None,
-                command: None,
+                entrypoint: ImageCommand::Inherit,
+                command: ImageCommand::Inherit,
                 healthcheck: None,
                 restart: None,
+                settings: ContainerSettings::default(),
             })),
         ])
         .unwrap()
@@ -856,10 +878,11 @@ mod tests {
                 ipv4_address: Some(NetworkAddress::new(address).unwrap()),
                 ipv6_address: None,
             }],
-            entrypoint: None,
-            command: None,
+            entrypoint: ImageCommand::Inherit,
+            command: ImageCommand::Inherit,
             healthcheck: None,
             restart: None,
+            settings: ContainerSettings::default(),
         }))
     }
 
@@ -1096,10 +1119,11 @@ mod tests {
             ports: vec![],
             mounts: vec![],
             networks: vec![attachment(1), attachment(1)],
-            entrypoint: None,
-            command: None,
+            entrypoint: ImageCommand::Inherit,
+            command: ImageCommand::Inherit,
             healthcheck: None,
             restart: None,
+            settings: ContainerSettings::default(),
         }));
         assert_eq!(
             TargetIntent::new(vec![duplicate]).unwrap_err(),
@@ -1309,5 +1333,614 @@ mod tests {
             assert!(!capabilities.supports(Capability::NetworkMultipleAttachment));
             assert!(!capabilities.supports(Capability::NetworkInternal));
         }
+    }
+
+    fn bare_container() -> ContainerIntent {
+        ContainerIntent {
+            reference: ResourceRef::new(1),
+            identity: TargetIdentity::new(b"app".to_vec()).unwrap(),
+            image: ImageReference::new(b"image:1".to_vec()).unwrap(),
+            environment: vec![],
+            ports: vec![],
+            mounts: vec![],
+            networks: vec![],
+            entrypoint: ImageCommand::Inherit,
+            command: ImageCommand::Inherit,
+            healthcheck: None,
+            restart: None,
+            settings: ContainerSettings::default(),
+        }
+    }
+
+    #[test]
+    fn typed_port_publications_preserve_exposure_scope_and_repeated_bindings() {
+        let mut container = bare_container();
+        container.ports = vec![
+            PortPublication::exposed(NonZeroU16::new(80).unwrap(), Protocol::Tcp),
+            PortPublication::published(
+                NonZeroU16::new(443).unwrap(),
+                Protocol::Tcp,
+                vec![
+                    HostBinding {
+                        host_ip: PortHostIp::Address("127.0.0.1".parse().unwrap()),
+                        host_port: PortHostPort::Fixed(NonZeroU16::new(8443).unwrap()),
+                    },
+                    HostBinding {
+                        host_ip: PortHostIp::Address("::1".parse().unwrap()),
+                        host_port: PortHostPort::Fixed(NonZeroU16::new(8444).unwrap()),
+                    },
+                ],
+            )
+            .unwrap(),
+            PortPublication::published(
+                NonZeroU16::new(53).unwrap(),
+                Protocol::Udp,
+                vec![HostBinding {
+                    host_ip: PortHostIp::Unspecified,
+                    host_port: PortHostPort::Ephemeral,
+                }],
+            )
+            .unwrap(),
+        ];
+        let intent =
+            TargetIntent::new(vec![TargetResource::Container(Box::new(container))]).unwrap();
+        let facts = facts(
+            49,
+            DaemonMode::Rootful,
+            &[
+                Capability::StandaloneContainer,
+                Capability::PortPublish,
+                Capability::PortExposeOnly,
+                Capability::PortHostIpv4,
+                Capability::PortHostIpv6,
+                Capability::PortMultipleBindings,
+                Capability::PortEphemeral,
+            ],
+        );
+        let capabilities = ValidatedCapabilities::new(&facts).unwrap();
+        let graph = DockerPlanner.plan(&intent, &capabilities).unwrap();
+        let artifact = DockerApiRenderer.render(&graph).unwrap();
+        let request: serde_json::Value = serde_json::from_slice(artifact.bytes()).unwrap();
+        let body = &request["body"];
+        assert_eq!(body["ExposedPorts"]["80/tcp"], serde_json::json!({}));
+        assert!(body["HostConfig"]["PortBindings"].get("80/tcp").is_none());
+        assert_eq!(
+            body["HostConfig"]["PortBindings"]["443/tcp"],
+            serde_json::json!([
+                {"HostIp":"127.0.0.1","HostPort":"8443"},
+                {"HostIp":"::1","HostPort":"8444"}
+            ])
+        );
+        assert_eq!(
+            body["HostConfig"]["PortBindings"]["53/udp"],
+            serde_json::json!([{"HostPort":""}])
+        );
+        for sensitive in ["127.0.0.1", "::1", "8443"] {
+            assert!(!format!("{intent:?} {graph:?} {artifact:?}").contains(sensitive));
+        }
+    }
+
+    #[test]
+    fn fixed_host_port_conflicts_span_containers_but_disjoint_addresses_and_protocols_do_not() {
+        let published = |reference: u64, address: PortHostIp, protocol: Protocol| {
+            let mut container = bare_container();
+            container.reference = ResourceRef::new(reference);
+            container.identity =
+                TargetIdentity::new(format!("app{reference}").into_bytes()).unwrap();
+            container.ports = vec![
+                PortPublication::published(
+                    NonZeroU16::new(80).unwrap(),
+                    protocol,
+                    vec![HostBinding {
+                        host_ip: address,
+                        host_port: PortHostPort::Fixed(NonZeroU16::new(8080).unwrap()),
+                    }],
+                )
+                .unwrap(),
+            ];
+            TargetResource::Container(Box::new(container))
+        };
+        let loopback: PortHostIp = PortHostIp::Address("127.0.0.1".parse().unwrap());
+        let other: PortHostIp = PortHostIp::Address("127.0.0.2".parse().unwrap());
+        for (left, right) in [(loopback, loopback), (PortHostIp::Unspecified, loopback)] {
+            assert_eq!(
+                TargetIntent::new(vec![
+                    published(1, left, Protocol::Tcp),
+                    published(2, right, Protocol::Tcp),
+                ])
+                .unwrap_err(),
+                IntentError::DuplicatePort
+            );
+        }
+        TargetIntent::new(vec![
+            published(1, loopback, Protocol::Tcp),
+            published(2, other, Protocol::Tcp),
+        ])
+        .unwrap();
+        TargetIntent::new(vec![
+            published(1, loopback, Protocol::Tcp),
+            published(2, loopback, Protocol::Udp),
+        ])
+        .unwrap();
+    }
+
+    #[test]
+    fn host_ip_requires_its_own_fact_and_conflicting_bindings_fail_early() {
+        let scoped = || HostBinding {
+            host_ip: PortHostIp::Address("127.0.0.1".parse().unwrap()),
+            host_port: PortHostPort::Fixed(NonZeroU16::new(8080).unwrap()),
+        };
+        let mut container = bare_container();
+        container.ports = vec![
+            PortPublication::published(NonZeroU16::new(80).unwrap(), Protocol::Tcp, vec![scoped()])
+                .unwrap(),
+        ];
+        let intent =
+            TargetIntent::new(vec![TargetResource::Container(Box::new(container))]).unwrap();
+        let daemon = facts(
+            41,
+            DaemonMode::Rootful,
+            &[Capability::StandaloneContainer, Capability::PortPublish],
+        );
+        let capabilities = ValidatedCapabilities::new(&daemon).unwrap();
+        assert_eq!(
+            DockerPlanner.plan(&intent, &capabilities).unwrap_err(),
+            PlanningError::MissingCapability {
+                resource: ResourceRef::new(1),
+                field: TargetField::PortHostIpv4,
+                capability: Capability::PortHostIpv4,
+            }
+        );
+        let mut conflict = bare_container();
+        conflict.ports = vec![
+            PortPublication::published(NonZeroU16::new(80).unwrap(), Protocol::Tcp, vec![scoped()])
+                .unwrap(),
+            PortPublication::published(
+                NonZeroU16::new(81).unwrap(),
+                Protocol::Tcp,
+                vec![HostBinding {
+                    host_ip: PortHostIp::Unspecified,
+                    host_port: PortHostPort::Fixed(NonZeroU16::new(8080).unwrap()),
+                }],
+            )
+            .unwrap(),
+        ];
+        assert_eq!(
+            TargetIntent::new(vec![TargetResource::Container(Box::new(conflict))]).unwrap_err(),
+            IntentError::DuplicatePort
+        );
+    }
+
+    #[test]
+    fn protected_metadata_clear_command_and_shell_health_render_as_distinct_shapes() {
+        let mut container = bare_container();
+        container.command = ImageCommand::Clear;
+        container.entrypoint =
+            ImageCommand::Exec(vec![Argument::new(b"/bin/app".to_vec()).unwrap()]);
+        container.healthcheck = Some(
+            Healthcheck::configured(
+                HealthTest::Shell(Argument::new(b"test -f /private/ready".to_vec()).unwrap()),
+                Some(NonZeroU64::new(1_000_000_000).unwrap()),
+                Some(NonZeroU64::new(2_000_000_000).unwrap()),
+                Some(NonZeroU32::new(3).unwrap()),
+            )
+            .unwrap()
+            .with_start_period(5_000_000_000)
+            .unwrap()
+            .with_start_interval(1_000_000_000)
+            .unwrap(),
+        );
+        container.settings.labels =
+            vec![ContainerLabel::new(b"private.owner".to_vec(), b"secret".to_vec()).unwrap()];
+        container.settings.user = Some(ContainerUser::new(b"1000:1000".to_vec()).unwrap());
+        container.settings.working_dir =
+            Some(WorkingDirectory::new(b"/private/work".to_vec()).unwrap());
+        container.settings.hostname =
+            Some(ContainerHostname::new(b"private-host".to_vec()).unwrap());
+        container.settings.read_only_rootfs = Some(true);
+        container.settings.init = Some(false);
+        container.settings.stop_signal = Some(Argument::new(b"SIGTERM".to_vec()).unwrap());
+        container.settings.stop_timeout_seconds = Some(20);
+        let intent =
+            TargetIntent::new(vec![TargetResource::Container(Box::new(container))]).unwrap();
+        let expected = &[
+            Capability::StandaloneContainer,
+            Capability::CommandClear,
+            Capability::Entrypoint,
+            Capability::HealthShell,
+            Capability::HealthStartPeriod,
+            Capability::HealthStartInterval,
+            Capability::ContainerLabels,
+            Capability::ContainerUser,
+            Capability::ContainerWorkdir,
+            Capability::ContainerHostname,
+            Capability::ReadOnlyRootfs,
+            Capability::ContainerInit,
+            Capability::StopSignal,
+            Capability::StopTimeout,
+        ];
+        let missing: Vec<_> = expected
+            .iter()
+            .copied()
+            .filter(|item| *item != Capability::HealthStartInterval)
+            .collect();
+        let daemon = facts(41, DaemonMode::Rootful, &missing);
+        let capabilities = ValidatedCapabilities::new(&daemon).unwrap();
+        assert_eq!(
+            DockerPlanner.plan(&intent, &capabilities).unwrap_err(),
+            PlanningError::MissingCapability {
+                resource: ResourceRef::new(1),
+                field: TargetField::HealthStartInterval,
+                capability: Capability::HealthStartInterval,
+            }
+        );
+        let daemon = facts(49, DaemonMode::Rootful, expected);
+        let capabilities = ValidatedCapabilities::new(&daemon).unwrap();
+        let graph = DockerPlanner.plan(&intent, &capabilities).unwrap();
+        let artifact = DockerApiRenderer.render(&graph).unwrap();
+        let request: serde_json::Value = serde_json::from_slice(artifact.bytes()).unwrap();
+        let body = &request["body"];
+        assert_eq!(body["Cmd"], serde_json::json!([]));
+        assert_eq!(body["Entrypoint"], serde_json::json!(["/bin/app"]));
+        assert_eq!(
+            body["Healthcheck"]["Test"],
+            serde_json::json!(["CMD-SHELL", "test -f /private/ready"])
+        );
+        assert_eq!(body["Healthcheck"]["StartPeriod"], 5_000_000_000_u64);
+        assert_eq!(body["Healthcheck"]["StartInterval"], 1_000_000_000_u64);
+        assert_eq!(body["Labels"]["private.owner"], "secret");
+        assert_eq!(body["User"], "1000:1000");
+        assert_eq!(body["WorkingDir"], "/private/work");
+        assert_eq!(body["Hostname"], "private-host");
+        assert_eq!(body["StopSignal"], "SIGTERM");
+        assert_eq!(body["StopTimeout"], 20);
+        assert_eq!(body["HostConfig"]["ReadonlyRootfs"], true);
+        assert_eq!(body["HostConfig"]["Init"], false);
+        for protected in [
+            "private.owner",
+            "secret",
+            "1000:1000",
+            "/private/work",
+            "private-host",
+            "ready",
+        ] {
+            assert!(!format!("{intent:?} {graph:?} {artifact:?}").contains(protected));
+        }
+    }
+
+    #[test]
+    fn disabled_health_and_clear_entrypoint_are_not_inherited() {
+        assert_eq!(
+            Healthcheck::configured(
+                HealthTest::Disabled,
+                Some(NonZeroU64::new(1_000_000).unwrap()),
+                None,
+                None,
+            )
+            .unwrap_err(),
+            IntentError::InvalidHealthcheck
+        );
+        let mut container = bare_container();
+        container.entrypoint = ImageCommand::Clear;
+        container.healthcheck =
+            Some(Healthcheck::configured(HealthTest::Disabled, None, None, None).unwrap());
+        let intent =
+            TargetIntent::new(vec![TargetResource::Container(Box::new(container))]).unwrap();
+        let daemon = facts(
+            49,
+            DaemonMode::Rootful,
+            &[
+                Capability::StandaloneContainer,
+                Capability::EntrypointClear,
+                Capability::HealthDisabled,
+            ],
+        );
+        let capabilities = ValidatedCapabilities::new(&daemon).unwrap();
+        let graph = DockerPlanner.plan(&intent, &capabilities).unwrap();
+        let artifact = DockerApiRenderer.render(&graph).unwrap();
+        let request: serde_json::Value = serde_json::from_slice(artifact.bytes()).unwrap();
+        assert_eq!(request["body"]["Entrypoint"], serde_json::json!([]));
+        assert!(request["body"].get("Cmd").is_none());
+        assert_eq!(
+            request["body"]["Healthcheck"]["Test"],
+            serde_json::json!(["NONE"])
+        );
+    }
+
+    #[test]
+    fn typed_tmpfs_resources_and_runtime_settings_render_only_with_scoped_facts() {
+        let mut container = bare_container();
+        container.mounts = vec![
+            Mount::tmpfs(
+                b"/private/tmp".to_vec(),
+                false,
+                TmpfsOptions {
+                    size_bytes: NonZeroU64::new(4096),
+                    mode: Some(0o700),
+                },
+            )
+            .unwrap(),
+        ];
+        container.settings.memory_limit =
+            Some(MemoryLimit::Bytes(NonZeroU64::new(1_048_576).unwrap()));
+        container.settings.pids_limit = Some(PidsLimit::Unlimited);
+        container.settings.shm_size_bytes = NonZeroU64::new(65536);
+        container.settings.ulimits = vec![Ulimit {
+            name: ContainerToken::new(b"nofile".to_vec()).unwrap(),
+            soft: UlimitValue::Value(1024),
+            hard: UlimitValue::Value(2048),
+        }];
+        container.settings.devices = vec![DeviceMapping {
+            host_path: WorkingDirectory::new(b"/dev/private0".to_vec()).unwrap(),
+            container_path: WorkingDirectory::new(b"/dev/inside0".to_vec()).unwrap(),
+            permissions: DevicePermissions {
+                read: true,
+                write: false,
+                create: false,
+            },
+        }];
+        container.settings.cap_add =
+            vec![ContainerToken::new(b"NET_BIND_SERVICE".to_vec()).unwrap()];
+        container.settings.cap_drop = vec![ContainerToken::new(b"SYS_ADMIN".to_vec()).unwrap()];
+        container.settings.security_options = vec![SecurityOption::NoNewPrivileges(true)];
+        container.settings.sysctls =
+            vec![ContainerLabel::new(b"net.ipv4.ip_forward".to_vec(), b"0".to_vec()).unwrap()];
+        container.settings.group_add = vec![ContainerUser::new(b"27".to_vec()).unwrap()];
+        container.settings.dns = vec!["127.0.0.53".parse().unwrap()];
+        container.settings.extra_hosts = vec![ExtraHost {
+            name: ContainerHostname::new(b"private-db".to_vec()).unwrap(),
+            address: "10.0.0.2".parse().unwrap(),
+        }];
+        container.settings.log_config = Some(LogConfig {
+            driver: LogDriver::JsonFile,
+            options: vec![ContainerLabel::new(b"max-size".to_vec(), b"10m".to_vec()).unwrap()],
+        });
+        let intent =
+            TargetIntent::new(vec![TargetResource::Container(Box::new(container))]).unwrap();
+        let facts = facts(
+            49,
+            DaemonMode::Rootful,
+            &[
+                Capability::StandaloneContainer,
+                Capability::TmpfsMount,
+                Capability::MemoryLimit,
+                Capability::PidsLimit,
+                Capability::ShmSize,
+                Capability::Ulimits,
+                Capability::UlimitNofile,
+                Capability::DeviceMappings,
+                Capability::LinuxCapabilities,
+                Capability::CapAddNetBindService,
+                Capability::CapDropSysAdmin,
+                Capability::SecurityOptions,
+                Capability::Sysctls,
+                Capability::SysctlIpv4Forward,
+                Capability::SupplementaryGroups,
+                Capability::DnsServers,
+                Capability::ExtraHosts,
+                Capability::LogConfig,
+                Capability::LogOptionMaxSize,
+            ],
+        );
+        let capabilities = ValidatedCapabilities::new(&facts).unwrap();
+        let graph = DockerPlanner.plan(&intent, &capabilities).unwrap();
+        let artifact = DockerApiRenderer.render(&graph).unwrap();
+        let request: serde_json::Value = serde_json::from_slice(artifact.bytes()).unwrap();
+        let host = &request["body"]["HostConfig"];
+        assert_eq!(host["Mounts"][0]["Type"], "tmpfs");
+        assert_eq!(
+            host["Mounts"][0]["TmpfsOptions"],
+            serde_json::json!({"SizeBytes":4096,"Mode":448})
+        );
+        assert_eq!(host["Memory"], 1_048_576);
+        assert_eq!(host["PidsLimit"], -1);
+        assert_eq!(host["ShmSize"], 65_536);
+        assert_eq!(
+            host["Ulimits"][0],
+            serde_json::json!({"Name":"nofile","Soft":1024,"Hard":2048})
+        );
+        assert_eq!(host["Devices"][0]["CgroupPermissions"], "r");
+        assert_eq!(host["CapAdd"], serde_json::json!(["NET_BIND_SERVICE"]));
+        assert_eq!(host["CapDrop"], serde_json::json!(["SYS_ADMIN"]));
+        assert_eq!(
+            host["SecurityOpt"],
+            serde_json::json!(["no-new-privileges:true"])
+        );
+        assert_eq!(host["Sysctls"]["net.ipv4.ip_forward"], "0");
+        assert_eq!(host["GroupAdd"], serde_json::json!(["27"]));
+        assert_eq!(host["Dns"], serde_json::json!(["127.0.0.53"]));
+        assert_eq!(
+            host["ExtraHosts"],
+            serde_json::json!(["private-db:10.0.0.2"])
+        );
+        assert_eq!(
+            host["LogConfig"],
+            serde_json::json!({"Type":"json-file","Config":{"max-size":"10m"}})
+        );
+        for protected in [
+            "/dev/private0",
+            "NET_BIND_SERVICE",
+            "private-db",
+            "10.0.0.2",
+            "127.0.0.53",
+        ] {
+            assert!(!format!("{intent:?} {graph:?} {artifact:?}").contains(protected));
+        }
+    }
+
+    #[test]
+    fn invalid_resource_limits_and_user_namespace_fail_closed() {
+        let mut container = bare_container();
+        container.settings.memory_limit = Some(MemoryLimit::Bytes(
+            NonZeroU64::new(i64::MAX as u64 + 1).unwrap(),
+        ));
+        assert_eq!(
+            TargetIntent::new(vec![TargetResource::Container(Box::new(container))]).unwrap_err(),
+            IntentError::InvalidContainerSetting
+        );
+        let mut container = bare_container();
+        container.settings.ulimits = vec![Ulimit {
+            name: ContainerToken::new(b"nofile".to_vec()).unwrap(),
+            soft: UlimitValue::Value(2048),
+            hard: UlimitValue::Value(1024),
+        }];
+        assert_eq!(
+            TargetIntent::new(vec![TargetResource::Container(Box::new(container))]).unwrap_err(),
+            IntentError::InvalidContainerSetting
+        );
+        let mut container = bare_container();
+        container.settings.userns_mode = Some(UserNamespaceMode::Host);
+        let intent =
+            TargetIntent::new(vec![TargetResource::Container(Box::new(container))]).unwrap();
+        let daemon = facts(49, DaemonMode::Rootful, &[Capability::StandaloneContainer]);
+        let capabilities = ValidatedCapabilities::new(&daemon).unwrap();
+        assert_eq!(
+            DockerPlanner.plan(&intent, &capabilities).unwrap_err(),
+            PlanningError::MissingCapability {
+                resource: ResourceRef::new(1),
+                field: TargetField::UserNamespace,
+                capability: Capability::UserNamespace,
+            }
+        );
+    }
+
+    #[test]
+    fn container_setting_constructors_and_duplicate_fields_reject_bad_intent() {
+        assert_eq!(
+            PortPublication::published(NonZeroU16::new(80).unwrap(), Protocol::Tcp, vec![])
+                .unwrap_err(),
+            IntentError::InvalidPort
+        );
+        assert_eq!(
+            ContainerHostname::new(b"host:bad".to_vec()).unwrap_err(),
+            IntentError::InvalidContainerHostname
+        );
+        assert_eq!(
+            Mount::tmpfs(
+                b"/tmp".to_vec(),
+                false,
+                TmpfsOptions {
+                    size_bytes: None,
+                    mode: Some(0o10000)
+                },
+            )
+            .unwrap_err(),
+            IntentError::InvalidMount
+        );
+        let mut container = bare_container();
+        container.command = ImageCommand::Exec(vec![]);
+        assert_eq!(
+            TargetIntent::new(vec![TargetResource::Container(Box::new(container))]).unwrap_err(),
+            IntentError::InvalidArgument
+        );
+        let mut container = bare_container();
+        container.settings.labels = vec![
+            ContainerLabel::new(b"private".to_vec(), b"one".to_vec()).unwrap(),
+            ContainerLabel::new(b"private".to_vec(), b"two".to_vec()).unwrap(),
+        ];
+        assert_eq!(
+            TargetIntent::new(vec![TargetResource::Container(Box::new(container))]).unwrap_err(),
+            IntentError::DuplicateContainerLabel
+        );
+    }
+
+    #[test]
+    fn security_and_ulimit_contradictions_are_rejected() {
+        let mut container = bare_container();
+        container.settings.security_options = vec![
+            SecurityOption::NoNewPrivileges(true),
+            SecurityOption::NoNewPrivileges(false),
+        ];
+        assert_eq!(
+            TargetIntent::new(vec![TargetResource::Container(Box::new(container))]).unwrap_err(),
+            IntentError::DuplicateContainerSetting
+        );
+        let mut container = bare_container();
+        container.settings.ulimits = vec![Ulimit {
+            name: ContainerToken::new(b"nofile".to_vec()).unwrap(),
+            soft: UlimitValue::Unlimited,
+            hard: UlimitValue::Value(1024),
+        }];
+        assert_eq!(
+            TargetIntent::new(vec![TargetResource::Container(Box::new(container))]).unwrap_err(),
+            IntentError::InvalidContainerSetting
+        );
+        let mut container = bare_container();
+        container.settings.ulimits = vec![Ulimit {
+            name: ContainerToken::new(b"nofile".to_vec()).unwrap(),
+            soft: UlimitValue::Value(1024),
+            hard: UlimitValue::Unlimited,
+        }];
+        TargetIntent::new(vec![TargetResource::Container(Box::new(container))]).unwrap();
+    }
+
+    #[test]
+    fn named_runtime_options_need_their_own_facts_and_unknown_keys_fail_closed() {
+        let mut container = bare_container();
+        container.settings.log_config = Some(LogConfig {
+            driver: LogDriver::JsonFile,
+            options: vec![ContainerLabel::new(b"max-size".to_vec(), b"10m".to_vec()).unwrap()],
+        });
+        let intent =
+            TargetIntent::new(vec![TargetResource::Container(Box::new(container))]).unwrap();
+        let daemon = facts(
+            49,
+            DaemonMode::Rootful,
+            &[Capability::StandaloneContainer, Capability::LogConfig],
+        );
+        let capabilities = ValidatedCapabilities::new(&daemon).unwrap();
+        assert_eq!(
+            DockerPlanner.plan(&intent, &capabilities).unwrap_err(),
+            PlanningError::MissingCapability {
+                resource: ResourceRef::new(1),
+                field: TargetField::LogOptionMaxSize,
+                capability: Capability::LogOptionMaxSize,
+            }
+        );
+        let daemon = facts(
+            49,
+            DaemonMode::Rootful,
+            &[
+                Capability::StandaloneContainer,
+                Capability::LogConfig,
+                Capability::LogOptionMaxSize,
+            ],
+        );
+        let capabilities = ValidatedCapabilities::new(&daemon).unwrap();
+        DockerPlanner.plan(&intent, &capabilities).unwrap();
+
+        let mut container = bare_container();
+        container.settings.log_config = Some(LogConfig {
+            driver: LogDriver::JsonFile,
+            options: vec![ContainerLabel::new(b"max-file".to_vec(), b"3".to_vec()).unwrap()],
+        });
+        assert_eq!(
+            TargetIntent::new(vec![TargetResource::Container(Box::new(container))]).unwrap_err(),
+            IntentError::InvalidContainerSetting
+        );
+        let mut container = bare_container();
+        container.settings.cap_add = vec![ContainerToken::new(b"SYS_ADMIN".to_vec()).unwrap()];
+        assert_eq!(
+            TargetIntent::new(vec![TargetResource::Container(Box::new(container))]).unwrap_err(),
+            IntentError::InvalidContainerSetting
+        );
+        let mut container = bare_container();
+        container.settings.ulimits = vec![Ulimit {
+            name: ContainerToken::new(b"nproc".to_vec()).unwrap(),
+            soft: UlimitValue::Value(100),
+            hard: UlimitValue::Value(200),
+        }];
+        assert_eq!(
+            TargetIntent::new(vec![TargetResource::Container(Box::new(container))]).unwrap_err(),
+            IntentError::InvalidContainerSetting
+        );
+        let mut container = bare_container();
+        container.settings.sysctls = vec![
+            ContainerLabel::new(b"net.ipv4.conf.all.forwarding".to_vec(), b"1".to_vec()).unwrap(),
+        ];
+        assert_eq!(
+            TargetIntent::new(vec![TargetResource::Container(Box::new(container))]).unwrap_err(),
+            IntentError::InvalidContainerSetting
+        );
     }
 }

@@ -1,6 +1,7 @@
 use super::{
-    BridgeOption, ContainerIntent, NetworkDriver, NetworkIntent, NetworkRole, NetworkSource,
-    RestartPolicy, TargetKind,
+    BridgeOption, ContainerIntent, ContainerSettings, ImageCommand, LogDriver, MemoryLimit,
+    NetworkDriver, NetworkIntent, NetworkRole, NetworkSource, PidsLimit, PortHostIp, PortHostPort,
+    RestartPolicy, TargetKind, UlimitValue,
 };
 use crate::evidence::ProtectedValue;
 use crate::observation::ResourceRef;
@@ -79,7 +80,15 @@ pub enum IntentError {
     InvalidHealthcheck,
     InvalidRestart,
     DuplicatePort,
+    InvalidPort,
     DuplicateMount,
+    InvalidContainerLabel,
+    DuplicateContainerLabel,
+    InvalidContainerUser,
+    InvalidWorkingDirectory,
+    InvalidContainerHostname,
+    InvalidContainerSetting,
+    DuplicateContainerSetting,
     InvalidNetworkDriver,
     DuplicateNetworkOption,
     InvalidNetworkOption,
@@ -131,6 +140,7 @@ impl TargetIntent {
         }
         let mut identities = HashSet::new();
         let mut default_network = false;
+        let mut fixed_host_ports = Vec::new();
         for resource in &resources {
             if let TargetResource::Network(network) = resource {
                 if network.role == NetworkRole::ApplicationDefault {
@@ -228,12 +238,46 @@ impl TargetIntent {
                     return Err(IntentError::InvalidEnvironment);
                 }
                 let mut ports = HashSet::new();
-                let mut host_ports = HashSet::new();
-                if !container.ports.iter().all(|port| {
-                    ports.insert((port.container, port.protocol))
-                        && host_ports.insert((port.host, port.protocol))
-                }) {
-                    return Err(IntentError::DuplicatePort);
+                for port in &container.ports {
+                    if !ports.insert((port.container, port.protocol)) {
+                        return Err(IntentError::DuplicatePort);
+                    }
+                    let mut dynamic_hosts = Vec::new();
+                    for binding in port.bindings() {
+                        match binding.host_port {
+                            PortHostPort::Fixed(host_port) => {
+                                if fixed_host_ports
+                                    .iter()
+                                    .any(|(existing, protocol, address)| {
+                                        *existing == host_port
+                                            && *protocol == port.protocol
+                                            && host_ip_overlaps(*address, binding.host_ip)
+                                    })
+                                {
+                                    return Err(IntentError::DuplicatePort);
+                                }
+                                fixed_host_ports.push((host_port, port.protocol, binding.host_ip));
+                            }
+                            PortHostPort::Ephemeral => {
+                                if dynamic_hosts
+                                    .iter()
+                                    .any(|address| host_ip_overlaps(*address, binding.host_ip))
+                                {
+                                    return Err(IntentError::DuplicatePort);
+                                }
+                                dynamic_hosts.push(binding.host_ip);
+                            }
+                        }
+                    }
+                }
+                let mut labels = HashSet::new();
+                if !container
+                    .settings
+                    .labels
+                    .iter()
+                    .all(|label| labels.insert(label.key()))
+                {
+                    return Err(IntentError::DuplicateContainerLabel);
                 }
                 let mut networks = HashSet::new();
                 for attachment in &container.networks {
@@ -299,17 +343,30 @@ impl TargetIntent {
                     .mounts
                     .iter()
                     .all(|mount| mounts.insert(mount.target()))
+                    || container
+                        .settings
+                        .devices
+                        .iter()
+                        .any(|device| mounts.contains(device.container_path.bytes()))
                 {
                     return Err(IntentError::DuplicateMount);
                 }
-                for arguments in [&container.entrypoint, &container.command]
-                    .into_iter()
-                    .flatten()
-                {
-                    if arguments.is_empty() || arguments[0].bytes().is_empty() {
-                        return Err(IntentError::InvalidArgument);
+                for command in [&container.entrypoint, &container.command] {
+                    if let ImageCommand::Exec(arguments) = command {
+                        if arguments.is_empty() || arguments[0].bytes().is_empty() {
+                            return Err(IntentError::InvalidArgument);
+                        }
                     }
                 }
+                if container
+                    .settings
+                    .stop_signal
+                    .as_ref()
+                    .is_some_and(|value| value.bytes().is_empty())
+                {
+                    return Err(IntentError::InvalidArgument);
+                }
+                validate_container_settings(&container.settings)?;
                 if matches!(container.restart, Some(RestartPolicy::OnFailure { maximum_retries }) if maximum_retries > i32::MAX as u32)
                 {
                     return Err(IntentError::InvalidRestart);
@@ -338,4 +395,132 @@ impl TargetIntent {
     pub fn resources(&self) -> &[TargetResource] {
         &self.resources
     }
+}
+
+fn host_ip_overlaps(left: PortHostIp, right: PortHostIp) -> bool {
+    let wildcard = |address| match address {
+        PortHostIp::Unspecified => true,
+        PortHostIp::Address(std::net::IpAddr::V4(value)) => value.is_unspecified(),
+        PortHostIp::Address(std::net::IpAddr::V6(value)) => value.is_unspecified(),
+    };
+    wildcard(left) || wildcard(right) || left == right
+}
+
+fn validate_container_settings(settings: &ContainerSettings) -> Result<(), IntentError> {
+    if matches!(settings.memory_limit, Some(MemoryLimit::Bytes(value)) if value.get() > i64::MAX as u64)
+        || matches!(settings.pids_limit, Some(PidsLimit::Count(value)) if value.get() > i64::MAX as u64)
+        || settings
+            .shm_size_bytes
+            .is_some_and(|value| value.get() > i64::MAX as u64)
+    {
+        return Err(IntentError::InvalidContainerSetting);
+    }
+    let mut names = HashSet::new();
+    for limit in &settings.ulimits {
+        let valid_value = |value| match value {
+            UlimitValue::Unlimited => true,
+            UlimitValue::Value(number) => number <= i64::MAX as u64,
+        };
+        if limit.name.bytes() != b"nofile"
+            || !names.insert(limit.name.bytes())
+            || !valid_value(limit.soft)
+            || !valid_value(limit.hard)
+            || matches!(
+                (limit.soft, limit.hard),
+                (UlimitValue::Unlimited, UlimitValue::Value(_))
+            )
+            || matches!((limit.soft, limit.hard), (UlimitValue::Value(soft), UlimitValue::Value(hard)) if soft > hard)
+        {
+            return Err(IntentError::InvalidContainerSetting);
+        }
+    }
+    let mut targets = HashSet::new();
+    for device in &settings.devices {
+        let permissions = device.permissions;
+        if !targets.insert(device.container_path.bytes())
+            || !(permissions.read || permissions.write || permissions.create)
+        {
+            return Err(IntentError::InvalidContainerSetting);
+        }
+    }
+    let mut capabilities = HashSet::new();
+    for token in settings.cap_add.iter().chain(&settings.cap_drop) {
+        if !capabilities.insert(token.bytes()) {
+            return Err(IntentError::DuplicateContainerSetting);
+        }
+    }
+    if settings
+        .cap_add
+        .iter()
+        .any(|token| token.bytes() != b"NET_BIND_SERVICE")
+        || settings
+            .cap_drop
+            .iter()
+            .any(|token| token.bytes() != b"SYS_ADMIN")
+    {
+        return Err(IntentError::InvalidContainerSetting);
+    }
+    let mut unique = HashSet::new();
+    if !settings
+        .security_options
+        .iter()
+        .all(|item| unique.insert(std::mem::discriminant(item)))
+    {
+        return Err(IntentError::DuplicateContainerSetting);
+    }
+    let mut unique = HashSet::new();
+    for item in &settings.sysctls {
+        if item.key() != b"net.ipv4.ip_forward" || !matches!(item.value(), b"0" | b"1") {
+            return Err(IntentError::InvalidContainerSetting);
+        }
+        if !unique.insert(item.key()) {
+            return Err(IntentError::DuplicateContainerSetting);
+        }
+    }
+    let mut unique = HashSet::new();
+    if !settings
+        .group_add
+        .iter()
+        .all(|item| unique.insert(item.bytes()))
+    {
+        return Err(IntentError::DuplicateContainerSetting);
+    }
+    let mut unique = HashSet::new();
+    if !settings
+        .extra_hosts
+        .iter()
+        .all(|item| unique.insert(item.name.bytes()))
+    {
+        return Err(IntentError::DuplicateContainerSetting);
+    }
+    if let Some(log) = &settings.log_config {
+        if log.driver == LogDriver::None && !log.options.is_empty() {
+            return Err(IntentError::InvalidContainerSetting);
+        }
+        let mut unique = HashSet::new();
+        for item in &log.options {
+            if log.driver != LogDriver::JsonFile
+                || item.key() != b"max-size"
+                || !valid_log_max_size(item.value())
+            {
+                return Err(IntentError::InvalidContainerSetting);
+            }
+            if !unique.insert(item.key()) {
+                return Err(IntentError::DuplicateContainerSetting);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn valid_log_max_size(value: &[u8]) -> bool {
+    let Some((&suffix, digits)) = value.split_last() else {
+        return false;
+    };
+    matches!(suffix, b'k' | b'm' | b'g')
+        && !digits.is_empty()
+        && std::str::from_utf8(digits)
+            .ok()
+            .and_then(|digits| digits.parse::<u64>().ok())
+            .is_some_and(|size| size != 0)
 }

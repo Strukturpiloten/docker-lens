@@ -93,6 +93,7 @@ pub enum CapabilityState {
 pub enum Capability {
     StandaloneContainer,
     BindMount,
+    TmpfsMount,
     NamedVolume,
     BridgeNetwork,
     NetworkExternalReference,
@@ -107,12 +108,48 @@ pub enum Capability {
     NetworkMultipleAttachment,
     HostNetwork,
     PortPublish,
+    PortExposeOnly,
+    PortHostIpv4,
+    PortHostIpv6,
+    PortMultipleBindings,
+    PortEphemeral,
     UserNamespace,
     EnvironmentAssignment,
     Command,
+    CommandClear,
     Entrypoint,
+    EntrypointClear,
     Healthcheck,
+    HealthShell,
+    HealthDisabled,
+    HealthStartPeriod,
+    HealthStartInterval,
     RestartPolicy,
+    ContainerLabels,
+    ContainerUser,
+    ContainerWorkdir,
+    ContainerHostname,
+    ReadOnlyRootfs,
+    ContainerInit,
+    StopSignal,
+    StopTimeout,
+    MemoryLimit,
+    PidsLimit,
+    ShmSize,
+    Ulimits,
+    UlimitNofile,
+    DeviceMappings,
+    LinuxCapabilities,
+    CapAddNetBindService,
+    CapDropSysAdmin,
+    SecurityOptions,
+    Sysctls,
+    SysctlIpv4Forward,
+    SupplementaryGroups,
+    DnsServers,
+    ExtraHosts,
+    LogConfig,
+    LogOptionMaxSize,
 }
 
 /// The exact daemon scope of a capability claim.
@@ -527,13 +564,70 @@ pub(crate) enum NativeCapabilityShape {
     NetworkSecondaryConnect,
     FixedTcpPort,
     FixedUdpPort,
+    ExposedOnlyPort,
+    FixedIpv4HostPort,
+    EphemeralIpv4HostPort,
+    FixedIpv6HostPort,
+    EphemeralIpv6HostPort,
+    MultipleFixedPortBindings,
+    MultipleEphemeralPortBindings,
+    EphemeralHostPort,
     BindMountReadWrite,
     BindMountReadOnly,
+    TmpfsMountReadWrite,
+    TmpfsMountReadOnly,
+    TmpfsMountOptions,
     EnvironmentValue,
     EnvironmentEmptyValue,
     ExecCommand,
+    ClearCommand,
     ExecEntrypoint,
+    ClearEntrypoint,
     ExecHealthcheck,
+    ShellHealthcheck,
+    DisabledHealthcheck,
+    HealthStartPeriodZero,
+    HealthStartPeriodPositive,
+    HealthStartIntervalZero,
+    HealthStartIntervalPositive,
+    ContainerCreateLabels,
+    ContainerUser,
+    ContainerWorkdir,
+    ContainerHostname,
+    ReadOnlyRootfsTrue,
+    ReadOnlyRootfsFalse,
+    ContainerInitTrue,
+    ContainerInitFalse,
+    StopSignal,
+    StopTimeoutZero,
+    StopTimeoutPositive,
+    MemoryBytes,
+    MemoryUnlimited,
+    PidsCount,
+    PidsUnlimited,
+    ShmSize,
+    UlimitsFinite,
+    UlimitsUnlimited,
+    UlimitNofile,
+    DeviceMappings,
+    LinuxCapAdd,
+    LinuxCapDrop,
+    CapAddNetBindService,
+    CapDropSysAdmin,
+    NoNewPrivilegesEnabled,
+    NoNewPrivilegesDisabled,
+    Sysctls,
+    SysctlIpv4Forward,
+    SupplementaryGroups,
+    DnsIpv4,
+    DnsIpv6,
+    ExtraHostsIpv4,
+    ExtraHostsIpv6,
+    LogJsonFile,
+    LogLocal,
+    LogNone,
+    LogOptions,
+    LogOptionMaxSize,
     RestartNo,
     RestartAlways,
     RestartUnlessStopped,
@@ -569,13 +663,62 @@ impl NativeCapabilityShape {
             Self::NetworkStaticIpv4 | Self::NetworkStaticIpv6 => Capability::NetworkStaticAddress,
             Self::NetworkSecondaryConnect => Capability::NetworkMultipleAttachment,
             Self::FixedTcpPort | Self::FixedUdpPort => Capability::PortPublish,
+            Self::ExposedOnlyPort => Capability::PortExposeOnly,
+            Self::FixedIpv4HostPort | Self::EphemeralIpv4HostPort => Capability::PortHostIpv4,
+            Self::FixedIpv6HostPort | Self::EphemeralIpv6HostPort => Capability::PortHostIpv6,
+            Self::MultipleFixedPortBindings | Self::MultipleEphemeralPortBindings => {
+                Capability::PortMultipleBindings
+            }
+            Self::EphemeralHostPort => Capability::PortEphemeral,
             Self::BindMountReadWrite | Self::BindMountReadOnly => Capability::BindMount,
+            Self::TmpfsMountReadWrite | Self::TmpfsMountReadOnly | Self::TmpfsMountOptions => {
+                Capability::TmpfsMount
+            }
             Self::EnvironmentValue | Self::EnvironmentEmptyValue => {
                 Capability::EnvironmentAssignment
             }
             Self::ExecCommand => Capability::Command,
+            Self::ClearCommand => Capability::CommandClear,
             Self::ExecEntrypoint => Capability::Entrypoint,
+            Self::ClearEntrypoint => Capability::EntrypointClear,
             Self::ExecHealthcheck => Capability::Healthcheck,
+            Self::ShellHealthcheck => Capability::HealthShell,
+            Self::DisabledHealthcheck => Capability::HealthDisabled,
+            Self::HealthStartPeriodZero | Self::HealthStartPeriodPositive => {
+                Capability::HealthStartPeriod
+            }
+            Self::HealthStartIntervalZero | Self::HealthStartIntervalPositive => {
+                Capability::HealthStartInterval
+            }
+            Self::ContainerCreateLabels => Capability::ContainerLabels,
+            Self::ContainerUser => Capability::ContainerUser,
+            Self::ContainerWorkdir => Capability::ContainerWorkdir,
+            Self::ContainerHostname => Capability::ContainerHostname,
+            Self::ReadOnlyRootfsTrue | Self::ReadOnlyRootfsFalse => Capability::ReadOnlyRootfs,
+            Self::ContainerInitTrue | Self::ContainerInitFalse => Capability::ContainerInit,
+            Self::StopSignal => Capability::StopSignal,
+            Self::StopTimeoutZero | Self::StopTimeoutPositive => Capability::StopTimeout,
+            Self::MemoryBytes | Self::MemoryUnlimited => Capability::MemoryLimit,
+            Self::PidsCount | Self::PidsUnlimited => Capability::PidsLimit,
+            Self::ShmSize => Capability::ShmSize,
+            Self::UlimitsFinite | Self::UlimitsUnlimited => Capability::Ulimits,
+            Self::UlimitNofile => Capability::UlimitNofile,
+            Self::DeviceMappings => Capability::DeviceMappings,
+            Self::LinuxCapAdd | Self::LinuxCapDrop => Capability::LinuxCapabilities,
+            Self::CapAddNetBindService => Capability::CapAddNetBindService,
+            Self::CapDropSysAdmin => Capability::CapDropSysAdmin,
+            Self::NoNewPrivilegesEnabled | Self::NoNewPrivilegesDisabled => {
+                Capability::SecurityOptions
+            }
+            Self::Sysctls => Capability::Sysctls,
+            Self::SysctlIpv4Forward => Capability::SysctlIpv4Forward,
+            Self::SupplementaryGroups => Capability::SupplementaryGroups,
+            Self::DnsIpv4 | Self::DnsIpv6 => Capability::DnsServers,
+            Self::ExtraHostsIpv4 | Self::ExtraHostsIpv6 => Capability::ExtraHosts,
+            Self::LogJsonFile | Self::LogLocal | Self::LogNone | Self::LogOptions => {
+                Capability::LogConfig
+            }
+            Self::LogOptionMaxSize => Capability::LogOptionMaxSize,
             Self::RestartNo
             | Self::RestartAlways
             | Self::RestartUnlessStopped
@@ -621,13 +764,75 @@ impl NativeCapabilityShape {
             }
             Capability::NetworkMultipleAttachment => Some(&[Self::NetworkSecondaryConnect]),
             Capability::PortPublish => Some(&[Self::FixedTcpPort, Self::FixedUdpPort]),
+            Capability::PortExposeOnly => Some(&[Self::ExposedOnlyPort]),
+            Capability::PortHostIpv4 => {
+                Some(&[Self::FixedIpv4HostPort, Self::EphemeralIpv4HostPort])
+            }
+            Capability::PortHostIpv6 => {
+                Some(&[Self::FixedIpv6HostPort, Self::EphemeralIpv6HostPort])
+            }
+            Capability::PortMultipleBindings => Some(&[
+                Self::MultipleFixedPortBindings,
+                Self::MultipleEphemeralPortBindings,
+            ]),
+            Capability::PortEphemeral => Some(&[Self::EphemeralHostPort]),
             Capability::BindMount => Some(&[Self::BindMountReadWrite, Self::BindMountReadOnly]),
+            Capability::TmpfsMount => Some(&[
+                Self::TmpfsMountReadWrite,
+                Self::TmpfsMountReadOnly,
+                Self::TmpfsMountOptions,
+            ]),
             Capability::EnvironmentAssignment => {
                 Some(&[Self::EnvironmentValue, Self::EnvironmentEmptyValue])
             }
             Capability::Command => Some(&[Self::ExecCommand]),
+            Capability::CommandClear => Some(&[Self::ClearCommand]),
             Capability::Entrypoint => Some(&[Self::ExecEntrypoint]),
+            Capability::EntrypointClear => Some(&[Self::ClearEntrypoint]),
             Capability::Healthcheck => Some(&[Self::ExecHealthcheck]),
+            Capability::HealthShell => Some(&[Self::ShellHealthcheck]),
+            Capability::HealthDisabled => Some(&[Self::DisabledHealthcheck]),
+            Capability::HealthStartPeriod => {
+                Some(&[Self::HealthStartPeriodZero, Self::HealthStartPeriodPositive])
+            }
+            Capability::HealthStartInterval => Some(&[
+                Self::HealthStartIntervalZero,
+                Self::HealthStartIntervalPositive,
+            ]),
+            Capability::ContainerLabels => Some(&[Self::ContainerCreateLabels]),
+            Capability::ContainerUser => Some(&[Self::ContainerUser]),
+            Capability::ContainerWorkdir => Some(&[Self::ContainerWorkdir]),
+            Capability::ContainerHostname => Some(&[Self::ContainerHostname]),
+            Capability::ReadOnlyRootfs => {
+                Some(&[Self::ReadOnlyRootfsTrue, Self::ReadOnlyRootfsFalse])
+            }
+            Capability::ContainerInit => Some(&[Self::ContainerInitTrue, Self::ContainerInitFalse]),
+            Capability::StopSignal => Some(&[Self::StopSignal]),
+            Capability::StopTimeout => Some(&[Self::StopTimeoutZero, Self::StopTimeoutPositive]),
+            Capability::MemoryLimit => Some(&[Self::MemoryBytes, Self::MemoryUnlimited]),
+            Capability::PidsLimit => Some(&[Self::PidsCount, Self::PidsUnlimited]),
+            Capability::ShmSize => Some(&[Self::ShmSize]),
+            Capability::Ulimits => Some(&[Self::UlimitsFinite, Self::UlimitsUnlimited]),
+            Capability::UlimitNofile => Some(&[Self::UlimitNofile]),
+            Capability::DeviceMappings => Some(&[Self::DeviceMappings]),
+            Capability::LinuxCapabilities => Some(&[Self::LinuxCapAdd, Self::LinuxCapDrop]),
+            Capability::CapAddNetBindService => Some(&[Self::CapAddNetBindService]),
+            Capability::CapDropSysAdmin => Some(&[Self::CapDropSysAdmin]),
+            Capability::SecurityOptions => {
+                Some(&[Self::NoNewPrivilegesEnabled, Self::NoNewPrivilegesDisabled])
+            }
+            Capability::Sysctls => Some(&[Self::Sysctls]),
+            Capability::SysctlIpv4Forward => Some(&[Self::SysctlIpv4Forward]),
+            Capability::SupplementaryGroups => Some(&[Self::SupplementaryGroups]),
+            Capability::DnsServers => Some(&[Self::DnsIpv4, Self::DnsIpv6]),
+            Capability::ExtraHosts => Some(&[Self::ExtraHostsIpv4, Self::ExtraHostsIpv6]),
+            Capability::LogConfig => Some(&[
+                Self::LogJsonFile,
+                Self::LogLocal,
+                Self::LogNone,
+                Self::LogOptions,
+            ]),
+            Capability::LogOptionMaxSize => Some(&[Self::LogOptionMaxSize]),
             Capability::RestartPolicy => Some(&[
                 Self::RestartNo,
                 Self::RestartAlways,

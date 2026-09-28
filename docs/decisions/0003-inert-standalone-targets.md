@@ -6,6 +6,7 @@ complete and native gates for each changed candidate and release.
 This supersedes the target-setting and renderer placeholders in ADR 0002;
 its capture and offline-evidence boundaries remain in force.
 ADR 0006 supersedes this decision's one-network/basic-bridge target shape;
+ADR 0007 supersedes its fixed-only publication and exec-only health subset;
 its remaining inert-rendering and evidence rules stay in force.
 
 DockerLens accepts caller-authored target intent with named networks, named

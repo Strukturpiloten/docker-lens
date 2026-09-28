@@ -18,6 +18,16 @@ non-membership, and verify that the external network was never created by the
 target artifact on every exact rootful/rootless lane. The existing native
 request allowlist needs an explicit `networks/{id}/connect` branch before
 those requests can be exercised; no new shape is admitted by offline checks.
+The typed-container offline regressions cover exact grouped `PortBindings`
+and `ExposedPorts` bodies, host-IP privacy, wildcard conflicts, ephemeral
+allocation requests, command/entrypoint inheritance and clearing, shell and
+disabled health, timing, metadata, tmpfs, and runtime settings. These are
+local contract tests only. #31's independent native assertions must check
+resulting loopback and IPv6 exposure, repeated/dynamic assignments, mount
+access, process identity, health behavior, and resource/security outcomes in
+each claimed mode and API. `StartInterval` needs exact native support and a
+1.41 negative boundary before any catalog admission; no generic introduction
+floor is inferred from Compose documentation.
 Run `./scripts/check-all.sh --check` for the complete offline gate: format,
 Clippy, a locked all-target check under the minimum Rust release declared by
 `Cargo.toml`, unit and documentation tests, policy tests, and documentation build.

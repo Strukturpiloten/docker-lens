@@ -17,10 +17,10 @@ use crate::decoder::decode_capture;
 use crate::evidence::CaptureRoute;
 use crate::observation::ResourceRef;
 use crate::target::{
-    Argument, ContainerIntent, DockerApiRenderer, DockerPlanner, EnvironmentAssignment,
-    Healthcheck, ImageReference, Mount, NetworkAttachmentIntent, NetworkCreate, NetworkIntent,
-    NetworkRole, NetworkSource, Planner, PortBinding, Protocol, Renderer, RestartPolicy,
-    TargetIdentity, TargetIntent, TargetResource,
+    Argument, ContainerIntent, ContainerSettings, DockerApiRenderer, DockerPlanner,
+    EnvironmentAssignment, Healthcheck, ImageCommand, ImageReference, Mount,
+    NetworkAttachmentIntent, NetworkCreate, NetworkIntent, NetworkRole, NetworkSource, Planner,
+    PortBinding, Protocol, Renderer, RestartPolicy, TargetIdentity, TargetIntent, TargetResource,
 };
 use crate::version::{
     ApiVersion, Capability, CapabilityFact, CapabilityScope, CapabilityState, DaemonMode,
@@ -483,10 +483,11 @@ fn render_and_inspect_variant(
         ports: vec![],
         mounts,
         networks: vec![],
-        entrypoint: None,
-        command: Some(vec![argument("sh"), argument("-c"), argument("sleep 30")]),
+        entrypoint: ImageCommand::Inherit,
+        command: ImageCommand::Exec(vec![argument("sh"), argument("-c"), argument("sleep 30")]),
         healthcheck: None,
         restart,
+        settings: ContainerSettings::default(),
     })));
     let intent = TargetIntent::new(resources).unwrap();
     let graph = DockerPlanner
@@ -750,12 +751,14 @@ fn live_target_render_matches_engine() {
                     host: NonZeroU16::new(18090).unwrap(),
                     container: NonZeroU16::new(8080).unwrap(),
                     protocol: Protocol::Tcp,
-                },
+                }
+                .into(),
                 PortBinding {
                     host: NonZeroU16::new(18091).unwrap(),
                     container: NonZeroU16::new(8081).unwrap(),
                     protocol: Protocol::Udp,
-                },
+                }
+                .into(),
             ],
             mounts: vec![
                 Mount::bind(
@@ -772,8 +775,8 @@ fn live_target_render_matches_engine() {
                 ipv4_address: None,
                 ipv6_address: None,
             }],
-            entrypoint: Some(vec![argument("/bin/sh")]),
-            command: Some(vec![argument("-c"), argument(service)]),
+            entrypoint: ImageCommand::Exec(vec![argument("/bin/sh")]),
+            command: ImageCommand::Exec(vec![argument("-c"), argument(service)]),
             healthcheck: Some(
                 Healthcheck::new(
                     vec![argument("/bin/true")],
@@ -784,6 +787,7 @@ fn live_target_render_matches_engine() {
                 .unwrap(),
             ),
             restart: Some(RestartPolicy::OnFailure { maximum_retries: 3 }),
+            settings: ContainerSettings::default(),
         })),
     ])
     .unwrap();
