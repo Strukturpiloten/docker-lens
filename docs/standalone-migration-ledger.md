@@ -37,6 +37,35 @@ native probes. IPv4 `/31` and `/32` bridge subnet pools remain explicitly
 unsupported by planning until #31 verifies their Engine behavior per exact
 API and mode.
 
+DockerLens #30 adds an inert typed container target contract for the six
+fixtures' loopback-only publications, labels, Forgejo/Nextcloud user values,
+explicit commands, shell health checks, and read-only mounts. The full six-app
+route still requires BoxFerry #343 promotion decisions and #366 runtime
+rehearsal. The historical four-profile catalog admits only its former fixed
+TCP/UDP, exec command/entrypoint/health, bind/volume and restart shapes.
+No new container capability is positive merely because a target type and
+renderer branch exists.
+
+| #30 target branch | Typed request contract | Remaining proof / owner |
+| --- | --- | --- |
+| Publication | `PortPublication` has exposed-only or ordered `HostBinding` values; each binding distinguishes omitted/explicit IPv4 or IPv6 `HostIp` and fixed/ephemeral `HostPort`. Duplicate or wildcard-overlapping fixed bindings fail before planning. | #31 must inspect resulting fixed/repeated/dynamic bindings, loopback isolation and IPv6 behavior per exact lane; #343 must retain authored address versus observed assigned port. |
+| Process and health | Command and entrypoint distinguish inherit, clear and exec. Health test distinguishes exec, one shell string, disabled and inherited absence; timing retains omitted versus explicit start values. | #31 must prove clear/disabled behavior, exact health outcome and `StartInterval` support or rejection for each claimed API. No generic API floor is inferred from Compose. |
+| Identity and runtime | Protected labels/user/workdir/hostname; typed tmpfs, read-only rootfs, init, stop settings, limits, devices, caps/security/sysctls/groups, DNS/extra hosts and logging render behind individual capabilities. | #31 checks resulting process, mount, resolver and security/resource behavior. #343 maps each neutral field or records actionable loss; a typed branch alone does not close the full application contract. |
+
+The existing source-to-target rows below remain the finite release blockers.
+The current named runtime subset is `nofile` ulimit, `NET_BIND_SERVICE` add,
+`SYS_ADMIN` drop, `net.ipv4.ip_forward` (`0`/`1`), and `json-file` `max-size`
+(positive `k`/`m`/`g` size). Other capability names or directions, ulimit and
+sysctl names, and log option keys fail intent validation; each supported name
+still requires its own positive exact-profile fact. These deliberately
+unsupported values remain #30/#31/#343 follow-up whenever the six application
+routes require them, not evidence of completed native migration.
+
+Host user namespace is still a closed unadmitted request, and alternative
+rootfs sources and declarative health-readiness/dependency execution are not
+claimed by this target contract. These gaps cannot be marked complete solely
+through a generic unsupported result.
+
 The required migration set is the six repository-owned application scenarios
 (Forgejo, Immich, Nextcloud, Observability, Paperless-ngx, and Supabase),
 plus a small four-lane standalone
@@ -98,24 +127,22 @@ twenty closed renderer shapes, not any row above merely because it is listed.
 
 ## File ownership for parallel implementation
 
-DockerLens #3's integrator owns `src/target.rs` public reexports and tests,
-`src/target_modules/intent.rs` resource enum, identities and shared validation,
-`src/target_modules/graph.rs`, and `src/target_modules/render.rs` dispatch
-and common JSON encoding. These are shared contract files: #29 and #30 should
-propose precise interface edits to the integrator rather than write them in
-parallel. #29 owns `src/target_modules/render/network.rs` and future
-network-specific intent files. #30 owns `src/target_modules/container.rs` and
-`src/target_modules/render/container.rs`. #28 owns acquisition and decoder
-field work, with shared `lib.rs` wiring coordinated by the integrator. #31
-owns native assertions/harness extensions; the integrator alone wires reviewed
-catalog, capability vocabulary and evidence records after independent review.
-The BoxFerry issues own only their own checkout. No two writers share a checkout.
+DockerLens #29 owns the merged network target contract; #30 is the sole writer
+of its separate issue checkout for container intent/rendering, shared target
+validation and graph gates, public target tests/reexports, baseline native-test
+constructor updates, and delegated capability vocabulary/closed shapes. The
+primary integrator reviews those shared changes and alone updates reviewed
+catalog records after independent #31 evidence. #28 owns acquisition and
+decoder source fields; #31 owns new native assertions and harness extensions
+in its own checkout. The BoxFerry issues own only their own checkout. No two
+writers share a checkout.
 
 The initial module checkpoint preserved public `docker_lens::target::*` paths
 and struct-literal shapes. The subsequent #29 contract intentionally replaces
 the single network field with typed network resources and attachments under
 ADR 0006; native baseline test constructors follow the new contract. Further
 target fields, constructors, capability names, or cross-repository API changes
-require explicit reviewed contracts before parallel edits. Historical catalog
-records remain unchanged, and new network shapes remain unadmitted. DockerLens
+require explicit reviewed contracts before parallel edits. ADR 0007 records
+the reviewed #30 container contract. Historical catalog records remain
+unchanged, and new network and container shapes remain unadmitted. DockerLens
 #3 remains open after this checkpoint.

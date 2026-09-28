@@ -29,8 +29,10 @@
    Findings contain no raw values. A caller-provided capture is not proof of
    daemon contact.
 4. Target intent carries explicit identities and typed standalone container
-   settings: image, ports, mounts, typed bridge networks and attachments,
-   environment, exec-form command and health check, and restart policy.
+   settings: image, scoped and repeated port publications, mounts, typed
+   bridge networks and attachments, protected environment and metadata,
+   explicit command/entrypoint inheritance or clearing, exec/shell/disabled
+   health and timing, runtime settings, and restart policy.
    The public planner admits
    only profiles resolved from the reviewed catalog; caller-authored positive
    daemon claims cannot authorize planning. A profile distinguishes upstream
@@ -68,6 +70,12 @@ existence. A container's first attachment is in its create request, while
 each later attachment has its own step ID and inert network-connect request.
 New network capability facts are absent from the four historical profiles
 until exact-lane native conformance and independent evidence review.
+New container-setting facts are likewise absent. `StartInterval` is gated by
+an exact capability claim; no generic Engine API introduction version is
+assumed from Compose metadata. Port rendering groups host bindings under one
+container port/protocol key and preserves an explicitly authored host address
+or ephemeral allocation request. Values remain protected in Debug and
+diagnostics. The renderer still produces only inert request data.
 These modules define independent ownership boundaries for later native work.
 
 ## Decoder evidence boundary

@@ -1,4 +1,7 @@
-use super::{MountSource, NetworkSource, TargetIntent, TargetResource};
+use super::{
+    HealthTest, ImageCommand, MountSource, NetworkSource, PortHostIp, PortHostPort, TargetIntent,
+    TargetResource,
+};
 use crate::observation::ResourceRef;
 use crate::version::{
     ApiVersion, Capability, CapabilityScope, DaemonMode, TargetCapabilities, TargetProfile,
@@ -145,7 +148,13 @@ pub enum PlanningError {
 pub enum TargetField {
     Resource,
     Port,
+    PortExposeOnly,
+    PortHostIpv4,
+    PortHostIpv6,
+    PortMultipleBindings,
+    PortEphemeral,
     BindMount,
+    TmpfsMount,
     NamedVolume,
     Network,
     NetworkInternal,
@@ -160,9 +169,41 @@ pub enum TargetField {
     NetworkExternalReference,
     Environment,
     Command,
+    CommandClear,
     Entrypoint,
+    EntrypointClear,
     Healthcheck,
+    HealthShell,
+    HealthDisabled,
+    HealthStartPeriod,
+    HealthStartInterval,
     Restart,
+    ContainerLabels,
+    ContainerUser,
+    ContainerWorkdir,
+    ContainerHostname,
+    ReadOnlyRootfs,
+    ContainerInit,
+    StopSignal,
+    StopTimeout,
+    MemoryLimit,
+    PidsLimit,
+    ShmSize,
+    Ulimits,
+    UlimitNofile,
+    DeviceMappings,
+    LinuxCapabilities,
+    CapAddNetBindService,
+    CapDropSysAdmin,
+    SecurityOptions,
+    Sysctls,
+    SysctlIpv4Forward,
+    SupplementaryGroups,
+    DnsServers,
+    ExtraHosts,
+    LogConfig,
+    LogOptionMaxSize,
+    UserNamespace,
 }
 
 impl<'a> OperationGraph<'a> {
@@ -226,7 +267,7 @@ impl<'a> OperationGraph<'a> {
                                 MountSource::Volume(reference) => {
                                     Some((*reference, TargetKind::Volume))
                                 }
-                                MountSource::Bind(_) => None,
+                                MountSource::Bind(_) | MountSource::Tmpfs(_) => None,
                             }),
                     );
                 for (reference, kind) in required {
@@ -356,15 +397,41 @@ impl<'a> OperationGraph<'a> {
                 TargetResource::Container(container) => {
                     require(TargetField::Resource, Capability::StandaloneContainer)?;
                     if mode == DaemonMode::Rootless
-                        && container.ports.iter().any(|port| port.host.get() < 1024)
+                        && container.ports.iter().flat_map(|port| port.bindings()).any(|binding| {
+                            matches!(binding.host_port, PortHostPort::Fixed(port) if port.get() < 1024)
+                        })
                     {
                         return Err(PlanningError::RestrictedPort {
                             resource: reference,
                             mode,
                         });
                     }
-                    if !container.ports.is_empty() {
-                        require(TargetField::Port, Capability::PortPublish)?;
+                    for port in &container.ports {
+                        if port.bindings().is_empty() {
+                            require(TargetField::PortExposeOnly, Capability::PortExposeOnly)?;
+                        } else {
+                            require(TargetField::Port, Capability::PortPublish)?;
+                        }
+                        if port.bindings().len() > 1 {
+                            require(
+                                TargetField::PortMultipleBindings,
+                                Capability::PortMultipleBindings,
+                            )?;
+                        }
+                        for binding in port.bindings() {
+                            match binding.host_ip {
+                                PortHostIp::Unspecified => {}
+                                PortHostIp::Address(std::net::IpAddr::V4(_)) => {
+                                    require(TargetField::PortHostIpv4, Capability::PortHostIpv4)?;
+                                }
+                                PortHostIp::Address(std::net::IpAddr::V6(_)) => {
+                                    require(TargetField::PortHostIpv6, Capability::PortHostIpv6)?;
+                                }
+                            }
+                            if binding.host_port == PortHostPort::Ephemeral {
+                                require(TargetField::PortEphemeral, Capability::PortEphemeral)?;
+                            }
+                        }
                     }
                     for mount in &container.mounts {
                         match mount.source() {
@@ -373,6 +440,9 @@ impl<'a> OperationGraph<'a> {
                             }
                             MountSource::Volume(_) => {
                                 require(TargetField::NamedVolume, Capability::NamedVolume)?
+                            }
+                            MountSource::Tmpfs(_) => {
+                                require(TargetField::TmpfsMount, Capability::TmpfsMount)?
                             }
                         }
                     }
@@ -399,17 +469,147 @@ impl<'a> OperationGraph<'a> {
                     if !container.environment.is_empty() {
                         require(TargetField::Environment, Capability::EnvironmentAssignment)?;
                     }
-                    if container.command.is_some() {
-                        require(TargetField::Command, Capability::Command)?;
+                    match &container.command {
+                        ImageCommand::Inherit => {}
+                        ImageCommand::Clear => {
+                            require(TargetField::CommandClear, Capability::CommandClear)?
+                        }
+                        ImageCommand::Exec(_) => {
+                            require(TargetField::Command, Capability::Command)?
+                        }
                     }
-                    if container.entrypoint.is_some() {
-                        require(TargetField::Entrypoint, Capability::Entrypoint)?;
+                    match &container.entrypoint {
+                        ImageCommand::Inherit => {}
+                        ImageCommand::Clear => {
+                            require(TargetField::EntrypointClear, Capability::EntrypointClear)?
+                        }
+                        ImageCommand::Exec(_) => {
+                            require(TargetField::Entrypoint, Capability::Entrypoint)?
+                        }
                     }
-                    if container.healthcheck.is_some() {
-                        require(TargetField::Healthcheck, Capability::Healthcheck)?;
+                    if let Some(health) = &container.healthcheck {
+                        match health.test() {
+                            HealthTest::Exec(_) => {
+                                require(TargetField::Healthcheck, Capability::Healthcheck)?
+                            }
+                            HealthTest::Shell(_) => {
+                                require(TargetField::HealthShell, Capability::HealthShell)?
+                            }
+                            HealthTest::Disabled => {
+                                require(TargetField::HealthDisabled, Capability::HealthDisabled)?
+                            }
+                        }
+                        if health.start_period_ns().is_some() {
+                            require(
+                                TargetField::HealthStartPeriod,
+                                Capability::HealthStartPeriod,
+                            )?;
+                        }
+                        if health.start_interval_ns().is_some() {
+                            require(
+                                TargetField::HealthStartInterval,
+                                Capability::HealthStartInterval,
+                            )?;
+                        }
                     }
                     if container.restart.is_some() {
                         require(TargetField::Restart, Capability::RestartPolicy)?;
+                    }
+                    if !container.settings.labels.is_empty() {
+                        require(TargetField::ContainerLabels, Capability::ContainerLabels)?;
+                    }
+                    if container.settings.user.is_some() {
+                        require(TargetField::ContainerUser, Capability::ContainerUser)?;
+                    }
+                    if container.settings.working_dir.is_some() {
+                        require(TargetField::ContainerWorkdir, Capability::ContainerWorkdir)?;
+                    }
+                    if container.settings.hostname.is_some() {
+                        require(
+                            TargetField::ContainerHostname,
+                            Capability::ContainerHostname,
+                        )?;
+                    }
+                    if container.settings.read_only_rootfs.is_some() {
+                        require(TargetField::ReadOnlyRootfs, Capability::ReadOnlyRootfs)?;
+                    }
+                    if container.settings.init.is_some() {
+                        require(TargetField::ContainerInit, Capability::ContainerInit)?;
+                    }
+                    if container.settings.stop_signal.is_some() {
+                        require(TargetField::StopSignal, Capability::StopSignal)?;
+                    }
+                    if container.settings.stop_timeout_seconds.is_some() {
+                        require(TargetField::StopTimeout, Capability::StopTimeout)?;
+                    }
+                    if container.settings.memory_limit.is_some() {
+                        require(TargetField::MemoryLimit, Capability::MemoryLimit)?;
+                    }
+                    if container.settings.pids_limit.is_some() {
+                        require(TargetField::PidsLimit, Capability::PidsLimit)?;
+                    }
+                    if container.settings.shm_size_bytes.is_some() {
+                        require(TargetField::ShmSize, Capability::ShmSize)?;
+                    }
+                    if !container.settings.ulimits.is_empty() {
+                        require(TargetField::Ulimits, Capability::Ulimits)?;
+                        require(TargetField::UlimitNofile, Capability::UlimitNofile)?;
+                    }
+                    if !container.settings.devices.is_empty() {
+                        require(TargetField::DeviceMappings, Capability::DeviceMappings)?;
+                    }
+                    if !container.settings.cap_add.is_empty()
+                        || !container.settings.cap_drop.is_empty()
+                    {
+                        require(
+                            TargetField::LinuxCapabilities,
+                            Capability::LinuxCapabilities,
+                        )?;
+                    }
+                    if !container.settings.cap_add.is_empty() {
+                        require(
+                            TargetField::CapAddNetBindService,
+                            Capability::CapAddNetBindService,
+                        )?;
+                    }
+                    if !container.settings.cap_drop.is_empty() {
+                        require(TargetField::CapDropSysAdmin, Capability::CapDropSysAdmin)?;
+                    }
+                    if !container.settings.security_options.is_empty() {
+                        require(TargetField::SecurityOptions, Capability::SecurityOptions)?;
+                    }
+                    if !container.settings.sysctls.is_empty() {
+                        require(TargetField::Sysctls, Capability::Sysctls)?;
+                        require(
+                            TargetField::SysctlIpv4Forward,
+                            Capability::SysctlIpv4Forward,
+                        )?;
+                    }
+                    if !container.settings.group_add.is_empty() {
+                        require(
+                            TargetField::SupplementaryGroups,
+                            Capability::SupplementaryGroups,
+                        )?;
+                    }
+                    if !container.settings.dns.is_empty() {
+                        require(TargetField::DnsServers, Capability::DnsServers)?;
+                    }
+                    if !container.settings.extra_hosts.is_empty() {
+                        require(TargetField::ExtraHosts, Capability::ExtraHosts)?;
+                    }
+                    if container.settings.log_config.is_some() {
+                        require(TargetField::LogConfig, Capability::LogConfig)?;
+                    }
+                    if container
+                        .settings
+                        .log_config
+                        .as_ref()
+                        .is_some_and(|log| !log.options.is_empty())
+                    {
+                        require(TargetField::LogOptionMaxSize, Capability::LogOptionMaxSize)?;
+                    }
+                    if container.settings.userns_mode.is_some() {
+                        require(TargetField::UserNamespace, Capability::UserNamespace)?;
                     }
                 }
             }

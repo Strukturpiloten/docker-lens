@@ -12,6 +12,10 @@ The planned native work is tracked in [DockerLens #3](https://github.com/Struktu
 Typed multi-network target intent, external prerequisites and secondary
 connect requests are available as inert data. The four historical profiles
 do not admit these new shapes until independent native evidence is reviewed.
+Typed container intent also distinguishes host-IP scoped, repeated and
+ephemeral publications, exposed-only ports, command clearing, shell and
+disabled health checks, and protected runtime settings. These new branches
+likewise remain capability-unadmitted pending exact native evidence.
 The [standalone migration ledger](docs/standalone-migration-ledger.md) records
 the finite remaining shapes, evidence, and implementation owners; the current
 0.1.0 surface is the foundation, not completion of that ledger.
@@ -56,10 +60,12 @@ Compose compatibility and Swarm mode are separate discussion topics.
   profiles backed by reviewed native source records. Offline planning does not invent
   a live observation. The operation graph retains the resolved context and
   checks capabilities for each requested standalone shape.
-- Target intent includes explicit resource identities, container image, ports,
-  mounts, typed bridge-network resources and per-container attachments,
-  protected environment assignments, exec-form command, health check, and
-  restart policy. New network shapes remain capability-unadmitted.
+- Target intent includes explicit resource identities, container image,
+  typed publications and mounts, typed bridge-network resources and
+  per-container attachments, protected environment and metadata, explicit
+  command inheritance/clearing, health forms and timing, runtime settings,
+  and restart policy. New container and network shapes remain
+  capability-unadmitted.
   Unsupported settings remain explicit.
   Target intent, operation graph, and rendered artifact are inert data. The
   crate has no executor, deployment API, or file writer.

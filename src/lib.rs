@@ -9,7 +9,7 @@
 //! ```
 //! use docker_lens::acquisition::{Endpoint, Limits, NativeId, Selector};
 //! use docker_lens::observation::ResourceRef;
-//! use docker_lens::target::{ContainerIntent, ImageReference, TargetIdentity, TargetIntent, TargetResource};
+//! use docker_lens::target::{ContainerIntent, ContainerSettings, ImageCommand, ImageReference, TargetIdentity, TargetIntent, TargetResource};
 //! use std::time::Duration;
 //!
 //! let endpoint = Endpoint::unix_socket("/run/user/1000/docker.sock".into());
@@ -27,10 +27,11 @@
 //!     ports: vec![],
 //!     mounts: vec![],
 //!     networks: vec![],
-//!     entrypoint: None,
-//!     command: None,
+//!     entrypoint: ImageCommand::Inherit,
+//!     command: ImageCommand::Inherit,
 //!     healthcheck: None,
 //!     restart: None,
+//!     settings: ContainerSettings::default(),
 //! }))]).unwrap();
 //! assert!(endpoint.path().is_absolute());
 //! assert!(matches!(selector, Selector::ContainerIds(_)));
