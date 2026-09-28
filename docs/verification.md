@@ -19,7 +19,11 @@ target artifact on every exact rootful/rootless lane. The existing native
 request allowlist needs an explicit `networks/{id}/connect` branch before
 those requests can be exercised; no new shape is admitted by offline checks.
 Run `./scripts/check-all.sh --check` for the complete offline gate: format,
-Clippy, unit and documentation tests, policy tests, and documentation build.
+Clippy, a locked all-target check under the minimum Rust release declared by
+`Cargo.toml`, unit and documentation tests, policy tests, and documentation build.
+The MSRV check installs the exact official Rust distribution through rustup
+when it is not already available; its failure stops the gate. PR, main,
+validation-dispatch, and release workflows all call this same gate.
 `--fix` runs the same checks after formatting. The VS Code task calls the fast
 format/lint script; PR and main CI call the complete offline gate. PR checks
 never run the privileged native matrix or claim native Engine evidence.

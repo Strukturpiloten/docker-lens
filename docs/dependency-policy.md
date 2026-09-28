@@ -1,11 +1,16 @@
 # Dependency and pin policy
 
-The decoder pins serde_json 1.0.149 for pure Engine JSON parsing, and the
-bounded Unix-socket connector pins socket2 0.6.5 for connect_timeout. Cargo.lock
+The decoder pins serde_json 1.0.151 for pure Engine JSON parsing and BoxFerry's
+reviewed consumer floor. The bounded Unix-socket connector pins socket2 0.6.5
+for connect_timeout. Cargo.lock
 records their dependency graphs and registry checksums. Renovate owns Cargo
 manifest pins and lockfile through its Cargo manager. rust-toolchain.toml pins
 Rust 1.98.1; Cargo.toml declares MSRV 1.85.0. Rust distribution uses its
 standard toolchain integrity mechanism; no separate checksum is claimed.
+`scripts/check-msrv.sh` derives that minimum from `Cargo.toml` and asks
+rustup to install its verified distribution before checking all targets. The
+serde_json pin remains owned by Renovate's existing Cargo manager; no regex
+manager, manager path, grouping rule, or additional dependency is needed.
 
 GitHub Actions use full commit SHAs with exact release-tag comments on
 ubuntu-24.04. Renovate owns Cargo, GitHub Actions, and the pinned Rust toolchain.

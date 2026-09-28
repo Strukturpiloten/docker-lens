@@ -7,6 +7,7 @@ case "$mode" in
   *) echo "usage: $0 [--fix|--check]" >&2; exit 2 ;;
 esac
 "$(dirname "$0")/format-lint.sh" "$mode"
+"$(dirname "$0")/check-msrv.sh"
 cargo test --all-targets --locked
 cargo test --doc --locked
 cargo doc --no-deps --locked

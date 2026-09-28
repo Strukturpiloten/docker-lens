@@ -522,10 +522,10 @@ impl Planner for DockerPlanner {
                             }
                         }
                         for mount in &container.mounts {
-                            if let MountSource::Volume(reference) = mount.source()
-                                && !references.contains(reference)
-                            {
-                                references.push(*reference);
+                            if let MountSource::Volume(reference) = mount.source() {
+                                if !references.contains(reference) {
+                                    references.push(*reference);
+                                }
                             }
                         }
                         references

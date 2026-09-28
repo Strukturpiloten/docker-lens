@@ -4,7 +4,9 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 import textwrap
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -94,6 +96,42 @@ class ScaffoldPolicyTests(unittest.TestCase):
         self.assertIn("1 passed; 0 failed; 0 ignored", exact)
         self.assertNotIn("system prune", native)
         self.assertNotIn("volume prune", native)
+
+    def test_complete_gate_checks_declared_msrv_and_propagates_failure(self) -> None:
+        manifest = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
+        minimum = manifest["package"]["rust-version"]
+        complete = (ROOT / "scripts/check-all.sh").read_text(encoding="utf-8")
+        self.assertIn("set -euo pipefail", complete)
+        self.assertIn('\n"$(dirname "$0")/check-msrv.sh"\n', complete)
+        self.assertLess(complete.index("check-msrv.sh"), complete.index("cargo test --all-targets"))
+        for workflow in ("check.yml", "native-validation.yml", "release-validation.yml"):
+            self.assertIn("./scripts/check-all.sh --check",
+                          (ROOT / ".github/workflows" / workflow).read_text(encoding="utf-8"))
+
+        with tempfile.TemporaryDirectory() as temporary:
+            fake = Path(temporary) / "rustup"
+            trace = Path(temporary) / "trace"
+            cargo_trace = Path(temporary) / "cargo-trace"
+            fake.write_text("#!/usr/bin/env bash\n"
+                            "printf '%s\\n' \"$*\" >> \"$MSRV_TRACE\"\n"
+                            "if [[ $1 == run ]]; then exit 37; fi\n", encoding="utf-8")
+            fake.chmod(0o755)
+            cargo = Path(temporary) / "cargo"
+            cargo.write_text("#!/usr/bin/env bash\n"
+                             "printf '%s\\n' \"$*\" >> \"$CARGO_TRACE\"\n", encoding="utf-8")
+            cargo.chmod(0o755)
+            env = dict(os.environ, PATH=f"{temporary}:{os.environ['PATH']}",
+                       MSRV_TRACE=str(trace), CARGO_TRACE=str(cargo_trace))
+            result = subprocess.run([str(ROOT / "scripts/check-all.sh"), "--check"], env=env,
+                                    capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode, 37)
+            self.assertEqual(trace.read_text(encoding="utf-8").splitlines(), [
+                f"toolchain install {minimum} --profile minimal",
+                f"run {minimum} cargo check --all-targets --locked",
+            ])
+            self.assertEqual(cargo_trace.read_text(encoding="utf-8").splitlines(), [
+                "fmt --all -- --check", "clippy --all-targets --locked -- -D warnings",
+            ])
 
     def test_native_lanes_and_release_aggregate_remain_required(self) -> None:
         check = (ROOT / ".github/workflows/check.yml").read_text()
