@@ -361,7 +361,8 @@ esac
                 if (state / "run-args").exists():
                     args = (state / "run-args").read_text()
                     self.assertIn("--image-volume=ignore", args)
-                    self.assertIn("--security-opt apparmor=unconfined", args)
+                    self.assertEqual("--security-opt apparmor=unconfined" in args,
+                                     lane == "debian11-rootless")
                     self.assertEqual("--oom-score-adj=0" in args, lane == "debian11-rootless")
                     self.assertIn("/usr/local/bin/start-dockerd", args)
                     self.assertIn("--host=unix:///dockerlens-native/docker.sock", args)

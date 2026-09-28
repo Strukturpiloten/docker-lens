@@ -207,8 +207,10 @@ fi
 # Keep the image's native daemon launcher. Its second Unix listener is bind-mounted
 # for explicit local test capture; neither listener is exposed over TCP.
 start=(/usr/local/bin/start-dockerd --host=unix:///dockerlens-native/docker.sock)
-run_flags=(--image-volume=ignore --security-opt apparmor=unconfined)
-if [[ $lane == debian11-rootless ]]; then run_flags+=(--oom-score-adj=0); fi
+run_flags=(--image-volume=ignore)
+if [[ $lane == debian11-rootless ]]; then
+  run_flags+=(--oom-score-adj=0 --security-opt apparmor=unconfined)
+fi
 watchdog &
 watchdog_pid=$!
 # Pull only the reviewed digest under the lane's time and free-space budget.

@@ -50,14 +50,16 @@ that installed package revision separately from /version. The upstream
 images contain Engine 29.8.1. No lane installs packages at runtime. Debian 11
 is a historical compatibility baseline, not current security support.
 The Debian rootless image needs --oom-score-adj=0 on its privileged rootful
-outer Podman container for nested workloads. All lanes explicitly disable
+outer Podman container for nested workloads. This lane explicitly disables
 AppArmor for that already-privileged outer container only; the harness does
 not change host policy. The Debian rootless lane additionally mounts its
 task-owned outer data-root volume with suid,dev. Controlled independent CLI
 probes showed the historical runc could not start a read-only named-volume
 container when that outer mount instead had nosuid,nodev. The harness checks
 the effective mount flags before native tests. The other three lanes keep
-their default volume options.
+their default volume and AppArmor options. Their independent native runs
+must pass with that unchanged setup; the historical lane's requirements
+do not authorize broadening the other lanes' configuration.
 
 Run one lane with ./scripts/native-conformance.sh <lane> on Linux with
 rootful Podman through passwordless sudo, at least 8 GiB free, and access
