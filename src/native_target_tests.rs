@@ -12,7 +12,7 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::Duration;
 
-use crate::acquisition::{Endpoint, Limits, NativeId, Selector, acquire};
+use crate::acquisition::{Endpoint, Limits, NativeId, ReadRequest, Selector, acquire};
 use crate::decoder::decode_capture;
 use crate::evidence::CaptureRoute;
 use crate::observation::ResourceRef;
@@ -30,6 +30,55 @@ use serde_json::{Value, json};
 
 fn required(name: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| panic!("native harness must supply {name}"))
+}
+
+fn acquisition_api_from_exchanges(
+    exchanges: impl IntoIterator<Item = (bool, Option<ApiVersion>)>,
+) -> Result<ApiVersion, &'static str> {
+    let mut negotiated = None;
+    for (unversioned_request, version) in exchanges {
+        if unversioned_request {
+            if version.is_some() {
+                return Err("unversioned request carried an API version");
+            }
+            continue;
+        }
+        let version = version.ok_or("versioned request omitted its API version")?;
+        if negotiated.is_some_and(|previous| previous != version) {
+            return Err("versioned requests used mixed API versions");
+        }
+        negotiated = Some(version);
+    }
+    negotiated.ok_or("capture contains no versioned request")
+}
+
+#[test]
+fn acquisition_api_uses_versioned_capture_requests_and_fails_closed() {
+    let advertised = ApiVersion::new(NonZeroU16::new(1).unwrap(), 56);
+    let negotiated = ApiVersion::new(NonZeroU16::new(1).unwrap(), 49);
+    assert_eq!(
+        acquisition_api_from_exchanges([
+            (true, None),
+            (false, Some(negotiated)),
+            (false, Some(negotiated))
+        ]),
+        Ok(negotiated)
+    );
+    assert_ne!(advertised, negotiated);
+    assert!(acquisition_api_from_exchanges([(true, None)]).is_err());
+    assert!(acquisition_api_from_exchanges([(true, None), (false, None)]).is_err());
+    assert!(
+        acquisition_api_from_exchanges([
+            (true, None),
+            (false, Some(negotiated)),
+            (false, Some(advertised))
+        ])
+        .is_err()
+    );
+    assert!(
+        acquisition_api_from_exchanges([(true, Some(advertised)), (false, Some(negotiated))])
+            .is_err()
+    );
 }
 
 fn direct_body(name: &str) -> Value {
@@ -663,6 +712,14 @@ fn live_target_render_matches_engine() {
         format!("{}.{}", observed_api.major, observed_api.minor),
         api_version
     );
+    let acquisition_api =
+        acquisition_api_from_exchanges(capture.exchanges().iter().map(|exchange| {
+            (
+                matches!(exchange.request(), ReadRequest::DaemonVersion),
+                exchange.api_version(),
+            )
+        }))
+        .expect("capture must bind one consistent negotiated acquisition API");
 
     let target_network = format!("dl-target-{run_id}-net");
     let target_volume = format!("dl-target-{run_id}-vol");
@@ -796,7 +853,7 @@ fn live_target_render_matches_engine() {
         build,
         facts.release.clone().expect("observed Engine release"),
         rendering_api,
-        observed_api,
+        acquisition_api,
         rendering_api,
         facts.mode,
     )
