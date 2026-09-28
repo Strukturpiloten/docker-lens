@@ -156,9 +156,10 @@ pub(super) fn render_container(
             let (kind, source): (&str, Option<&[u8]>) = match mount.source() {
                 MountSource::Bind(path) => ("bind", Some(path.as_bytes())),
                 MountSource::Volume(reference) => match resources.get(reference) {
-                    Some(TargetResource::Volume { identity, .. }) => {
-                        ("volume", Some(identity.bytes()))
-                    }
+                    Some(
+                        TargetResource::Volume { identity, .. }
+                        | TargetResource::ExternalVolume { identity, .. },
+                    ) => ("volume", Some(identity.bytes())),
                     _ => return Err(RenderError::InvalidGraph),
                 },
                 MountSource::Tmpfs(_) => ("tmpfs", None),
