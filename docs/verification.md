@@ -32,8 +32,8 @@ responses, including TCP/UDP traffic, before admitting capabilities scoped to
 #10's actual observation. It applies only three allowlisted POST endpoint kinds
 inside the isolated test daemon and checks the resulting resources, traffic,
 mounts, environment, command, health, and restart behavior. Decoder-only
-fixtures cannot establish this evidence. Native compatibility remains unproven
-until all lanes genuinely pass and their evidence is independently reviewed.
+fixtures cannot establish this evidence. Native compatibility claims require
+genuine passing lanes and independently reviewed evidence for the exact scope.
 
 The target conformance test lives in `src/native_target_tests.rs` under
 `#[cfg(test)]`; the exact-name runner selects its single ignored library test.
@@ -172,8 +172,12 @@ Engine compatibility evidence.
 
 ## Reviewed target-profile records
 
-The catalog remains empty until the four native lanes produce genuine reviewed
-evidence. A proposed record must conform to
+The catalog contains four reviewed records from native run `36451790131`,
+attempt 1, of source candidate `d51d7dbfda5ee6f8fefe92605afe8baea3dc504e`.
+Exact raw manifests and reviewed envelopes are checked in under
+`docs/evidence/native/sha256/` and `docs/evidence/reviewed/sha256/`. Each
+changed candidate and release needs fresh complete and four-lane native gates.
+Each record must conform to
 [`native-evidence.schema.json`](native-evidence.schema.json). Its lane and exact
 identity bind the distribution package revision (or upstream origin), reported
 Engine release, advertised maximum API, negotiated acquisition API, tested
@@ -215,8 +219,7 @@ record, avoiding a self-reference. The public `NativeEvidenceReference`
 retrieves the source run, candidate, native manifest digest and record digest
 for an admitted profile. Its constructor checks only syntax and cannot add a
 catalog entry. A checked-in historical native run can establish source
-evidence for a later catalog commit; the final catalog candidate still needs
-its own complete checks and native validation. Never substitute the historical
+evidence for a later catalog commit; each changed candidate and release still
+needs fresh complete checks and native validation. Never substitute the historical
 source SHA for the final candidate SHA or infer an API version from a release
-label. Public resolver and rendering tests should be enabled only after exact
-records are reviewed and added.
+label. Public resolver and inert rendering tests cover the admitted records.

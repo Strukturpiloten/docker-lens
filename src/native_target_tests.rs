@@ -22,8 +22,9 @@ use crate::target::{
     TargetIdentity, TargetIntent, TargetResource,
 };
 use crate::version::{
-    Capability, CapabilityFact, CapabilityScope, CapabilityState, DaemonMode, FactProvenance,
-    ValidatedCapabilities,
+    ApiVersion, Capability, CapabilityFact, CapabilityScope, CapabilityState, DaemonMode,
+    DebianPackageRevision, EngineBuild, FactProvenance, TargetCapabilities,
+    TargetCapabilityCatalog, TargetProfileIdentity, ValidatedCapabilities,
 };
 use serde_json::{Value, json};
 
@@ -412,7 +413,7 @@ fn render_and_inspect_variant(
     name: &str,
     image: &str,
     api_version: &str,
-    capabilities: &ValidatedCapabilities<'_>,
+    capabilities: &TargetCapabilities<'_>,
     mounts: Vec<Mount>,
     existing_volume: Option<&str>,
     restart: Option<RestartPolicy>,
@@ -767,7 +768,43 @@ fn live_target_render_matches_engine() {
             ..
         })
     ));
-    let admitted = ValidatedCapabilities::new(&facts).expect("exact observed conformance scope");
+    // Keep the observation-scoped check separate from the public offline
+    // catalogue. Its acquisition API can differ from the rendering API.
+    let observed = ValidatedCapabilities::new(&facts).expect("exact observed conformance scope");
+    planner
+        .plan(&intent, &observed)
+        .expect("probed shapes plan in observed scope");
+    let build = match required("NATIVE_LANE").as_str() {
+        "debian11-rootful" | "debian11-rootless" => EngineBuild::DebianPackage(
+            DebianPackageRevision::new(required("NATIVE_DOCKER_PACKAGE"))
+                .expect("native Debian package revision"),
+        ),
+        "upstream-rootful" | "upstream-rootless" => {
+            assert!(required("NATIVE_DOCKER_PACKAGE").is_empty());
+            EngineBuild::Upstream
+        }
+        _ => panic!("unrecognized native lane"),
+    };
+    let (api_major, api_minor) = api_version
+        .split_once('.')
+        .expect("native advertised API version");
+    let rendering_api = ApiVersion::new(
+        NonZeroU16::new(api_major.parse().expect("native API major")).expect("nonzero API"),
+        api_minor.parse().expect("native API minor"),
+    );
+    let identity = TargetProfileIdentity::new(
+        build,
+        facts.release.clone().expect("observed Engine release"),
+        rendering_api,
+        observed_api,
+        rendering_api,
+        facts.mode,
+    )
+    .expect("native target identity");
+    let catalog = TargetCapabilityCatalog::reviewed();
+    let admitted = catalog
+        .resolve_identity(&identity)
+        .expect("exact native target must be reviewed");
     let graph = planner
         .plan(&intent, &admitted)
         .expect("probed shapes plan");

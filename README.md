@@ -3,12 +3,15 @@
 DockerLens is a native Docker Engine library under construction. The current
 crate establishes privacy, observation, bounded explicit Unix-socket acquisition,
 pure Engine JSON decoding, and inert standalone target planning and rendering.
-It does **not** establish native compatibility or execute a target.
+It does not execute a target. Four exact profiles backed by reviewed native
+source records are available for inert rendering. Each changed candidate and
+release must pass fresh complete and four-lane native gates before a
+compatibility claim.
 
 The planned native work is tracked in [DockerLens #3](https://github.com/Strukturpiloten/docker-lens/issues/3).
 BoxFerry integration is a separate stream in
 [BoxFerry #343](https://github.com/Strukturpiloten/boxferry/issues/343).
-Debian 11 Docker Engine support needs independent native evidence; Debian 11
+Debian 11 Docker Engine support is bounded by exact reviewed native evidence; Debian 11
 Compose compatibility and Swarm mode are separate discussion topics.
 
 ## Contract boundaries
@@ -43,8 +46,8 @@ Compose compatibility and Swarm mode are separate discussion topics.
   package revision, the reported Engine release, advertised maximum API,
   negotiated acquisition API, tested rendering API, and daemon mode. The
   reviewed catalog exposes exact profiles and their immutable evidence digests;
-  callers cannot manufacture positive planning claims. It remains empty until
-  independent native review supplies records. Offline planning does not invent
+  callers cannot manufacture positive planning claims. It contains four exact
+  profiles backed by reviewed native source records. Offline planning does not invent
   a live observation. The operation graph retains the resolved context and
   checks capabilities for each requested standalone shape.
 - Target intent includes explicit resource identities, container image, ports,

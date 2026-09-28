@@ -567,7 +567,7 @@ impl NativeCapabilityShape {
     }
 }
 
-/// Internal reviewed-catalog entry. Native conformance will provide real records.
+/// Internal reviewed-catalog entry bound to immutable native evidence.
 pub(crate) struct TargetCapabilityRecord {
     pub profile: TargetProfile,
     pub evidence: NativeEvidenceReference,
@@ -580,15 +580,14 @@ pub struct TargetCapabilityCatalog {
 }
 
 impl TargetCapabilityCatalog {
-    /// No reviewed native capability records ship with this contract milestone.
-    /// Every nonempty profile therefore fails closed until conformance lands.
+    /// Only the four exact profiles backed by crate-owned reviewed records.
     #[must_use]
     pub fn reviewed() -> Self {
-        Self::from_records(Vec::new()).expect("empty reviewed catalog is valid")
+        Self::from_records(crate::reviewed_catalog::records())
+            .expect("checked-in reviewed records satisfy capability admission")
     }
 
-    /// Discover exact reviewed profiles and their evidence keys. The public
-    /// catalog is empty until genuine native records have been reviewed.
+    /// Discover exact reviewed profiles and their immutable evidence keys.
     pub fn profiles(&self) -> impl ExactSizeIterator<Item = &TargetProfile> {
         self.records.iter().map(|record| &record.profile)
     }
@@ -1024,7 +1023,7 @@ mod tests {
             TargetCapabilityCatalog::reviewed().resolve(&profile),
             Err(CapabilityError::ProfileNotReviewed)
         ));
-        assert_eq!(TargetCapabilityCatalog::reviewed().profiles().len(), 0);
+        assert_eq!(TargetCapabilityCatalog::reviewed().profiles().len(), 4);
         let other_build = TargetProfileIdentity::new(
             EngineBuild::Upstream,
             release.clone(),

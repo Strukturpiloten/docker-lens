@@ -1,6 +1,11 @@
 //! An external consumer can discover reviewed profiles but cannot supply
 //! positive capability claims without a matching catalog record.
 
+use docker_lens::observation::ResourceRef;
+use docker_lens::target::{
+    DockerApiRenderer, DockerPlanner, Planner, Renderer, TargetIdentity, TargetIntent,
+    TargetResource,
+};
 use docker_lens::version::{
     ApiVersion, CapabilityError, CapabilityEvidenceKey, DaemonMode, DebianPackageRevision,
     EngineBuild, EngineRelease, NativeEvidenceLane, NativeEvidenceReference,
@@ -13,9 +18,60 @@ fn api(minor: u16) -> ApiVersion {
 }
 
 #[test]
-fn public_catalog_discovery_and_resolution_fail_closed_until_native_review() {
+fn public_catalog_resolves_four_exact_profiles_and_renders_inert_requests() {
     let catalog = TargetCapabilityCatalog::reviewed();
-    assert_eq!(catalog.profiles().len(), 0);
+    assert_eq!(catalog.profiles().len(), 4);
+    for profile in catalog.profiles() {
+        let admitted = catalog.resolve(profile).unwrap();
+        assert_eq!(admitted.profile(), profile);
+        assert_eq!(admitted.evidence_key(), profile.evidence_key());
+        let opposite_mode = if profile.mode() == DaemonMode::Rootful {
+            DaemonMode::Rootless
+        } else {
+            DaemonMode::Rootful
+        };
+        let mismatched_mode = TargetProfile::new(
+            TargetProfileIdentity::new(
+                profile.identity().build().clone(),
+                profile.release().clone(),
+                profile.identity().advertised_api_version(),
+                profile.identity().acquisition_api_version(),
+                profile.rendering_api_version(),
+                opposite_mode,
+            )
+            .unwrap(),
+            profile.evidence_key().clone(),
+        );
+        assert!(matches!(
+            catalog.resolve(&mismatched_mode),
+            Err(CapabilityError::ProfileNotReviewed)
+        ));
+        let intent = TargetIntent::new(vec![TargetResource::Volume {
+            reference: ResourceRef::new(1),
+            identity: TargetIdentity::new(b"consumer-volume".to_vec()).unwrap(),
+        }])
+        .unwrap();
+        let graph = DockerPlanner.plan(&intent, &admitted).unwrap();
+        let artifact = DockerApiRenderer.render(&graph).unwrap();
+        let rendered: serde_json::Value = serde_json::from_slice(
+            artifact
+                .bytes()
+                .split(|byte| *byte == b'\n')
+                .next()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(rendered["method"], "POST");
+        assert_eq!(rendered["body"]["Name"], "consumer-volume");
+        assert_eq!(
+            rendered["path"],
+            format!(
+                "/v{}.{}/volumes/create",
+                profile.rendering_api_version().major,
+                profile.rendering_api_version().minor
+            )
+        );
+    }
 
     let build = EngineBuild::DebianPackage(
         DebianPackageRevision::new("20.10.5+dfsg1-1+deb11u2".into()).unwrap(),
@@ -34,10 +90,7 @@ fn public_catalog_discovery_and_resolution_fail_closed_until_native_review() {
 
     assert_eq!(caller_claim.identity(), &identity);
     assert_eq!(caller_claim.evidence_key().as_sha256_bytes(), &[7; 32]);
-    assert!(matches!(
-        catalog.resolve_identity(&identity),
-        Err(CapabilityError::ProfileNotReviewed)
-    ));
+    assert!(catalog.resolve_identity(&identity).is_ok());
     assert!(matches!(
         catalog.resolve(&caller_claim),
         Err(CapabilityError::ProfileNotReviewed)
@@ -45,7 +98,7 @@ fn public_catalog_discovery_and_resolution_fail_closed_until_native_review() {
 }
 
 #[test]
-fn exact_debian11_candidates_in_both_modes_remain_unadmitted_without_native_records() {
+fn exact_debian11_candidates_admit_only_reviewed_identity_dimensions() {
     let catalog = TargetCapabilityCatalog::reviewed();
     let release = EngineRelease::new("20.10.5+dfsg1".into()).unwrap();
     let package = "20.10.5+dfsg1-1+deb11u2";
@@ -59,6 +112,7 @@ fn exact_debian11_candidates_in_both_modes_remain_unadmitted_without_native_reco
             mode,
         )
         .unwrap();
+        assert!(catalog.resolve_identity(&exact).is_ok());
         let neighbors = [
             TargetProfileIdentity::new(
                 EngineBuild::DebianPackage(
@@ -89,10 +143,79 @@ fn exact_debian11_candidates_in_both_modes_remain_unadmitted_without_native_reco
                 mode,
             )
             .unwrap(),
+            TargetProfileIdentity::new(
+                EngineBuild::DebianPackage(DebianPackageRevision::new(package.into()).unwrap()),
+                release.clone(),
+                api(42),
+                api(42),
+                api(41),
+                mode,
+            )
+            .unwrap(),
+            TargetProfileIdentity::new(
+                EngineBuild::DebianPackage(DebianPackageRevision::new(package.into()).unwrap()),
+                release.clone(),
+                api(42),
+                api(41),
+                api(42),
+                mode,
+            )
+            .unwrap(),
+            TargetProfileIdentity::new(
+                EngineBuild::Upstream,
+                release.clone(),
+                api(41),
+                api(41),
+                api(41),
+                mode,
+            )
+            .unwrap(),
         ];
-        for identity in std::iter::once(&exact).chain(neighbors.iter()) {
+        for identity in &neighbors {
             assert!(matches!(
                 catalog.resolve_identity(identity),
+                Err(CapabilityError::ProfileNotReviewed)
+            ));
+        }
+    }
+}
+
+#[test]
+fn upstream_profiles_bind_distinct_advertised_acquisition_and_rendering_apis() {
+    let catalog = TargetCapabilityCatalog::reviewed();
+    let release = EngineRelease::new("29.8.1".into()).unwrap();
+    for mode in [DaemonMode::Rootful, DaemonMode::Rootless] {
+        let identity = |advertised, acquisition, rendering| {
+            TargetProfileIdentity::new(
+                EngineBuild::Upstream,
+                release.clone(),
+                api(advertised),
+                api(acquisition),
+                api(rendering),
+                mode,
+            )
+            .unwrap()
+        };
+        assert!(catalog.resolve_identity(&identity(56, 49, 56)).is_ok());
+        for neighbor in [
+            identity(55, 49, 55),
+            identity(57, 49, 56),
+            identity(56, 48, 56),
+            identity(56, 50, 56),
+            identity(56, 49, 55),
+            identity(56, 56, 49),
+            TargetProfileIdentity::new(
+                EngineBuild::Upstream,
+                EngineRelease::new("29.8.2".into()).unwrap(),
+                api(56),
+                api(49),
+                api(56),
+                mode,
+            )
+            .unwrap(),
+        ] {
+            assert!(matches!(
+                catalog.resolve_identity(&neighbor),
                 Err(CapabilityError::ProfileNotReviewed)
             ));
         }

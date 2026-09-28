@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "lane": "upstream-rootless",
+  "candidate_sha": "d51d7dbfda5ee6f8fefe92605afe8baea3dc504e",
+  "run_url": "https://github.com/Strukturpiloten/docker-lens/actions/runs/36451790131/attempts/1",
+  "native_manifest_artifact_name": "dockerlens-native-upstream-rootless",
+  "native_manifest_sha256": "ec31ef230d76cf91071856dfdaf5601cb59f8fd72f154d4fd4746963bb228b7e",
+  "identity": {
+    "build": {
+      "kind": "upstream"
+    },
+    "engine_release": "29.8.1",
+    "advertised_api": "1.56",
+    "acquisition_api": "1.49",
+    "rendering_api": "1.56",
+    "mode": "rootless"
+  },
+  "capabilities": [
+    {
+      "name": "BindMount",
+      "state": "available",
+      "admitted_shapes": [
+        "BindMountReadWrite",
+        "BindMountReadOnly"
+      ]
+    },
+    {
+      "name": "BridgeNetwork",
+      "state": "available",
+      "admitted_shapes": [
+        "BridgeNetworkCreate",
+        "BridgeNetworkAttach"
+      ]
+    },
+    {
+      "name": "Command",
+      "state": "available",
+      "admitted_shapes": [
+        "ExecCommand"
+      ]
+    },
+    {
+      "name": "Entrypoint",
+      "state": "available",
+      "admitted_shapes": [
+        "ExecEntrypoint"
+      ]
+    },
+    {
+      "name": "EnvironmentAssignment",
+      "state": "available",
+      "admitted_shapes": [
+        "EnvironmentValue",
+        "EnvironmentEmptyValue"
+      ]
+    },
+    {
+      "name": "Healthcheck",
+      "state": "available",
+      "admitted_shapes": [
+        "ExecHealthcheck"
+      ]
+    },
+    {
+      "name": "NamedVolume",
+      "state": "available",
+      "admitted_shapes": [
+        "NamedVolumeCreate",
+        "NamedVolumeMountReadWrite",
+        "NamedVolumeMountReadOnly"
+      ]
+    },
+    {
+      "name": "PortPublish",
+      "state": "available",
+      "admitted_shapes": [
+        "FixedTcpPort",
+        "FixedUdpPort"
+      ]
+    },
+    {
+      "name": "RestartPolicy",
+      "state": "available",
+      "admitted_shapes": [
+        "RestartNo",
+        "RestartAlways",
+        "RestartUnlessStopped",
+        "RestartOnFailureUnlimited",
+        "RestartOnFailureLimited"
+      ]
+    },
+    {
+      "name": "StandaloneContainer",
+      "state": "available",
+      "admitted_shapes": [
+        "StandaloneCreate"
+      ]
+    }
+  ]
+}

@@ -5,10 +5,12 @@ This file applies to the entire DockerLens repository.
 ## Product scope
 
 DockerLens contains native contracts, bounded explicit Unix-socket capture, and a pure
-Docker Engine decoder, without proven Engine compatibility. Read this file,
+Docker Engine decoder, with four exact profiles backed by reviewed native source
+records. Each changed candidate and release requires fresh complete and native
+gates before a compatibility claim. Read this file,
 `README.md`, `docs/architecture.md`, `docs/verification.md`, and relevant decisions before editing.
-An isolated four-lane native Engine conformance harness is implemented, but its
-presence is not passing native evidence. Standalone target
+An isolated four-lane native Engine conformance harness is implemented, and a
+historical four-lane source run passed. Standalone target
 planning and rendering produce inert data only; they do not contact a daemon.
 Pure decoder tests do not establish native compatibility. Product libraries must not depend on BoxFerry.
 

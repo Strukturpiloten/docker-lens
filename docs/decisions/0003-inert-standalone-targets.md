@@ -1,6 +1,7 @@
 # ADR 0003: Render explicit standalone intent as inert Engine requests
 
-Status: accepted implementation contract; native compatibility remains unproven.
+Status: accepted implementation contract; compatibility claims require fresh
+complete and native gates for each changed candidate and release.
 
 This supersedes the target-setting and renderer placeholders in ADR 0002;
 its capture and offline-evidence boundaries remain in force.
@@ -22,8 +23,9 @@ a construction path, so callers cannot assert `NativeConformance` themselves.
 An offline identity distinguishes Debian package revision from the reported
 Engine release, and the advertised, acquisition, and tested rendering APIs
 from one another. Rendering uses only the reviewed rendering API. Callers can
-discover exact catalog profiles and the matching evidence digest; none ship
-until the genuine four-lane suite establishes them. Every used setting has a
+discover exact catalog profiles and the matching evidence digest; four now ship
+from a reviewed historical four-lane run. Each changed candidate and release
+requires fresh complete and native validation. Every used setting has a
 distinct positive capability fact; missing, unknown, or unavailable facts
 produce a value-free error identifying the resource, field, and capability.
 The operation graph validates kinds, required references, and cycles. It
@@ -47,5 +49,5 @@ transport, file writer, image builder, or deployment method.
 Independent native conformance must verify these request shapes against each
 claimed package build, Engine release, advertised/acquisition/rendering API
 combination, and daemon mode before compatibility is claimed or a release gate
-is enabled. The public offline capability catalog stays empty until reviewed
-native records are integrated.
+is enabled. The public offline capability catalog admits only the four
+integrated reviewed records and no caller-supplied positive facts.

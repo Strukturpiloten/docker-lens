@@ -1734,7 +1734,7 @@ mod tests {
         )
         .unwrap();
         let profile = TargetProfile::new(identity, CapabilityEvidenceKey::sha256([7; 32]).unwrap());
-        // Fabricated test record; production catalog is empty until native review.
+        // Fabricated test record; the production catalog admits only reviewed records.
         let catalog = TargetCapabilityCatalog::from_test_records(vec![TargetCapabilityRecord {
             profile: profile.clone(),
             evidence: NativeEvidenceReference::new(

@@ -36,8 +36,9 @@
    from an exact Debian package revision, the reported Engine release,
    advertised maximum API, negotiated acquisition API, tested rendering API,
    and daemon mode. Catalog discovery returns its SHA-256 evidence key. The
-   public catalog remains empty until native conformance supplies reviewed
-   records, so no target compatibility is claimed yet. The operation graph
+   public catalog contains four exact records from a reviewed historical native
+   run. Each changed candidate and release needs fresh complete and four-lane
+   native gates before a compatibility claim. The operation graph
    retains the chosen context and
    checks standalone containers, named volumes, bridge networks, and each
    requested setting. Other network modes await explicit native review.

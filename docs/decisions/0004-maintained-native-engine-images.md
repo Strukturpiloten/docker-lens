@@ -1,6 +1,7 @@
 # ADR 0004: Run native conformance against maintained Engine images
 
-Status: accepted harness contract; DockerLens compatibility evidence pending.
+Status: accepted harness contract; historical four-lane source evidence reviewed.
+Each changed candidate and release requires fresh complete and native gates.
 
 The four independent native lanes use the published, version-tagged and
 digest-pinned containers#260 GHCR images: Debian 11 packaged Engine in

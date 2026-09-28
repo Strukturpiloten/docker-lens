@@ -549,6 +549,7 @@ export NATIVE_ENGINE_SOCKET="$socket" NATIVE_CAPTURE_DIR="$run_dir" NATIVE_CONTA
 export NATIVE_NETWORK_ID="$network_id" NATIVE_VOLUME_NAME="$volume_name"
 export NATIVE_ENGINE_VERSION="$server_version" NATIVE_DAEMON_MODE="$expected_mode"
 export NATIVE_API_VERSION="$api_version"
+export NATIVE_LANE="$lane" NATIVE_DOCKER_PACKAGE="$installed_docker_package"
 export NATIVE_FIXTURE_IMAGE="$FIXTURE_IMAGE" NATIVE_OUTER_CONTAINER="$container"
 export NATIVE_BIND_SOURCE=/dockerlens-native/native-bind
 export NATIVE_SHAPES_PATH="$run_dir/target-shapes.json"

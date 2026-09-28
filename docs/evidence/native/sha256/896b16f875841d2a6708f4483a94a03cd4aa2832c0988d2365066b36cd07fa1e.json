@@ -1,0 +1,72 @@
+{
+  "acquisition_api": "1.49",
+  "admitted_shapes": {
+    "BindMount": [
+      "BindMountReadWrite",
+      "BindMountReadOnly"
+    ],
+    "BridgeNetwork": [
+      "BridgeNetworkCreate",
+      "BridgeNetworkAttach"
+    ],
+    "Command": [
+      "ExecCommand"
+    ],
+    "Entrypoint": [
+      "ExecEntrypoint"
+    ],
+    "EnvironmentAssignment": [
+      "EnvironmentValue",
+      "EnvironmentEmptyValue"
+    ],
+    "Healthcheck": [
+      "ExecHealthcheck"
+    ],
+    "NamedVolume": [
+      "NamedVolumeCreate",
+      "NamedVolumeMountReadWrite",
+      "NamedVolumeMountReadOnly"
+    ],
+    "PortPublish": [
+      "FixedTcpPort",
+      "FixedUdpPort"
+    ],
+    "RestartPolicy": [
+      "RestartNo",
+      "RestartAlways",
+      "RestartUnlessStopped",
+      "RestartOnFailureUnlimited",
+      "RestartOnFailureLimited"
+    ],
+    "StandaloneContainer": [
+      "StandaloneCreate"
+    ]
+  },
+  "candidate_sha": "d51d7dbfda5ee6f8fefe92605afe8baea3dc504e",
+  "capability_outcome": {
+    "BindMount": "available",
+    "BridgeNetwork": "available",
+    "Command": "available",
+    "Entrypoint": "available",
+    "EnvironmentAssignment": "available",
+    "Healthcheck": "available",
+    "NamedVolume": "available",
+    "PortPublish": "available",
+    "RestartPolicy": "available",
+    "StandaloneContainer": "available"
+  },
+  "capability_version": "1.56",
+  "debian_docker_package": null,
+  "engine_api_max": "1.56",
+  "engine_api_min": "1.40",
+  "engine_version": "29.8.1",
+  "expected_mode": "rootful",
+  "lane": "upstream-rootful",
+  "outer_image": "ghcr.io/strukturpiloten/docker-29-rootful:v29.8.1@sha256:bc71d19fbcd6d84d1452f61e6c3cbac77b6acaba214d7eb830b79124d1a4d563",
+  "rendering_api": "1.56",
+  "runtime_components": {
+    "containerd": "v2.3.5",
+    "runc": "1.5.1"
+  },
+  "schema_version": 1
+}
