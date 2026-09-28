@@ -9,6 +9,9 @@ release must pass fresh complete and four-lane native gates before a
 compatibility claim.
 
 The planned native work is tracked in [DockerLens #3](https://github.com/Strukturpiloten/docker-lens/issues/3).
+The [standalone migration ledger](docs/standalone-migration-ledger.md) records
+the finite remaining shapes, evidence, and implementation owners; the current
+0.1.0 surface is the foundation, not completion of that ledger.
 BoxFerry integration is a separate stream in
 [BoxFerry #343](https://github.com/Strukturpiloten/boxferry/issues/343).
 Debian 11 Docker Engine support is bounded by exact reviewed native evidence; Debian 11
