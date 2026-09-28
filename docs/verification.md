@@ -1,6 +1,9 @@
 # Verification
 
 Run `./scripts/format-lint.sh --fix` for local formatting and lint feedback.
+The target-module checkpoint has an exact network request regression alongside
+the existing container and graph tests. These offline checks preserve the
+0.1.0 contract; they do not prove new migration shapes or native compatibility.
 Run `./scripts/check-all.sh --check` for the complete offline gate: format,
 Clippy, unit and documentation tests, policy tests, and documentation build.
 `--fix` runs the same checks after formatting. The VS Code task calls the fast

@@ -51,7 +51,13 @@
 pure native JSON decoding; `src/evidence.rs` owns
 protected values and captures; `src/observation.rs` owns availability and origin;
 `src/finding.rs` owns value-free diagnostics; `src/version.rs` owns Engine, API,
-mode, and capability facts; `src/target.rs` owns intent, graph, and renderer seams.
+mode, and capability facts; `src/target.rs` preserves public target paths while
+`src/target_modules/intent.rs` owns shared intent and validation,
+`src/target_modules/container.rs` owns container types,
+`src/target_modules/graph.rs` owns planning, and
+`src/target_modules/render.rs` dispatches inert rendering to separate
+container and network modules. The [migration ledger](standalone-migration-ledger.md)
+defines subsequent ownership and evidence requirements.
 These modules define independent ownership boundaries for later native work.
 
 ## Decoder evidence boundary
