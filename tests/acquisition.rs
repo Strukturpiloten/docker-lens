@@ -403,11 +403,61 @@ fn duplicate_related_native_ids_consume_one_expansion_each() {
     assert_eq!(server.requests().len(), 5);
 }
 
+#[test]
+fn empty_network_id_uses_independent_endpoint_name_for_inspection() {
+    let server = Server::new(|request| {
+        let path = request.split_ascii_whitespace().nth(1)?;
+        Some(match path {
+            "/version" => version(),
+            "/v1.49/info" => response("{}"),
+            "/v1.49/containers/selected/json" => {
+                response(r#"{"NetworkSettings":{"Networks":{"named-bridge":{"NetworkID":""}}}}"#)
+            }
+            "/v1.49/networks/named-bridge" => {
+                response(r#"{"Id":"canonical-network-id","Name":"named-bridge"}"#)
+            }
+            _ => return None,
+        })
+    });
+    let capture = acquire(
+        &server.endpoint(),
+        Selector::ContainerIds(vec![NativeId::new("selected".into()).unwrap()]),
+        limits(),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(capture.bounds().expansions, 2);
+    assert!(capture.exchanges().iter().any(|exchange| {
+        matches!(exchange.request(), ReadRequest::InspectNetwork(id) if id.as_str() == "named-bridge")
+    }));
+    assert!(
+        server
+            .requests()
+            .iter()
+            .any(|request| { request.starts_with("GET /v1.49/networks/named-bridge ") })
+    );
+}
+
+fn acquisition_category(error: AcquisitionError) -> &'static str {
+    match error {
+        AcquisitionError::Endpoint => "endpoint",
+        AcquisitionError::Cancelled => "cancelled",
+        AcquisitionError::Deadline => "deadline",
+        AcquisitionError::Io => "io",
+        AcquisitionError::Protocol => "protocol",
+        AcquisitionError::Status => "status",
+        AcquisitionError::Version => "version",
+        AcquisitionError::Shape => "shape",
+        AcquisitionError::Budget(_) => "budget",
+    }
+}
+
 /// The native harness supplies a private isolated Engine socket and independent
 /// direct-API observations. Fake-socket tests above do not replace this check.
 #[test]
 #[ignore = "requires the isolated native Engine harness"]
 fn live_read_only_acquisition_matches_oracle() {
+    eprintln!("DOCKERLENS_NATIVE_CHECK: acquire_input");
     let required = |name| std::env::var(name).unwrap_or_else(|_| panic!("missing {name}"));
     let socket = required("NATIVE_ENGINE_SOCKET");
     let capture_dir = required("NATIVE_CAPTURE_DIR");
@@ -427,11 +477,24 @@ fn live_read_only_acquisition_matches_oracle() {
     let oracle_container = oracle("container.json");
     let oracle_network = oracle("network.json");
     let oracle_volume = oracle("volume.json");
+    eprintln!("DOCKERLENS_NATIVE_CHECK: acquire_oracle");
     assert!(oracle_version.get("Version").and_then(Value::as_str) == Some(engine_version.as_str()));
     assert!(oracle_container.get("Id").and_then(Value::as_str) == Some(container_id.as_str()));
     assert!(oracle_network.get("Id").and_then(Value::as_str) == Some(network_id.as_str()));
     assert!(oracle_volume.get("Name").and_then(Value::as_str) == Some(volume_name.as_str()));
     assert!(oracle_info.is_object());
+    let oracle_network_name = oracle_network["Name"]
+        .as_str()
+        .expect("direct network name");
+    let oracle_endpoint = &oracle_container["NetworkSettings"]["Networks"][oracle_network_name];
+    assert!(
+        oracle_endpoint.is_object(),
+        "direct container network endpoint"
+    );
+    let requested_network = oracle_endpoint["NetworkID"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .unwrap_or(oracle_network_name);
     let (major, minor) = api_version.split_once('.').expect("two-part API version");
     assert_eq!(major, "1");
     let expected_minor = minor.parse::<u16>().unwrap().min(49);
@@ -442,13 +505,18 @@ fn live_read_only_acquisition_matches_oracle() {
     native_limits.max_response_bytes = 8 * 1024 * 1024;
     native_limits.max_total_bytes = 32 * 1024 * 1024;
     native_limits.max_elapsed = Duration::from_secs(20);
+    eprintln!("DOCKERLENS_NATIVE_CHECK: acquire_socket");
     let capture = acquire(
         &Endpoint::unix_socket(PathBuf::from(socket)),
         Selector::ContainerIds(vec![NativeId::new(container_id.clone()).unwrap()]),
         native_limits,
         &AtomicBool::new(false),
     )
-    .unwrap();
+    .unwrap_or_else(|error| {
+        eprintln!("DOCKERLENS_NATIVE_ERROR: {}", acquisition_category(error));
+        panic!("bounded native acquisition failed");
+    });
+    eprintln!("DOCKERLENS_NATIVE_CHECK: acquire_route");
     assert_eq!(capture.route(), CaptureRoute::ExplicitUnixSocket);
     assert_eq!(capture.bounds().selected_resources, 1);
     assert_eq!(capture.bounds().expansions, 3);
@@ -458,9 +526,20 @@ fn live_read_only_acquisition_matches_oracle() {
             .iter()
             .all(|exchange| exchange.status().code() == 200)
     );
-    assert!(capture.exchanges().iter().any(|exchange| {
-        matches!(exchange.request(), ReadRequest::InspectNetwork(id) if id.as_str() == network_id)
-    }));
+    eprintln!("DOCKERLENS_NATIVE_CHECK: acquire_network");
+    let inspected_network = capture
+        .exchanges()
+        .iter()
+        .find(|exchange| {
+            matches!(exchange.request(), ReadRequest::InspectNetwork(id) if id.as_str() == requested_network)
+        })
+        .expect("requested native network was inspected");
+    let inspected_network_body: Value =
+        serde_json::from_slice(inspected_network.body().as_bytes()).expect("native network JSON");
+    assert!(
+        inspected_network_body["Id"].as_str() == Some(network_id.as_str()),
+        "inspected network canonical ID differs from direct oracle"
+    );
     assert!(capture.exchanges().iter().any(|exchange| {
         matches!(exchange.request(), ReadRequest::InspectVolume(id) if id.as_str() == volume_name)
     }));
@@ -469,11 +548,13 @@ fn live_read_only_acquisition_matches_oracle() {
             .iter()
             .all(|exchange| exchange.api_version().unwrap().minor == expected_minor)
     );
+    eprintln!("DOCKERLENS_NATIVE_CHECK: acquire_decode");
     let decoded = decode_capture(&capture).unwrap();
     assert_eq!(decoded.containers.len(), 1);
     assert_eq!(decoded.networks.len(), 1);
     assert_eq!(decoded.volumes.len(), 1);
     assert!(decoded.version.daemon.release.as_ref().unwrap().as_str() == engine_version);
+    eprintln!("DOCKERLENS_NATIVE_CHECK: acquire_mode");
     if daemon_mode == "rootless" {
         assert_eq!(decoded.version.daemon.mode, DaemonMode::Rootless);
     } else {
@@ -481,6 +562,7 @@ fn live_read_only_acquisition_matches_oracle() {
         assert_ne!(decoded.version.daemon.mode, DaemonMode::Rootless);
     }
     let container = &decoded.containers[0];
+    eprintln!("DOCKERLENS_NATIVE_CHECK: acquire_settings");
     let oracle_env = oracle_container["Config"]["Env"].as_array().unwrap();
     let synthetic = oracle_env
         .iter()
@@ -538,6 +620,7 @@ fn live_read_only_acquisition_matches_oracle() {
             .as_str()
             .is_some_and(|expected| driver.as_bytes() == expected.as_bytes())
     }));
+    eprintln!("DOCKERLENS_NATIVE_CHECK: acquire_replay");
     let replayed = decode_capture(&capture).unwrap();
     assert_eq!(replayed.containers.len(), decoded.containers.len());
 }

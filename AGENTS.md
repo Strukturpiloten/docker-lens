@@ -7,7 +7,8 @@ This file applies to the entire DockerLens repository.
 DockerLens contains native contracts, bounded explicit Unix-socket capture, and a pure
 Docker Engine decoder, without proven Engine compatibility. Read this file,
 `README.md`, `docs/architecture.md`, `docs/verification.md`, and relevant decisions before editing.
-No Engine conformance is implemented yet. Standalone target
+An isolated four-lane native Engine conformance harness is implemented, but its
+presence is not passing native evidence. Standalone target
 planning and rendering produce inert data only; they do not contact a daemon.
 Pure decoder tests do not establish native compatibility. Product libraries must not depend on BoxFerry.
 
@@ -86,19 +87,22 @@ These model settings do not expand the workspace scope or grant additional permi
   concurrent implementation. Research and review remain read-only.
 - The reviewer checks the original requirements and independent expected results, not just agreement
   between the implementation and its tests.
-- After writing finishes, the verifier runs the complete scaffold gate listed below. It reports
+- After writing finishes, the verifier runs the complete local gate listed below. It reports
   failures without formatting or editing tracked files; ignored caches are allowed.
 - Run at most one complete gate or heavy runtime suite at a time across this workspace. Agent
   concurrency is not permission for competing builds. The primary owns integration, the final
   complete gate, and every authorized Git or GitHub write.
 
-## Complete scaffold validation
+## Complete local validation
 
 Run `./scripts/format-lint.sh --fix`, then `./scripts/check-all.sh --check` after the final edit.
-The complete gate covers formatting, Clippy, unit and documentation tests, policy tests, and docs.
-The release validation workflow must also pass native Engine conformance for the exact candidate;
-its native script deliberately fails until the separately reviewed suite is implemented. Never
-silently skip a required check or claim native compatibility from scaffold tests.
+The local gate covers formatting, Clippy, unit and documentation tests, policy tests, and docs.
+Main push and exact-candidate release validation separately require all four isolated native
+Engine lanes. PR workflows run the complete offline gate only; a green PR does not claim native
+evidence. The native harness uses bounded rootful outer Podman and rootful/rootless inner
+Docker; only genuine passing, independently reviewed lane evidence establishes compatibility.
+Never silently skip a required check or claim native compatibility from local tests or harness
+definitions alone.
 
 The separate, validation-only native dispatcher is installed before the native suite. It runs
 only by reviewed manual dispatch from trusted `main` for an open same-repository PR's exact
