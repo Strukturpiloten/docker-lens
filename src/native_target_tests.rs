@@ -929,6 +929,7 @@ fn live_target_render_matches_engine() {
         Some(&target_volume),
         None,
     );
+    eprintln!("DOCKERLENS_NATIVE_CHECK: target_shape_volume_ro_created");
     assert_mount(
         &volume_ro,
         "volume",
@@ -936,12 +937,14 @@ fn live_target_render_matches_engine() {
         Some(&target_volume),
         false,
     );
+    eprintln!("DOCKERLENS_NATIVE_CHECK: target_shape_volume_ro_inspected");
     let (status, _) = api(
         "POST",
         &format!("/v{api_version}/containers/{volume_ro_id}/start"),
         None,
     );
     assert_eq!(status, 204);
+    eprintln!("DOCKERLENS_NATIVE_CHECK: target_shape_volume_ro_started");
     inner_docker(&[
         "exec",
         &volume_ro_id,
@@ -949,6 +952,7 @@ fn live_target_render_matches_engine() {
         "-c",
         "test -d /readonly-volume",
     ]);
+    eprintln!("DOCKERLENS_NATIVE_CHECK: target_shape_volume_ro_accessible");
     let mut write_probe = inner_docker_command(&[
         "exec",
         &volume_ro_id,
@@ -957,11 +961,18 @@ fn live_target_render_matches_engine() {
         "printf blocked > /readonly-volume/blocked",
     ]);
     write_probe.stdout(Stdio::null()).stderr(Stdio::null());
+    let write_status = write_probe
+        .status()
+        .expect("read-only volume write probe")
+        .code();
+    let write_category = match write_status {
+        Some(0) => "target_shape_volume_ro_write_zero",
+        Some(1) => "target_shape_volume_ro_write_one",
+        _ => "target_shape_volume_ro_write_other",
+    };
+    eprintln!("DOCKERLENS_NATIVE_CHECK: {write_category}");
     assert_eq!(
-        write_probe
-            .status()
-            .expect("read-only volume write probe")
-            .code(),
+        write_status,
         Some(1),
         "read-only named volume must reject a container write"
     );

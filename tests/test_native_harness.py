@@ -373,6 +373,7 @@ esac
             ("uidfail", False),
             ("phasefail", False),
             ("shapefail", False),
+            ("volumefail", False),
             ("startfail", False),
             ("listfail", False),
         ):
@@ -422,6 +423,13 @@ elif [[ $FAKE_NATIVE_TEST_MODE == shapefail ]]; then
   echo 'DOCKERLENS_NATIVE_CHECK: target_shape_private' >&2
   echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
   exit 12
+elif [[ $FAKE_NATIVE_TEST_MODE == volumefail ]]; then
+  echo 'protected read-only volume detail' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: target_shape_volume_ro_accessible' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: target_shape_volume_ro_write_other' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: target_shape_volume_ro_write_private' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 13
 elif [[ $FAKE_NATIVE_TEST_MODE == startfail ]]; then
   echo 'protected daemon start detail' >&2
   echo 'DOCKERLENS_NATIVE_CHECK: target_start_cgroup' >&2
@@ -463,6 +471,12 @@ fi
                 elif mode == "shapefail":
                     self.assertIn("DOCKERLENS_NATIVE_CHECK: target_shape_volume_ro", result.stderr)
                     self.assertNotIn("target_shape_private", result.stderr)
+                elif mode == "volumefail":
+                    self.assertIn(
+                        "DOCKERLENS_NATIVE_CHECK: target_shape_volume_ro_write_other",
+                        result.stderr,
+                    )
+                    self.assertNotIn("target_shape_volume_ro_write_private", result.stderr)
                 elif mode == "startfail":
                     self.assertIn("DOCKERLENS_NATIVE_CHECK: target_start_cgroup", result.stderr)
                     self.assertNotIn("target_start_private", result.stderr)

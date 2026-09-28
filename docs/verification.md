@@ -74,7 +74,9 @@ storage use and free space. Failure diagnostics show the exact native test,
 exit status, numeric libtest summary, fixed native marker, and closed
 acquisition-error category where applicable. Daemon startup failures show
 bounded container state and a fixed category. Raw daemon logs and API
-responses remain private; unknown failures are unclassified.
+responses remain private; unknown failures are unclassified. The read-only
+volume shape uses fixed phase and write-exit-category markers to pinpoint
+failures without publishing daemon responses or volume contents.
 
 After all three native Rust tests pass, a workflow lane writes one
 sanitized JSON manifest containing the exact candidate SHA, image
