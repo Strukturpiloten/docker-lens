@@ -34,9 +34,19 @@ SOURCE_PROBES = (
     "MultipleHostIpBindingsOracle", "MountEnvironmentOracle",
     "HealthRestartOracle", "SelectedFieldOrigins",
 )
+NETWORK_PROBES = (
+    "ExternalNetworkReference", "InternalBridgeNetworkCreate",
+    "Ipv6BridgeNetworkCreate", "NetworkIpamV4", "NetworkIpamV6",
+    "NetworkIpamGateway", "NetworkIpamRange", "NetworkIpamAuxiliary",
+    "NetworkIpamDefaultDriver", "NetworkBridgeMtu", "NetworkBridgeIcc",
+    "NetworkBridgeMasquerade", "NetworkBridgeHostBindingIp",
+    "NetworkCreateLabels", "NetworkPrimaryAliases", "NetworkSecondaryAliases",
+    "NetworkStaticIpv4", "NetworkStaticIpv6", "NetworkSecondaryConnect",
+)
 
 
-def emit(version_path: Path, shapes_path: Path, source_path: Path, destination: Path, lane: str, image: str,
+def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path: Path,
+         destination: Path, lane: str, image: str,
          mode: str, package: str, candidate_sha: str) -> None:
     if lane not in LANES or mode != lane.rsplit("-", 1)[1]:
         raise ValueError("invalid native lane or mode")
@@ -104,6 +114,14 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, destination: 
             or set(source_probes) != set(SOURCE_PROBES)):
         raise ValueError("native source probe set is incomplete")
 
+    if network_path.stat().st_size > 4096:
+        raise ValueError("native network evidence exceeds closed limit")
+    network_probes = json.loads(network_path.read_text(encoding="utf-8"))
+    if (not isinstance(network_probes, list) or len(network_probes) != len(NETWORK_PROBES)
+            or any(not isinstance(probe, str) for probe in network_probes)
+            or set(network_probes) != set(NETWORK_PROBES)):
+        raise ValueError("native network probe set is incomplete")
+
     record = {
         "schema_version": 1,
         "lane": lane,
@@ -121,15 +139,17 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, destination: 
         "capability_outcome": {name: "available" for name in CAPABILITIES},
         "admitted_shapes": {name: list(REQUIRED_SHAPES[name]) for name in CAPABILITIES},
         "source_probes": list(SOURCE_PROBES),
+        "network_probes": list(NETWORK_PROBES),
     }
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(record, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 10:
-        raise SystemExit("usage: native-evidence.py VERSION_JSON SHAPES_JSON SOURCE_JSON DESTINATION LANE IMAGE MODE PACKAGE SHA")
+    if len(sys.argv) != 11:
+        raise SystemExit("usage: native-evidence.py VERSION_JSON SHAPES_JSON SOURCE_JSON NETWORK_JSON DESTINATION LANE IMAGE MODE PACKAGE SHA")
     try:
-        emit(Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]), Path(sys.argv[4]), *sys.argv[5:])
+        emit(Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]), Path(sys.argv[4]),
+             Path(sys.argv[5]), *sys.argv[6:])
     except (ValueError, OSError, json.JSONDecodeError):
         raise SystemExit("native evidence rejected") from None

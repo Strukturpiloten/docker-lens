@@ -7,17 +7,31 @@ the existing container and graph tests. These offline checks preserve the
 The typed-network offline cases exercise create/external separation, multiple
 attachment request order, alias and IPAM encoding, redacted prerequisites,
 invalid topology, missing capabilities and the API floor. The native #31
-negative cases must include overlapping IPAM pools, subnet-base and broadcast
+negative cases include overlapping IPAM pools, subnet-base and broadcast
 gateway/auxiliary/static addresses, and static-address collisions. IPv4 `/31`
-and `/32` bridge parent subnets remain an explicit planning rejection until #31 tests
-their precise Engine behavior on each claimed API and daemon mode.
-The native #31
-extension must independently create and inspect both networks, connect the
-second endpoint, probe alias DNS and traffic, prove internal isolation and
-non-membership, and verify that the external network was never created by the
-target artifact on every exact rootful/rootless lane. The existing native
-request allowlist needs an explicit `networks/{id}/connect` branch before
-those requests can be exercised; no new shape is admitted by offline checks.
+and `/32` bridge parent subnets remain an explicit planning rejection; this
+extension does not establish their Engine behavior on any API or daemon mode.
+The native #31 network test uses an independent Docker CLI bridge oracle,
+direct Engine GETs, an externally seeded bridge, and test-only application of
+the inert renderer requests. It checks two rendered network creates, ordered
+secondary connects, per-network alias DNS and traffic, static IPv6 peer traffic,
+bridge-interface MTU, and the unchanged external network identity. Isolation
+uses separate backend-only and edge-only CLI peers: each positive local DNS
+control explicitly queries the IPv4 A record and checks an exact parsed answer
+for the inspected endpoint IPv4, excluding the resolver's address and partial
+matches, before local HTTP succeeds. The backend peer must then fail the edge-only
+IPv4 A query and direct edge-IP HTTP. A dual-homed app's edge IP is not an
+isolation oracle. Closed DNS and HTTP markers distinguish each stage. The
+executor allows only the run-owned network and
+container names, including exact `networks/{id}/connect` paths. The separate closed
+`network_probes` manifest field contains the nineteen checked network renderer
+shapes only after the exact ignored test passes; it does not extend
+`admitted_shapes`, catalog capabilities, or a compatibility claim. IPAM fields,
+labels, and bridge ICC, masquerade and host-binding options have request/inspect
+checks, not independent kernel-behavior proof. ICC is tested only as `true` and
+masquerade only as `false`; later positive admission of either boolean type
+requires both values on each claimed lane. IPv4 `/31` and `/32` bridge parents
+remain rejected by planning, independent of any Engine acceptance behavior.
 The typed-container offline regressions cover exact grouped `PortBindings`
 and `ExposedPorts` bodies, host-IP privacy, wildcard conflicts, ephemeral
 allocation requests, command/entrypoint inheritance and clearing, shell and
@@ -148,7 +162,7 @@ API-created container uses the independent CLI start probe to report both a
 closed component category and a separate closed errno/reason token for a
 failed start before checking the live read-only mount behavior.
 
-After all three native Rust tests pass, a workflow lane writes one
+After all required native Rust tests, including the network extension, pass, a workflow lane writes one
 sanitized JSON manifest containing the exact candidate SHA, image
 tag and digest, observed Engine release and advertised API bounds, the
 selected acquisition API, rendering API, reported containerd and runc

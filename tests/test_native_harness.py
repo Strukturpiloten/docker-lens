@@ -1,6 +1,7 @@
 """Fault injection for exact resource cleanup and ignored native test selection."""
 
 import os
+import re
 import stat
 import subprocess
 import tempfile
@@ -11,6 +12,81 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class NativeHarnessTests(unittest.TestCase):
+    def test_isolation_positive_controls_query_ipv4_before_negative_controls(self) -> None:
+        source = (ROOT / "src/native_network_tests.rs").read_text(encoding="utf-8")
+        markers = [
+            "network_isolation_edge_dns", "network_isolation_edge_http",
+            "network_isolation_local_dns", "network_isolation_local_http",
+            "network_isolation_foreign_dns", "network_isolation_foreign_route",
+        ]
+        self.assertEqual([source.count(f'DOCKERLENS_NATIVE_CHECK: {marker}"')
+                          for marker in markers], [1] * len(markers))
+        self.assertEqual([source.index(f'DOCKERLENS_NATIVE_CHECK: {marker}')
+                          for marker in markers],
+                         sorted(source.index(f'DOCKERLENS_NATIVE_CHECK: {marker}')
+                                for marker in markers))
+        self.assertEqual(re.findall(r'"nslookup",\s*"-type=A",\s*"([^"]+)"', source),
+                         ["edge-sentinel", "backend-app"])
+        self.assertIn("if nslookup -type=A edge-sentinel", source)
+        self.assertIn('edge_resolved && nslookup_has_ipv4_answer(edge_answer, "edge-sentinel", edge_ip)', source)
+        self.assertRegex(source,
+                         r'backend_resolved\s*&& nslookup_has_ipv4_answer\(&backend_answer, "backend-app", backend_ip\)')
+        self.assertIn("fn nslookup_ipv4_answer_requires_exact_named_address_not_prefix_or_resolver()", source)
+        self.assertIn('edge_only_body["State"]["Running"] != true', source)
+        self.assertIn("fn edge_dns_failure_categories_are_closed_and_value_free()", source)
+        self.assertIn("const LIMIT: usize = 8192;", source)
+        self.assertIn("let stdout_reader = std::thread::spawn", source)
+        self.assertIn("let stderr_reader = std::thread::spawn", source)
+
+    def test_network_probe_is_exact_and_precedes_manifest_emission(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
+        selected = '"$(dirname "$0")/run-exact-native-test.sh" native_network live_network_render_matches_engine'
+        target = '"$(dirname "$0")/run-exact-native-test.sh" native_target live_target_render_matches_engine'
+        manifest = 'python3 "$script_dir/native-evidence.py"'
+        self.assertEqual(source.count(selected), 1)
+        self.assertLess(source.index(target), source.index(selected))
+        self.assertLess(source.index(selected), source.index(manifest))
+        self.assertIn('"$NATIVE_NETWORK_PROBES_PATH"', source)
+
+    def test_network_failure_marker_is_closed_and_private(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_network_tests::live_network_render_matches_engine: test'
+else
+  echo 'protected native response' >&2
+  echo "DOCKERLENS_NATIVE_CHECK: network_isolation_$TEST_MARKER" >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: network_private' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            for marker in (
+                "edge_fixture_exited", "edge_dns", "edge_dns_output_limit",
+                "edge_dns_cli_timeout", "edge_dns_cli_resolver", "edge_dns_cli_lookup",
+                "edge_dns_cli_docker", "edge_dns_cli_exec",
+                "edge_dns_cli_answer_present", "edge_dns_cli_unclassified",
+                "edge_dns_answer_missing", "edge_dns_answer_wrong_ip",
+                "edge_dns_answer_malformed", "edge_dns_answer_inconsistent",
+                "edge_dns_alias_missing", "edge_http", "local_dns", "local_http",
+                "foreign_dns", "foreign_route",
+            ):
+                with self.subTest(marker=marker):
+                    env["TEST_MARKER"] = marker
+                    result = subprocess.run(
+                        [str(ROOT / "scripts/run-exact-native-test.sh"), "native_network",
+                         "live_network_render_matches_engine"],
+                        env=env, capture_output=True, text=True, timeout=15, check=False,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(f"DOCKERLENS_NATIVE_CHECK: network_isolation_{marker}",
+                                  result.stderr)
+                    self.assertNotIn("private", result.stdout + result.stderr)
+
     def test_source_probe_is_exact_and_precedes_manifest_emission(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
         selected = '"$(dirname "$0")/run-exact-native-test.sh" native_selection live_native_selection_and_source_observations'
