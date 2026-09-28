@@ -92,7 +92,7 @@ fn inner_docker_command(args: &[&str]) -> Command {
         &outer,
         "docker",
         "-H",
-        "unix:///run/dockerlens/docker.sock",
+        "unix:///dockerlens-native/docker.sock",
     ]);
     command.args(args);
     command

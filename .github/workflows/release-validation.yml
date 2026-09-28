@@ -56,7 +56,16 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           test "$(git rev-parse origin/main)" = "$EXPECTED_SHA"
       - name: Native conformance gate
+        env:
+          DOCKERLENS_NATIVE_EVIDENCE_DIR: ${{ runner.temp }}/dockerlens-native-evidence
+          DOCKERLENS_NATIVE_CANDIDATE_SHA: ${{ inputs.expected_sha }}
         run: ./scripts/native-conformance.sh "${{ matrix.lane }}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dockerlens-native-${{ matrix.lane }}
+          path: ${{ runner.temp }}/dockerlens-native-evidence/${{ matrix.lane }}.json
+          if-no-files-found: error
+          retention-days: 30
 
   release-gate:
     name: All exact-candidate validation required

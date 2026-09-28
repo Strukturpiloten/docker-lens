@@ -84,5 +84,10 @@ is available. Decoded version strings do not add positive capability facts.
 
 DockerLens has no BoxFerry or other Lens product dependency. BoxFerry will
 consume a released DockerLens and route all conversions through its neutral
-model. Debian 11 Engine and rootful/rootless coverage require genuine native
-tests; discovery of a version number is not compatibility evidence.
+model. Debian 11 and upstream Engine 29 coverage in both daemon modes uses
+maintained, digest-pinned GHCR images with native entrypoints. The validation
+harness mounts an explicit named volume at each image's data root and binds
+only a private Unix test socket. Debian package provenance is checked inside
+the image. Genuine native runs and independent review are required before any
+compatibility catalog record is positive; discovering a version number is
+not compatibility evidence.

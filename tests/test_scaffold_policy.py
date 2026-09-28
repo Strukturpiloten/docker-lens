@@ -40,44 +40,42 @@ class ScaffoldPolicyTests(unittest.TestCase):
         )
         native_script = (ROOT / "scripts/native-conformance.sh").read_text()
         pins = list(re.finditer(native_extractor, native_script))
-        self.assertEqual(len(pins), 4)
+        self.assertEqual(len(pins), 5)
         self.assertEqual({pin.group("datasource") for pin in pins}, {"docker"})
         self.assertEqual(
+            {pin.group("depName") for pin in pins},
+            {
+                "ghcr.io/strukturpiloten/docker-debian-11-rootful",
+                "ghcr.io/strukturpiloten/docker-debian-11-rootless",
+                "ghcr.io/strukturpiloten/docker-29-rootful",
+                "ghcr.io/strukturpiloten/docker-29-rootless",
+                "docker.io/library/busybox",
+            },
+        )
+        self.assertEqual(
             {pin.group("currentValue") for pin in pins},
-            {"28.5.1-dind", "28.5.1-dind-rootless", "11.11-slim", "1.37.0"},
+            {"v1.0.0", "v29.8.1", "1.37.0"},
         )
         self.assertTrue(all(re.fullmatch(r"sha256:[0-9a-f]{64}", pin.group("currentDigest")) for pin in pins))
-        for package, revision in (
-            ("DOCKER", "20.10.5+dfsg1-1+deb11u4"),
-            ("CA_CERTIFICATES", "20250419~deb12u1~deb11u1"),
-            ("ROOTLESSKIT", "0.14.2-1+b3"),
-            ("SLIRP4NETNS", "1.0.1-2"),
-            ("UIDMAP", "1:4.8.1-1+deb11u1"),
-            ("FUSE_OVERLAYFS", "1.4.0-1"),
-            ("IPROUTE2", "5.10.0-4"),
-        ):
-            self.assertIn(f"DEBIAN_{package}_PACKAGE='{revision}'", native_script)
-        self.assertIn("manual check of these seven pins before every native release", (ROOT / "docs/dependency-policy.md").read_text())
-        self.assertEqual(native_script.count('"ca-certificates=$DEBIAN_CA_CERTIFICATES_PACKAGE"'), 4)
-        self.assertEqual(native_script.count('"iproute2=$DEBIAN_IPROUTE2_PACKAGE"'), 2)
-        self.assertIn('"iproute2:$DEBIAN_IPROUTE2_PACKAGE"', native_script)
-        rootful_start = native_script.split('if [[ $lane == debian11-rootful ]]; then', 1)[1].split(
-            'elif [[ $lane == debian11-rootless ]]; then', 1
-        )[0]
-        self.assertNotIn('IPROUTE2', rootful_start)
-        self.assertIn('test -w /home/rootless', native_script)
-        self.assertIn('test -w /run/user/1000', native_script)
-        self.assertIn('rootless_path=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', native_script)
-        self.assertIn('test -x /usr/share/docker.io/contrib/dockerd-rootless.sh', native_script)
-        self.assertIn('for helper in dockerd rootlesskit slirp4netns newuidmap newgidmap', native_script)
-        self.assertIn('executable=\\$(command -v $helper) && test -x', native_script)
-        self.assertIn('DOCKERLENS_DAEMON_RESULT: %s_unavailable', native_script)
-        self.assertIn('/usr/bin/env PATH=$rootless_path XDG_RUNTIME_DIR=/run/user/1000', native_script)
-        self.assertIn('chown -R rootless:rootless /home/rootless/.local/share/docker', native_script)
+        self.assertIn("DEBIAN_DOCKER_PACKAGE='20.10.5+dfsg1-1+deb11u2'", native_script)
+        self.assertIn("--image-volume=ignore", native_script)
+        self.assertIn("--oom-score-adj=0", native_script)
+        self.assertIn("start=(/usr/local/bin/start-dockerd", native_script)
+        self.assertNotIn("apt-get", native_script)
+        self.assertNotIn("native-apt-install.sh", native_script)
+        self.assertNotIn("native-debian-snapshot.sh", native_script)
+        self.assertIn('"$volume" >/dev/null', native_script)
+        self.assertIn('"$volume"', native_script)
+        self.assertIn("five distinct version-tag", (ROOT / "docs/dependency-policy.md").read_text())
         for workflow in (ROOT / ".github/workflows").glob("*.yml"):
             text = workflow.read_text()
             for action in re.findall(r"uses: (.+)", text):
                 self.assertRegex(action, r"^[^@]+@[0-9a-f]{40} # v\d+\.\d+\.\d+$")
+        for name in ("check.yml", "release-validation.yml", "native-validation.yml"):
+            workflow = (ROOT / ".github/workflows" / name).read_text()
+            self.assertIn("name: dockerlens-native-${{ matrix.lane }}", workflow)
+            self.assertIn("if-no-files-found: error", workflow)
+            self.assertIn("DOCKERLENS_NATIVE_CANDIDATE_SHA:", workflow)
 
     def test_scripts_have_distinct_scope(self) -> None:
         fast = (ROOT / "scripts/format-lint.sh").read_text()

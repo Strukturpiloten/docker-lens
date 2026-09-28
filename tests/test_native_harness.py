@@ -180,68 +180,8 @@ esac
                         self.assertTrue((state / "bridge").exists())
                         self.assertFalse((state / "error_inspected-bridge").exists())
 
-    def test_created_resources_are_removed_even_when_create_reports_failure(self) -> None:
-        diagnoses = {
-            "daemon_sources_unexpected": "stage=sources category=package_sources_unexpected",
-            "daemon_package_missing": "stage=install category=package_install",
-            "daemon_signature": "stage=update category=package_signature",
-            "daemon_time": "stage=update category=package_time",
-            "daemon_dependency": "stage=install category=package_dependency",
-            "daemon_post_invoke": "stage=update category=package_post_invoke",
-            "daemon_pin_missing": "stage=install category=package_version_unavailable",
-            "daemon_dpkg": "stage=install category=package_dpkg",
-            "daemon_guest_dependency": "stage=install category=package_dependency",
-            "daemon_guest_unknown": "stage=install category=package_apt_failure",
-            "daemon_prior_update_error": "stage=install category=package_apt_failure",
-            "daemon_home_unwritable": "stage=daemon category=rootless_home_unwritable",
-            "daemon_runtime_unwritable": "stage=daemon category=rootless_runtime_unwritable",
-            "daemon_dockerd_unavailable": "stage=daemon category=rootless_dockerd_unavailable",
-            "daemon_which_unrunnable": "stage=daemon category=rootless_which_unrunnable",
-            "daemon_env_unrunnable": "stage=daemon category=rootless_env_unrunnable",
-            "daemon_upstream_storage": "stage=daemon category=daemon_storage",
-            "daemon_upstream_network": "stage=daemon category=daemon_network",
-            "daemon_unknown_127": "stage=daemon category=unclassified",
-        }
-        helpers = ("launcher", "dockerd", "rootlesskit", "slirp4netns", "newuidmap",
-                   "newgidmap", "which", "ip", "rm", "env")
-        for helper in helpers:
-            for suffix in ("marker", "missing_log"):
-                diagnoses[f"daemon_{helper}_{suffix}"] = (
-                    f"stage=daemon category=rootless_{helper}_unavailable"
-                )
-        for fault in (
-            "volume", "pull", "run", "run_exists_error", "pull_exists_error",
-            "preflight_exists_error", "daemon_exit", "daemon_sources_unexpected", "daemon_package_missing",
-            "daemon_signature", "daemon_time", "daemon_dependency",
-            "daemon_post_invoke", "daemon_pin_missing", "daemon_dpkg",
-            "daemon_guest_dependency", "daemon_guest_unknown",
-            "daemon_prior_update_error", "daemon_home_unwritable",
-            "daemon_runtime_unwritable", "daemon_dockerd_unavailable",
-            "daemon_which_unrunnable", "daemon_env_unrunnable", "daemon_upstream_storage",
-            "daemon_upstream_network", "daemon_unknown_127", "daemon_trace_which",
-            "daemon_trace_rootlesskit", "daemon_trace_unknown", "daemon_preflight_complete",
-            *(f"daemon_{helper}_{suffix}" for helper in helpers for suffix in ("marker", "missing_log")),
-            "cleanup_container_remains",
-            "cleanup_volume_remains", "cleanup_container_query_error",
-            "cleanup_volume_query_error",
-        ):
-            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                bin_dir = root / "bin"
-                state = root / "state"
-                bin_dir.mkdir()
-                state.mkdir()
-                self._tool(bin_dir, "sudo", "#!/bin/sh\n[ \"$1\" = -n ] && shift\nexec \"$@\"\n")
-                self._tool(
-                    bin_dir,
-                    "df",
-                    "#!/bin/sh\nprintf 'Filesystem 1024-blocks Used Available Capacity Mounted\\n'"
-                    "\nprintf 'fake 100000000 1 100000000 1%% /tmp\\n'\n",
-                )
-                self._tool(
-                    bin_dir,
-                    "podman",
-                    """#!/usr/bin/env bash
+    def test_owned_resources_are_cleaned_after_early_failures(self) -> None:
+        fake_podman = """#!/usr/bin/env bash
 set -eu
 state=$FAKE_NATIVE_STATE
 command=$1; shift
@@ -253,307 +193,152 @@ case "$command" in
       *) exit 3 ;;
     esac ;;
   container)
-    if [[ $1 == exists && $FAKE_NATIVE_FAULT == preflight_exists_error ]]; then exit 125; fi
-    if [[ $1 == exists && $FAKE_NATIVE_FAULT == run_exists_error && -e $state/container ]]; then exit 125; fi
-    if [[ $1 == exists && $FAKE_NATIVE_FAULT == cleanup_container_query_error && -e $state/container_removal_attempted ]]; then exit 125; fi
+    if [[ $1 == exists && $FAKE_NATIVE_FAULT == container_query_error && -e $state/ran ]]; then exit 125; fi
     [[ $1 == exists && -e $state/container ]] ;;
   volume)
     action=$1; shift
     case "$action" in
       exists)
-        if [[ $FAKE_NATIVE_FAULT == pull_exists_error && -e $state/volume ]]; then exit 125; fi
-        if [[ $FAKE_NATIVE_FAULT == cleanup_volume_query_error && -e $state/volume_removal_attempted ]]; then exit 125; fi
+        if [[ $FAKE_NATIVE_FAULT == volume_query_error && -e $state/ran ]]; then exit 125; fi
         [[ -e $state/volume ]] ;;
       create)
+        for name; do :; done
+        printf '%s\n' "$name" > "$state/expected-volume"
         touch "$state/volume"
         [[ $FAKE_NATIVE_FAULT == volume ]] && exit 42
         echo "$state/volume" ;;
       inspect)
         if [[ $* == *Labels* ]]; then
-          name=${*: -1}; echo "${name#dl-native-data-}"
-        else
-          echo "$state"
-        fi ;;
+          for name; do :; done
+          echo "$name" | sed 's/^dl-native-data-//'
+        else echo "$state"; fi ;;
       rm)
+        for name; do :; done
+        read -r expected < "$state/expected-volume"
+        [[ $name == "$expected" ]] || exit 66
         touch "$state/volume_removal_attempted"
-        [[ $FAKE_NATIVE_FAULT == cleanup_volume_remains ]] || rm -f "$state/volume" ;;
+        [[ $FAKE_NATIVE_FAULT == volume_remains ]] || rm -f "$state/volume" ;;
       *) exit 4 ;;
     esac ;;
-  pull)
-    [[ $FAKE_NATIVE_FAULT == pull || $FAKE_NATIVE_FAULT == pull_exists_error ]] && exit 42
-    exit 0 ;;
+  pull) [[ $FAKE_NATIVE_FAULT != pull ]] ;;
   run)
+    printf '%s\n' "$*" > "$state/run-args"
+    prior=
+    for item in "$@"; do
+      if [[ $prior == --name ]]; then printf '%s\n' "$item" > "$state/expected-container"; fi
+      prior=$item
+    done
+    touch "$state/ran"
     touch "$state/container"
-    [[ $FAKE_NATIVE_FAULT == run || $FAKE_NATIVE_FAULT == run_exists_error || $FAKE_NATIVE_FAULT == cleanup_* ]] && exit 42
-    echo fake-id ;;
+    [[ $FAKE_NATIVE_FAULT == unexpected_mount ]] ;;
   inspect)
     if [[ $* == *Labels* ]]; then
-      name=${*: -1}; echo "${name#dl-native-}"
-    elif [[ $* == *State.Running* ]]; then
-      [[ $FAKE_NATIVE_FAULT == daemon_* ]] && echo false || echo true
-    elif [[ $* == *State.Status* ]]; then
-      if [[ $FAKE_NATIVE_FAULT == *_marker || $FAKE_NATIVE_FAULT == *_missing_log || $FAKE_NATIVE_FAULT == daemon_unknown_127 || $FAKE_NATIVE_FAULT == daemon_trace_* || $FAKE_NATIVE_FAULT == daemon_preflight_complete ]]; then
-        echo 'exited|127|false'
-      else
-        echo 'exited|42|false'
-      fi
-    else
-      echo true
-    fi ;;
-      logs)
-        case "$FAKE_NATIVE_FAULT" in
-          daemon_sources_unexpected)
-            echo 'DOCKERLENS_APT_STAGE: sources'
-            echo 'DOCKERLENS_APT_RESULT: unexpected_sources' ;;
-      daemon_package_missing)
-        echo 'DOCKERLENS_APT_STAGE: install'
-        echo "E: Version 'protected-secret' for 'docker.io' was not found" ;;
-      daemon_signature)
-        echo 'DOCKERLENS_APT_STAGE: update'
-        echo 'NO_PUBKEY protected-secret' ;;
-      daemon_time)
-        echo 'DOCKERLENS_APT_STAGE: update'
-        echo 'Release file is not valid yet; protected-secret' ;;
-      daemon_dependency)
-        echo 'DOCKERLENS_APT_STAGE: install'
-        echo 'Unmet dependencies: protected-secret' ;;
-      daemon_post_invoke)
-        echo 'DOCKERLENS_APT_STAGE: update'
-        echo 'APT::Update::Post-Invoke failed for protected-secret' ;;
-      daemon_pin_missing)
-        echo 'DOCKERLENS_APT_STAGE: install'
-        echo 'DOCKERLENS_APT_RESULT: version-unavailable' ;;
-      daemon_dpkg)
-        echo 'DOCKERLENS_APT_STAGE: install'
-        echo 'E: Sub-process /usr/bin/dpkg returned an error code (1); protected-secret' ;;
-      daemon_guest_dependency)
-        echo 'DOCKERLENS_APT_STAGE: install'
-        echo 'DOCKERLENS_APT_RESULT: package_dependency' ;;
-      daemon_guest_unknown)
-        echo 'DOCKERLENS_APT_STAGE: install'
-        echo 'DOCKERLENS_APT_RESULT: package_apt_failure' ;;
-      daemon_prior_update_error)
-        echo 'DOCKERLENS_APT_STAGE: update'
-        echo 'NO_PUBKEY protected-secret'
-        echo 'DOCKERLENS_APT_STAGE: install'
-        echo 'DOCKERLENS_APT_RESULT: install-failed' ;;
-      daemon_home_unwritable)
-        echo 'DOCKERLENS_APT_STAGE: daemon'
-        echo 'error initializing graphdriver: protected-secret'
-        echo 'DOCKERLENS_DAEMON_RESULT: home_unwritable'
-        echo 'protected-secret' ;;
-      daemon_runtime_unwritable)
-        echo 'DOCKERLENS_APT_STAGE: daemon'
-        echo 'DOCKERLENS_DAEMON_RESULT: runtime_unwritable'
-        echo 'protected-secret' ;;
-      daemon_dockerd_unavailable)
-        echo 'DOCKERLENS_APT_STAGE: daemon'
-        echo 'error initializing graphdriver: protected-secret'
-        echo 'DOCKERLENS_DAEMON_RESULT: dockerd_unavailable'
-        echo 'protected-secret' ;;
-      daemon_which_unrunnable|daemon_env_unrunnable)
-        helper=${FAKE_NATIVE_FAULT#daemon_}; helper=${helper%_unrunnable}
-        echo 'DOCKERLENS_APT_STAGE: daemon'
-        echo "DOCKERLENS_DAEMON_RESULT: ${helper}_unrunnable"
-        echo 'protected-secret' ;;
-      daemon_*_marker)
-        helper=${FAKE_NATIVE_FAULT#daemon_}; helper=${helper%_marker}
-        echo 'DOCKERLENS_APT_STAGE: daemon'
-        echo "DOCKERLENS_DAEMON_RESULT: ${helper}_unavailable"
-        echo 'protected-secret' ;;
-      daemon_*_missing_log)
-        helper=${FAKE_NATIVE_FAULT#daemon_}; helper=${helper%_missing_log}
-        [[ $helper == launcher ]] && helper=/usr/share/docker.io/contrib/dockerd-rootless.sh
-        echo 'DOCKERLENS_APT_STAGE: daemon'
-        echo "sh: 1: $helper: not found"
-        echo 'protected-secret' ;;
-      daemon_unknown_127)
-        echo 'DOCKERLENS_APT_STAGE: daemon'
-        echo 'protected-secret: unexpected failure' ;;
-      daemon_trace_which|daemon_trace_rootlesskit)
-        helper=${FAKE_NATIVE_FAULT#daemon_trace_}
-        echo 'DOCKERLENS_APT_STAGE: daemon'
-        echo 'DOCKERLENS_ROOTLESS_STAGE: preflight_complete'
-        echo "DOCKERLENS_ROOTLESS_TRACE:command -v $helper"
-        echo "DOCKERLENS_ROOTLESS_TRACE:$helper protected-secret error initializing graphdriver"
-        echo 'protected-secret: unexpected failure' ;;
-      daemon_trace_unknown)
-        echo 'DOCKERLENS_APT_STAGE: daemon'
-        echo 'DOCKERLENS_ROOTLESS_TRACE:unrecognized protected-secret'
-        echo 'protected-secret: unexpected failure' ;;
-      daemon_preflight_complete)
-        echo 'DOCKERLENS_APT_STAGE: daemon'
-        echo 'DOCKERLENS_ROOTLESS_STAGE: preflight_complete'
-        echo 'protected-secret: unexpected failure' ;;
-      daemon_upstream_storage)
-        echo 'error initializing graphdriver: protected-secret' ;;
-      daemon_upstream_network)
-        echo 'failed to create NAT chain: iptables protected-secret' ;;
-      *)
-        echo 'DOCKERLENS_APT_STAGE: daemon'
-        echo 'newuidmap: protected-secret could not write uid_map' ;;
-    esac ;;
+      for name; do :; done
+      echo "$name" | sed 's/^dl-native-//'
+    elif [[ $* == *HostConfig.Privileged* ]]; then echo true
+    elif [[ $* == *'.Mounts'* ]]; then echo unexpected:/var/lib/docker
+    else exit 4; fi ;;
   rm)
+    for name; do :; done
+    read -r expected < "$state/expected-container"
+    [[ $name == "$expected" ]] || exit 66
     touch "$state/container_removal_attempted"
-    [[ $FAKE_NATIVE_FAULT == cleanup_container_remains ]] || rm -f "$state/container" ;;
-  *) exit 5 ;;
+    [[ $FAKE_NATIVE_FAULT == container_remains ]] || rm -f "$state/container" ;;
+  *) exit 4 ;;
 esac
-""",
-                )
+"""
+        for lane, fault in (
+            ("debian11-rootful", "volume"),
+            ("debian11-rootful", "pull"),
+            ("debian11-rootful", "run"),
+            ("debian11-rootless", "unexpected_mount"),
+            ("upstream-rootful", "unexpected_mount"),
+            ("upstream-rootless", "run"),
+            ("debian11-rootful", "container_query_error"),
+            ("debian11-rootless", "volume_query_error"),
+            ("upstream-rootful", "container_remains"),
+            ("upstream-rootless", "volume_remains"),
+        ):
+            with self.subTest(lane=lane, fault=fault), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                state = root / "state"
+                bin_dir = root / "bin"
+                state.mkdir()
+                (state / "foreign-resource").write_text("untouched")
+                bin_dir.mkdir()
+                self._tool(bin_dir, "sudo", "#!/bin/sh\n[ \"$1\" = -n ] && shift\nexec \"$@\"\n")
+                self._tool(bin_dir, "df",
+                           "#!/bin/sh\nprintf 'Filesystem 1024-blocks Used Available Capacity Mounted\n'"
+                           "\nprintf 'fake 100000000 1 100000000 1%% /tmp\n'\n")
+                self._tool(bin_dir, "podman", fake_podman)
                 env = os.environ.copy()
-                env.update(
-                    PATH=f"{bin_dir}:{env['PATH']}",
-                    TMPDIR=str(root),
-                    FAKE_NATIVE_STATE=str(state),
-                    FAKE_NATIVE_FAULT=fault,
-                )
+                env.update(PATH=f"{bin_dir}:{env['PATH']}",
+                           FAKE_NATIVE_STATE=str(state), FAKE_NATIVE_FAULT=fault)
                 result = subprocess.run(
-                    ["bash", str(ROOT / "scripts/native-conformance.sh"),
-                     "debian11-rootless" if fault in (
-                         "daemon_exit", "daemon_home_unwritable", "daemon_runtime_unwritable",
-                         "daemon_dockerd_unavailable"
-                     ) or fault.endswith(("_marker", "_missing_log")) or fault in (
-                         "daemon_unknown_127", "daemon_which_unrunnable", "daemon_env_unrunnable",
-                         "daemon_trace_which", "daemon_trace_rootlesskit", "daemon_trace_unknown",
-                         "daemon_preflight_complete")
-                     else "upstream-rootful" if fault.startswith("daemon_upstream_")
-                     else "debian11-rootful" if fault.startswith("daemon_")
-                     else "upstream-rootful"],
-                    env=env,
-                    capture_output=True,
-                    text=True,
-                    timeout=15,
-                    check=False,
+                    ["bash", str(ROOT / "scripts/native-conformance.sh"), lane],
+                    env=env, capture_output=True, text=True, timeout=15, check=False,
                 )
                 self.assertNotEqual(result.returncode, 0)
-                self.assertEqual((state / "container").exists(), fault == "cleanup_container_remains")
-                self.assertEqual((state / "volume").exists(), fault == "cleanup_volume_remains")
-                if fault == "run_exists_error":
+                self.assertEqual((state / "volume").exists(), fault == "volume_remains")
+                self.assertEqual((state / "container").exists(), fault == "container_remains")
+                self.assertEqual((state / "foreign-resource").read_text(), "untouched")
+                if fault in ("container_query_error", "container_remains"):
+                    self.assertTrue((state / "container_removal_attempted").exists())
+                if fault in ("volume_query_error", "volume_remains"):
+                    self.assertTrue((state / "volume_removal_attempted").exists())
+                if fault == "container_query_error":
                     self.assertIn("could not verify whether owned container", result.stderr)
-                elif fault == "pull_exists_error":
+                if fault == "volume_query_error":
                     self.assertIn("could not verify whether owned volume", result.stderr)
-                elif fault == "preflight_exists_error":
-                    self.assertIn("could not verify generated native container name", result.stderr)
-                elif fault == "daemon_exit":
-                    self.assertIn("state=exited|42|false stage=daemon category=rootless_uidmap", result.stderr)
-                    self.assertNotIn("protected-secret", result.stderr)
-                elif fault in diagnoses:
-                    code = 127 if fault.endswith(("_marker", "_missing_log")) or fault == "daemon_unknown_127" else 42
-                    self.assertIn(f"state=exited|{code}|false {diagnoses[fault]}", result.stderr)
-                    self.assertNotIn("protected-secret", result.stderr)
-                elif fault.startswith("daemon_trace_") or fault == "daemon_preflight_complete":
-                    trace = fault.removeprefix("daemon_trace_") if fault.startswith("daemon_trace_") else "preflight_complete"
-                    if trace == "unknown":
-                        trace = "unavailable"
-                    self.assertIn(
-                        f"state=exited|127|false stage=daemon category=unclassified trace={trace}",
-                        result.stderr,
-                    )
-                    self.assertNotIn("protected-secret", result.stderr)
-                elif fault.startswith("cleanup_"):
-                    resource = "container" if "container" in fault else "volume"
-                    exit_status = 125 if fault.endswith("query_error") else 0
-                    self.assertIn(
-                        f"owned {resource} cleanup readback failed (exists exit {exit_status})",
-                        result.stderr,
-                    )
+                if fault == "container_remains":
+                    self.assertIn("owned container cleanup readback failed", result.stderr)
+                if fault == "volume_remains":
+                    self.assertIn("owned volume cleanup readback failed", result.stderr)
+                if (state / "run-args").exists():
+                    args = (state / "run-args").read_text()
+                    self.assertIn("--image-volume=ignore", args)
+                    self.assertEqual("--oom-score-adj=0" in args, lane == "debian11-rootless")
+                    self.assertIn("/usr/local/bin/start-dockerd", args)
+                    self.assertIn("--host=unix:///dockerlens-native/docker.sock", args)
+                    self.assertIn(":/dockerlens-native", args)
+                    expected_store = ("/home/docker/.local/share/docker:U"
+                                      if lane.endswith("rootless") else "/var/lib/docker:U")
+                    self.assertIn(expected_store, args)
+                    if fault == "unexpected_mount":
+                        self.assertIn("unexpected image or data-root volumes", result.stderr)
 
-    def test_guest_apt_install_output_is_bounded_and_removed(self) -> None:
-        for apt_output, category in (
-            ("Unmet dependencies: protected-secret", "package_dependency"),
-            ("unknown failure with protected-secret", "package_apt_failure"),
-        ):
-            with self.subTest(category=category), tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                self._tool(
-                    root,
-                    "apt-get",
-                    "#!/bin/sh\nprintf '%s\\n' \"$FAKE_APT_OUTPUT\" >&2\nexit 100\n",
-                )
-                env = os.environ.copy()
-                env.update(PATH=f"{root}:{env['PATH']}", FAKE_APT_OUTPUT=apt_output,
-                           TMPDIR=str(root))
-                result = subprocess.run(
-                    ["sh", str(ROOT / "scripts/native-apt-install.sh"), "docker.io=sample"],
-                    env=env, capture_output=True, text=True, check=False,
-                )
-                self.assertEqual(result.returncode, 100)
-                self.assertEqual(result.stdout, f"DOCKERLENS_APT_RESULT: {category}\n")
-                self.assertEqual(result.stderr, "")
-                self.assertNotIn("protected-secret", result.stdout + result.stderr)
-                self.assertEqual(list(root.glob("dockerlens-apt.*")), [])
-
-    def test_debian_guest_uses_one_signed_historical_snapshot(self) -> None:
-        harness = (ROOT / "scripts/native-conformance.sh").read_text()
-        self.assertEqual(harness.count("sh /run/dockerlens/native-debian-snapshot.sh"), 2)
-        with tempfile.TemporaryDirectory() as directory:
-            apt_dir = Path(directory)
-            env = os.environ.copy()
-            env["DOCKERLENS_APT_DIR"] = str(apt_dir)
-            result = subprocess.run(
-                ["sh", str(ROOT / "scripts/native-debian-snapshot.sh")],
-                env=env, capture_output=True, text=True, check=False,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(result.stdout + result.stderr, "")
-            self.assertEqual((apt_dir / "sources.list").read_text().splitlines(), [
-                "deb http://snapshot.debian.org/archive/debian/20260824T000000Z bullseye main",
-                "deb http://snapshot.debian.org/archive/debian-security/20260824T000000Z bullseye-security main",
-                "deb http://snapshot.debian.org/archive/debian/20260824T000000Z bullseye-updates main",
-            ])
-            self.assertEqual(
-                (apt_dir / "apt.conf.d/99dockerlens-snapshot").read_text(),
-                'Acquire::Check-Valid-Until "false";\n',
-            )
-            (apt_dir / "sources.list.d").mkdir()
-            (apt_dir / "sources.list.d/other.list").write_text("unexpected source\n")
-            rejected = subprocess.run(
-                ["sh", str(ROOT / "scripts/native-debian-snapshot.sh")],
-                env=env, capture_output=True, text=True, check=False,
-            )
-            self.assertNotEqual(rejected.returncode, 0)
-            self.assertEqual(rejected.stderr, "DOCKERLENS_APT_RESULT: unexpected_sources\n")
-            (apt_dir / "sources.list.d/other.list").unlink()
-            (apt_dir / "sources.list.d/other.sources").symlink_to(apt_dir / "sources.list")
-            symlink_rejected = subprocess.run(
-                ["sh", str(ROOT / "scripts/native-debian-snapshot.sh")],
-                env=env, capture_output=True, text=True, check=False,
-            )
-            self.assertNotEqual(symlink_rejected.returncode, 0)
-            self.assertEqual(symlink_rejected.stderr, "DOCKERLENS_APT_RESULT: unexpected_sources\n")
-            (apt_dir / "sources.list.d/other.sources").unlink()
-            (apt_dir / "sources.list.d").rmdir()
-            extra = apt_dir / "extra-sources"
-            extra.mkdir()
-            (extra / "other.list").write_text("unexpected source\n")
-            (apt_dir / "sources.list.d").symlink_to(extra, target_is_directory=True)
-            directory_rejected = subprocess.run(
-                ["sh", str(ROOT / "scripts/native-debian-snapshot.sh")],
-                env=env, capture_output=True, text=True, check=False,
-            )
-            self.assertNotEqual(directory_rejected.returncode, 0)
-            self.assertEqual(directory_rejected.stderr, "DOCKERLENS_APT_RESULT: unexpected_sources\n")
+    def test_published_image_and_fixture_contracts_are_static(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text()
+        self.assertIn("DEBIAN_DOCKER_PACKAGE='20.10.5+dfsg1-1+deb11u2'", source)
+        self.assertIn('storage_mount="$volume:', source)
+        self.assertIn('rootless ]]; then printf /home/docker/.local/share/docker', source)
+        self.assertIn('--user 0:0 --workdir /tmp --hostname dockerlens-native', source)
+        self.assertIn('--label io.dockerlens.fixture=synthetic', source)
+        self.assertNotIn('/run/dockerlens', source)
+        self.assertIn('curl -fs --max-time 5 --unix-socket "$socket" http://localhost/_ping', source)
+        self.assertNotIn('apt-get', source)
+        self.assertFalse((ROOT / "scripts/native-apt-install.sh").exists())
+        self.assertFalse((ROOT / "scripts/native-debian-snapshot.sh").exists())
 
     def test_engine_release_match_has_exact_boundaries(self) -> None:
-        helper = ROOT / "scripts/native-version.sh"
-        for lane, expected, reported, allowed in (
-            ("upstream-rootful", "28.5.1", "28.5.1", True),
-            ("upstream-rootless", "28.5.1", "28.5.10", False),
-            ("upstream-rootful", "28.5.1", "28.5.1+dfsg1", False),
+        source = (ROOT / "scripts/native-version.sh").read_text()
+        for lane, expected, actual, should_pass in (
+            ("upstream-rootful", "29.8.1", "29.8.1", True),
+            ("upstream-rootless", "29.8.1", "29.8.10", False),
+            ("upstream-rootful", "29.8.1", "29.8.1+dfsg1", False),
             ("debian11-rootful", "20.10.5", "20.10.5", True),
             ("debian11-rootless", "20.10.5", "20.10.5+dfsg1", True),
             ("debian11-rootful", "20.10.5", "20.10.50", False),
             ("debian11-rootful", "20.10.5", "20.10.5+unexpected", False),
         ):
-            with self.subTest(lane=lane, reported=reported):
+            with self.subTest(lane=lane, actual=actual):
                 result = subprocess.run(
-                    ["bash", "-c", 'source "$1"; native_engine_release_matches "$2" "$3" "$4"',
-                     "native-version-test", str(helper), lane, expected, reported],
-                    capture_output=True,
-                    text=True,
-                    check=False,
+                    ["bash", "-c", f'source "{ROOT}/scripts/native-version.sh"; '
+                     'native_engine_release_matches "$1" "$2" "$3"',
+                     "native-test", lane, expected, actual],
+                    capture_output=True, text=True, check=False,
                 )
-                self.assertEqual(result.returncode == 0, allowed)
+                self.assertEqual(result.returncode == 0, should_pass)
 
     def test_only_one_ignored_test_counts_as_native_success(self) -> None:
         for mode, expected_success in (

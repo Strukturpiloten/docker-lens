@@ -51,8 +51,9 @@ Compose compatibility and Swarm mode are separate discussion topics.
   Target intent, operation graph, and rendered artifact are inert data. The
   crate has no executor, deployment API, or file writer.
 
-Native conformance has separate Debian 11 and upstream rootful/rootless
-test lanes. Passing hosted evidence for live #10 acquisition and #12 target
+Native conformance has separate maintained Debian 11 and upstream Engine 29
+rootful/rootless image lanes, each pinned by tag and digest. Passing hosted
+evidence for live #10 acquisition and #12 target
 request conformance is required before any compatibility claim. See
 [architecture](docs/architecture.md) and
 [verification](docs/verification.md).

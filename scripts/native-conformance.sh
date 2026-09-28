@@ -3,23 +3,19 @@ set -euo pipefail
 script_dir=$(cd -- "$(dirname -- "$0")" && pwd -P)
 source "$script_dir/native-version.sh"
 
-# Registry manifest digests verified with skopeo inspect on 2026-09-26.
-# renovate: datasource=docker depName=docker.io/library/docker
-UPSTREAM_ROOTFUL_IMAGE='docker.io/library/docker:28.5.1-dind@sha256:ea9d20492ca1caaaba78e68453433895d256173c79281756e88b745647fcbcfd'
-# renovate: datasource=docker depName=docker.io/library/docker
-UPSTREAM_ROOTLESS_IMAGE='docker.io/library/docker:28.5.1-dind-rootless@sha256:87d03cfe51f2bf87eec6dda1922dc572da4d37a1d21c5ca8e8b22c8a1fa107cc'
-# renovate: datasource=docker depName=docker.io/library/debian
-DEBIAN_IMAGE='docker.io/library/debian:11.11-slim@sha256:e5b6442dd2e9684cf5e87d8338b5968f3b348636fc0be6d7850a381e3731a2bd'
+# Published containers#260 manifest digests verified on 2026-09-28 (amd64 and arm64).
+# renovate: datasource=docker depName=ghcr.io/strukturpiloten/docker-29-rootful
+UPSTREAM_ROOTFUL_IMAGE='ghcr.io/strukturpiloten/docker-29-rootful:v29.8.1@sha256:bc71d19fbcd6d84d1452f61e6c3cbac77b6acaba214d7eb830b79124d1a4d563'
+# renovate: datasource=docker depName=ghcr.io/strukturpiloten/docker-29-rootless
+UPSTREAM_ROOTLESS_IMAGE='ghcr.io/strukturpiloten/docker-29-rootless:v29.8.1@sha256:075f6b6e6f15960ebf3bca6496331ee6b0e32d96b7824cbac382ae5b296f0d7c'
+# renovate: datasource=docker depName=ghcr.io/strukturpiloten/docker-debian-11-rootful
+DEBIAN_ROOTFUL_IMAGE='ghcr.io/strukturpiloten/docker-debian-11-rootful:v1.0.0@sha256:656ab906588fcf0acfc66e48ff22e1cd56003495ea43b7066f307db9c7f63124'
+# renovate: datasource=docker depName=ghcr.io/strukturpiloten/docker-debian-11-rootless
+DEBIAN_ROOTLESS_IMAGE='ghcr.io/strukturpiloten/docker-debian-11-rootless:v1.0.0@sha256:44eadaa886f56d64a3b47fdcee6a812045e0faf6ca207501fd35d1118840f41f'
 # renovate: datasource=docker depName=docker.io/library/busybox
 FIXTURE_IMAGE='docker.io/library/busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e'
-# Debian 11 distribution revision, distinct from upstream Engine 28.5.1.
-DEBIAN_DOCKER_PACKAGE='20.10.5+dfsg1-1+deb11u4'
-DEBIAN_CA_CERTIFICATES_PACKAGE='20250419~deb12u1~deb11u1'
-DEBIAN_ROOTLESSKIT_PACKAGE='0.14.2-1+b3'
-DEBIAN_SLIRP4NETNS_PACKAGE='1.0.1-2'
-DEBIAN_UIDMAP_PACKAGE='1:4.8.1-1+deb11u1'
-DEBIAN_FUSE_OVERLAYFS_PACKAGE='1.4.0-1'
-DEBIAN_IPROUTE2_PACKAGE='5.10.0-4'
+# The image's native Debian package revision is distinct from its Engine release.
+DEBIAN_DOCKER_PACKAGE='20.10.5+dfsg1-1+deb11u2'
 
 usage() {
   echo "usage: $0 {debian11-rootful|debian11-rootless|upstream-rootful|upstream-rootless}" >&2
@@ -29,14 +25,14 @@ usage() {
 [[ $# == 1 ]] || usage
 lane=$1
 case "$lane" in
-  debian11-rootful) image=$DEBIAN_IMAGE; expected_mode=rootful; expected_release='20.10.5' ;;
-  debian11-rootless) image=$DEBIAN_IMAGE; expected_mode=rootless; expected_release='20.10.5' ;;
-  upstream-rootful) image=$UPSTREAM_ROOTFUL_IMAGE; expected_mode=rootful; expected_release='28.5.1' ;;
-  upstream-rootless) image=$UPSTREAM_ROOTLESS_IMAGE; expected_mode=rootless; expected_release='28.5.1' ;;
+  debian11-rootful) image=$DEBIAN_ROOTFUL_IMAGE; expected_mode=rootful; expected_release='20.10.5' ;;
+  debian11-rootless) image=$DEBIAN_ROOTLESS_IMAGE; expected_mode=rootless; expected_release='20.10.5' ;;
+  upstream-rootful) image=$UPSTREAM_ROOTFUL_IMAGE; expected_mode=rootful; expected_release='29.8.1' ;;
+  upstream-rootless) image=$UPSTREAM_ROOTLESS_IMAGE; expected_mode=rootless; expected_release='29.8.1' ;;
   *) usage ;;
 esac
 
-for tool in podman curl python3 timeout df du mktemp install; do
+for tool in podman curl python3 timeout df du mktemp; do
   command -v "$tool" >/dev/null || { echo "missing native test tool: $tool" >&2; exit 1; }
 done
 if [[ $EUID == 0 ]]; then
@@ -59,8 +55,6 @@ socket_dir="$run_dir/socket"
 socket="$socket_dir/docker.sock"
 mkdir -m 0777 "$socket_dir"
 mkdir -m 0755 "$socket_dir/native-bind"
-install -m 0644 "$script_dir/native-apt-install.sh" "$socket_dir/native-apt-install.sh"
-install -m 0644 "$script_dir/native-debian-snapshot.sh" "$socket_dir/native-debian-snapshot.sh"
 printf 'native-bind-canary\n' > "$socket_dir/native-bind/canary"
 printf 'native-tcp-canary\n' > "$socket_dir/native-bind/index.html"
 chmod 0700 "$run_dir"
@@ -138,116 +132,24 @@ for chunk in iter(lambda: sys.stdin.buffer.read(65536), b""):
     tail.extend(chunk)
     if len(tail) > 65536:
         del tail[:-65536]
-import re
 s = tail.decode("utf-8", "replace").lower()
-stages = {"dockerlens_apt_stage: sources": "sources",
-          "dockerlens_apt_stage: update": "update",
-          "dockerlens_apt_stage: install": "install",
-          "dockerlens_apt_stage: daemon": "daemon"}
+stage = "daemon"
+# Daemon logs can contain secrets; classifications only emit fixed categories.
 lines = s.splitlines()
-last_stage = next(((index, stages[lines[index].strip()])
-                   for index in range(len(lines) - 1, -1, -1)
-                   if lines[index].strip() in stages), None)
-stage = (last_stage[1] if last_stage else "unavailable") if sys.argv[1].startswith("debian11-") else "daemon"
-if last_stage and sys.argv[1].startswith("debian11-"):
-    s = "\n".join(lines[last_stage[0] + 1:])
-# Trace arguments are private and are not evidence for a daemon category.
-# Only fixed preflight results and non-trace daemon lines may classify it.
-category_text = "\n".join(line for line in s.splitlines()
+category_text = "\n".join(line for line in lines
                           if not line.strip().startswith("dockerlens_rootless_trace:"))
-package_checks = (("package_sources_unexpected", ("dockerlens_apt_result: unexpected_sources",)),
-                  ("package_version_unavailable", ("dockerlens_apt_result: version-unavailable",)),
-                  ("package_post_invoke", ("dockerlens_apt_result: package_post_invoke",)),
-                  ("package_signature", ("dockerlens_apt_result: package_signature",)),
-                  ("package_time", ("dockerlens_apt_result: package_time",)),
-                  ("package_disk", ("dockerlens_apt_result: package_disk",)),
-                  ("package_lock", ("dockerlens_apt_result: package_lock",)),
-                  ("package_dependency", ("dockerlens_apt_result: package_dependency",)),
-                  ("package_download", ("dockerlens_apt_result: package_download",)),
-                  ("package_dpkg", ("dockerlens_apt_result: package_dpkg",)),
-                  ("package_install", ("dockerlens_apt_result: package_install",)),
-                  ("package_post_invoke", ("post-invoke",)),
-                  ("package_signature", ("no_pubkey", "expkeysig", "badsig",
-                                 "signatures could not be verified", "invalid signature",
-                                 "is not signed")),
-                  ("package_time", ("not valid yet", "release file is expired",
-                            "release file expired", "invalid for another")),
-                  ("package_disk", ("no space left on device", "write error - write",)),
-                  ("package_lock", ("could not get lock", "unable to acquire the dpkg frontend lock")),
-                  ("package_dependency", ("unmet dependencies", "dependency problems",
-                                  "unable to correct problems", "held broken packages",
-                                  "depends:")),
-                  ("package_download", ("failed to fetch", "temporary failure resolving",
-                                "does not have a release file", "404 not found")),
-                  ("package_dpkg", ("sub-process /usr/bin/dpkg returned an error code",
-                                    "dpkg: error processing", "dpkg: error:")),
-                  ("package_install", ("unable to locate package",
-                                       "was not found", "has no installation candidate")),
-                  ("package_apt_failure", ("dockerlens_apt_result: package_apt_failure",
-                                           "dockerlens_apt_result: install-failed")))
-rootless_executable_checks = (("rootless_launcher_unavailable", ("dockerlens_daemon_result: launcher_unavailable",)),
-                 ("rootless_dockerd_unavailable", ("dockerlens_daemon_result: dockerd_unavailable",)),
-                 ("rootless_rootlesskit_unavailable", ("dockerlens_daemon_result: rootlesskit_unavailable",)),
-                 ("rootless_slirp4netns_unavailable", ("dockerlens_daemon_result: slirp4netns_unavailable",)),
-                 ("rootless_newuidmap_unavailable", ("dockerlens_daemon_result: newuidmap_unavailable",)),
-                 ("rootless_newgidmap_unavailable", ("dockerlens_daemon_result: newgidmap_unavailable",)),
-                 ("rootless_which_unavailable", ("dockerlens_daemon_result: which_unavailable",)),
-                 ("rootless_ip_unavailable", ("dockerlens_daemon_result: ip_unavailable",)),
-                 ("rootless_rm_unavailable", ("dockerlens_daemon_result: rm_unavailable",)),
-                 ("rootless_env_unavailable", ("dockerlens_daemon_result: env_unavailable",)))
-rootless_smoke_checks = tuple(("rootless_" + helper + "_unrunnable",
-                               ("dockerlens_daemon_result: " + helper + "_unrunnable",))
-                              for helper in ("which", "ip", "rm", "env", "dockerd",
-                                             "rootlesskit", "slirp4netns"))
-daemon_checks = rootless_executable_checks + rootless_smoke_checks + (("rootless_home_unwritable", ("dockerlens_daemon_result: home_unwritable",
-                                               "home needs to be set and writable")),
-                 ("rootless_runtime_unwritable", ("dockerlens_daemon_result: runtime_unwritable",
-                                                  "xdg_runtime_dir needs to be set and writable")),
-                 ("daemon_storage", ("error initializing graphdriver",
-                                     "failed to mount overlay", "storage driver")),
-                 ("rootless_uidmap", ("uid_map", "newuidmap", "newgidmap")),
-                 ("daemon_permission", ("operation not permitted", "permission denied")),
-                 ("rootless_network", ("rootlesskit", "slirp4netns")),
-                 ("daemon_network", ("iptables", "failed to create nat chain",
-                                     "error creating default bridge")),
-                 ("daemon_startup", ("failed to start daemon",)))
-if stage in ("sources", "update", "install"):
-    checks = package_checks
-elif stage == "daemon":
-    checks = daemon_checks
-else:
-    checks = package_checks + daemon_checks
-explicit = rootless_executable_checks + rootless_smoke_checks if stage == "daemon" and sys.argv[1] == "debian11-rootless" else ()
-category = next((name for name, needles in explicit if any(item in category_text for item in needles)), None)
-if category is None and stage == "daemon" and sys.argv[1] == "debian11-rootless":
-    # Recognize only shell/exec missing-executable signatures for the known
-    # launcher and helpers. Do not expose the matching private log line.
-    missing = r": (?:not found|no such file or directory)$"
-    launcher = r"(?:^|: )(?:exec: )?/usr/share/docker\.io/contrib/dockerd-rootless\.sh" + missing
-    if re.search(launcher, category_text, re.MULTILINE):
-        category = "rootless_launcher_unavailable"
-    else:
-        for helper in ("dockerd", "rootlesskit", "slirp4netns", "newuidmap", "newgidmap",
-                       "which", "ip", "rm", "env", "/usr/bin/env"):
-            pattern = r"(?:^|: )(?:exec: )?" + helper + missing
-            if re.search(pattern, category_text, re.MULTILINE):
-                category = "rootless_" + ("env" if helper == "/usr/bin/env" else helper) + "_unavailable"
-                break
-if category is None:
-    category = next((name for name, needles in checks if any(item in category_text for item in needles)), "unclassified")
-# The private shell trace may contain values. Admit only these fixed command
-# names and the harness-owned marker; never emit source lines or arguments.
+checks = (
+    ("rootless_launcher_unavailable", ("start-dockerd: not found", "start-dockerd: no such file")),
+    ("rootless_uidmap", ("uid_map", "newuidmap", "newgidmap")),
+    ("rootless_network", ("rootlesskit", "slirp4netns")),
+    ("daemon_storage", ("error initializing graphdriver", "failed to mount overlay", "storage driver")),
+    ("daemon_permission", ("operation not permitted", "permission denied")),
+    ("daemon_network", ("iptables", "failed to create nat chain", "error creating default bridge")),
+    ("daemon_startup", ("failed to start daemon",)),
+)
+category = next((name for name, needles in checks
+                 if any(item in category_text for item in needles)), "unclassified")
 trace = "unavailable"
-if stage == "daemon" and sys.argv[1] == "debian11-rootless":
-    allowed = {"which", "ip", "rm", "env", "dockerd", "rootlesskit", "slirp4netns",
-               "newuidmap", "newgidmap"}
-    for line in lines[last_stage[0] + 1:] if last_stage else lines:
-        line = line.strip()
-        if line == "dockerlens_rootless_stage: preflight_complete":
-            trace = "preflight_complete"
-        match = re.fullmatch(r"dockerlens_rootless_trace:(?:exec )?([^ ]+)(?: .*)?", line)
-        if match and match[1] in allowed:
-            trace = match[1]
 print("stage=" + stage + " category=" + category + " trace=" + trace)' "$lane") || diagnosis='stage=unavailable category=unavailable trace=unavailable'
   echo "inner daemon startup diagnosis: state=$state $diagnosis" >&2
 }
@@ -292,127 +194,30 @@ watchdog() {
     fi
   done
 }
-if [[ $lane == debian11-rootful ]]; then
-  storage_mount="$volume:/var/lib/docker:U"
-  start=(sh -ec '
-    printf "DOCKERLENS_APT_STAGE: sources\n"
-    sh /run/dockerlens/native-debian-snapshot.sh
-    printf "DOCKERLENS_APT_STAGE: update\n"
-    apt-get update -qq
-    printf "DOCKERLENS_APT_STAGE: install\n"
-    for spec in "docker.io=$DEBIAN_DOCKER_PACKAGE" "ca-certificates=$DEBIAN_CA_CERTIFICATES_PACKAGE"; do
-      package=${spec%%=*}; pinned=${spec#*=}
-      if ! apt-cache madison "$package" | awk -F "|" -v pin="$pinned" '\''
-        { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); if ($2 == pin) found = 1 }
-        END { exit !found }'\''; then
-        printf "DOCKERLENS_APT_RESULT: version-unavailable\n"
-        exit 100
-      fi
-    done
-    sh /run/dockerlens/native-apt-install.sh \
-      "docker.io=$DEBIAN_DOCKER_PACKAGE" "ca-certificates=$DEBIAN_CA_CERTIFICATES_PACKAGE"
-    printf "DOCKERLENS_APT_STAGE: daemon\n"
-    exec dockerd --host=unix:///run/dockerlens/docker.sock --storage-driver=vfs
-  ')
-elif [[ $lane == debian11-rootless ]]; then
-  storage_mount="$volume:/home/rootless/.local/share/docker:U"
-  start=(sh -ec '
-    printf "DOCKERLENS_APT_STAGE: sources\n"
-    sh /run/dockerlens/native-debian-snapshot.sh
-    printf "DOCKERLENS_APT_STAGE: update\n"
-    apt-get update -qq
-    printf "DOCKERLENS_APT_STAGE: install\n"
-    for spec in "docker.io=$DEBIAN_DOCKER_PACKAGE" "ca-certificates=$DEBIAN_CA_CERTIFICATES_PACKAGE" \
-      "rootlesskit=$DEBIAN_ROOTLESSKIT_PACKAGE" \
-      "slirp4netns=$DEBIAN_SLIRP4NETNS_PACKAGE" "uidmap=$DEBIAN_UIDMAP_PACKAGE" \
-      "fuse-overlayfs=$DEBIAN_FUSE_OVERLAYFS_PACKAGE" "iproute2=$DEBIAN_IPROUTE2_PACKAGE"; do
-      package=${spec%%=*}; pinned=${spec#*=}
-      if ! apt-cache madison "$package" | awk -F "|" -v pin="$pinned" '\''
-        { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); if ($2 == pin) found = 1 }
-        END { exit !found }'\''; then
-        printf "DOCKERLENS_APT_RESULT: version-unavailable\n"
-        exit 100
-      fi
-    done
-    sh /run/dockerlens/native-apt-install.sh \
-      "docker.io=$DEBIAN_DOCKER_PACKAGE" "ca-certificates=$DEBIAN_CA_CERTIFICATES_PACKAGE" \
-      "rootlesskit=$DEBIAN_ROOTLESSKIT_PACKAGE" \
-      "slirp4netns=$DEBIAN_SLIRP4NETNS_PACKAGE" "uidmap=$DEBIAN_UIDMAP_PACKAGE" \
-      "fuse-overlayfs=$DEBIAN_FUSE_OVERLAYFS_PACKAGE" "iproute2=$DEBIAN_IPROUTE2_PACKAGE"
-    useradd --create-home --uid 1000 --shell /bin/sh rootless
-    install -d -m 0700 -o rootless -g rootless /home/rootless
-    grep -q "^rootless:" /etc/subuid || printf "rootless:100000:65536\n" >> /etc/subuid
-    grep -q "^rootless:" /etc/subgid || printf "rootless:100000:65536\n" >> /etc/subgid
-    install -d -m 0700 -o rootless -g rootless /run/user/1000
-    install -d -m 0700 -o rootless -g rootless /home/rootless/.local/share/docker
-    chown -R rootless:rootless /home/rootless/.local/share/docker
-    printf "DOCKERLENS_APT_STAGE: daemon\n"
-    if ! su -s /bin/sh rootless -c "test -w /home/rootless" >/dev/null 2>&1; then
-      printf "DOCKERLENS_DAEMON_RESULT: home_unwritable\n"
-      exit 100
-    fi
-    if ! su -s /bin/sh rootless -c "test -w /run/user/1000" >/dev/null 2>&1; then
-      printf "DOCKERLENS_DAEMON_RESULT: runtime_unwritable\n"
-      exit 100
-    fi
-    rootless_path=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-    if ! su -s /bin/sh rootless -c "PATH=$rootless_path; XDG_RUNTIME_DIR=/run/user/1000; HOME=/home/rootless; export PATH XDG_RUNTIME_DIR HOME; test -x /usr/share/docker.io/contrib/dockerd-rootless.sh" >/dev/null 2>&1; then
-      printf "DOCKERLENS_DAEMON_RESULT: launcher_unavailable\n"
-      exit 100
-    fi
-    if ! su -s /bin/sh rootless -c "test -x /usr/bin/env" >/dev/null 2>&1; then
-      printf "DOCKERLENS_DAEMON_RESULT: env_unavailable\n"
-      exit 100
-    fi
-    for helper in dockerd rootlesskit slirp4netns newuidmap newgidmap which ip rm; do
-      if ! su -s /bin/sh rootless -c "PATH=$rootless_path; XDG_RUNTIME_DIR=/run/user/1000; HOME=/home/rootless; export PATH XDG_RUNTIME_DIR HOME; executable=\$(command -v $helper) && test -x \"\$executable\"" >/dev/null 2>&1; then
-        printf "DOCKERLENS_DAEMON_RESULT: %s_unavailable\n" "$helper"
-        exit 100
-      fi
-    done
-    # These commands have side-effect-free version or lookup modes. setuid
-    # uidmap helpers have no equivalent dry run, so only existence is checked.
-    for helper in which ip rm env dockerd rootlesskit slirp4netns; do
-      case $helper in
-        which) smoke_arg=sh ;;
-        ip) smoke_arg=-Version ;;
-        *) smoke_arg=--version ;;
-      esac
-      if ! su -s /bin/sh rootless -c "PATH=$rootless_path; XDG_RUNTIME_DIR=/run/user/1000; HOME=/home/rootless; export PATH XDG_RUNTIME_DIR HOME; $helper $smoke_arg" >/dev/null 2>&1; then
-        printf "DOCKERLENS_DAEMON_RESULT: %s_unrunnable\n" "$helper"
-        exit 100
-      fi
-    done
-    printf "DOCKERLENS_ROOTLESS_STAGE: preflight_complete\n"
-    exec su -s /bin/sh rootless -c "/usr/bin/env PATH=$rootless_path XDG_RUNTIME_DIR=/run/user/1000 HOME=/home/rootless PS4=DOCKERLENS_ROOTLESS_TRACE: /bin/sh -x /usr/share/docker.io/contrib/dockerd-rootless.sh --host=unix:///run/dockerlens/docker.sock --storage-driver=vfs"
-  ')
-else
-  if [[ $expected_mode == rootless ]]; then
-    storage_mount="$volume:/home/rootless/.local/share/docker:U"
-  else
-    storage_mount="$volume:/var/lib/docker:U"
-  fi
-  start=(--host=unix:///run/dockerlens/docker.sock --storage-driver=vfs)
-fi
-
+storage_mount="$volume:$(if [[ $expected_mode == rootless ]]; then printf /home/docker/.local/share/docker; else printf /var/lib/docker; fi):U"
+# Keep the image's native daemon launcher. Its second Unix listener is bind-mounted
+# for explicit local test capture; neither listener is exposed over TCP.
+start=(/usr/local/bin/start-dockerd --host=unix:///dockerlens-native/docker.sock)
+run_flags=(--image-volume=ignore)
+if [[ $lane == debian11-rootless ]]; then run_flags+=(--oom-score-adj=0); fi
 watchdog &
 watchdog_pid=$!
 # Pull only the reviewed digest under the lane's time and free-space budget.
 # Prevent `run` from doing a second unbounded implicit pull.
 timeout 180 "${podman_cmd[@]}" pull "$image" >/dev/null
 timeout 120 "${podman_cmd[@]}" run --pull=never -d --name "$container" --label "io.dockerlens.native-run=$run_id" \
-  --privileged --pids-limit=512 --memory=4g --cpus=2 \
-  --env DOCKER_TLS_CERTDIR= --env "DEBIAN_DOCKER_PACKAGE=$DEBIAN_DOCKER_PACKAGE" \
-  --env "DEBIAN_CA_CERTIFICATES_PACKAGE=$DEBIAN_CA_CERTIFICATES_PACKAGE" \
-  --env "DEBIAN_ROOTLESSKIT_PACKAGE=$DEBIAN_ROOTLESSKIT_PACKAGE" \
-  --env "DEBIAN_SLIRP4NETNS_PACKAGE=$DEBIAN_SLIRP4NETNS_PACKAGE" \
-  --env "DEBIAN_UIDMAP_PACKAGE=$DEBIAN_UIDMAP_PACKAGE" \
-  --env "DEBIAN_FUSE_OVERLAYFS_PACKAGE=$DEBIAN_FUSE_OVERLAYFS_PACKAGE" \
-  --env "DEBIAN_IPROUTE2_PACKAGE=$DEBIAN_IPROUTE2_PACKAGE" \
-  --volume "$storage_mount" --volume "$socket_dir:/run/dockerlens" \
+  --privileged --pids-limit=512 --memory=4g --cpus=2 "${run_flags[@]}" \
+  --volume "$storage_mount" --volume "$socket_dir:/dockerlens-native" \
   "$image" "${start[@]}" >/dev/null
 privileged=$("${podman_cmd[@]}" inspect --format '{{.HostConfig.Privileged}}' "$container")
 [[ $privileged == true ]] || { echo 'outer container does not have reviewed nesting privilege' >&2; exit 1; }
+volume_mounts=$("${podman_cmd[@]}" inspect --format '{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}}:{{.Destination}}{{"\n"}}{{end}}{{end}}' "$container")
+expected_mount=${storage_mount%%:*}:${storage_mount#*:}
+expected_mount=${expected_mount%:U}
+[[ $volume_mounts == "$expected_mount" ]] || {
+  echo 'outer container has unexpected image or data-root volumes' >&2
+  exit 1
+}
 
 deadline=$((SECONDS + 360))
 while (( SECONDS < deadline )); do
@@ -449,20 +254,17 @@ api_get /version "$run_dir/version.json"
 api_version=$(json_key "$run_dir/version.json" ApiVersion)
 server_version=$(json_key "$run_dir/version.json" Version)
 [[ $api_version =~ ^[0-9]+\.[0-9]+$ ]] && native_engine_release_matches "$lane" "$expected_release" "$server_version" || {
-  echo "unexpected Engine version in $lane: $server_version API $api_version" >&2; exit 1;
+  echo "unexpected Engine release or API in $lane" >&2; exit 1;
 }
 api_get "/v$api_version/info" "$run_dir/info.json"
 if [[ $lane == debian11-* ]]; then
-  packages=("docker.io:$DEBIAN_DOCKER_PACKAGE" "ca-certificates:$DEBIAN_CA_CERTIFICATES_PACKAGE")
-  if [[ $expected_mode == rootless ]]; then
-    packages+=("rootlesskit:$DEBIAN_ROOTLESSKIT_PACKAGE" "slirp4netns:$DEBIAN_SLIRP4NETNS_PACKAGE" "uidmap:$DEBIAN_UIDMAP_PACKAGE" "fuse-overlayfs:$DEBIAN_FUSE_OVERLAYFS_PACKAGE" "iproute2:$DEBIAN_IPROUTE2_PACKAGE")
-  fi
-  for package in "${packages[@]}"; do
-    name=${package%%:*}
-    pinned=${package#*:}
-    installed=$("${podman_cmd[@]}" exec "$container" dpkg-query -W -f='${Version}' "$name")
-    [[ $installed == "$pinned" ]] || { echo "Debian package revision differs from pin: $name" >&2; exit 1; }
-  done
+  installed_docker_package=$("${podman_cmd[@]}" exec "$container" dpkg-query -W -f='${Version}' docker.io)
+  [[ $installed_docker_package == "$DEBIAN_DOCKER_PACKAGE" ]] || {
+    echo 'Debian docker.io revision differs from published image contract' >&2
+    exit 1
+  }
+else
+  installed_docker_package=
 fi
 python3 - "$run_dir/info.json" "$expected_mode" <<'PY'
 import json, sys
@@ -473,7 +275,7 @@ if rootless != (sys.argv[2] == 'rootless'):
     raise SystemExit('inner daemon mode differs from native lane')
 PY
 
-inner_docker=("${podman_cmd[@]}" exec "$container" docker -H unix:///run/dockerlens/docker.sock)
+inner_docker=("${podman_cmd[@]}" exec "$container" docker -H unix:///dockerlens-native/docker.sock)
 docker_root=$(timeout 15 "${inner_docker[@]}" info --format '{{.DockerRootDir}}')
 inner_cgroup=$(timeout 15 "${inner_docker[@]}" info --format '{{.CgroupVersion}}')
 # Report only fixed fields and validated package revision strings. In particular,
@@ -489,7 +291,7 @@ native_package_version() {
 }
 echo "DOCKERLENS_NATIVE_ENV: cgroup_driver=$inner_cgroup_driver cgroup_version=$inner_cgroup runc=$(native_package_version runc) containerd=$(native_package_version containerd) libseccomp2=$(native_package_version libseccomp2)"
 if [[ $expected_mode == rootless ]]; then
-  [[ $docker_root == /home/rootless/.local/share/docker ]] || { echo 'rootless daemon store is outside owned volume' >&2; exit 1; }
+  [[ $docker_root == /home/docker/.local/share/docker ]] || { echo 'rootless daemon store is outside owned volume' >&2; exit 1; }
 else
   [[ $docker_root == /var/lib/docker ]] || { echo 'rootful daemon store is outside owned volume' >&2; exit 1; }
 fi
@@ -705,8 +507,10 @@ network_id=$(timeout 30 "${inner_docker[@]}" network create --driver bridge "dl-
 volume_name="dl-${run_id}-vol"
 timeout 30 "${inner_docker[@]}" volume create "$volume_name" >/dev/null
 container_id=$(timeout 30 "${inner_docker[@]}" container create --name "dl-${run_id}-box" \
+  --user 0:0 --workdir /tmp --hostname dockerlens-native \
+  --label io.dockerlens.fixture=synthetic \
   --network "dl-${run_id}-net" --mount "type=volume,source=$volume_name,target=/data" \
-  --mount 'type=bind,source=/run/dockerlens/native-bind,target=/readonly,readonly' \
+  --mount 'type=bind,source=/dockerlens-native/native-bind,target=/readonly,readonly' \
   -p 18080:8080/tcp -p 18081:8081/udp \
   -e DL_CONFORMANCE=synthetic-secret -e EMPTY= -e 'QUOTED=a"b\c' \
   --health-cmd 'true' --restart on-failure:3 --entrypoint /bin/sh \
@@ -727,10 +531,25 @@ export NATIVE_NETWORK_ID="$network_id" NATIVE_VOLUME_NAME="$volume_name"
 export NATIVE_ENGINE_VERSION="$server_version" NATIVE_DAEMON_MODE="$expected_mode"
 export NATIVE_API_VERSION="$api_version"
 export NATIVE_FIXTURE_IMAGE="$FIXTURE_IMAGE" NATIVE_OUTER_CONTAINER="$container"
-export NATIVE_BIND_SOURCE=/run/dockerlens/native-bind
+export NATIVE_BIND_SOURCE=/dockerlens-native/native-bind
 if [[ $EUID == 0 ]]; then export NATIVE_PODMAN_USE_SUDO=0; else export NATIVE_PODMAN_USE_SUDO=1; fi
 "$(dirname "$0")/run-exact-native-test.sh" native_capture live_engine_capture_decodes
 "$(dirname "$0")/run-exact-native-test.sh" acquisition live_read_only_acquisition_matches_oracle
 "$(dirname "$0")/run-exact-native-test.sh" native_target live_target_render_matches_engine
+
+if [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]; then
+  candidate_sha=$(git -C "$script_dir/.." rev-parse HEAD)
+  [[ $candidate_sha =~ ^[0-9a-f]{40}$ && ${DOCKERLENS_NATIVE_CANDIDATE_SHA:-} == "$candidate_sha" ]] || {
+    echo 'native evidence candidate SHA does not match reviewed checkout' >&2
+    exit 1
+  }
+  [[ -z $(git -C "$script_dir/.." status --porcelain --untracked-files=all) ]] || {
+    echo 'native evidence requires a clean candidate checkout' >&2
+    exit 1
+  }
+  python3 "$script_dir/native-evidence.py" "$run_dir/version.json" \
+    "$DOCKERLENS_NATIVE_EVIDENCE_DIR/$lane.json" "$lane" "$image" "$expected_mode" \
+    "$installed_docker_package" "$candidate_sha"
+fi
 
 echo "native conformance passed: $lane; Engine $server_version; API $api_version; mode $expected_mode; inner cgroup $inner_cgroup; outer $("${podman_cmd[@]}" --version); kernel $(uname -r); privileged $privileged; nested storage ${used_kib} KiB"

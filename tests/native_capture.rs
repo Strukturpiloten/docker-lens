@@ -176,7 +176,7 @@ fn live_engine_capture_decodes() {
         .expect("read-only bind mount exists");
     assert_eq!(
         bind.source.value().unwrap().as_bytes(),
-        b"/run/dockerlens/native-bind"
+        b"/dockerlens-native/native-bind"
     );
     assert_eq!(bind.destination.value().unwrap().as_bytes(), b"/readonly");
     assert_eq!(bind.read_write.value(), Some(&false));

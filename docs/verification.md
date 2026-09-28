@@ -35,57 +35,48 @@ mounts, environment, command, health, and restart behavior. Decoder-only
 fixtures cannot establish this evidence. Native compatibility remains unproven
 until all lanes genuinely pass and their evidence is independently reviewed.
 
-The Debian guests use one fixed official Debian Snapshot date, not the live
-Bullseye mirror: the latter advertised the pinned `docker.io` package after
-its file disappeared. The snapshot's signed metadata and package hashes remain
-verified; only historical `Valid-Until` expiry is disabled. This proves a
-historical Debian 11 package baseline, not current security support.
+The Debian guests are maintained test images published by containers#260.
+Each contains native docker.io 20.10.5+dfsg1-1+deb11u2; the harness checks
+that installed package revision separately from /version. The upstream
+images contain Engine 29.8.1. No lane installs packages at runtime. Debian 11
+is a historical compatibility baseline, not current security support.
+The Debian rootless image needs --oom-score-adj=0 on its privileged rootful
+outer Podman container for nested workloads.
 
-Run one lane with `./scripts/native-conformance.sh <lane>` on Linux with
-rootful Podman through passwordless `sudo`, at least 8 GiB free, and access to
-the pinned image manifests and Debian 11 snapshot. The script caps
-the nested daemon at 4 GiB storage, 4 GiB memory, two CPUs and 512 processes.
-It bounds the outer image pull to three minutes, checks free space before the
-pull, monitors space during it, and forbids an implicit pull when starting the
-outer container. Failure diagnostics show the exact native test, exit status,
-numeric libtest summary, last fixed native check marker, and a closed
+Run one lane with ./scripts/native-conformance.sh <lane> on Linux with
+rootful Podman through passwordless sudo, at least 8 GiB free, and access
+to the pinned GHCR and BusyBox manifests. The script caps the nested daemon
+at 4 GiB storage, 4 GiB memory, two CPUs and 512 processes. It bounds the
+outer image pull to three minutes, monitors space during it, and prevents an
+implicit second pull. The image's native launcher starts a Unix-socket
+daemon. The harness binds a second Unix socket at `/dockerlens-native` into
+its private temporary directory for explicit, local-only capture and requires
+a host-side `/_ping` before proceeding. This path stays outside the rootless
+launcher's `/run` copy-up. It exposes no TCP daemon port.
+
+Every image declares a Docker data-root VOLUME. The harness disables
+automatic image volumes and mounts exactly one task-labeled named volume at
+the declared data root. It checks the mounted volume after launch; an
+unexpected anonymous or extra volume fails the lane. A watchdog bounds
+storage use and free space. Failure diagnostics show the exact native test,
+exit status, numeric libtest summary, fixed native marker, and closed
 acquisition-error category where applicable. Daemon startup failures show
-bounded container state and a classified startup category. Debian lanes also
-show the last fixed APT stage, including a fail-closed `package_sources_unexpected`
-category if the pinned image gains another APT source, plus signature, clock,
-dependency and post-invoke failures. The Debian harness checks every requested revision in
-APT metadata before install, and reports a fixed `package_version_unavailable`
-category if a pin is absent. Failed installs also report bounded disk, lock,
-dependency, download, or `dpkg` categories when recognized. The guest captures
-the full install output in a temporary file, emits only a fixed category, and
-removes the file on exit. Unknown failures report `package_apt_failure` without
-printing APT output. Raw assertions, daemon logs, and API responses stay private.
-The Debian guest installs a pinned CA-certificate package before pulling the
-fixture through its inner daemon. The rootless lane owns its mounted Docker
-storage and checks that its home and runtime directories are writable by the
-rootless user before starting the daemon; failures report only the closed
-`rootless_home_unwritable` or `rootless_runtime_unwritable` category. Its
-launcher receives an explicit path including Debian's `/usr/sbin` location for
-`dockerd`. The Debian rootless lane checks, installs, and verifies the exact
-`iproute2` revision from the pinned snapshot because RootlessKit invokes `ip`.
-Before execution, the harness checks that the exact launcher and
-`/usr/bin/env` are executable and that `dockerd`, `rootlesskit`, `slirp4netns`,
-`newuidmap`, `newgidmap`, `which`, `ip`, and `rm` resolve to executable files in
-the rootless user's environment. It runs bounded, output-suppressed version or
-lookup smoke checks for `which`, `ip`, `rm`, `env`, `dockerd`, `rootlesskit`, and
-`slirp4netns`; the setuid uidmap helpers have no safe dry run. Missing and
-failed smoke checks have fixed `rootless_<name>_unavailable` and
-`rootless_<name>_unrunnable` categories; the launcher uses
-`rootless_launcher_unavailable`. Private daemon logs are also checked for
-narrow shell missing-executable signatures. For this diagnostic run the harness
-invokes the Debian `.sh` launcher through `/bin/sh -x`; this uses its POSIX shell
-entry point with tracing enabled. The trace stays in private logs. The bounded parser emits at
-most the last allowlisted command name or the fixed `preflight_complete`
-marker as `trace`; unknown transitions are `unavailable`. It never prints a
-trace line or command arguments, and trace arguments cannot assign a startup
-category. Other exit 127 failures remain
-`unclassified`; these diagnostics narrow an investigation but do not establish
-rootless compatibility.
+bounded container state and a fixed category. Raw daemon logs and API
+responses remain private; unknown failures are unclassified.
+
+After all three native Rust tests pass, a workflow lane writes one
+sanitized JSON manifest containing the exact candidate SHA, image
+tag and digest, observed Engine release and advertised API bounds, the
+selected acquisition API, rendering API, reported containerd and runc
+component versions, daemon mode, installed Debian
+package revision where applicable, and the ten tested target capability
+names. Acquisition selects at most API 1.49 even if the daemon advertises
+a newer API; rendering uses the observed advertised API. The workflow
+uploads only this JSON as dockerlens-native-<lane>, with a fixed <lane>.json
+filename. Artifact upload failure fails the lane. A reviewer must bind
+the exact artifact bytes, run attempt, and candidate SHA before adding
+positive catalog evidence. No local harness definition or green offline
+check creates that evidence.
 It deletes its exact named container, volume, and temporary files after
 success, failure, or catchable termination. SIGKILL, host failure, or hard
 runner shutdown can prevent cleanup; inspect the printed exact names and
