@@ -32,6 +32,7 @@ pub enum AcquisitionError {
     Status,
     Version,
     Shape,
+    Selection,
     Budget(LimitError),
 }
 
@@ -98,10 +99,68 @@ pub enum ReadRequest {
 }
 
 /// Explicit selectors are applied before bounded resource expansion.
-#[derive(Debug)]
 pub enum Selector {
+    /// Exact canonical (64 hexadecimal character) container IDs. No list is read.
     ContainerIds(Vec<NativeId>),
+    /// Exact canonical Docker network IDs as standalone resource roots.
+    NetworkIds(Vec<NativeId>),
+    /// Exact Docker volume names as standalone resource roots.
+    VolumeNames(Vec<NativeId>),
+    /// Exact names obtained from bounded list metadata, never abbreviations.
+    ContainerNames(Vec<NativeId>),
+    /// A literal prefix of a container name, matched against bounded metadata.
+    NamePrefix(NativeId),
+    /// Literal label key and optional exact value, matched against bounded metadata.
+    Label {
+        key: ProtectedValue,
+        value: Option<ProtectedValue>,
+    },
+    /// Read protected list metadata without inspecting any container.
+    Discovery,
     AllContainers,
+}
+
+impl std::fmt::Debug for Selector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let kind = match self {
+            Self::ContainerIds(_) => "ContainerIds",
+            Self::NetworkIds(_) => "NetworkIds",
+            Self::VolumeNames(_) => "VolumeNames",
+            Self::ContainerNames(_) => "ContainerNames",
+            Self::NamePrefix(_) => "NamePrefix",
+            Self::Label { .. } => "Label",
+            Self::Discovery => "Discovery",
+            Self::AllContainers => "AllContainers",
+        };
+        f.write_str(kind)
+    }
+}
+
+/// Why a selected root was inspected. Native values remain in protected exchanges.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SelectionReason {
+    ExactId,
+    ExactNetworkId,
+    ExactVolumeName,
+    ExactName,
+    NamePrefix,
+    Label,
+    ExplicitAll,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RootKind {
+    Container,
+    Network,
+    Volume,
+}
+
+/// An opaque inspected container root and its explicit selection reason.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SelectedRoot {
+    pub resource: ResourceRef,
+    pub kind: RootKind,
+    pub reason: SelectionReason,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -736,25 +795,187 @@ fn negotiated_api(body: &[u8]) -> Result<ApiVersion, AcquisitionError> {
     Ok(selected)
 }
 
-fn selected_ids(body: &[u8]) -> Result<Vec<NativeId>, AcquisitionError> {
+fn valid_exact_container_id(id: &NativeId) -> bool {
+    id.as_str().len() == 64 && id.as_str().bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn valid_literal_name(name: &str) -> bool {
+    let name = name.strip_prefix('/').unwrap_or(name);
+    !name.is_empty()
+        && name.len() <= 255
+        && name.as_bytes()[0].is_ascii_alphanumeric()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+}
+
+fn valid_volume_name(name: &str) -> bool {
+    !name.starts_with('/') && valid_literal_name(name)
+}
+
+pub(crate) fn selected_ids(
+    body: &[u8],
+    selector: &Selector,
+) -> Result<Vec<NativeId>, AcquisitionError> {
     let list: Value = serde_json::from_slice(body).map_err(|_| AcquisitionError::Shape)?;
     let entries = list.as_array().ok_or(AcquisitionError::Shape)?;
     if entries.len() > MAX_COLLECTION_ITEMS {
         return Err(AcquisitionError::Shape);
     }
-    entries
-        .iter()
-        .map(|entry| {
-            entry
-                .get("Id")
-                .and_then(Value::as_str)
-                .and_then(|id| NativeId::new(id.to_owned()))
-                .ok_or(AcquisitionError::Shape)
-        })
-        .collect()
+    let names = match selector {
+        Selector::ContainerNames(names) => {
+            if names.is_empty() || names.iter().any(|name| !valid_literal_name(name.as_str())) {
+                return Err(AcquisitionError::Selection);
+            }
+            Some(names)
+        }
+        Selector::NamePrefix(prefix) if !valid_literal_name(prefix.as_str()) => {
+            return Err(AcquisitionError::Selection);
+        }
+        Selector::Label { key, value }
+            if key.is_empty()
+                || key.as_bytes().contains(&0)
+                || value
+                    .as_ref()
+                    .is_some_and(|value| value.as_bytes().contains(&0)) =>
+        {
+            return Err(AcquisitionError::Selection);
+        }
+        _ => None,
+    };
+    let mut selected = Vec::new();
+    let mut matched_names = HashSet::new();
+    let mut seen_ids = HashSet::new();
+    for entry in entries {
+        let object = entry.as_object().ok_or(AcquisitionError::Shape)?;
+        let id = object
+            .get("Id")
+            .and_then(Value::as_str)
+            .and_then(|id| NativeId::new(id.to_owned()))
+            .ok_or(AcquisitionError::Shape)?;
+        if !valid_exact_container_id(&id) {
+            return Err(AcquisitionError::Shape);
+        }
+        if !seen_ids.insert(id.clone()) {
+            return Err(AcquisitionError::Shape);
+        }
+        let matches = match selector {
+            Selector::AllContainers => true,
+            Selector::Discovery => false,
+            Selector::ContainerNames(_) | Selector::NamePrefix(_) => {
+                let native_names = object
+                    .get("Names")
+                    .and_then(Value::as_array)
+                    .ok_or(AcquisitionError::Shape)?;
+                if native_names.len() > MAX_COLLECTION_ITEMS {
+                    return Err(AcquisitionError::Shape);
+                }
+                let mut matches = false;
+                for native_name in native_names {
+                    let native_name = native_name.as_str().ok_or(AcquisitionError::Shape)?;
+                    let native_name = native_name.strip_prefix('/').unwrap_or(native_name);
+                    if let Some(names) = names {
+                        for name in names {
+                            if native_name == name.as_str().trim_start_matches('/') {
+                                if !matched_names.insert(name.as_str()) {
+                                    return Err(AcquisitionError::Selection);
+                                }
+                                matches = true;
+                            }
+                        }
+                    } else if let Selector::NamePrefix(prefix) = selector {
+                        matches |= native_name.starts_with(prefix.as_str().trim_start_matches('/'));
+                    }
+                }
+                matches
+            }
+            Selector::Label { key, value } => {
+                let labels = object
+                    .get("Labels")
+                    .and_then(Value::as_object)
+                    .ok_or(AcquisitionError::Shape)?;
+                if labels.len() > MAX_COLLECTION_ITEMS {
+                    return Err(AcquisitionError::Shape);
+                }
+                match labels.get(
+                    std::str::from_utf8(key.as_bytes()).map_err(|_| AcquisitionError::Selection)?,
+                ) {
+                    Some(found) => {
+                        let found = found.as_str().ok_or(AcquisitionError::Shape)?;
+                        value
+                            .as_ref()
+                            .is_none_or(|expected| found.as_bytes() == expected.as_bytes())
+                    }
+                    None => false,
+                }
+            }
+            Selector::ContainerIds(_) | Selector::NetworkIds(_) | Selector::VolumeNames(_) => {
+                return Err(AcquisitionError::Selection);
+            }
+        };
+        if matches {
+            selected.push(id);
+        }
+    }
+    if names.is_some_and(|names| matched_names.len() != names.len())
+        || matches!(selector, Selector::NamePrefix(_) | Selector::Label { .. })
+            && selected.is_empty()
+    {
+        return Err(AcquisitionError::Selection);
+    }
+    Ok(selected)
 }
 
-fn related_ids(body: &[u8]) -> Result<(Vec<NativeId>, Vec<NativeId>), AcquisitionError> {
+fn validate_selector(selector: &Selector, limits: Limits) -> Result<(), AcquisitionError> {
+    match selector {
+        Selector::ContainerIds(ids) | Selector::NetworkIds(ids) => {
+            if ids.len() > limits.max_selected_resources || ids.len() > MAX_COLLECTION_ITEMS {
+                return Err(LimitError::SelectedResources.into());
+            }
+            if ids.iter().any(|id| !valid_exact_container_id(id)) {
+                return Err(AcquisitionError::Selection);
+            }
+        }
+        Selector::VolumeNames(names) => {
+            if names.is_empty() || names.iter().any(|name| !valid_volume_name(name.as_str())) {
+                return Err(AcquisitionError::Selection);
+            }
+            if names.len() > limits.max_selected_resources || names.len() > MAX_COLLECTION_ITEMS {
+                return Err(LimitError::SelectedResources.into());
+            }
+        }
+        Selector::ContainerNames(names) => {
+            if names.is_empty() || names.iter().any(|name| !valid_literal_name(name.as_str())) {
+                return Err(AcquisitionError::Selection);
+            }
+            if names.len() > limits.max_selected_resources || names.len() > MAX_COLLECTION_ITEMS {
+                return Err(LimitError::SelectedResources.into());
+            }
+        }
+        Selector::NamePrefix(prefix) if !valid_literal_name(prefix.as_str()) => {
+            return Err(AcquisitionError::Selection);
+        }
+        Selector::Label { key, value }
+            if key.is_empty()
+                || key.as_bytes().len() > MAX_COLLECTION_ITEMS
+                || key.as_bytes().contains(&0)
+                || value.as_ref().is_some_and(|value| {
+                    value.as_bytes().len() > MAX_COLLECTION_ITEMS || value.as_bytes().contains(&0)
+                }) =>
+        {
+            return Err(AcquisitionError::Selection);
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+struct RelatedResources {
+    networks: Vec<(NativeId, bool)>,
+    volumes: Vec<NativeId>,
+}
+
+fn related_ids(body: &[u8]) -> Result<RelatedResources, AcquisitionError> {
     let root: Value = serde_json::from_slice(body).map_err(|_| AcquisitionError::Shape)?;
     let object = root.as_object().ok_or(AcquisitionError::Shape)?;
     let mut networks = Vec::new();
@@ -769,12 +990,15 @@ fn related_ids(body: &[u8]) -> Result<(Vec<NativeId>, Vec<NativeId>), Acquisitio
             return Err(AcquisitionError::Shape);
         }
         for (name, endpoint) in entries {
-            let id = endpoint
+            let network_id = endpoint
                 .get("NetworkID")
                 .and_then(Value::as_str)
-                .filter(|value| !value.is_empty())
-                .unwrap_or(name);
-            networks.push(NativeId::new(id.to_owned()).ok_or(AcquisitionError::Shape)?);
+                .filter(|value| !value.is_empty());
+            let id = network_id.unwrap_or(name);
+            networks.push((
+                NativeId::new(id.to_owned()).ok_or(AcquisitionError::Shape)?,
+                network_id.is_none(),
+            ));
         }
     }
     if let Some(mounts) = object.get("Mounts").filter(|value| !value.is_null()) {
@@ -793,7 +1017,24 @@ fn related_ids(body: &[u8]) -> Result<(Vec<NativeId>, Vec<NativeId>), Acquisitio
             }
         }
     }
-    Ok((networks, volumes))
+    Ok(RelatedResources { networks, volumes })
+}
+
+fn inspect_identity(body: &[u8], key: &str, expected: &NativeId) -> Result<(), AcquisitionError> {
+    let root: Value = serde_json::from_slice(body).map_err(|_| AcquisitionError::Shape)?;
+    if root.get(key).and_then(Value::as_str) == Some(expected.as_str()) {
+        Ok(())
+    } else {
+        Err(AcquisitionError::Shape)
+    }
+}
+
+fn inspected_network_id(body: &[u8]) -> Result<NativeId, AcquisitionError> {
+    let root: Value = serde_json::from_slice(body).map_err(|_| AcquisitionError::Shape)?;
+    root.get("Id")
+        .and_then(Value::as_str)
+        .and_then(|id| NativeId::new(id.to_owned()))
+        .ok_or(AcquisitionError::Shape)
 }
 
 /// Read a bounded inventory from one explicitly supplied Unix socket.
@@ -807,6 +1048,7 @@ pub fn acquire(
     limits: Limits,
     cancelled: &AtomicBool,
 ) -> Result<Capture, AcquisitionError> {
+    validate_selector(&selector, limits)?;
     let mut budget = Budget::new(limits)?;
     let api = negotiated_api(
         exchange(
@@ -828,14 +1070,22 @@ pub fn acquire(
         cancelled,
     )?;
 
-    let containers = match selector {
-        Selector::ContainerIds(ids) => {
-            if ids.len() > budget.limits.max_selected_resources {
-                return Err(AcquisitionError::Budget(LimitError::SelectedResources));
-            }
-            ids
-        }
-        Selector::AllContainers => selected_ids(
+    let reason = match &selector {
+        Selector::ContainerIds(_) => SelectionReason::ExactId,
+        Selector::NetworkIds(_) | Selector::VolumeNames(_) => SelectionReason::ExactId,
+        Selector::ContainerNames(_) => SelectionReason::ExactName,
+        Selector::NamePrefix(_) => SelectionReason::NamePrefix,
+        Selector::Label { .. } => SelectionReason::Label,
+        Selector::Discovery | Selector::AllContainers => SelectionReason::ExplicitAll,
+    };
+    let containers = match &selector {
+        Selector::ContainerIds(ids) => ids.clone(),
+        Selector::NetworkIds(_) | Selector::VolumeNames(_) => Vec::new(),
+        Selector::ContainerNames(_)
+        | Selector::NamePrefix(_)
+        | Selector::Label { .. }
+        | Selector::Discovery
+        | Selector::AllContainers => selected_ids(
             exchange(
                 &mut budget,
                 endpoint,
@@ -845,6 +1095,7 @@ pub fn acquire(
                 cancelled,
             )?
             .as_bytes(),
+            &selector,
         )?,
     };
     let mut seen = HashSet::new();
@@ -852,29 +1103,52 @@ pub fn acquire(
         .into_iter()
         .filter(|id| seen.insert(id.clone()))
         .collect();
-    budget.record_selection(containers.len())?;
+    let mut networks: HashMap<NativeId, bool> = match &selector {
+        Selector::NetworkIds(ids) => ids.iter().cloned().map(|id| (id, false)).collect(),
+        _ => HashMap::new(),
+    };
+    let mut volumes: HashSet<NativeId> = match &selector {
+        Selector::VolumeNames(names) => names.iter().cloned().collect(),
+        _ => HashSet::new(),
+    };
+    budget.record_selection(containers.len() + networks.len() + volumes.len())?;
     let mut next_reference = 1_u64;
-    let mut networks = HashSet::new();
-    let mut volumes = HashSet::new();
+    let mut selected_roots = Vec::with_capacity(budget.counts().selected_resources);
+    let mut network_name_fallbacks = HashSet::new();
+    let mut inspected_network_ids = HashSet::new();
     for id in containers {
         let reference = ResourceRef::new(next_reference);
+        selected_roots.push(SelectedRoot {
+            resource: reference,
+            kind: RootKind::Container,
+            reason,
+        });
         next_reference = next_reference
             .checked_add(1)
             .ok_or(AcquisitionError::Shape)?;
         let body = exchange(
             &mut budget,
             endpoint,
-            ReadRequest::InspectContainer(id),
+            ReadRequest::InspectContainer(id.clone()),
             Some(reference),
             Some(api),
             cancelled,
         )?;
-        let (related_networks, related_volumes) = related_ids(body.as_bytes())?;
-        let new_networks: HashSet<_> = related_networks
-            .into_iter()
-            .filter(|id| !networks.contains(id))
-            .collect();
-        let new_volumes: HashSet<_> = related_volumes
+        inspect_identity(body.as_bytes(), "Id", &id)?;
+        let related = related_ids(body.as_bytes())?;
+        let mut new_networks = HashMap::new();
+        for (id, by_name) in related.networks {
+            if let Some(previous) = networks.get_mut(&id) {
+                *previous &= by_name;
+            } else {
+                new_networks
+                    .entry(id)
+                    .and_modify(|previous: &mut bool| *previous &= by_name)
+                    .or_insert(by_name);
+            }
+        }
+        let new_volumes: HashSet<_> = related
+            .volumes
             .into_iter()
             .filter(|id| !volumes.contains(id))
             .collect();
@@ -893,39 +1167,71 @@ pub fn acquire(
         volumes.extend(new_volumes);
     }
     let mut networks: Vec<_> = networks.into_iter().collect();
-    networks.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+    networks.sort_by(|left, right| left.0.as_str().cmp(right.0.as_str()));
     let mut volumes: Vec<_> = volumes.into_iter().collect();
     volumes.sort_by(|left, right| left.as_str().cmp(right.as_str()));
-    for id in networks {
+    for (id, by_name) in networks {
         let reference = ResourceRef::new(next_reference);
+        if by_name {
+            network_name_fallbacks.insert(reference);
+        }
+        if matches!(&selector, Selector::NetworkIds(_)) {
+            selected_roots.push(SelectedRoot {
+                resource: reference,
+                kind: RootKind::Network,
+                reason: SelectionReason::ExactNetworkId,
+            });
+        }
         next_reference = next_reference
             .checked_add(1)
             .ok_or(AcquisitionError::Shape)?;
-        exchange(
+        let body = exchange(
             &mut budget,
             endpoint,
-            ReadRequest::InspectNetwork(id),
+            ReadRequest::InspectNetwork(id.clone()),
             Some(reference),
             Some(api),
             cancelled,
         )?;
+        inspect_identity(body.as_bytes(), if by_name { "Name" } else { "Id" }, &id)?;
+        if !inspected_network_ids.insert(inspected_network_id(body.as_bytes())?) {
+            return Err(AcquisitionError::Shape);
+        }
     }
     for id in volumes {
         let reference = ResourceRef::new(next_reference);
+        if matches!(&selector, Selector::VolumeNames(_)) {
+            selected_roots.push(SelectedRoot {
+                resource: reference,
+                kind: RootKind::Volume,
+                reason: SelectionReason::ExactVolumeName,
+            });
+        }
         next_reference = next_reference
             .checked_add(1)
             .ok_or(AcquisitionError::Shape)?;
-        exchange(
+        let body = exchange(
             &mut budget,
             endpoint,
-            ReadRequest::InspectVolume(id),
+            ReadRequest::InspectVolume(id.clone()),
             Some(reference),
             Some(api),
             cancelled,
         )?;
+        inspect_identity(body.as_bytes(), "Name", &id)?;
     }
     remaining(budget.started, budget.limits.max_elapsed, cancelled)?;
-    Ok(budget.into_capture()?.with_explicit_socket())
+    let capture = budget
+        .into_capture()?
+        .with_selected_roots(selected_roots)
+        .with_selector(selector)
+        .with_network_name_fallbacks(network_name_fallbacks)
+        .with_explicit_socket();
+    Ok(if matches!(capture.selector(), Some(Selector::Discovery)) {
+        capture.with_discovery_only()
+    } else {
+        capture
+    })
 }
 
 #[cfg(test)]
@@ -1307,5 +1613,91 @@ mod tests {
             capture.exchanges()[1].resource()
         );
         assert!(!format!("{capture:?}").contains("db"));
+    }
+
+    #[test]
+    fn list_selection_is_literal_and_does_not_select_unrelated_peers() {
+        let list = br#"[{"Id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","Names":["/app"],"Labels":{"com.example.project":"private"}},{"Id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","Names":["/app-peer"],"Labels":{"com.example.project":"other"}}]"#;
+        let ids = |selector| selected_ids(list, &selector).unwrap();
+        assert_eq!(
+            ids(Selector::ContainerNames(vec![
+                NativeId::new("app".into()).unwrap()
+            ]))[0]
+                .as_str(),
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(
+            ids(Selector::NamePrefix(NativeId::new("app-".into()).unwrap()))[0].as_str(),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        );
+        assert_eq!(
+            ids(Selector::Label {
+                key: ProtectedValue::new(b"com.example.project".to_vec()),
+                value: Some(ProtectedValue::new(b"private".to_vec())),
+            })[0]
+                .as_str(),
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert!(matches!(
+            selected_ids(
+                list,
+                &Selector::ContainerNames(vec![NativeId::new("missing".into()).unwrap()])
+            ),
+            Err(AcquisitionError::Selection)
+        ));
+        assert!(matches!(
+            validate_selector(
+                &Selector::NamePrefix(NativeId::new("app*".into()).unwrap()),
+                limits()
+            ),
+            Err(AcquisitionError::Selection)
+        ));
+        assert!(matches!(
+            validate_selector(
+                &Selector::ContainerIds(vec![NativeId::new("id-a".into()).unwrap()]),
+                limits()
+            ),
+            Err(AcquisitionError::Selection)
+        ));
+    }
+
+    #[test]
+    fn list_ids_and_nested_metadata_are_bounded_before_inspection() {
+        let selected = Selector::NamePrefix(NativeId::new("app".into()).unwrap());
+        assert_eq!(
+            selected_ids(br#"[{"Id":"short","Names":["/app"]}]"#, &selected),
+            Err(AcquisitionError::Shape)
+        );
+        assert_eq!(selected_ids(br#"[{"Id":"gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg","Names":["/app"]}]"#, &selected), Err(AcquisitionError::Shape));
+        let id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let names = vec!["/app"; MAX_COLLECTION_ITEMS + 1];
+        let body = serde_json::json!([{"Id": id, "Names": names}]).to_string();
+        assert_eq!(
+            selected_ids(body.as_bytes(), &selected),
+            Err(AcquisitionError::Shape)
+        );
+        let labels: serde_json::Map<String, Value> = (0..=MAX_COLLECTION_ITEMS)
+            .map(|index| (format!("key{index}"), Value::String("value".to_owned())))
+            .collect();
+        let body = serde_json::json!([{"Id": id, "Labels": labels}]).to_string();
+        let label = Selector::Label {
+            key: ProtectedValue::new(b"key0".to_vec()),
+            value: None,
+        };
+        assert_eq!(
+            selected_ids(body.as_bytes(), &label),
+            Err(AcquisitionError::Shape)
+        );
+    }
+
+    #[test]
+    fn volume_roots_reject_container_name_slashes() {
+        assert_eq!(
+            validate_selector(
+                &Selector::VolumeNames(vec![NativeId::new("/data".into()).unwrap()]),
+                limits()
+            ),
+            Err(AcquisitionError::Selection)
+        );
     }
 }

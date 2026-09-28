@@ -43,6 +43,21 @@ fn capture_selected(
         budget.record_selection(selected_resources).unwrap();
     }
     for (request, resource, version, status, body) in exchanges {
+        let mut fixture = serde_json::from_str::<serde_json::Value>(body).ok();
+        let identity = match &request {
+            ReadRequest::InspectContainer(id) | ReadRequest::InspectNetwork(id) => {
+                Some(("Id", id.as_str()))
+            }
+            ReadRequest::InspectVolume(id) => Some(("Name", id.as_str())),
+            _ => None,
+        };
+        if let (Some((key, id)), Some(serde_json::Value::Object(object))) = (identity, &mut fixture)
+        {
+            object
+                .entry(key)
+                .or_insert_with(|| serde_json::Value::String(id.to_owned()));
+        }
+        let body = fixture.map_or_else(|| body.to_owned(), |value| value.to_string());
         budget.record_request(request, resource, version).unwrap();
         budget
             .read_response(HttpStatus::new(status).unwrap(), body.as_bytes())
@@ -62,7 +77,62 @@ fn container(body: &str) -> docker_lens::evidence::Capture {
 }
 
 #[test]
-fn independent_engine_fixture_decodes_typed_inventory_without_authorship() {
+fn inspect_identity_must_match_closed_request() {
+    for body in [
+        r#"{"Id":"different-container"}"#,
+        r#"{"Id":null}"#,
+        r#"{"Id":{"__docker_lens_redacted__":true}}"#,
+    ] {
+        assert!(matches!(
+            decode_capture(&container(body)),
+            Err(DecodeError::ConflictingFacts)
+        ));
+    }
+    let volume = capture(vec![(
+        ReadRequest::InspectVolume(NativeId::new("data".into()).unwrap()),
+        Some(ResourceRef::new(1)),
+        Some(api(41)),
+        200,
+        r#"{"Name":"stale-data"}"#,
+    )]);
+    assert!(matches!(
+        decode_capture(&volume),
+        Err(DecodeError::ConflictingFacts)
+    ));
+}
+
+#[test]
+fn literal_missing_inspect_identity_is_rejected() {
+    for request in [
+        ReadRequest::InspectContainer(NativeId::new("a".repeat(64)).unwrap()),
+        ReadRequest::InspectNetwork(NativeId::new("b".repeat(64)).unwrap()),
+        ReadRequest::InspectVolume(NativeId::new("data".into()).unwrap()),
+    ] {
+        // Bypass fixture normalization: the literal response has no Id or Name.
+        let mut budget = Budget::new(Limits {
+            max_requests: 1,
+            max_selected_resources: 1,
+            max_expansions: 1,
+            max_response_bytes: 1024,
+            max_total_bytes: 1024,
+            max_elapsed: Duration::from_secs(30),
+        })
+        .unwrap();
+        budget
+            .record_request(request, Some(ResourceRef::new(1)), Some(api(41)))
+            .unwrap();
+        budget
+            .read_response(HttpStatus::new(200).unwrap(), b"{}".as_slice())
+            .unwrap();
+        assert!(matches!(
+            decode_capture(&budget.into_capture().unwrap()),
+            Err(DecodeError::ConflictingFacts)
+        ));
+    }
+}
+
+#[test]
+fn synthetic_engine_fixture_decodes_typed_inventory_without_authorship() {
     let fixture = capture(vec![
         (
             ReadRequest::DaemonVersion,
@@ -93,7 +163,7 @@ fn independent_engine_fixture_decodes_typed_inventory_without_authorship() {
             r#"{"Name":"app","Driver":"bridge","Internal":false}"#,
         ),
         (
-            ReadRequest::InspectVolume(NativeId::new("vol1".into()).unwrap()),
+            ReadRequest::InspectVolume(NativeId::new("data".into()).unwrap()),
             Some(ResourceRef::new(3)),
             Some(api(41)),
             200,
@@ -781,4 +851,107 @@ fn network_endpoint_aliases_preserve_values_and_availability() {
     assert_eq!(aliases(b"d").availability, Availability::Redacted);
     assert_eq!(aliases(b"e").availability, Availability::Missing);
     assert!(!format!("{decoded:?}").contains("private-app"));
+}
+
+#[test]
+fn runtime_and_network_inspect_fields_keep_independent_native_meanings() {
+    let fixture = capture(vec![
+        (
+            ReadRequest::InspectContainer(NativeId::new("app".into()).unwrap()),
+            Some(ResourceRef::new(1)),
+            Some(api(41)),
+            200,
+            r#"{"Config":{"StopSignal":"SIGTERM","StopTimeout":15},"HostConfig":{"ReadonlyRootfs":true,"Memory":536870912,"PidsLimit":-1,"ShmSize":67108864,"Ulimits":[{"Name":"nofile","Soft":1024,"Hard":2048}],"CapAdd":["NET_BIND_SERVICE"],"SecurityOpt":["no-new-privileges:true"],"GroupAdd":["1001"],"Sysctls":{"net.ipv4.ip_unprivileged_port_start":"0"},"Dns":["127.0.0.11"],"ExtraHosts":["db:host-gateway"],"Init":true,"Tmpfs":{"/run":"rw,size=65536"},"LogConfig":{"Type":"json-file","Config":{"max-size":"10m"}},"Devices":[{"PathOnHost":"/dev/fuse","PathInContainer":"/dev/fuse","CgroupPermissions":"rwm"}]},"NetworkSettings":{"Networks":{"backend":{"NetworkID":"net-1","IPAddress":"172.18.0.4","GlobalIPv6Address":"fd00::4","IPAMConfig":{"IPv4Address":"172.18.0.4","IPv6Address":"fd00::4"},"Aliases":["app"]}}}}"#,
+        ),
+        (
+            ReadRequest::InspectNetwork(NativeId::new("net-1".into()).unwrap()),
+            Some(ResourceRef::new(2)),
+            Some(api(41)),
+            200,
+            r#"{"Name":"backend","Driver":"bridge","Internal":true,"EnableIPv6":true,"IPAM":{"Driver":"default","Config":[{"Subnet":"fd00::/64","Gateway":"fd00::1","IPRange":null}]},"Options":{"com.example.private":"value"},"Labels":{"app":"private"}}"#,
+        ),
+    ]);
+    let decoded = decode_capture(&fixture).unwrap();
+    let container = &decoded.containers[0];
+    assert_eq!(container.runtime.read_only_rootfs.value(), Some(&true));
+    assert_eq!(container.runtime.memory_bytes.value(), Some(&536_870_912));
+    assert_eq!(container.runtime.pids_limit.value(), Some(&-1));
+    assert_eq!(
+        container.runtime.ulimits.value().unwrap()[0].hard.value(),
+        Some(&2048)
+    );
+    assert_eq!(
+        container
+            .runtime
+            .logging
+            .value()
+            .unwrap()
+            .driver
+            .value()
+            .unwrap()
+            .as_bytes(),
+        b"json-file"
+    );
+    assert_eq!(container.runtime.stop_timeout.value(), Some(&15));
+    let attachment = &container.networks.value().unwrap()[0];
+    assert_eq!(attachment.ip_address.origin, Origin::RuntimeAssigned);
+    assert_eq!(attachment.requested_ipv4_address.origin, Origin::Effective);
+    assert_eq!(
+        attachment
+            .requested_ipv4_address
+            .value()
+            .unwrap()
+            .as_bytes(),
+        b"172.18.0.4"
+    );
+    let network = &decoded.networks[0];
+    assert_eq!(network.internal.value(), Some(&true));
+    assert_eq!(network.enable_ipv6.value(), Some(&true));
+    assert_eq!(
+        network.ipam_configs.value().unwrap()[0]
+            .ip_range
+            .availability,
+        Availability::Null
+    );
+    assert!(!format!("{decoded:?}").contains("no-new-privileges"));
+    assert!(!format!("{decoded:?}").contains("fd00::/64"));
+}
+
+#[test]
+fn runtime_availability_and_failure_categories_are_closed() {
+    let named = decode_capture(&container(r#"{"HostConfig":{"UsernsMode":"private"}}"#)).unwrap();
+    assert_eq!(
+        named.containers[0].runtime.userns_mode.origin,
+        Origin::Effective
+    );
+    assert_eq!(
+        named.containers[0]
+            .runtime
+            .userns_mode
+            .value()
+            .unwrap()
+            .as_bytes(),
+        b"private"
+    );
+    let redacted = decode_capture(&container(
+        r#"{"HostConfig":{"UsernsMode":{"__docker_lens_redacted__":true}}}"#,
+    ))
+    .unwrap();
+    assert_eq!(
+        redacted.containers[0].runtime.userns_mode.availability,
+        Availability::Redacted
+    );
+    let decoded = decode_capture(&container(r#"{"HostConfig":{"ReadonlyRootfs":null,"Memory":{"__docker_lens_redacted__":true},"PidsLimit":0,"CapAdd":[],"Dns":null},"Config":{"StopSignal":""}}"#)).unwrap();
+    let runtime = &decoded.containers[0].runtime;
+    assert_eq!(runtime.read_only_rootfs.availability, Availability::Null);
+    assert_eq!(runtime.memory_bytes.availability, Availability::Redacted);
+    assert_eq!(runtime.pids_limit.value(), Some(&0));
+    assert_eq!(runtime.cap_add.availability, Availability::Empty);
+    assert_eq!(runtime.dns_servers.availability, Availability::Null);
+    assert_eq!(runtime.stop_signal.availability, Availability::Empty);
+    assert_eq!(runtime.devices.availability, Availability::Missing);
+    assert!(matches!(
+        decode_capture(&container(r#"{"HostConfig":{"Memory":"512m"}}"#)),
+        Err(DecodeError::InvalidShape(FieldPath::ResourceLimit))
+    ));
 }
