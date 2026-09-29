@@ -332,8 +332,10 @@ else
   echo 'DOCKERLENS_NATIVE_CHECK: container_port_fixed_ipv6_rendered_protected-secret' >&2
   echo 'DOCKERLENS_NATIVE_CLI_DIAG: exit=other stderr=address_family' >&2
   echo 'DOCKERLENS_NATIVE_CLI_DIAG: exit=other stderr=protected-secret' >&2
-  echo 'DOCKERLENS_NATIVE_API_DIAG: status=conflict' >&2
-  echo 'DOCKERLENS_NATIVE_API_DIAG: status=protected-secret' >&2
+  echo 'DOCKERLENS_NATIVE_API_DIAG: operation=start status=conflict' >&2
+  echo 'DOCKERLENS_NATIVE_API_DIAG: operation=protected-secret status=conflict' >&2
+  echo 'DOCKERLENS_NATIVE_API_DIAG: operation=start status=protected-secret' >&2
+  echo 'DOCKERLENS_NATIVE_API_DIAG: operation=start status=conflict raw=protected-secret' >&2
   echo 'DOCKERLENS_NATIVE_IPV6_BOUNDARY_DIAG: result=refused' >&2
   echo 'DOCKERLENS_NATIVE_IPV6_BOUNDARY_DIAG: result=protected-secret' >&2
   echo 'DOCKERLENS_NATIVE_PORT_BINDINGS_DIAG: key=array count=one ipv4=one ipv6=zero other=zero v4_port=nonzero v6_port=absent' >&2
@@ -367,7 +369,7 @@ fi
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn(f"container_port_{stage}", result.stderr)
                     self.assertIn("DOCKERLENS_NATIVE_CLI_DIAG: exit=other stderr=address_family", result.stderr)
-                    self.assertIn("DOCKERLENS_NATIVE_API_DIAG: status=conflict", result.stderr)
+                    self.assertIn("DOCKERLENS_NATIVE_API_DIAG: observation=last operation=start status=conflict", result.stderr)
                     self.assertIn("DOCKERLENS_NATIVE_IPV6_BOUNDARY_DIAG: result=refused", result.stderr)
                     self.assertIn("DOCKERLENS_NATIVE_PORT_BINDINGS_DIAG: key=array count=one ipv4=one ipv6=zero other=zero v4_port=nonzero v6_port=absent", result.stderr)
                     self.assertNotIn("protected-secret", result.stdout + result.stderr)
@@ -535,9 +537,12 @@ set -eu
 if [[ $* == *--list* ]]; then
   echo 'native_container_tests::live_container_settings_match_engine: test'
 else
-  echo 'DOCKERLENS_NATIVE_START_TIMEOUT_DIAG: state=running' >&2
-  echo 'DOCKERLENS_NATIVE_START_TIMEOUT_DIAG: state=protected-secret' >&2
-  echo 'DOCKERLENS_NATIVE_START_TIMEOUT_DIAG: state=running raw=protected-secret' >&2
+  echo 'DOCKERLENS_NATIVE_START_TIMEOUT_DIAG: state=running reason=none' >&2
+  echo 'DOCKERLENS_NATIVE_START_TIMEOUT_DIAG: state=unavailable reason=transport' >&2
+  echo 'DOCKERLENS_NATIVE_START_TIMEOUT_DIAG: state=protected-secret reason=transport' >&2
+  echo 'DOCKERLENS_NATIVE_START_TIMEOUT_DIAG: state=running reason=protected-secret' >&2
+  echo 'DOCKERLENS_NATIVE_START_TIMEOUT_DIAG: state=running reason=transport' >&2
+  echo 'DOCKERLENS_NATIVE_START_TIMEOUT_DIAG: state=unavailable reason=transport raw=protected-secret' >&2
   echo 'DOCKERLENS_NATIVE_CLEANUP_STEP: step=tracked_delete outcome=begin' >&2
   echo 'DOCKERLENS_NATIVE_CLEANUP_STEP: step=delete_inspect outcome=begin' >&2
   echo 'DOCKERLENS_NATIVE_CLEANUP_STEP: step=delete_request outcome=begin' >&2
@@ -548,6 +553,9 @@ else
   echo 'DOCKERLENS_NATIVE_CLEANUP_STEP: step=protected-secret outcome=begin' >&2
   echo 'DOCKERLENS_NATIVE_CLEANUP_STEP: step=readback_stable outcome=protected-secret' >&2
   echo 'DOCKERLENS_NATIVE_CLEANUP_STEP: step=readback_stable outcome=begin raw=protected-secret' >&2
+  echo 'DOCKERLENS_NATIVE_CLEANUP_READBACK: phase=first containers=nonzero images=zero' >&2
+  echo 'DOCKERLENS_NATIVE_CLEANUP_READBACK: phase=first containers=protected-secret images=zero' >&2
+  echo 'DOCKERLENS_NATIVE_CLEANUP_READBACK: phase=first containers=nonzero images=zero raw=protected-secret' >&2
   echo 'protected-secret raw Engine response' >&2
   echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
   exit 23
@@ -561,8 +569,12 @@ fi
                 env=env, capture_output=True, text=True, timeout=15, check=False,
             )
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("DOCKERLENS_NATIVE_START_TIMEOUT_DIAG: state=running", result.stderr)
+            self.assertIn("DOCKERLENS_NATIVE_START_TIMEOUT_DIAG: state=unavailable reason=transport", result.stderr)
             self.assertIn("DOCKERLENS_NATIVE_CLEANUP_STEP: step=readback_stable outcome=begin", result.stderr)
+            self.assertIn(
+                "DOCKERLENS_NATIVE_CLEANUP_READBACK: phase=first containers=nonzero images=zero",
+                result.stderr,
+            )
             self.assertEqual(result.stderr.count("DOCKERLENS_NATIVE_CLEANUP_STEP:"), 32)
             self.assertNotIn("protected-secret", result.stdout + result.stderr)
 
@@ -571,7 +583,7 @@ fi
         self.assertIn("if oracle_start_status != 204 {", source)
         self.assertIn("resource_start_control_matrix(run);", source)
         self.assertLess(source.index("resource_start_control_matrix(run);"),
-                        source.index("assert_native_api_status(oracle_start_status, 204);"))
+                        source.index("assert_native_api_status(NativeApiOperation::Start, oracle_start_status, 204);"))
         self.assertIn('resource_control_may_continue(uncertain, resource_control_seconds_remaining())', source)
         self.assertIn('const RESOURCE_START_CONTROLS: [&str; 4] = ["baseline", "memory", "pids", "device"]', source)
         self.assertIn('"memory" => Some(&["--memory=67108864"])', source)
@@ -676,6 +688,46 @@ fi
         self.assertRegex(helper, r'"--connect-timeout",\s*"2",\s*"--max-time",\s*"3"')
         self.assertIn('pass_fds=(net_fd,)', helper)
         self.assertIn('f"--net=/proc/self/fd/{net_fd}"', helper)
+
+    def test_api_and_resolver_logs_failure_labels_are_closed(self) -> None:
+        source = (ROOT / "src/native_container_tests.rs").read_text(encoding="utf-8")
+        self.assertIn('DOCKERLENS_NATIVE_API_DIAG: operation={} status={}', source)
+        self.assertIn('DOCKERLENS_NATIVE_RESOLVER_LOGS_DIAG: operation=logs outcome=cli_failure', source)
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_container_tests::live_container_settings_match_engine: test'
+else
+  echo 'DOCKERLENS_NATIVE_API_DIAG: operation=inspect status=not_found' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: container_resolver_logging_ipv4_oracle_logs' >&2
+  echo 'DOCKERLENS_NATIVE_RESOLVER_LOGS_DIAG: operation=logs outcome=cli_failure' >&2
+  echo 'DOCKERLENS_NATIVE_RESOLVER_LOGS_DIAG: operation=private outcome=cli_failure' >&2
+  echo 'DOCKERLENS_NATIVE_GROUP_FAILURE: group=resolver_logging reason=probe' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: container_resolver_logging_local_rendered_create' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            result = subprocess.run(
+                [str(ROOT / "scripts/run-exact-native-test.sh"), "native_container",
+                 "live_container_settings_match_engine"],
+                env=env, capture_output=True, text=True, timeout=15, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "DOCKERLENS_NATIVE_API_DIAG: observation=last operation=inspect status=not_found",
+                result.stderr,
+            )
+            self.assertIn(
+                "DOCKERLENS_NATIVE_RESOLVER_LOGS_DIAG: operation=logs outcome=cli_failure",
+                result.stderr,
+            )
+            self.assertIn("DOCKERLENS_NATIVE_GROUP_FAILURE: group=resolver_logging reason=probe", result.stderr)
+            self.assertNotIn("private", result.stdout + result.stderr)
 
     def test_container_http_and_health_diagnostics_are_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

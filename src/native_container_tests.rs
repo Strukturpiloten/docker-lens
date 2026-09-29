@@ -256,31 +256,34 @@ fn closed_start_timeout_state(
     id: &str,
     name: &str,
     run_id: &str,
-) -> &'static str {
+) -> (&'static str, &'static str) {
     if status == Some(404) {
-        return "missing";
+        return ("missing", "status");
     }
-    if status != Some(200) || body.len() > 131_072 {
-        return "unavailable";
+    if status != Some(200) {
+        return ("unavailable", "status");
+    }
+    if body.len() > 131_072 {
+        return ("unavailable", "invalid_payload");
     }
     let Ok(inspected) = serde_json::from_slice::<Value>(body) else {
-        return "unavailable";
+        return ("unavailable", "invalid_payload");
     };
     if inspected["Id"] != id
         || inspected["Name"] != format!("/{name}")
         || inspected["Config"]["Labels"]["io.dockerlens.native-run"] != run_id
     {
-        return "identity_mismatch";
+        return ("identity_mismatch", "identity_mismatch");
     }
     match (
         inspected["State"]["Status"].as_str(),
         inspected["State"]["Running"].as_bool(),
     ) {
-        (Some("created"), Some(false)) => "created",
-        (Some("running"), Some(true)) => "running",
-        (Some("exited"), Some(false)) => "exited",
-        (Some(_), Some(_)) => "other",
-        _ => "unavailable",
+        (Some("created"), Some(false)) => ("created", "none"),
+        (Some("running"), Some(true)) => ("running", "none"),
+        (Some("exited"), Some(false)) => ("exited", "none"),
+        (Some(_), Some(_)) => ("other", "none"),
+        _ => ("unavailable", "invalid_payload"),
     }
 }
 
@@ -295,27 +298,27 @@ fn start_timeout_diagnostic_requires_owned_identity_and_remains_closed() {
     let bytes = serde_json::to_vec(&body).unwrap();
     assert_eq!(
         closed_start_timeout_state(Some(200), &bytes, "exact-id", "exact-name", "exact-run"),
-        "running"
+        ("running", "none")
     );
     assert_eq!(
         closed_start_timeout_state(Some(200), &bytes, "other-id", "exact-name", "exact-run"),
-        "identity_mismatch"
+        ("identity_mismatch", "identity_mismatch")
     );
     assert_eq!(
         closed_start_timeout_state(Some(200), &bytes, "exact-id", "exact-name", "other-run"),
-        "identity_mismatch"
+        ("identity_mismatch", "identity_mismatch")
     );
     assert_eq!(
         closed_start_timeout_state(Some(404), b"protected-secret", "id", "name", "run"),
-        "missing"
+        ("missing", "status")
     );
     assert_eq!(
         closed_start_timeout_state(Some(500), b"protected-secret", "id", "name", "run"),
-        "unavailable"
+        ("unavailable", "status")
     );
     assert_eq!(
         closed_start_timeout_state(Some(200), b"protected-secret", "id", "name", "run"),
-        "unavailable"
+        ("unavailable", "invalid_payload")
     );
 }
 
@@ -496,10 +499,28 @@ fn start_failure_body_diagnostic_is_structured_closed_and_private() {
     assert!(!path_diagnostic.contains("token"));
 }
 
-fn assert_native_api_status(actual: u16, expected: u16) {
+#[derive(Clone, Copy)]
+enum NativeApiOperation {
+    Inspect,
+    Create,
+    Start,
+}
+
+impl NativeApiOperation {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Inspect => "inspect",
+            Self::Create => "create",
+            Self::Start => "start",
+        }
+    }
+}
+
+fn assert_native_api_status(operation: NativeApiOperation, actual: u16, expected: u16) {
     if actual != expected {
         eprintln!(
-            "DOCKERLENS_NATIVE_API_DIAG: status={}",
+            "DOCKERLENS_NATIVE_API_DIAG: operation={} status={}",
+            operation.label(),
             api_status_category(actual)
         );
     }
@@ -541,6 +562,9 @@ fn native_failure_categories_remain_closed_and_private() {
     }
     assert_eq!(api_status_category(409), "conflict");
     assert_eq!(api_status_category(500), "server");
+    assert_eq!(NativeApiOperation::Inspect.label(), "inspect");
+    assert_eq!(NativeApiOperation::Create.label(), "create");
+    assert_eq!(NativeApiOperation::Start.label(), "start");
 }
 
 fn bounded_native_cli_stream<R: Read>(mut reader: R) -> (Vec<u8>, bool) {
@@ -970,6 +994,44 @@ impl OwnedInventory {
     fn is_empty(&self) -> bool {
         self.containers.is_empty() && self.images.is_empty()
     }
+
+    fn presence(&self) -> (&'static str, &'static str) {
+        (
+            if self.containers.is_empty() {
+                "zero"
+            } else {
+                "nonzero"
+            },
+            if self.images.is_empty() {
+                "zero"
+            } else {
+                "nonzero"
+            },
+        )
+    }
+}
+
+fn mark_cleanup_readback(phase: &'static str, inventory: &OwnedInventory) {
+    assert!(matches!(phase, "first" | "stable"));
+    let (containers, images) = inventory.presence();
+    eprintln!(
+        "DOCKERLENS_NATIVE_CLEANUP_READBACK: phase={phase} containers={containers} images={images}"
+    );
+}
+
+#[test]
+fn cleanup_readback_presence_reports_only_resource_kinds() {
+    let mut inventory = OwnedInventory::default();
+    assert_eq!(inventory.presence(), ("zero", "zero"));
+    inventory
+        .containers
+        .push(("private-name".into(), "private-id".into()));
+    assert_eq!(inventory.presence(), ("nonzero", "zero"));
+    inventory.containers.clear();
+    inventory
+        .images
+        .push(("private-reference".into(), "private-id".into()));
+    assert_eq!(inventory.presence(), ("zero", "nonzero"));
 }
 
 fn canonical_container_id(id: &str) -> bool {
@@ -1293,10 +1355,8 @@ impl NativeRun {
             };
             eprintln!("DOCKERLENS_NATIVE_API_DIAG: transport={category}");
             if method == "POST" && category == "timeout" && path.ends_with("/start") {
-                eprintln!(
-                    "DOCKERLENS_NATIVE_START_TIMEOUT_DIAG: state={}",
-                    self.read_only_start_timeout_state(path)
-                );
+                let (state, reason) = self.read_only_start_timeout_state(path);
+                eprintln!("DOCKERLENS_NATIVE_START_TIMEOUT_DIAG: state={state} reason={reason}");
             }
             if method != "GET" {
                 mark_container_flow(
@@ -1338,19 +1398,19 @@ impl NativeRun {
         (status, output.stdout[..split].to_vec())
     }
 
-    fn read_only_start_timeout_state(&self, path: &str) -> &'static str {
+    fn read_only_start_timeout_state(&self, path: &str) -> (&'static str, &'static str) {
         let prefix = format!("/v{}/containers/", self.api_version);
         let Some(id) = path
             .strip_prefix(&prefix)
             .and_then(|rest| rest.strip_suffix("/start"))
         else {
-            return "unavailable";
+            return ("unavailable", "input");
         };
         if !canonical_container_id(id) {
-            return "unavailable";
+            return ("unavailable", "input");
         }
         let Some((name, _)) = self.created.iter().find(|(_, created_id)| created_id == id) else {
-            return "unavailable";
+            return ("unavailable", "input");
         };
         // The timed-out POST is uncertain. A short, read-only inspect can report
         // observed state without altering that uncertainty or delaying cleanup
@@ -1374,17 +1434,23 @@ impl NativeRun {
             .stderr(Stdio::null())
             .output();
         let Ok(output) = output else {
-            return "unavailable";
+            return ("unavailable", "transport");
         };
-        if !output.status.success() || output.stdout.len() > 131_076 {
-            return "unavailable";
+        if !output.status.success() {
+            return ("unavailable", "transport");
+        }
+        if output.stdout.len() > 131_076 {
+            return ("unavailable", "invalid_payload");
         }
         let Some(split) = output.stdout.iter().rposition(|byte| *byte == b'\n') else {
-            return "unavailable";
+            return ("unavailable", "invalid_payload");
         };
         let status = std::str::from_utf8(&output.stdout[split + 1..])
             .ok()
             .and_then(|value| value.parse().ok());
+        if status.is_none() {
+            return ("unavailable", "invalid_payload");
+        }
         closed_start_timeout_state(status, &output.stdout[..split], id, name, &self.run_id)
     }
 
@@ -1416,6 +1482,13 @@ impl NativeRun {
         command.args(args);
         let output = bounded_native_cli_output(&mut command);
         if !output.status.success() {
+            if args.len() == 2 && args[0] == "logs" {
+                // Every logs call in this suite belongs to the resolver/logging
+                // group. Only this fixed operation name leaves the private CLI.
+                eprintln!(
+                    "DOCKERLENS_NATIVE_RESOLVER_LOGS_DIAG: operation=logs outcome=cli_failure"
+                );
+            }
             eprintln!(
                 "DOCKERLENS_NATIVE_CLI_DIAG: exit={} stderr={}",
                 cli_failure_exit(output.status),
@@ -1766,7 +1839,7 @@ impl NativeRun {
             &format!("/v{}/containers/{id}/json", self.api_version),
             None,
         );
-        assert_native_api_status(status, 200);
+        assert_native_api_status(NativeApiOperation::Inspect, status, 200);
         serde_json::from_slice(&response).expect("private Engine inspect JSON")
     }
 
@@ -1790,7 +1863,7 @@ impl NativeRun {
         mark_port_stage(suffix, "api_create");
         mark_resolver_suffix_stage(suffix, "create");
         let (status, response) = self.api("POST", &expected_path, Some(&body));
-        assert_native_api_status(status, 201);
+        assert_native_api_status(NativeApiOperation::Create, status, 201);
         let created: Value = serde_json::from_slice(&response).expect("private create response");
         let id = created["Id"]
             .as_str()
@@ -2138,17 +2211,15 @@ impl NativeRun {
         mark_container_flow("cleanup_readback", "begin");
         let readback = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             mark_cleanup_step("readback_first", "begin");
-            assert!(
-                self.owned_inventory(true).is_empty(),
-                "owned resources absent"
-            );
+            let first = self.owned_inventory(true);
+            mark_cleanup_readback("first", &first);
+            assert!(first.is_empty(), "owned resources absent");
             mark_cleanup_step("readback_first", "pass");
             std::thread::sleep(std::time::Duration::from_millis(200));
             mark_cleanup_step("readback_stable", "begin");
-            assert!(
-                self.owned_inventory(true).is_empty(),
-                "owned absence stable"
-            );
+            let stable = self.owned_inventory(true);
+            mark_cleanup_readback("stable", &stable);
+            assert!(stable.is_empty(), "owned absence stable");
             mark_cleanup_step("readback_stable", "pass");
         }))
         .is_ok();
@@ -2933,7 +3004,7 @@ fn probe_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
         &format!("/v{}/containers/{id}/start", run.api_version),
         None,
     );
-    assert_native_api_status(status, 204);
+    assert_native_api_status(NativeApiOperation::Start, status, 204);
     assert_fixed_ipv4_http(run, &id, "port-rendered", false);
     assert_fixed_ipv4_http(run, &id, "port-rendered", true);
     mark_port_stage("port-rendered", "isolated_http");
@@ -3082,7 +3153,7 @@ fn probe_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
         &format!("/v{}/containers/{id}/start", run.api_version),
         None,
     );
-    assert_native_api_status(status, 204);
+    assert_native_api_status(NativeApiOperation::Start, status, 204);
     if let Some(oracle_outcome) = oracle_outcome {
         let rendered_outcome = assert_debian_ipv6_fixture(
             run,
@@ -4140,7 +4211,7 @@ fn start_container(run: &NativeRun, id: &str) {
     if status != 204 {
         eprintln!("{}", start_failure_body_diagnostic(&body));
     }
-    assert_native_api_status(status, 204);
+    assert_native_api_status(NativeApiOperation::Start, status, 204);
 }
 
 fn start_and_wait(run: &NativeRun, id: &str) -> u32 {
@@ -4748,7 +4819,7 @@ fn probe_resources_and_security(run: &mut NativeRun, evidence: &mut ProbeEvidenc
             run.uncertain_mutation.set(true);
         }
     }
-    assert_native_api_status(oracle_start_status, 204);
+    assert_native_api_status(NativeApiOperation::Start, oracle_start_status, 204);
     assert_resource_effects(run, &oracle_id, "oracle");
 
     let mut container = bare_container(&run.image);
