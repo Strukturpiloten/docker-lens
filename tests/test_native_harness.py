@@ -188,6 +188,32 @@ fi
         self.assertLess(source.index(selected), source.index(manifest))
         self.assertIn('"$NATIVE_NETWORK_PROBES_PATH"', source)
 
+    def test_network_option_value_and_label_controls_are_closed(self) -> None:
+        source = (ROOT / "src/native_network_tests.rs").read_text(encoding="utf-8")
+        version = (ROOT / "src/version.rs").read_text(encoding="utf-8")
+        self.assertIn('"NetworkBridgeIccDisabled"', source)
+        self.assertIn('"NetworkBridgeMasqueradeEnabled"', source)
+        self.assertIn('"NetworkCreateLabelsValueDomain"', source)
+        self.assertIn('Self::NetworkBridgeIccDisabled,', version)
+        self.assertIn('Self::NetworkBridgeMasqueradeEnabled,', version)
+        self.assertIn('"com.docker.network.bridge.enable_icc=false"', source)
+        self.assertIn('"com.docker.network.bridge.enable_ip_masquerade=true"', source)
+        self.assertIn('NetworkLabel::new(EMPTY_LABEL_KEY.as_bytes().to_vec(), Vec::new())', source)
+        self.assertIn('SPECIAL_LABEL_VALUE.as_bytes().to_vec()', source)
+        self.assertIn('oracle_control_body["Labels"] == expected_labels', source)
+        self.assertIn('control_request["body"] == expected_option_control_body(&control, false)', source)
+        self.assertIn('enabled_request["body"] == expected_option_control_body(&control_enabled, true)', source)
+        self.assertIn('matched["Options"]["com.docker.network.bridge.enable_icc"] = json!("true")', source)
+        self.assertIn('control_body["Labels"] == expected_labels', source)
+        enabled = source.index('backend_http.as_slice()')
+        disabled = source.index('ICC-disabled control must block healthy same-bridge peers')
+        self.assertLess(enabled, disabled)
+        self.assertIn('"http://127.0.0.1:8080/"', source[enabled:disabled])
+        self.assertIn('let cross_url = format!("http://{server_ip}:8080/")', source[enabled:disabled])
+        self.assertIn('let enabled_cross_url = format!("http://{enabled_server_ip}:8080/")', source[enabled:disabled])
+        self.assertIn('enabled_cross_success && enabled_cross_body.as_slice() == b"control-server"', source[enabled:disabled])
+        self.assertIn('!cross_success && cross_body.is_empty()', source[enabled:disabled])
+
     def test_network_failure_marker_is_closed_and_private(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             bin_dir = Path(directory)

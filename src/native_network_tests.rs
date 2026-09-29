@@ -23,10 +23,10 @@ use crate::target::{
 };
 use crate::version::{
     Capability, CapabilityFact, CapabilityScope, CapabilityState, DaemonMode, FactProvenance,
-    ValidatedCapabilities,
+    NativeCapabilityShape, ValidatedCapabilities,
 };
 
-const PROBES: [&str; 19] = [
+const PROBES: [&str; 22] = [
     "ExternalNetworkReference",
     "InternalBridgeNetworkCreate",
     "Ipv6BridgeNetworkCreate",
@@ -46,10 +46,16 @@ const PROBES: [&str; 19] = [
     "NetworkStaticIpv4",
     "NetworkStaticIpv6",
     "NetworkSecondaryConnect",
+    "NetworkBridgeIccDisabled",
+    "NetworkBridgeMasqueradeEnabled",
+    "NetworkCreateLabelsValueDomain",
 ];
 
 const DNS_CLI_HARD_LIMIT_SECS: u64 = 9;
 const EMBEDDED_DNS_SERVER: &str = "127.0.0.11";
+const EMPTY_LABEL_KEY: &str = "io.dockerlens.network.empty";
+const SPECIAL_LABEL_KEY: &str = "io.dockerlens.network.special";
+const SPECIAL_LABEL_VALUE: &str = "Grüße \"quoted\" \\ path";
 
 fn required(name: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| panic!("native harness must supply {name}"))
@@ -1183,7 +1189,11 @@ fn expected_post_bodies(run_id: &str, image: &str) -> [Value; 5] {
                 "com.docker.network.bridge.enable_ip_masquerade": "false",
                 "com.docker.network.bridge.host_binding_ipv4": "127.0.0.1",
             },
-            "Labels": {"io.dockerlens.network": "synthetic"},
+            "Labels": {
+                "io.dockerlens.network": "synthetic",
+                (EMPTY_LABEL_KEY): "",
+                (SPECIAL_LABEL_KEY): SPECIAL_LABEL_VALUE,
+            },
         }),
         json!({"Name": edge.as_str(), "Driver": "bridge"}),
         json!({
@@ -1195,6 +1205,22 @@ fn expected_post_bodies(run_id: &str, image: &str) -> [Value; 5] {
         json!({"Container": app.as_str(), "EndpointConfig": {"Aliases": ["edge-app"]}}),
         json!({"Container": app.as_str(), "EndpointConfig": {"Aliases": ["external-app"]}}),
     ]
+}
+
+fn expected_option_control_body(name: &str, icc: bool) -> Value {
+    json!({
+        "Name": name,
+        "Driver": "bridge",
+        "Options": {
+            "com.docker.network.bridge.enable_icc": icc.to_string(),
+            "com.docker.network.bridge.enable_ip_masquerade": "true",
+        },
+        "Labels": {
+            "io.dockerlens.network": "synthetic",
+            (EMPTY_LABEL_KEY): "",
+            (SPECIAL_LABEL_KEY): SPECIAL_LABEL_VALUE,
+        },
+    })
 }
 
 fn allowed_request(
@@ -1212,10 +1238,17 @@ fn allowed_request(
     let edge = format!("dl-network-{run_id}-edge");
     let external = format!("dl-network-{run_id}-external");
     let oracle = format!("dl-network-{run_id}-oracle");
+    let oracle_control = format!("dl-network-{run_id}-oracle-control");
+    let control = format!("dl-network-{run_id}-control");
+    let control_enabled = format!("dl-network-{run_id}-control-enabled");
     let app = format!("dl-network-{run_id}-app");
     let isolated = format!("dl-network-{run_id}-isolated");
     let edge_only = format!("dl-network-{run_id}-edge-only");
     let dns_peer = format!("dl-network-{run_id}-dns-peer");
+    let control_server = format!("dl-network-{run_id}-control-server");
+    let control_client = format!("dl-network-{run_id}-control-client");
+    let enabled_server = format!("dl-network-{run_id}-enabled-server");
+    let enabled_client = format!("dl-network-{run_id}-enabled-client");
     let path_allowed = match method {
         "GET" => {
             [
@@ -1223,6 +1256,9 @@ fn allowed_request(
                 edge.as_str(),
                 external.as_str(),
                 oracle.as_str(),
+                oracle_control.as_str(),
+                control.as_str(),
+                control_enabled.as_str(),
             ]
             .iter()
             .any(|name| suffix == format!("networks/{name}"))
@@ -1231,6 +1267,10 @@ fn allowed_request(
                     isolated.as_str(),
                     edge_only.as_str(),
                     dns_peer.as_str(),
+                    control_server.as_str(),
+                    control_client.as_str(),
+                    enabled_server.as_str(),
+                    enabled_client.as_str(),
                 ]
                 .iter()
                 .any(|name| suffix == format!("containers/{name}/json"))
@@ -1251,7 +1291,12 @@ fn allowed_request(
     }
     let expected = expected_post_bodies(run_id, image);
     match suffix {
-        "networks/create" => body == Some(&expected[0]) || body == Some(&expected[1]),
+        "networks/create" => {
+            body == Some(&expected[0])
+                || body == Some(&expected[1])
+                || body == Some(&expected_option_control_body(&control, false))
+                || body == Some(&expected_option_control_body(&control_enabled, true))
+        }
         _ if suffix == format!("containers/create?name={app}") => body == Some(&expected[2]),
         _ if suffix == format!("networks/{edge}/connect") => body == Some(&expected[3]),
         _ if suffix == format!("networks/{external}/connect") => body == Some(&expected[4]),
@@ -1392,9 +1437,44 @@ fn rich_create() -> NetworkCreate {
         BridgeOption::IpMasquerade(false),
         BridgeOption::HostBindingIp(addr("127.0.0.1")),
     ];
-    create.labels =
-        vec![NetworkLabel::new(b"io.dockerlens.network".to_vec(), b"synthetic".to_vec()).unwrap()];
+    create.labels = vec![
+        NetworkLabel::new(b"io.dockerlens.network".to_vec(), b"synthetic".to_vec()).unwrap(),
+        NetworkLabel::new(EMPTY_LABEL_KEY.as_bytes().to_vec(), Vec::new()).unwrap(),
+        NetworkLabel::new(
+            SPECIAL_LABEL_KEY.as_bytes().to_vec(),
+            SPECIAL_LABEL_VALUE.as_bytes().to_vec(),
+        )
+        .unwrap(),
+    ];
     create
+}
+
+fn option_control_create(icc: bool) -> NetworkCreate {
+    let mut create = NetworkCreate::bridge();
+    create.options = vec![
+        BridgeOption::InterContainerCommunication(icc),
+        BridgeOption::IpMasquerade(true),
+    ];
+    create.labels = vec![
+        NetworkLabel::new(b"io.dockerlens.network".to_vec(), b"synthetic".to_vec()).unwrap(),
+        NetworkLabel::new(EMPTY_LABEL_KEY.as_bytes().to_vec(), Vec::new()).unwrap(),
+        NetworkLabel::new(
+            SPECIAL_LABEL_KEY.as_bytes().to_vec(),
+            SPECIAL_LABEL_VALUE.as_bytes().to_vec(),
+        )
+        .unwrap(),
+    ];
+    create
+}
+
+fn option_control_intent(name: &str, icc: bool) -> TargetIntent {
+    TargetIntent::new(vec![TargetResource::Network(NetworkIntent {
+        reference: ResourceRef::new(1),
+        identity: identity(name),
+        role: NetworkRole::Declared,
+        source: NetworkSource::Create(option_control_create(icc)),
+    })])
+    .expect("valid authored network option control")
 }
 
 fn container(name: &str, image: &str, networks: Vec<NetworkAttachmentIntent>) -> TargetResource {
@@ -1491,14 +1571,63 @@ fn network_run_identity_preserves_mixed_case_mktemp_suffix() {
 #[test]
 fn network_probe_names_are_distinct_from_historical_admission() {
     let names: std::collections::HashSet<_> = PROBES.into_iter().collect();
-    assert_eq!(names.len(), 19);
+    assert_eq!(names.len(), 22);
+    assert_eq!(
+        &PROBES[19..],
+        &[
+            "NetworkBridgeIccDisabled",
+            "NetworkBridgeMasqueradeEnabled",
+            "NetworkCreateLabelsValueDomain",
+        ]
+    );
     assert!(!names.contains("BridgeNetworkCreate"));
     assert!(!names.contains("BridgeNetworkAttach"));
+    let options = NativeCapabilityShape::required_for(Capability::NetworkOptions).unwrap();
+    assert!(options.contains(&NativeCapabilityShape::NetworkBridgeIcc));
+    assert!(options.contains(&NativeCapabilityShape::NetworkBridgeIccDisabled));
+    assert!(options.contains(&NativeCapabilityShape::NetworkBridgeMasquerade));
+    assert!(options.contains(&NativeCapabilityShape::NetworkBridgeMasqueradeEnabled));
 }
 
 #[test]
 fn network_executor_allowlist_is_closed() {
     let expected = expected_post_bodies("test", "fixture-image");
+    let control = expected_option_control_body("dl-network-test-control", false);
+    let enabled = expected_option_control_body("dl-network-test-control-enabled", true);
+    let mut matched = control.clone();
+    matched["Name"] = enabled["Name"].clone();
+    matched["Options"]["com.docker.network.bridge.enable_icc"] = json!("true");
+    assert_eq!(
+        matched, enabled,
+        "ICC controls differ only in name and value"
+    );
+    assert!(allowed_request(
+        "POST",
+        "/v1.41/networks/create",
+        "1.41",
+        "test",
+        "fixture-image",
+        Some(&control)
+    ));
+    assert!(allowed_request(
+        "POST",
+        "/v1.41/networks/create",
+        "1.41",
+        "test",
+        "fixture-image",
+        Some(&enabled)
+    ));
+    assert!(!allowed_request(
+        "POST",
+        "/v1.41/networks/create",
+        "1.41",
+        "test",
+        "fixture-image",
+        Some(&expected_option_control_body(
+            "dl-network-other-control",
+            false
+        ))
+    ));
     assert!(allowed_request(
         "POST",
         "/v1.41/networks/create",
@@ -1707,6 +1836,9 @@ fn live_network_render_matches_engine() {
     let edge = format!("dl-network-{run_id}-edge");
     let external = format!("dl-network-{run_id}-external");
     let oracle = format!("dl-network-{run_id}-oracle");
+    let oracle_control = format!("dl-network-{run_id}-oracle-control");
+    let control = format!("dl-network-{run_id}-control");
+    let control_enabled = format!("dl-network-{run_id}-control-enabled");
     let app = format!("dl-network-{run_id}-app");
 
     // The CLI oracle is independent of the inert renderer. Direct GETs check
@@ -1741,6 +1873,10 @@ fn live_network_render_matches_engine() {
         "com.docker.network.bridge.host_binding_ipv4=127.0.0.1",
         "--label",
         "io.dockerlens.network=synthetic",
+        "--label",
+        "io.dockerlens.network.empty=",
+        "--label",
+        "io.dockerlens.network.special=Grüße \"quoted\" \\ path",
         &oracle,
     ]);
     let oracle_body = inspect(&format!("/v{api_version}/networks/{oracle}"));
@@ -1785,7 +1921,46 @@ fn live_network_render_matches_engine() {
         oracle_body["Options"]["com.docker.network.bridge.host_binding_ipv4"],
         "127.0.0.1"
     );
-    assert_eq!(oracle_body["Labels"]["io.dockerlens.network"], "synthetic");
+    let expected_labels = json!({
+        "io.dockerlens.network": "synthetic",
+        (EMPTY_LABEL_KEY): "",
+        (SPECIAL_LABEL_KEY): SPECIAL_LABEL_VALUE,
+    });
+    assert!(
+        oracle_body["Labels"] == expected_labels,
+        "closed CLI network label oracle"
+    );
+    cli_ok(&[
+        "network",
+        "create",
+        "--driver",
+        "bridge",
+        "--opt",
+        "com.docker.network.bridge.enable_icc=false",
+        "--opt",
+        "com.docker.network.bridge.enable_ip_masquerade=true",
+        "--label",
+        "io.dockerlens.network=synthetic",
+        "--label",
+        "io.dockerlens.network.empty=",
+        "--label",
+        "io.dockerlens.network.special=Grüße \"quoted\" \\ path",
+        &oracle_control,
+    ]);
+    let oracle_control_body = inspect(&format!("/v{api_version}/networks/{oracle_control}"));
+    assert_eq!(oracle_control_body["Driver"], "bridge");
+    assert_eq!(
+        oracle_control_body["Options"]["com.docker.network.bridge.enable_icc"],
+        "false"
+    );
+    assert_eq!(
+        oracle_control_body["Options"]["com.docker.network.bridge.enable_ip_masquerade"],
+        "true"
+    );
+    assert!(
+        oracle_control_body["Labels"] == expected_labels,
+        "closed CLI control labels"
+    );
     cli_ok(&["network", "create", "--driver", "bridge", &external]);
     let external_before = inspect(&format!("/v{api_version}/networks/{external}"));
     let external_id = external_before["Id"].as_str().unwrap().to_owned();
@@ -1947,9 +2122,9 @@ fn live_network_render_matches_engine() {
             "com.docker.network.bridge.host_binding_ipv4": "127.0.0.1",
         })
     );
-    assert_eq!(
-        requests[0]["body"]["Labels"]["io.dockerlens.network"],
-        "synthetic"
+    assert!(
+        requests[0]["body"]["Labels"] == expected_labels,
+        "closed rendered labels"
     );
     assert_eq!(
         requests[2]["path"],
@@ -2040,7 +2215,100 @@ fn live_network_render_matches_engine() {
     ] {
         assert_eq!(backend_body["Options"][option], value);
     }
-    assert_eq!(backend_body["Labels"]["io.dockerlens.network"], "synthetic");
+    assert!(
+        backend_body["Labels"] == expected_labels,
+        "closed backend labels"
+    );
+    let control_intent = option_control_intent(&control, false);
+    let control_graph = DockerPlanner
+        .plan(&control_intent, &supported)
+        .expect("native option control plan");
+    let control_artifact = DockerApiRenderer
+        .render(&control_graph)
+        .expect("inert option control request");
+    assert!(
+        !format!("{control_intent:?} {control_graph:?} {control_artifact:?}")
+            .contains(SPECIAL_LABEL_VALUE)
+    );
+    let control_request: Value = serde_json::from_slice(
+        control_artifact
+            .bytes()
+            .strip_suffix(b"\n")
+            .expect("one request"),
+    )
+    .expect("inert option control JSON");
+    assert_eq!(control_request["method"], "POST");
+    assert_eq!(
+        control_request["path"],
+        format!("/v{api_version}/networks/create")
+    );
+    assert!(
+        control_request["body"] == expected_option_control_body(&control, false),
+        "closed opposite-value rendered body"
+    );
+    let (control_status, _) = api(
+        "POST",
+        &format!("/v{api_version}/networks/create"),
+        Some(&control_request["body"]),
+    );
+    assert_eq!(
+        control_status, 201,
+        "Engine accepts opposite-value option control"
+    );
+    let control_body = inspect(&format!("/v{api_version}/networks/{control}"));
+    for (option, value) in [
+        ("com.docker.network.bridge.enable_icc", "false"),
+        ("com.docker.network.bridge.enable_ip_masquerade", "true"),
+    ] {
+        assert_eq!(control_body["Options"][option], value);
+        assert_eq!(oracle_control_body["Options"][option], value);
+    }
+    assert!(
+        control_body["Labels"] == expected_labels,
+        "closed control labels"
+    );
+    let enabled_intent = option_control_intent(&control_enabled, true);
+    let enabled_graph = DockerPlanner
+        .plan(&enabled_intent, &supported)
+        .expect("native enabled control plan");
+    let enabled_artifact = DockerApiRenderer
+        .render(&enabled_graph)
+        .expect("inert enabled control request");
+    let enabled_request: Value = serde_json::from_slice(
+        enabled_artifact
+            .bytes()
+            .strip_suffix(b"\n")
+            .expect("one enabled request"),
+    )
+    .expect("inert enabled control JSON");
+    assert_eq!(enabled_request["method"], "POST");
+    assert_eq!(
+        enabled_request["path"],
+        format!("/v{api_version}/networks/create")
+    );
+    assert!(
+        enabled_request["body"] == expected_option_control_body(&control_enabled, true),
+        "closed matched enabled-control body"
+    );
+    let (enabled_status, _) = api(
+        "POST",
+        &format!("/v{api_version}/networks/create"),
+        Some(&enabled_request["body"]),
+    );
+    assert_eq!(enabled_status, 201, "Engine accepts matched ICC control");
+    let enabled_body = inspect(&format!("/v{api_version}/networks/{control_enabled}"));
+    assert_eq!(
+        enabled_body["Options"]["com.docker.network.bridge.enable_icc"],
+        "true"
+    );
+    assert_eq!(
+        enabled_body["Options"]["com.docker.network.bridge.enable_ip_masquerade"],
+        "true"
+    );
+    assert!(
+        enabled_body["Labels"] == expected_labels,
+        "closed matched labels"
+    );
     assert_eq!(edge_body["Name"], edge);
     assert_eq!(external_after["Id"], external_id);
     assert_eq!(external_after["Driver"], "bridge");
@@ -2343,6 +2611,217 @@ fn live_network_render_matches_engine() {
         b"network-canary",
         "same backend-only peer must reach the backend endpoint"
     );
+    // The matched controls have the same authored bridge options and labels,
+    // differing only in ICC. Both use healthy direct-IP peer HTTP, avoiding
+    // DNS and egress as explanations for a blocked cross-peer request.
+    let enabled_server = format!("dl-network-{run_id}-enabled-server");
+    let enabled_client = format!("dl-network-{run_id}-enabled-client");
+    let mut enabled_server_fixture = ExactNetworkFixture {
+        name: &enabled_server,
+        cleaned: false,
+    };
+    let mut enabled_client_fixture = ExactNetworkFixture {
+        name: &enabled_client,
+        cleaned: false,
+    };
+    for (name, canary) in [
+        (&enabled_server, "control-server"),
+        (&enabled_client, "control-client"),
+    ] {
+        let command = format!("printf {canary} > /tmp/index.html; httpd -f -p 8080 -h /tmp");
+        cli_ok(&[
+            "create",
+            "--name",
+            name,
+            "--network",
+            &control_enabled,
+            &image,
+            "sh",
+            "-c",
+            &command,
+        ]);
+        cli_ok(&["start", name]);
+    }
+    let enabled_server_body = inspect(&format!("/v{api_version}/containers/{enabled_server}/json"));
+    let enabled_client_body = inspect(&format!("/v{api_version}/containers/{enabled_client}/json"));
+    let enabled_server_id = canonical_inspected_container_id(&enabled_server_body)
+        .expect("enabled server has canonical container ID");
+    let enabled_client_id = canonical_inspected_container_id(&enabled_client_body)
+        .expect("enabled client has canonical container ID");
+    assert!(
+        enabled_server_id != enabled_client_id,
+        "enabled peers must differ"
+    );
+    for inspected in [&enabled_server_body, &enabled_client_body] {
+        assert_eq!(inspected["State"]["Running"], true);
+        let networks = inspected["NetworkSettings"]["Networks"]
+            .as_object()
+            .expect("enabled peer network map");
+        assert!(networks.len() == 1 && networks.contains_key(control_enabled.as_str()));
+    }
+    let enabled_server_ip = enabled_server_body["NetworkSettings"]["Networks"]
+        [control_enabled.as_str()]["IPAddress"]
+        .as_str()
+        .expect("enabled server IPv4")
+        .parse::<Ipv4Addr>()
+        .expect("enabled server address");
+    let enabled_client_ip = enabled_client_body["NetworkSettings"]["Networks"]
+        [control_enabled.as_str()]["IPAddress"]
+        .as_str()
+        .expect("enabled client IPv4")
+        .parse::<Ipv4Addr>()
+        .expect("enabled client address");
+    assert!(
+        enabled_server_ip != enabled_client_ip,
+        "enabled peer IPv4 addresses must differ"
+    );
+    for (name, canary) in [
+        (&enabled_server, &b"control-server"[..]),
+        (&enabled_client, &b"control-client"[..]),
+    ] {
+        let own_http = cli_ok(&[
+            "exec",
+            name,
+            "wget",
+            "-T",
+            "2",
+            "-qO-",
+            "http://127.0.0.1:8080/",
+        ]);
+        assert_eq!(
+            own_http.as_slice(),
+            canary,
+            "enabled peer local HTTP health"
+        );
+    }
+    let enabled_cross_url = format!("http://{enabled_server_ip}:8080/");
+    let (enabled_cross_success, enabled_cross_body) = cli(&[
+        "exec",
+        &enabled_client,
+        "wget",
+        "-T",
+        "2",
+        "-qO-",
+        &enabled_cross_url,
+    ]);
+    assert!(
+        enabled_cross_success && enabled_cross_body.as_slice() == b"control-server",
+        "ICC-enabled matched peers must connect by direct IPv4"
+    );
+    assert!(
+        enabled_client_fixture.cleanup(),
+        "exact enabled client cleanup"
+    );
+    assert!(
+        enabled_server_fixture.cleanup(),
+        "exact enabled server cleanup"
+    );
+    cli_ok(&["network", "rm", &control_enabled]);
+    assert!(!cli(&["network", "inspect", &control_enabled]).0);
+    // On the separately rendered ICC-disabled bridge, both peers must be
+    // independently running and able to serve themselves before a direct-IP
+    // cross-peer request can count as an ICC-negative observation.
+    let control_server = format!("dl-network-{run_id}-control-server");
+    let control_client = format!("dl-network-{run_id}-control-client");
+    let mut control_server_fixture = ExactNetworkFixture {
+        name: &control_server,
+        cleaned: false,
+    };
+    let mut control_client_fixture = ExactNetworkFixture {
+        name: &control_client,
+        cleaned: false,
+    };
+    for (name, canary) in [
+        (&control_server, "control-server"),
+        (&control_client, "control-client"),
+    ] {
+        let command = format!("printf {canary} > /tmp/index.html; httpd -f -p 8080 -h /tmp");
+        cli_ok(&[
+            "create",
+            "--name",
+            name,
+            "--network",
+            &control,
+            &image,
+            "sh",
+            "-c",
+            &command,
+        ]);
+        cli_ok(&["start", name]);
+    }
+    let server_body = inspect(&format!("/v{api_version}/containers/{control_server}/json"));
+    let client_body = inspect(&format!("/v{api_version}/containers/{control_client}/json"));
+    let server_id = canonical_inspected_container_id(&server_body)
+        .expect("control server has canonical container ID");
+    let client_id = canonical_inspected_container_id(&client_body)
+        .expect("control client has canonical container ID");
+    assert!(server_id != client_id, "control peers must differ");
+    for inspected in [&server_body, &client_body] {
+        assert_eq!(inspected["State"]["Running"], true);
+        let networks = inspected["NetworkSettings"]["Networks"]
+            .as_object()
+            .expect("control peer network map");
+        assert!(networks.len() == 1 && networks.contains_key(control.as_str()));
+    }
+    let server_ip = server_body["NetworkSettings"]["Networks"][control.as_str()]["IPAddress"]
+        .as_str()
+        .expect("control server IPv4")
+        .parse::<Ipv4Addr>()
+        .expect("control server address");
+    let client_ip = client_body["NetworkSettings"]["Networks"][control.as_str()]["IPAddress"]
+        .as_str()
+        .expect("control client IPv4")
+        .parse::<Ipv4Addr>()
+        .expect("control client address");
+    assert!(
+        server_ip != client_ip,
+        "control peer IPv4 addresses must differ"
+    );
+    for (name, canary) in [
+        (&control_server, &b"control-server"[..]),
+        (&control_client, &b"control-client"[..]),
+    ] {
+        let own_http = cli_ok(&[
+            "exec",
+            name,
+            "wget",
+            "-T",
+            "2",
+            "-qO-",
+            "http://127.0.0.1:8080/",
+        ]);
+        assert_eq!(
+            own_http.as_slice(),
+            canary,
+            "control peer local HTTP health"
+        );
+    }
+    let cross_url = format!("http://{server_ip}:8080/");
+    let (cross_success, cross_body) = cli(&[
+        "exec",
+        &control_client,
+        "wget",
+        "-T",
+        "2",
+        "-qO-",
+        &cross_url,
+    ]);
+    assert!(
+        !cross_success && cross_body.is_empty(),
+        "ICC-disabled control must block healthy same-bridge peers"
+    );
+    assert!(
+        control_client_fixture.cleanup(),
+        "exact control client cleanup"
+    );
+    assert!(
+        control_server_fixture.cleanup(),
+        "exact control server cleanup"
+    );
+    cli_ok(&["network", "rm", &control]);
+    cli_ok(&["network", "rm", &oracle_control]);
+    assert!(!cli(&["network", "inspect", &control]).0);
+    assert!(!cli(&["network", "inspect", &oracle_control]).0);
     eprintln!("DOCKERLENS_NATIVE_CHECK: network_isolation_collision_dns");
     let edge_resolver = cli_dns(&["exec", &edge_only, "cat", "/etc/resolv.conf"]);
     assert!(

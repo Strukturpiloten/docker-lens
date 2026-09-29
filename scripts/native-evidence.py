@@ -44,6 +44,8 @@ NETWORK_PROBES = (
     "NetworkBridgeMasquerade", "NetworkBridgeHostBindingIp",
     "NetworkCreateLabels", "NetworkPrimaryAliases", "NetworkSecondaryAliases",
     "NetworkStaticIpv4", "NetworkStaticIpv6", "NetworkSecondaryConnect",
+    "NetworkBridgeIccDisabled", "NetworkBridgeMasqueradeEnabled",
+    "NetworkCreateLabelsValueDomain",
 )
 VOLUME_PROBES = (
     "ExistingVolumePrerequisite", "ExistingVolumeTargetIdentity",
