@@ -23,21 +23,47 @@ class NativeHarnessTests(unittest.TestCase):
         cases = (
             (
                 "permission denied private-canary", 0,
-                "bind: address already in use private-canary", 0, "permission", "logs",
+                "bind: address already in use private-canary", 0, "permission", "logs_query",
+                "private-canary", "private-canary",
+            ),
+            (
+                "private-canary", 0,
+                "bind: address already in use private-canary", 0,
+                "permission", "logs_query",
+                "permission denied private-canary", "private-canary",
             ),
             (
                 "private-canary", 0,
                 "bind: address already in use private-canary", 0, "bind_error", "state_error",
+                "private-canary", "private-canary",
             ),
             (
                 "permission denied private-canary", 42,
                 "bind: address already in use private-canary", 0, "bind_error", "state_error",
+                "private-canary", "private-canary",
             ),
-            ("permission denied private-canary", 42, "private-canary", 0, "unknown", "none"),
-            ("private-canary", 0, "private-canary", 0, "unknown", "none"),
+            (
+                "private-canary", 0,
+                "permission denied private-canary", 0, "permission", "state_error",
+                "private-canary", "private-canary",
+            ),
+            (
+                "private-canary", 0, "private-canary", 0, "permission", "logs_query",
+                "permission denied private-canary", "private-canary",
+            ),
+            (
+                "private-canary", 0, "private-canary", 0, "unknown", "none",
+                "private-canary", "permission denied private-canary",
+            ),
+            (
+                "permission denied private-canary", 42,
+                "private-canary", 0, "unknown", "none",
+                "permission denied private-canary", "private-canary",
+            ),
             (
                 "permission denied private-canary", 42,
                 "bind: address already in use private-canary", 42, "unknown", "none",
+                "permission denied private-canary", "permission denied private-canary",
             ),
         )
         with tempfile.TemporaryDirectory() as directory:
@@ -45,8 +71,10 @@ class NativeHarnessTests(unittest.TestCase):
             fake.write_text(
                 '#!/usr/bin/env bash\n'
                 'case "$1" in\n'
-                '  logs) printf "%s\\n" "$FAKE_LOGS"; exit "$FAKE_LOGS_STATUS" ;;\n'
-                '  inspect) printf "%s\\n" "$FAKE_STATE_ERROR"; exit "$FAKE_STATE_STATUS" ;;\n'
+                '  logs) printf "%s\\n" "$FAKE_LOGS"; '
+                'printf "%s\\n" "$FAKE_LOGS_STDERR" >&2; exit "$FAKE_LOGS_STATUS" ;;\n'
+                '  inspect) printf "%s\\n" "$FAKE_STATE_ERROR"; '
+                'printf "%s\\n" "$FAKE_STATE_STDERR" >&2; exit "$FAKE_STATE_STATUS" ;;\n'
                 '  *) exit 42 ;;\n'
                 'esac\n',
                 encoding="utf-8",
@@ -59,7 +87,10 @@ class NativeHarnessTests(unittest.TestCase):
                 + helpers
                 + "sidecar_failure_diagnostic\n"
             )
-            for logs, logs_status, state, state_status, category, origin in cases:
+            for (
+                logs, logs_status, state, state_status,
+                category, origin, logs_stderr, state_stderr,
+            ) in cases:
                 with self.subTest(
                     category=category, source=origin,
                     logs_status=logs_status, state_status=state_status,
@@ -68,8 +99,10 @@ class NativeHarnessTests(unittest.TestCase):
                     env.update(
                         FAKE_LOGS=logs,
                         FAKE_LOGS_STATUS=str(logs_status),
+                        FAKE_LOGS_STDERR=logs_stderr,
                         FAKE_STATE_ERROR=state,
                         FAKE_STATE_STATUS=str(state_status),
+                        FAKE_STATE_STDERR=state_stderr,
                     )
                     result = subprocess.run(
                         ["bash", "-c", script], env=env, capture_output=True,
@@ -1221,9 +1254,9 @@ esac
                     )
                     self.assertNotIn("phase=attachment", result.stderr)
                     self.assertFalse((state / "health-attempted").exists())
-                    self.assertIn("phase=sidecar_failure category=applet_missing", result.stderr)
+                    self.assertIn("phase=sidecar_failure category=applet_missing source=logs_query", result.stderr)
                 if fault == "sidecar_state_error_field":
-                    self.assertIn("phase=sidecar_failure category=bind_error", result.stderr)
+                    self.assertIn("phase=sidecar_failure category=bind_error source=state_error", result.stderr)
                     self.assertFalse((state / "health-attempted").exists())
                 if fault == "sidecar_start":
                     self.assertIn("phase=sidecar_failure category=shell_error", result.stderr)

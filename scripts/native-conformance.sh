@@ -367,14 +367,16 @@ print(next((category for category, patterns in checks
 }
 sidecar_failure_diagnostic() {
   local category=unknown source=none observed
+  # A successful Podman logs query may replay container output on either CLI
+  # stream. The query cannot identify which stream supplied the category.
   if observed=$(timeout --signal=TERM --kill-after=2s 5s "${podman_cmd[@]}" logs --tail 32 "$sidecar" 2>&1 |
     classify_sidecar_error) && [[ $observed != unknown ]]; then
     category=$observed
-    source=logs
+    source=logs_query
   fi
   if [[ $category == unknown ]] &&
     observed=$(timeout --signal=TERM --kill-after=2s 5s "${podman_cmd[@]}" inspect \
-      --format '{{.State.Error}}' "$sidecar" 2>&1 | classify_sidecar_error) &&
+      --format '{{.State.Error}}' "$sidecar" 2>/dev/null | classify_sidecar_error) &&
     [[ $observed != unknown ]]; then
     category=$observed
     source=state_error
