@@ -3,8 +3,10 @@
 
 use std::collections::HashSet;
 use std::fs;
+use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
@@ -149,6 +151,425 @@ fn summary_matches_direct(summary: &ContainerSummary, direct: &Value) {
             )
     );
     effective_string(&summary.image, direct.get("Image"));
+}
+
+fn canonical_container_id(id: &str) -> bool {
+    id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn membership_run_id() -> String {
+    let outer = required("NATIVE_OUTER_CONTAINER");
+    let run_id = outer
+        .strip_prefix("dl-native-")
+        .expect("task-owned outer container name");
+    assert!(
+        !run_id.is_empty()
+            && run_id.len() <= 32
+            && run_id.bytes().all(|byte| byte.is_ascii_alphanumeric()),
+        "bounded native run ID"
+    );
+    run_id.to_owned()
+}
+
+// Both pipes and elapsed time are bounded; no native CLI output enters a panic.
+fn bounded_output(command: &mut Command) -> (bool, Vec<u8>) {
+    const MAX_OUTPUT: u64 = 1024 * 1024;
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("native membership command available");
+    let mut output = Vec::new();
+    child
+        .stdout
+        .take()
+        .expect("private command stdout")
+        .take(MAX_OUTPUT + 1)
+        .read_to_end(&mut output)
+        .expect("bounded private command stdout");
+    if output.len() as u64 > MAX_OUTPUT {
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("native membership command exceeded output budget");
+    }
+    let status = child.wait().expect("bounded native membership command");
+    (status.success(), output)
+}
+
+fn membership_cli(args: &[&str]) -> (bool, Vec<u8>) {
+    let mut command = Command::new("timeout");
+    command.args(["--kill-after=1s", "20s"]);
+    match required("NATIVE_PODMAN_USE_SUDO").as_str() {
+        "1" => {
+            command.args(["sudo", "-n", "podman"]);
+        }
+        "0" => {
+            command.arg("podman");
+        }
+        _ => panic!("invalid native Podman privilege mode"),
+    }
+    command.args([
+        "exec",
+        &required("NATIVE_OUTER_CONTAINER"),
+        "docker",
+        "-H",
+        "unix:///dockerlens-native/docker.sock",
+    ]);
+    bounded_output(command.args(args))
+}
+
+fn membership_cli_ok(args: &[&str]) -> Vec<u8> {
+    let (success, output) = membership_cli(args);
+    assert!(success, "isolated native membership CLI failed");
+    output
+}
+
+fn direct_network_membership(socket: &Path, api: &str, network_id: &str) -> Value {
+    let mut command = Command::new("timeout");
+    command.args(["--kill-after=1s", "18s", "curl", "-fsS", "--max-time", "15"]);
+    command.arg("--unix-socket").arg(socket);
+    command.arg(format!("http://localhost/v{api}/networks/{network_id}"));
+    let (success, body) = bounded_output(&mut command);
+    assert!(success, "bounded direct network GET failed");
+    let direct: Value = serde_json::from_slice(&body).expect("direct network GET is JSON");
+    assert!(
+        direct["Id"].as_str() == Some(network_id),
+        "direct network identity changed"
+    );
+    direct
+}
+
+fn membership_matches_direct(inventory: &DecodedInventory, direct: &Value) -> HashSet<String> {
+    assert_eq!(inventory.networks.len(), 1);
+    let network = &inventory.networks[0];
+    assert_eq!(network.id.origin, Origin::RuntimeAssigned);
+    assert!(network.id.value().is_some_and(|id| {
+        direct["Id"]
+            .as_str()
+            .is_some_and(|raw| id.as_bytes() == raw.as_bytes())
+    }));
+    assert_eq!(network.active_endpoints.origin, Origin::RuntimeAssigned);
+    let raw = direct.get("Containers");
+    let expected = match raw {
+        None => Availability::Missing,
+        Some(Value::Null) => Availability::Null,
+        Some(Value::Object(entries)) if entries.is_empty() => Availability::Empty,
+        Some(Value::Object(_)) => Availability::Present,
+        _ => panic!("direct network membership has unexpected shape"),
+    };
+    assert_eq!(network.active_endpoints.availability, expected);
+    let entries = network.active_endpoints.value();
+    let raw_entries = raw.and_then(Value::as_object);
+    match (entries, raw_entries) {
+        (None, None) => HashSet::new(),
+        (Some(entries), Some(raw_entries)) => {
+            assert_eq!(entries.len(), raw_entries.len());
+            let mut ids = HashSet::new();
+            for entry in entries {
+                assert_eq!(entry.container_id.origin, Origin::RuntimeAssigned);
+                assert_eq!(entry.container_id.availability, Availability::Present);
+                let id = entry.container_id.value().expect("active member ID");
+                assert!(canonical_container_id(
+                    std::str::from_utf8(id.as_bytes()).expect("ASCII native member ID")
+                ));
+                let raw_entry = raw_entries
+                    .iter()
+                    .find(|(key, _)| id.as_bytes() == key.as_bytes())
+                    .map(|(_, value)| value)
+                    .expect("typed member matches direct map key");
+                assert_eq!(entry.endpoint.origin, Origin::RuntimeAssigned);
+                match raw_entry {
+                    Value::Null => {
+                        assert_eq!(entry.endpoint.availability, Availability::Null);
+                        assert!(entry.endpoint.value().is_none());
+                    }
+                    Value::Object(details) => {
+                        assert_eq!(
+                            entry.endpoint.availability,
+                            if details.is_empty() {
+                                Availability::Empty
+                            } else {
+                                Availability::Present
+                            }
+                        );
+                        effective_string(
+                            &entry.endpoint.value().expect("typed endpoint").name,
+                            details.get("Name"),
+                        );
+                    }
+                    _ => panic!("direct endpoint has unexpected shape"),
+                }
+                ids.insert(String::from_utf8(id.as_bytes().to_vec()).expect("ASCII native ID"));
+            }
+            assert_eq!(ids.len(), raw_entries.len());
+            ids
+        }
+        _ => panic!("typed and direct membership availability differ"),
+    }
+}
+
+struct MembershipFixtures {
+    run_id: String,
+    names: [String; 2],
+    cleaned: bool,
+}
+
+impl MembershipFixtures {
+    fn new(run_id: String) -> Self {
+        let names = [
+            format!("dl-{run_id}-membership-selected"),
+            format!("dl-{run_id}-membership-peer"),
+        ];
+        for name in &names {
+            assert!(
+                Self::listed_ids(name).is_empty(),
+                "native fixture name is occupied"
+            );
+        }
+        Self {
+            run_id,
+            names,
+            cleaned: false,
+        }
+    }
+
+    fn listed_ids(name: &str) -> Vec<String> {
+        let filter = format!("name=^/{name}$");
+        let output =
+            membership_cli_ok(&["container", "ls", "-aq", "--no-trunc", "--filter", &filter]);
+        let text = std::str::from_utf8(&output).expect("ASCII native container IDs");
+        text.lines()
+            .map(|id| {
+                assert!(canonical_container_id(id), "canonical native container ID");
+                id.to_owned()
+            })
+            .collect()
+    }
+
+    fn cleanup(&mut self) -> Result<(), &'static str> {
+        let mut success = true;
+        for name in &self.names {
+            if !matches!(
+                std::panic::catch_unwind(|| self.cleanup_one(name)),
+                Ok(true)
+            ) {
+                success = false;
+            }
+        }
+        self.cleaned = success;
+        if success {
+            Ok(())
+        } else {
+            Err("native membership fixture cleanup unverified")
+        }
+    }
+
+    fn cleanup_one(&self, name: &str) -> bool {
+        let ids = Self::listed_ids(name);
+        if ids.is_empty() {
+            return true;
+        }
+        if ids.len() != 1 {
+            return false;
+        }
+        let identity = membership_cli_ok(&[
+            "container",
+            "inspect",
+            "--format",
+            "{{.Name}}|{{index .Config.Labels \"io.dockerlens.native-run\"}}",
+            name,
+        ]);
+        let expected = format!("/{name}|{}\n", self.run_id);
+        if identity != expected.as_bytes() {
+            return false;
+        }
+        let (removed, _) = membership_cli(&["container", "rm", "-f", name]);
+        let absent = Self::listed_ids(name).is_empty();
+        removed && absent
+    }
+}
+
+impl Drop for MembershipFixtures {
+    fn drop(&mut self) {
+        if !self.cleaned
+            && !matches!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.cleanup())),
+                Ok(Ok(()))
+            )
+        {
+            // A concurrent assertion panic still reaches here. Keep the diagnostic
+            // closed and leave exact names for the harness operator's readback.
+            eprintln!("DOCKERLENS_NATIVE_CHECK: membership_cleanup_unverified");
+            if !std::thread::panicking() {
+                panic!("native membership fixture cleanup unverified");
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires the isolated native Engine harness"]
+fn live_network_membership_matches_engine() {
+    eprintln!("DOCKERLENS_NATIVE_CHECK: source_network_membership");
+    let directory = PathBuf::from(required("NATIVE_CAPTURE_DIR"));
+    let socket = PathBuf::from(required("NATIVE_ENGINE_SOCKET"));
+    let api = required("NATIVE_API_VERSION");
+    assert!(
+        api.split_once('.').is_some_and(|(major, minor)| {
+            !major.is_empty()
+                && !minor.is_empty()
+                && major.bytes().all(|byte| byte.is_ascii_digit())
+                && minor.bytes().all(|byte| byte.is_ascii_digit())
+        }),
+        "bounded native API version"
+    );
+    let network_id = required("NATIVE_NETWORK_ID");
+    assert!(
+        canonical_container_id(&network_id),
+        "canonical native network ID"
+    );
+    let endpoint = Endpoint::unix_socket(socket.clone());
+    let image = required("NATIVE_FIXTURE_IMAGE");
+    let mut fixtures = MembershipFixtures::new(membership_run_id());
+    let label = format!("io.dockerlens.native-run={}", fixtures.run_id);
+
+    let mut ids = Vec::new();
+    for name in &fixtures.names {
+        let created = membership_cli_ok(&[
+            "container",
+            "create",
+            "--name",
+            name,
+            "--label",
+            &label,
+            "--network",
+            &network_id,
+            &image,
+            "sleep",
+            "900",
+        ]);
+        let id = std::str::from_utf8(&created)
+            .expect("ASCII native create ID")
+            .trim();
+        assert!(canonical_container_id(id), "canonical native create ID");
+        ids.push(id.to_owned());
+        membership_cli_ok(&["container", "start", name]);
+        assert!(
+            membership_cli_ok(&[
+                "container",
+                "inspect",
+                "--format",
+                "{{.State.Running}}",
+                name
+            ]) == b"true\n",
+            "native membership fixture did not start"
+        );
+    }
+    assert!(ids[0] != ids[1], "native membership fixture IDs differ");
+    let selected_id = &ids[0];
+    let peer_id = &ids[1];
+
+    let direct_active_before = direct_network_membership(&socket, &api, &network_id);
+    let direct_active_members = direct_active_before["Containers"]
+        .as_object()
+        .expect("direct active endpoint map");
+    assert!(
+        direct_active_members.contains_key(selected_id)
+            && direct_active_members.contains_key(peer_id),
+        "both running fixtures must be direct active members"
+    );
+    let (active_capture, active_inventory) = capture(
+        &endpoint,
+        Selector::ContainerIds(vec![NativeId::new(selected_id.clone()).unwrap()]),
+    );
+    let direct_active_after = direct_network_membership(&socket, &api, &network_id);
+    assert!(
+        direct_active_before.get("Containers") == direct_active_after.get("Containers"),
+        "direct active membership changed during acquisition"
+    );
+    assert!(
+        inspected_container_ids(&active_capture) == HashSet::from([selected_id.as_str()]),
+        "active acquisition inspected outside exact selected root"
+    );
+    assert_eq!(active_inventory.containers.len(), 1);
+    assert!(
+        active_inventory.containers[0]
+            .name
+            .value()
+            .is_some_and(|name| {
+                name.as_bytes() == format!("/{}", fixtures.names[0]).as_bytes()
+            })
+    );
+    let active_ids = membership_matches_direct(&active_inventory, &direct_active_before);
+    assert!(active_ids.contains(selected_id) && active_ids.contains(peer_id));
+
+    membership_cli_ok(&["container", "stop", "-t", "2", &fixtures.names[1]]);
+    assert!(
+        membership_cli_ok(&[
+            "container",
+            "inspect",
+            "--format",
+            "{{.State.Running}}",
+            &fixtures.names[1],
+        ]) == b"false\n",
+        "native membership peer did not stop"
+    );
+    let direct_stopped_before = direct_network_membership(&socket, &api, &network_id);
+    let (stopped_capture, stopped_inventory) = capture(
+        &endpoint,
+        Selector::ContainerIds(vec![NativeId::new(selected_id.clone()).unwrap()]),
+    );
+    let direct_stopped_after = direct_network_membership(&socket, &api, &network_id);
+    assert!(
+        direct_stopped_before.get("Containers") == direct_stopped_after.get("Containers"),
+        "direct stopped-boundary membership changed during acquisition"
+    );
+    assert!(
+        inspected_container_ids(&stopped_capture) == HashSet::from([selected_id.as_str()]),
+        "stopped-boundary acquisition inspected outside exact selected root"
+    );
+    assert_eq!(stopped_inventory.containers.len(), 1);
+    let stopped_ids = membership_matches_direct(&stopped_inventory, &direct_stopped_before);
+    assert!(
+        stopped_ids.contains(selected_id),
+        "selected fixture remains active"
+    );
+    // The peer's stopped-state membership is read from this Engine response;
+    // no historical or cross-lane assumption decides whether its key remains.
+    fixtures
+        .cleanup()
+        .expect("exact membership fixture cleanup");
+    append_membership_probes(&directory);
+}
+
+fn append_membership_probes(directory: &Path) {
+    let source_path = PathBuf::from(required("NATIVE_SOURCE_PROBES_PATH"));
+    assert!(
+        source_path.parent() == Some(directory),
+        "private probe path changed"
+    );
+    let metadata = fs::symlink_metadata(&source_path).expect("private source probes exist");
+    assert!(metadata.file_type().is_file() && metadata.len() <= 4096);
+    let mut existing = Vec::new();
+    fs::File::open(&source_path)
+        .expect("private source probes readable")
+        .take(4097)
+        .read_to_end(&mut existing)
+        .expect("bounded private source probes");
+    assert_eq!(existing.len() as u64, metadata.len());
+    let probes: Vec<String> =
+        serde_json::from_slice(&existing).expect("private source probes JSON");
+    assert!(
+        probes.iter().map(String::as_str).eq(SOURCE_PROBES),
+        "existing source probes differ from the baseline"
+    );
+    let mut completed = SOURCE_PROBES.to_vec();
+    completed.extend([
+        "NetworkActiveMembership",
+        "NetworkStoppedMembershipBoundary",
+    ]);
+    fs::write(source_path, serde_json::to_vec(&completed).unwrap())
+        .expect("private membership source evidence write");
 }
 
 #[test]

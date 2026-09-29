@@ -126,10 +126,31 @@ The rootless lane runs a rootless inner
 daemon; rootless outer Podman nesting is not assumed.
 
 The #28 selector and typed-observation fixtures are offline contract checks.
+The separate ignored `live_network_membership_matches_engine` native test runs
+after the existing selector test and before evidence emission. It creates two
+exact run-labelled active peers on the owned bridge, acquires only one exact
+container ID, and compares protected typed membership to direct network GETs
+before and after acquisition. The unselected peer must not gain a container
+inspect request. After stopping that peer it repeats the comparison to the
+actual Engine response without assuming that stopped peers remain listed.
+Only successful assertions and verified fixture cleanup append
+`NetworkActiveMembership` and `NetworkStoppedMembershipBoundary` to the original
+fifteen source probes. The emitter requires all seventeen; a failure cannot emit
+partial source evidence. These are source-observation checks, not ownership,
+atomic-snapshot, or target-capability admission. All four exact lanes still
+require genuine passing runs and independent review before compatibility claims.
 They cover protected predicate replay closure, canonical list identities,
 inspect response binding (including network-name fallback), explicit resource
 roots, typed inspected network IDs distinct from fallback names and empty
 endpoint IDs, and effective user namespace availability.
+The network-inspect membership fixtures additionally check protected canonical
+container-ID keys, entry versus `Name` availability, the 4096-entry bound,
+malformed-value diagnostics, and an unselected active member that does not
+expand container inspection. These are pure decoder contracts, not proof of
+Engine behavior. Independent source proof must compare a selected and an
+unselected active attachment, then a stopped-peer boundary, against direct
+network-inspect responses in all four exact lanes. A stopped peer's absence
+from an active snapshot cannot establish that no other resource is shared.
 They do not extend reviewed profile claims until fresh independent native tests
 cover each new source shape on the exact versions and daemon modes.
 

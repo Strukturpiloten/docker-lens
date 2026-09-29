@@ -352,6 +352,42 @@ fi
         self.assertIn('"$NATIVE_SOURCE_PROBES_PATH"', source)
         self.assertIn('io.dockerlens.fixture=decoy', source)
 
+    def test_membership_probe_follows_source_and_precedes_manifest(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
+        baseline = 'native_selection live_native_selection_and_source_observations'
+        membership = ('"$(dirname "$0")/run-exact-native-test.sh" native_selection '
+                      'live_network_membership_matches_engine')
+        self.assertEqual(source.count(membership), 1)
+        self.assertLess(source.index(baseline), source.index(membership))
+        self.assertLess(source.index(membership), source.index('python3 "$script_dir/native-evidence.py"'))
+
+    def test_membership_failure_markers_remain_closed_and_private(self) -> None:
+        for marker in ("source_network_membership", "membership_cleanup_unverified"):
+            with self.subTest(marker=marker), tempfile.TemporaryDirectory() as directory:
+                bin_dir = Path(directory)
+                self._tool(bin_dir, "cargo", f'''#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'live_network_membership_matches_engine: test'
+else
+  echo 'private native response' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: {marker}' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: membership_private' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+''')
+                env = os.environ.copy()
+                env["PATH"] = f"{bin_dir}:{env['PATH']}"
+                result = subprocess.run(
+                    [str(ROOT / "scripts/run-exact-native-test.sh"), "native_selection",
+                     "live_network_membership_matches_engine"],
+                    env=env, capture_output=True, text=True, timeout=15, check=False,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f"DOCKERLENS_NATIVE_CHECK: {marker}", result.stderr)
+                self.assertNotIn("private", result.stdout + result.stderr)
+
     def test_existing_volume_probe_is_exact_and_precedes_manifest_emission(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
         selected = ('"$(dirname "$0")/run-exact-native-test.sh" native_volume '
