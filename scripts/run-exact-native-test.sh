@@ -77,6 +77,7 @@ isolation_diag=$(grep -Eo '^DOCKERLENS_NATIVE_ISOLATION_DIAG: result=(refused|co
 namespace_diag=$(grep -Eo '^DOCKERLENS_NATIVE_NAMESPACE_DIAG: category=(input|inspect|identity|changed|process|missing_tool|probe)$' "$capture_path" | tail -n 1 || true)
 api_diag=$(grep -E '^DOCKERLENS_NATIVE_API_DIAG: (transport=(timeout|other)|operation=(inspect|create|start) status=(invalid_request|not_found|conflict|server|other))$' "$capture_path" | tail -n 1 | sed 's/^DOCKERLENS_NATIVE_API_DIAG: /DOCKERLENS_NATIVE_API_DIAG: observation=last /' || true)
 resolver_logs_diag=$(grep -E '^DOCKERLENS_NATIVE_RESOLVER_LOGS_DIAG: operation=logs outcome=cli_failure$' "$capture_path" | tail -n 1 || true)
+resolver_log_canary_diag=$(grep -E '^DOCKERLENS_NATIVE_RESOLVER_LOG_CANARY: side=(oracle|rendered) outcome=(present|missing)$' "$capture_path" | tail -n 2 || true)
 start_body_diag=$(grep -Eo '^DOCKERLENS_NATIVE_START_BODY_DIAG: shape=(message|missing|malformed|oversize) cgroup_mention=(present|absent|unknown) device_mention=(present|absent|unknown) sysctl_mention=(present|absent|unknown) ulimit_mention=(present|absent|unknown) apparmor_mention=(present|absent|unknown) permission_phrase=(present|absent|unknown) errno_mention=(present|absent|unknown) controller_mention=(present|absent|unknown) bpf_mention=(present|absent|unknown)$' "$capture_path" | tail -n 1 || true)
 resource_control_diag=$(grep -E '^DOCKERLENS_NATIVE_RESOURCE_CONTROL: control=(baseline|memory|pids|device) phase=(create|inspect|start) outcome=(begin|ready|started|rejected|timeout|uncertain|invalid|budget)$' "$capture_path" | tail -n 24 || true)
 resource_start_http_diag=$(grep -E '^DOCKERLENS_NATIVE_RESOURCE_START_HTTP: control=(baseline|memory|pids|device) status=[1-5][0-9][0-9]$' "$capture_path" | tail -n 4 || true)
@@ -116,6 +117,7 @@ if (( run_status != 0 )); then
   if [[ -n $namespace_diag ]]; then echo "$namespace_diag" >&2; fi
   if [[ -n $api_diag ]]; then echo "$api_diag" >&2; fi
   if [[ -n $resolver_logs_diag ]]; then echo "$resolver_logs_diag" >&2; fi
+  if [[ -n $resolver_log_canary_diag ]]; then printf '%s\n' "$resolver_log_canary_diag" >&2; fi
   if [[ -n $start_body_diag ]]; then echo "$start_body_diag" >&2; fi
   if [[ -n $resource_control_diag ]]; then printf '%s\n' "$resource_control_diag" >&2; fi
   if [[ -n $resource_start_http_diag ]]; then printf '%s\n' "$resource_start_http_diag" >&2; fi

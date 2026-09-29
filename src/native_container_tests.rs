@@ -5122,6 +5122,12 @@ fn mark_resolver_suffix_stage(suffix: &str, phase: &'static str) {
     mark_resolver_stage(lane, side, phase);
 }
 
+fn mark_ipv4_log_canary(side: &'static str, present: bool) {
+    assert!(matches!(side, "oracle" | "rendered"));
+    let outcome = if present { "present" } else { "missing" };
+    eprintln!("DOCKERLENS_NATIVE_RESOLVER_LOG_CANARY: side={side} outcome={outcome}");
+}
+
 fn assert_resolver_and_logging(run: &NativeRun, id: &str, side: &'static str) {
     mark_resolver_stage("ipv4", side, "resolver");
     let resolver = run.cli(&[
@@ -5142,7 +5148,9 @@ fn assert_resolver_and_logging(run: &NativeRun, id: &str, side: &'static str) {
     }));
     mark_resolver_stage("ipv4", side, "logs");
     let logs = run.cli(&["logs".into(), id.into()]);
-    assert!(logs.contains("native-log-canary"));
+    let canary_present = logs.contains("native-log-canary");
+    mark_ipv4_log_canary(side, canary_present);
+    assert!(canary_present, "expected native log canary");
 }
 
 fn probe_resolver_and_logging(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
@@ -5671,10 +5679,10 @@ fn group_failure_never_merges_or_continues_without_proven_cleanup() {
 }
 
 const GROUPS: [(&str, GroupProbe); 5] = [
+    ("resources_security", probe_resources_security_group),
     ("ports", probe_port_group),
     ("identity_health_clear", probe_identity_health_clear_group),
     ("storage_lifecycle", probe_storage_lifecycle_group),
-    ("resources_security", probe_resources_security_group),
     ("resolver_logging", probe_resolver_logging_group),
 ];
 

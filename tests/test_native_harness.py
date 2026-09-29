@@ -585,6 +585,8 @@ fi
         self.assertLess(source.index("resource_start_control_matrix(run);"),
                         source.index("assert_native_api_status(NativeApiOperation::Start, oracle_start_status, 204);"))
         self.assertIn('resource_control_may_continue(uncertain, resource_control_seconds_remaining())', source)
+        self.assertLess(source.index('("resources_security", probe_resources_security_group)'),
+                        source.index('("ports", probe_port_group)'))
         self.assertIn('const RESOURCE_START_CONTROLS: [&str; 4] = ["baseline", "memory", "pids", "device"]', source)
         self.assertIn('"memory" => Some(&["--memory=67108864"])', source)
         self.assertIn('"pids" => Some(&["--pids-limit=32"])', source)
@@ -693,6 +695,7 @@ fi
         source = (ROOT / "src/native_container_tests.rs").read_text(encoding="utf-8")
         self.assertIn('DOCKERLENS_NATIVE_API_DIAG: operation={} status={}', source)
         self.assertIn('DOCKERLENS_NATIVE_RESOLVER_LOGS_DIAG: operation=logs outcome=cli_failure', source)
+        self.assertIn('mark_ipv4_log_canary(side, canary_present);', source)
         with tempfile.TemporaryDirectory() as directory:
             bin_dir = Path(directory)
             self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
@@ -703,6 +706,8 @@ else
   echo 'DOCKERLENS_NATIVE_API_DIAG: operation=inspect status=not_found' >&2
   echo 'DOCKERLENS_NATIVE_CHECK: container_resolver_logging_ipv4_oracle_logs' >&2
   echo 'DOCKERLENS_NATIVE_RESOLVER_LOGS_DIAG: operation=logs outcome=cli_failure' >&2
+  echo 'DOCKERLENS_NATIVE_RESOLVER_LOG_CANARY: side=oracle outcome=missing' >&2
+  echo 'DOCKERLENS_NATIVE_RESOLVER_LOG_CANARY: side=private outcome=missing' >&2
   echo 'DOCKERLENS_NATIVE_RESOLVER_LOGS_DIAG: operation=private outcome=cli_failure' >&2
   echo 'DOCKERLENS_NATIVE_GROUP_FAILURE: group=resolver_logging reason=probe' >&2
   echo 'DOCKERLENS_NATIVE_CHECK: container_resolver_logging_local_rendered_create' >&2
@@ -724,6 +729,10 @@ fi
             )
             self.assertIn(
                 "DOCKERLENS_NATIVE_RESOLVER_LOGS_DIAG: operation=logs outcome=cli_failure",
+                result.stderr,
+            )
+            self.assertIn(
+                "DOCKERLENS_NATIVE_RESOLVER_LOG_CANARY: side=oracle outcome=missing",
                 result.stderr,
             )
             self.assertIn("DOCKERLENS_NATIVE_GROUP_FAILURE: group=resolver_logging reason=probe", result.stderr)
