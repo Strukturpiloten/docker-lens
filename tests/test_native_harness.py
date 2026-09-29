@@ -4,6 +4,7 @@ import os
 import re
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -47,14 +48,13 @@ fi
             self.assertNotIn("private-canary", result.stdout + result.stderr)
             self.assertNotIn("network_oracle_private", result.stdout + result.stderr)
 
-    def test_host_network_hints_are_read_only_and_closed(self) -> None:
+    def test_host_network_prerequisite_runs_before_owned_resources(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
-        hints = source.split("host_bridge_filter=absent", 1)[1].split("# A random directory", 1)[0]
-        self.assertIn("/sys/module/br_netfilter", hints)
-        self.assertIn("/proc/sys/net/bridge/bridge-nf-call-iptables", hints)
-        self.assertNotIn("modprobe", hints)
+        preflight = 'python3 "$script_dir/native-bridge-prerequisite.py"'
+        self.assertIn(preflight, source)
+        self.assertLess(source.index(preflight), source.index('run_dir=$(mktemp -d'))
         self.assertNotIn("sysctl -w", source)
-        self.assertIn("bridge_filter_sysctl=$host_bridge_filter_sysctl", hints)
+        self.assertNotIn("DOCKER_IGNORE_BR_NETFILTER_ERROR", source)
 
     def test_failure_exposes_only_selected_native_panic_location(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -779,6 +779,13 @@ esac
                            "#!/bin/sh\nprintf 'Filesystem 1024-blocks Used Available Capacity Mounted\n'"
                            "\nprintf 'fake 100000000 1 100000000 1%% /tmp\n'\n")
                 self._tool(bin_dir, "podman", fake_podman)
+                # These cleanup fixtures do not test kernel preflight. Admit
+                # that single helper in the fake PATH, leaving every other
+                # Python helper on the real interpreter.
+                self._tool(bin_dir, "python3", "#!/bin/sh\n"
+                           "case \"$1\" in */native-bridge-prerequisite.py) "
+                           "echo DOCKERLENS_NATIVE_HOST_NETWORK:bridge_filter=ready; exit 0;; esac\n"
+                           f'exec "{sys.executable}" "$@"\n')
                 env = os.environ.copy()
                 env.update(PATH=f"{bin_dir}:{env['PATH']}",
                            FAKE_NATIVE_STATE=str(state), FAKE_NATIVE_FAULT=fault)

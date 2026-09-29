@@ -27,9 +27,22 @@ and, on a failed command, a closed exit and stderr category. Native stdout and
 stderr are bounded independently to 8 KiB; raw bytes remain private. A category
 such as a disabled firewall identifies a failure to investigate, not permission
 to skip the assertion or admit an unsupported result as positive evidence.
-The harness also reports only closed, read-only host bridge-filter module and
-sysctl availability hints. These do not establish the inner daemon's network
-configuration. It never loads host modules or changes sysctls to collect them.
+Before creating run-owned resources, the canonical native harness requires the
+host `br_netfilter` module and both `bridge-nf-call-iptables` and
+`bridge-nf-call-ip6tables` to read back as `1`. Already-ready hosts need no
+load. Local, unknown, and other untrusted environments perform read-only
+checks and fail if a prerequisite is absent or disabled. Only a positively
+identified GitHub-hosted Linux `native-conformance` job for this repository on
+trusted `main` push or workflow dispatch may attempt only
+`sudo -n timeout --signal=TERM --kill-after=2s 10s modprobe br_netfilter`;
+the root-owned timeout bounds that exact module load, and the helper then
+requires the same readback. A separate outer deadline is only a fallback:
+an unprivileged runner cannot necessarily signal sudo's root process group.
+These environment values prevent accidental local mutation, not impersonation by a
+root caller. The harness never changes sysctls, unloads modules, installs
+packages, changes forwarding policy, or treats the host check as proof of the
+inner daemon's network behavior. Failures expose closed categories, not
+subprocess output. This bounded prerequisite does not relax any native test.
 On a failed edge-side DNS positive, the network test may create one exact
 run-owned diagnostic peer. Its closed summary distinguishes resolver setup,
 default/explicit/dotted A lookups, named/direct-IP HTTP and cleanup without

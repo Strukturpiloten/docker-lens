@@ -27,6 +27,22 @@ with Engine conformance. The maintained Debian images contain native
 docker.io 20.10.5+dfsg1-1+deb11u2, which the harness checks directly.
 Their package provenance remains tied to the published image digest.
 
+The network native gate has one validation-only host prerequisite outside the
+image: `br_netfilter` and both bridge netfilter iptables sysctls must read back
+enabled before any run-owned resources are created. The harness reads these
+values in every environment. It may attempt only the bounded, exact
+`sudo -n timeout --signal=TERM --kill-after=2s 10s modprobe br_netfilter`
+when the module is absent and the job is
+positively identified as the GitHub-hosted Linux DockerLens native matrix on
+trusted `main` push or workflow dispatch. The exact load uses root-owned GNU
+`timeout` around `modprobe br_netfilter` with TERM and a two-second KILL
+fallback; an outer deadline cannot reliably signal root children. It rechecks
+the module and both sysctls afterward. The environment guard prevents accidental local mutation,
+not root-caller impersonation. Already-ready hosts never load, while local or
+unknown contexts remain read-only and fail closed. This narrowly extends the
+host-side harness preflight; it does not change sysctls, unload modules,
+install packages, alter forwarding policy, or waive any inner Engine assertion.
+
 An image build, pinned reference, passing offline suite, or local harness
 definition does not establish DockerLens compatibility. Each lane must run
 its exact native acquisition, capture, and target checks. Only after these
