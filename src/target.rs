@@ -33,8 +33,8 @@ pub use network::{
     NetworkLabel, NetworkRole, NetworkSource, NetworkSubnet,
 };
 pub use render::{
-    DockerApiRenderer, NetworkPrerequisite, RenderError, RenderedArtifact, Renderer,
-    VolumePrerequisite,
+    CompleteArtifactError, DockerApiRenderer, NetworkPrerequisite, RenderError, RenderedArtifact,
+    Renderer, VolumePrerequisite,
 };
 
 #[cfg(test)]
@@ -408,6 +408,20 @@ mod tests {
         );
         assert!(lines[2].contains("TOKEN=secret\\\"\\\\\\nvalue"));
         assert!(!output.contains("TOKEN=secret\"\\\nvalue"));
+        let complete: serde_json::Value =
+            serde_json::from_slice(&artifact.complete_bytes().unwrap()).unwrap();
+        let expected_requests: Vec<serde_json::Value> = lines
+            .iter()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(complete["requests"], serde_json::json!(expected_requests));
+        assert_eq!(complete["requests"][0]["path"], "/v1.41/volumes/create");
+        assert_eq!(complete["requests"][1]["path"], "/v1.41/networks/create");
+        assert_eq!(
+            complete["requests"][2]["path"],
+            "/v1.41/containers/create?name=app"
+        );
+        assert_eq!(complete["prerequisites"], serde_json::json!([]));
         for protected in ["secret", "registry/app:1", "app_net", "TOKEN"] {
             assert!(!format!("{graph:?} {artifact:?}").contains(protected));
         }
@@ -949,6 +963,23 @@ mod tests {
         let requests = std::str::from_utf8(artifact.bytes()).unwrap();
         assert!(requests.contains("/v1.41/volumes/create"));
         assert!(!requests.contains("/v1.49/"));
+        assert_eq!(artifact.context(), Some(graph.context()));
+        let complete: serde_json::Value =
+            serde_json::from_slice(&artifact.complete_bytes().unwrap()).unwrap();
+        assert_eq!(complete["schema_version"], 1);
+        assert_eq!(complete["context"]["kind"], "target");
+        assert_eq!(
+            complete["context"]["build"],
+            serde_json::json!({"kind":"upstream"})
+        );
+        assert_eq!(complete["context"]["engine_release"], "29.8.1");
+        assert_eq!(complete["context"]["advertised_api_version"], "1.50");
+        assert_eq!(complete["context"]["acquisition_api_version"], "1.49");
+        assert_eq!(complete["context"]["rendering_api_version"], "1.41");
+        assert_eq!(complete["context"]["daemon_mode"], "rootless");
+        assert_eq!(complete["context"]["evidence_sha256"], "07".repeat(32));
+        assert_eq!(complete["requests"][0]["path"], "/v1.41/volumes/create");
+        assert_eq!(complete["prerequisites"], serde_json::json!([]));
     }
 
     fn expanded_network_intent() -> TargetIntent {

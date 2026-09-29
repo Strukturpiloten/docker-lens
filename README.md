@@ -69,6 +69,9 @@ Compose compatibility and Swarm mode are separate discussion topics.
   Unsupported settings remain explicit.
   Target intent, operation graph, and rendered artifact are inert data. The
   crate has no executor, deployment API, or file writer.
+  `RenderedArtifact::bytes()` is a request-only stream; consumers needing
+  external network and volume prerequisites use the [complete inert review
+  artifact](docs/complete-artifact.md) instead.
 
 Native conformance has separate maintained Debian 11 and upstream Engine 29
 rootful/rootless image lanes, each pinned by tag and digest. Passing hosted

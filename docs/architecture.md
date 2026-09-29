@@ -49,6 +49,10 @@
    emits inert Engine API request descriptions; it never contacts a daemon,
    applies an operation, or writes the artifact. API versions below 1.41 are
    rejected conservatively pending independent native evidence.
+   The renderer also owns a [versioned complete review artifact](complete-artifact.md)
+   containing those ordered requests, external prerequisites, and target
+   context/evidence binding. Its explicit bytes read is distinct from the
+   legacy request-only stream; neither representation executes work.
 
 `src/acquisition.rs` owns the closed socket transport, request and resource budgets; `src/decoder.rs` owns
 pure native JSON decoding; `src/evidence.rs` owns
