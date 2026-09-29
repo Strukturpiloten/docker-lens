@@ -18,6 +18,96 @@ fn cli_failure_exit(status: std::process::ExitStatus) -> &'static str {
     }
 }
 
+fn closed_http_exit(status: std::process::ExitStatus) -> &'static str {
+    match status.code() {
+        Some(0) => "0",
+        Some(6) => "6",
+        Some(7) => "7",
+        Some(22) => "22",
+        Some(28) => "28",
+        Some(35) => "35",
+        Some(52) => "52",
+        Some(56) => "56",
+        Some(60) => "60",
+        Some(124) => "124",
+        Some(137) => "137",
+        _ => "other",
+    }
+}
+
+fn closed_ipv6_disable_values(output: &[u8]) -> (&'static str, &'static str) {
+    let mut lines = output.split(|byte| *byte == b'\n');
+    let state = |line: Option<&[u8]>| {
+        if line == Some(b"0".as_slice()) {
+            "enabled"
+        } else if line == Some(b"1".as_slice()) {
+            "disabled"
+        } else {
+            "unavailable"
+        }
+    };
+    let all = state(lines.next());
+    let lo = state(lines.next());
+    if all == "unavailable"
+        || lo == "unavailable"
+        || lines.next() != Some(b"".as_slice())
+        || lines.next().is_some()
+    {
+        return ("unavailable", "unavailable");
+    }
+    (all, lo)
+}
+
+fn best_effort_ipv6_diagnostics(
+    inner: impl FnOnce() -> (&'static str, &'static str),
+    outer: impl FnOnce() -> &'static str,
+) -> ((&'static str, &'static str), &'static str) {
+    // These follow-up checks must not mask the already failed published HTTP
+    // assertion, even when exact inspect or namespace identity fails closed.
+    let inner = std::panic::catch_unwind(std::panic::AssertUnwindSafe(inner))
+        .unwrap_or(("unavailable", "unavailable"));
+    let outer =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(outer)).unwrap_or("probe_failed");
+    (inner, outer)
+}
+
+#[test]
+fn ipv6_disable_diagnostic_accepts_only_two_closed_values() {
+    assert_eq!(
+        closed_ipv6_disable_values(b"0\n1\n"),
+        ("enabled", "disabled")
+    );
+    assert_eq!(
+        closed_ipv6_disable_values(b"1\n0\n"),
+        ("disabled", "enabled")
+    );
+    for malformed in [
+        b"protected-secret\n0\n".as_slice(),
+        b"0\nprotected-secret\n",
+        b"0\n1\nextra\n",
+        b"0\n1",
+    ] {
+        assert_eq!(
+            closed_ipv6_disable_values(malformed),
+            ("unavailable", "unavailable")
+        );
+    }
+}
+
+#[test]
+fn failed_ipv6_follow_up_checks_keep_independent_closed_results() {
+    let (inner, outer) =
+        best_effort_ipv6_diagnostics(|| panic!("synthetic failed inspect"), || "available");
+    assert_eq!(inner, ("unavailable", "unavailable"));
+    assert_eq!(outer, "available");
+    let (inner, outer) = best_effort_ipv6_diagnostics(
+        || ("enabled", "disabled"),
+        || panic!("synthetic failed pinned probe"),
+    );
+    assert_eq!(inner, ("enabled", "disabled"));
+    assert_eq!(outer, "probe_failed");
+}
+
 fn cli_failure_stderr(stderr: &[u8]) -> &'static str {
     let message = String::from_utf8_lossy(stderr).to_ascii_lowercase();
     if message.contains("connection refused") || message.contains("could not connect to server") {
@@ -127,23 +217,11 @@ fn bounded_native_cli_stream<R: Read>(mut reader: R) -> (Vec<u8>, bool) {
     (bytes, exceeded)
 }
 
-fn bounded_native_cli_output(command: &mut Command, input: Option<&[u8]>) -> std::process::Output {
+fn bounded_native_cli_output(command: &mut Command) -> std::process::Output {
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
-    if input.is_some() {
-        command.stdin(Stdio::piped());
-    }
     let mut child = command
         .spawn()
         .expect("bounded private native CLI available");
-    if let Some(input) = input {
-        assert!(input.len() <= 4096, "bounded synthetic CLI input");
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(input)
-            .expect("write bounded CLI input");
-    }
     let stdout = child.stdout.take().expect("private native CLI stdout");
     let stderr = child.stderr.take().expect("private native CLI stderr");
     let stdout_reader = std::thread::spawn(move || bounded_native_cli_stream(stdout));
@@ -175,7 +253,7 @@ fn oversized_fake_native_cli_output_fails_closed() {
             &format!("head -c 1048576 /dev/zero{redirection}; printf private-canary{redirection}"),
         ]);
         let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            bounded_native_cli_output(&mut command, None);
+            bounded_native_cli_output(&mut command);
         }))
         .unwrap_err();
         let text = failure
@@ -577,7 +655,7 @@ impl NativeRun {
             "unix:///dockerlens-native/docker.sock",
         ]);
         command.args(args);
-        let output = bounded_native_cli_output(&mut command, None);
+        let output = bounded_native_cli_output(&mut command);
         if !output.status.success() {
             eprintln!(
                 "DOCKERLENS_NATIVE_CLI_DIAG: exit={} stderr={}",
@@ -592,7 +670,13 @@ impl NativeRun {
     fn namespace_probe(&self, mode: &str, argument: Option<&str>) -> std::process::Output {
         assert!(matches!(
             mode,
-            "identity" | "curl_version" | "bash_version" | "http" | "udp" | "tcp_refusal"
+            "identity"
+                | "curl_version"
+                | "bash_version"
+                | "http"
+                | "udp"
+                | "tcp_refusal"
+                | "ipv6_socket"
         ));
         let mut command = Command::new("timeout");
         command.args(["--kill-after=1", "16"]);
@@ -616,7 +700,7 @@ impl NativeRun {
         if let Some(argument) = argument {
             command.arg(argument);
         }
-        let output = bounded_native_cli_output(&mut command, None);
+        let output = bounded_native_cli_output(&mut command);
         if !output.status.success() {
             if let Some(category) = namespace_failure_category(&output.stderr) {
                 eprintln!("DOCKERLENS_NATIVE_NAMESPACE_DIAG: category={category}");
@@ -684,46 +768,35 @@ impl NativeRun {
         );
     }
 
-    fn try_outer_http(&self, url: &str) -> Result<String, (&'static str, &'static str)> {
+    fn try_outer_http(
+        &self,
+        url: &str,
+    ) -> Result<String, (&'static str, &'static str, &'static str)> {
         let output = self.namespace_probe("http", Some(url));
         if !output.status.success() {
             return Err((
                 cli_failure_exit(output.status),
                 cli_failure_stderr(&output.stderr),
+                closed_http_exit(output.status),
             ));
         }
         Ok(String::from_utf8(output.stdout).expect("bounded outer HTTP UTF-8"))
     }
 
-    fn assert_published_http(&self, url: &str, expected: &str, local_ipv6: Option<bool>) {
-        let mut outcome = ("other", "unknown");
-        for attempt in 0..5 {
-            match self.try_outer_http(url) {
-                Ok(body) if body == expected => return,
-                Ok(_) => outcome = ("success", "body_mismatch"),
-                Err(category) => outcome = category,
-            }
-            if attempt < 4 {
-                std::thread::sleep(std::time::Duration::from_millis(250));
-            }
-        }
-        if let Some(local_ipv6) = local_ipv6 {
-            eprintln!(
-                "DOCKERLENS_NATIVE_IPV6_DIAG: local_service={}",
-                if local_ipv6 { "pass" } else { "fail" }
-            );
-        }
-        eprintln!(
-            "DOCKERLENS_NATIVE_HTTP_DIAG: exit={} category={}",
-            outcome.0, outcome.1
+    fn inner_ipv6_state(&self, id: &str) -> (&'static str, &'static str) {
+        assert!(
+            id.len() == 64
+                && id.bytes().all(|byte| byte.is_ascii_hexdigit())
+                && self.created.iter().any(|(_, created_id)| created_id == id),
+            "exact task-owned IPv6 diagnostic container"
         );
-        panic!("closed published endpoint HTTP assertion failed");
-    }
-
-    fn cli_with_stdin(&self, args: &[String], input: &[u8]) -> String {
-        assert!(input.len() <= 4096, "bounded synthetic Dockerfile");
+        let inspected = self.inspect(id);
+        assert_eq!(
+            inspected["Config"]["Labels"]["io.dockerlens.native-run"],
+            self.run_id
+        );
         let mut command = Command::new("timeout");
-        command.args(["--kill-after=1", "60"]);
+        command.args(["--kill-after=1", "12"]);
         if required("NATIVE_PODMAN_USE_SUDO") == "1" {
             command.args(["sudo", "-n", "podman"]);
         } else {
@@ -731,26 +804,64 @@ impl NativeRun {
         }
         command.args([
             "exec",
-            "-i",
             &required("NATIVE_OUTER_CONTAINER"),
             "docker",
             "-H",
             "unix:///dockerlens-native/docker.sock",
+            "exec",
+            id,
+            "sh",
+            "-c",
+            "cat /proc/sys/net/ipv6/conf/all/disable_ipv6 /proc/sys/net/ipv6/conf/lo/disable_ipv6",
         ]);
-        command.args(args);
-        let output = bounded_native_cli_output(&mut command, Some(input));
+        let output = bounded_native_cli_output(&mut command);
         if !output.status.success() {
+            return ("unavailable", "unavailable");
+        }
+        closed_ipv6_disable_values(&output.stdout)
+    }
+
+    fn assert_published_http(&self, url: &str, expected: &str, local_ipv6: Option<(&str, bool)>) {
+        let mut outcome = ("other", "unknown", "other");
+        for attempt in 0..5 {
+            match self.try_outer_http(url) {
+                Ok(body) if body == expected => return,
+                Ok(_) => outcome = ("success", "body_mismatch", "0"),
+                Err(category) => outcome = category,
+            }
+            if attempt < 4 {
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
+        }
+        eprintln!(
+            "DOCKERLENS_NATIVE_HTTP_DIAG: exit={} category={}",
+            outcome.0, outcome.1
+        );
+        if let Some((id, local_ipv6)) = local_ipv6 {
+            let ((inner_all, inner_lo), outer_tcp6) = best_effort_ipv6_diagnostics(
+                || self.inner_ipv6_state(id),
+                || {
+                    let outer = self.namespace_probe("ipv6_socket", None);
+                    if outer.status.success() {
+                        match outer.stdout.as_slice() {
+                            b"available\n" => "available",
+                            b"tcp6_unavailable\n" => "tcp6_unavailable",
+                            b"bind_unavailable\n" => "bind_unavailable",
+                            b"loopback_unavailable\n" => "loopback_unavailable",
+                            _ => "probe_failed",
+                        }
+                    } else {
+                        "probe_failed"
+                    }
+                },
+            );
             eprintln!(
-                "DOCKERLENS_NATIVE_CLI_DIAG: exit={} stderr={}",
-                cli_failure_exit(output.status),
-                cli_failure_stderr(&output.stderr)
+                "DOCKERLENS_NATIVE_IPV6_DIAG: local_service={} inner_all={inner_all} inner_lo={inner_lo} outer_tcp6={outer_tcp6} curl_exit={}",
+                if local_ipv6 { "pass" } else { "fail" },
+                outcome.2
             );
         }
-        assert!(
-            output.status.success(),
-            "independent derived image build failed"
-        );
-        String::from_utf8(output.stdout).expect("bounded CLI build output UTF-8")
+        panic!("closed published endpoint HTTP assertion failed");
     }
 
     fn cli_create(&mut self, suffix: &str, options: &[String], command: &[&str]) -> Value {
@@ -985,29 +1096,48 @@ impl NativeRun {
     }
 
     fn image_with_failing_health(&mut self) -> String {
-        let image = format!("{}:local", self.name("health-default-image"));
-        let dockerfile = format!(
-            "FROM {}\nLABEL io.dockerlens.native-run={}\nHEALTHCHECK --interval=1s --timeout=1s --retries=2 CMD /bin/false\n",
-            self.image, self.run_id
-        );
-        self.cli_with_stdin(
+        let source = self.cli_create(
+            "health-default-source",
             &[
-                "build".into(),
-                "--pull=false".into(),
-                "--network=none".into(),
-                "-t".into(),
-                image.clone(),
-                "-".into(),
+                "--health-cmd=/bin/false".into(),
+                "--health-interval=1s".into(),
+                "--health-timeout=1s".into(),
+                "--health-retries=2".into(),
             ],
-            dockerfile.as_bytes(),
+            &["sh", "-c", "sleep 120"],
         );
+        let source_id = source["Id"].as_str().expect("health source ID").to_owned();
+        let expected_health = json!({
+            "Test": ["CMD-SHELL", "/bin/false"],
+            "Interval": 1_000_000_000_i64,
+            "Timeout": 1_000_000_000_i64,
+            "Retries": 2,
+        });
+        for key in ["Test", "Interval", "Timeout", "Retries"] {
+            assert_eq!(source["Config"]["Healthcheck"][key], expected_health[key]);
+        }
+        let image = format!("{}:local", self.name("health-default-image"));
+        self.cli(&[
+            "commit".into(),
+            "--change".into(),
+            format!("LABEL io.dockerlens.native-run={}", self.run_id),
+            source_id.clone(),
+            image.clone(),
+        ]);
         self.images.push(image.clone());
         let inspected = self.cli(&["image".into(), "inspect".into(), image.clone()]);
         let inspected: Value = serde_json::from_str(&inspected).unwrap();
+        for key in ["Test", "Interval", "Timeout", "Retries"] {
+            assert_eq!(
+                inspected[0]["Config"]["Healthcheck"][key],
+                expected_health[key]
+            );
+        }
         assert_eq!(
-            inspected[0]["Config"]["Healthcheck"]["Test"],
-            json!(["CMD-SHELL", "/bin/false"])
+            inspected[0]["Config"]["Labels"]["io.dockerlens.native-run"],
+            self.run_id
         );
+        self.delete(&source_id);
         image
     }
 }
@@ -1421,7 +1551,7 @@ fn assert_ipv6_traffic(run: &NativeRun, id: &str, suffix: &str) {
     run.assert_published_http(
         "http://[::1]:18112/index.html",
         "native-ipv6-canary",
-        Some(local_ipv6),
+        Some((id, local_ipv6)),
     );
     mark_port_stage(suffix, "http_assert");
 }
@@ -1777,7 +1907,7 @@ fn probe_identity_and_health(run: &mut NativeRun, evidence: &mut ProbeEvidence) 
     );
 
     eprintln!("DOCKERLENS_NATIVE_CHECK: container_health_disabled");
-    eprintln!("DOCKERLENS_NATIVE_CHECK: container_health_disabled_image_build");
+    eprintln!("DOCKERLENS_NATIVE_CHECK: container_health_disabled_image_commit");
     let health_image = run.image_with_failing_health();
     eprintln!("DOCKERLENS_NATIVE_CHECK: container_health_disabled_inherited_create");
     let inherited = run.cli_create_image(
@@ -3162,7 +3292,7 @@ fn assert_no_log_output(_run: &NativeRun, id: &str) {
         "logs",
         id,
     ]);
-    let output = bounded_native_cli_output(&mut command, None);
+    let output = bounded_native_cli_output(&mut command);
     assert!(
         !output.status.success(),
         "none driver must reject log reads"

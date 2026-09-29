@@ -24,6 +24,44 @@ SPEC.loader.exec_module(PROBE)
 
 
 class NativeNetProbeTests(unittest.TestCase):
+    def test_ipv6_socket_diagnostic_is_fixed_and_closed(self) -> None:
+        self.assertEqual(PROBE.probe_command("ipv6_socket", None),
+                         [sys.executable, "-c", PROBE.IPV6_SOCKET_SCRIPT])
+        with self.assertRaises(PROBE.ProbeFailure):
+            PROBE.probe_command("ipv6_socket", "private-input")
+        for failed_stage, expected in (
+            ("socket", "tcp6_unavailable"),
+            ("bind", "bind_unavailable"),
+            ("connect", "loopback_unavailable"),
+            (None, "available"),
+        ):
+            with self.subTest(failed_stage=failed_stage):
+                listener = mock.MagicMock()
+                listener.__enter__.return_value = listener
+                listener.getsockname.return_value = ("::1", 54321, 0, 0)
+                client = mock.MagicMock()
+                client.__enter__.return_value = client
+                accepted = mock.MagicMock()
+                listener.accept.return_value = (accepted, ("::1", 54321, 0, 0))
+                if failed_stage == "bind":
+                    listener.bind.side_effect = OSError("private-canary")
+                if failed_stage == "connect":
+                    client.connect.side_effect = OSError("private-canary")
+                side_effect = (OSError("private-canary") if failed_stage == "socket"
+                               else [listener, client])
+                with mock.patch.object(socket, "socket", side_effect=side_effect) as factory:
+                    output = io.StringIO()
+                    with contextlib.redirect_stdout(output):
+                        exec(PROBE.IPV6_SOCKET_SCRIPT, {})
+                self.assertEqual(output.getvalue(), expected + "\n")
+                factory.assert_called_with(socket.AF_INET6, socket.SOCK_STREAM)
+                if failed_stage != "socket":
+                    listener.bind.assert_called_once_with(("::1", 0))
+                if failed_stage in ("connect", None):
+                    client.connect.assert_called_once_with(("::1", 54321))
+                if failed_stage is None:
+                    accepted.close.assert_called_once_with()
+
     def test_tcp_isolation_accepts_only_kernel_connection_refusal(self) -> None:
         self.assertEqual(PROBE.probe_command("tcp_refusal", None),
                          [sys.executable, "-c", PROBE.TCP_REFUSAL_SCRIPT])
@@ -188,6 +226,26 @@ else:
                 PROBE.main()
             inspect.assert_not_called()
             launched.assert_not_called()
+            closed.assert_called_with(11)
+
+    def test_ipv6_socket_uses_the_same_pinned_outer_namespace(self) -> None:
+        cached = PROBE.Identity(*self.expected, 777)
+        with mock.patch.object(
+            sys, "argv", [str(SCRIPT), "ipv6_socket", self.outer, cached.token()]
+        ), mock.patch.object(
+            PROBE, "verified_process", return_value=(777, 11)
+        ), mock.patch.object(
+            PROBE, "inspect", return_value=self.expected
+        ), mock.patch.object(
+            PROBE.shutil, "which", return_value="/usr/bin/tool"
+        ), mock.patch.object(
+            PROBE.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)
+        ) as launched, mock.patch.object(PROBE.os, "close") as closed:
+            self.assertEqual(PROBE.main(), 0)
+            args, kwargs = launched.call_args
+            self.assertEqual(args[0][:3], ["nsenter", "--net=/proc/self/fd/11", "--"])
+            self.assertEqual(args[0][3:], [sys.executable, "-c", PROBE.IPV6_SOCKET_SCRIPT])
+            self.assertEqual(kwargs["pass_fds"], (11,))
             closed.assert_called_with(11)
 
     def test_nsenter_receives_held_fd_and_after_readback_must_match(self) -> None:

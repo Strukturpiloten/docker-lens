@@ -32,6 +32,7 @@ SOURCE_PROBES = [
     "IdentityFieldsOracle", "PortBindingsOracle",
     "MultipleHostIpBindingsOracle", "MountEnvironmentOracle",
     "HealthRestartOracle", "SelectedFieldOrigins",
+    "NetworkActiveMembership", "NetworkStoppedMembershipBoundary",
 ]
 NETWORK_PROBES = [
     "ExternalNetworkReference", "InternalBridgeNetworkCreate", "Ipv6BridgeNetworkCreate",
@@ -40,6 +41,8 @@ NETWORK_PROBES = [
     "NetworkBridgeIcc", "NetworkBridgeMasquerade", "NetworkBridgeHostBindingIp",
     "NetworkCreateLabels", "NetworkPrimaryAliases", "NetworkSecondaryAliases",
     "NetworkStaticIpv4", "NetworkStaticIpv6", "NetworkSecondaryConnect",
+    "NetworkBridgeIccDisabled", "NetworkBridgeMasqueradeEnabled",
+    "NetworkCreateLabelsValueDomain",
 ]
 VOLUME_PROBES = [
     "ExistingVolumePrerequisite", "ExistingVolumeTargetIdentity",
@@ -305,8 +308,14 @@ class NativeEvidenceTests(unittest.TestCase):
 
     def test_network_probes_are_exact_closed_non_admission_evidence(self) -> None:
         version = {"Version": "29.8.1", "ApiVersion": "1.56", "MinAPIVersion": "1.44"}
+        self.assertEqual(len(NETWORK_PROBES), 22)
+        self.assertEqual(NETWORK_PROBES[19:], [
+            "NetworkBridgeIccDisabled", "NetworkBridgeMasqueradeEnabled",
+            "NetworkCreateLabelsValueDomain",
+        ])
         for probes in (NETWORK_PROBES[:-1], NETWORK_PROBES + ["private-canary"],
-                       NETWORK_PROBES[:-1] + [NETWORK_PROBES[0]]):
+                       NETWORK_PROBES[:-1] + [NETWORK_PROBES[0]],
+                       NETWORK_PROBES[:19]):
             with self.subTest(probes=probes):
                 result, path = self.run_emit(version, network_probes=probes)
                 self.assertNotEqual(result.returncode, 0)

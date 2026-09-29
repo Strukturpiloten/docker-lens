@@ -35,8 +35,9 @@ This map identifies available inert types, not a completed BoxFerry consumer
 mapping or a native compatibility claim. None of these six fixtures authors
 IPAM or static endpoint addresses; those typed branches need separate small
 native probes. IPv4 `/31` and `/32` bridge subnet pools remain explicitly
-unsupported by planning until #31 verifies their Engine behavior per exact
-API and mode.
+unsupported by planning as library policy. The current offline rejection is
+not evidence that Engine rejects them; changing this policy requires separate
+exact API/mode native evidence.
 
 DockerLens #30 adds an inert typed container target contract for the six
 fixtures' loopback-only publications, labels, Forgejo/Nextcloud user values,

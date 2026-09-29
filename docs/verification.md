@@ -12,11 +12,37 @@ the existing container and graph tests. These offline checks preserve the
 0.1.0 contract; they do not prove new migration shapes or native compatibility.
 The typed-network offline cases exercise create/external separation, multiple
 attachment request order, alias and IPAM encoding, redacted prerequisites,
-invalid topology, missing capabilities and the API floor. The native #31
-negative cases include overlapping IPAM pools, subnet-base and broadcast
-gateway/auxiliary/static addresses, and static-address collisions. IPv4 `/31`
-and `/32` bridge parent subnets remain an explicit planning rejection; this
-extension does not establish their Engine behavior on any API or daemon mode.
+invalid topology, missing capabilities and the API floor. The #31 negative
+cases for overlapping IPAM pools, subnet-base and broadcast gateway/auxiliary/
+static addresses, and static-address collisions are offline library-policy
+rejections before any Engine request. IPv4 `/31` and `/32` bridge parent subnets
+remain an explicit planning rejection; this extension does not establish their
+Engine behavior on any API or daemon mode.
+For native assertion failures, the exact-test wrapper may expose the selected
+native test's fixed source basename and bounded numeric line/column. It does not
+print the assertion message, compared values, thread name, or absolute build
+path. The location is diagnostic only and never changes a failed outcome.
+The CLI network oracle also emits only its closed create/inspect/assert phase
+and, on a failed command, a closed exit and stderr category. Native stdout and
+stderr are bounded independently to 8 KiB; raw bytes remain private. A category
+such as a disabled firewall identifies a failure to investigate, not permission
+to skip the assertion or admit an unsupported result as positive evidence.
+Before creating run-owned resources, the canonical native harness requires the
+host `br_netfilter` module and both `bridge-nf-call-iptables` and
+`bridge-nf-call-ip6tables` to read back as `1`. Already-ready hosts need no
+load. Local, unknown, and other untrusted environments perform read-only
+checks and fail if a prerequisite is absent or disabled. Only a positively
+identified GitHub-hosted Linux `native-conformance` job for this repository on
+trusted `main` push or workflow dispatch may attempt only
+`sudo -n timeout --signal=TERM --kill-after=2s 10s modprobe br_netfilter`;
+the root-owned timeout bounds that exact module load, and the helper then
+requires the same readback. A separate outer deadline is only a fallback:
+an unprivileged runner cannot necessarily signal sudo's root process group.
+These environment values prevent accidental local mutation, not impersonation by a
+root caller. The harness never changes sysctls, unloads modules, installs
+packages, changes forwarding policy, or treats the host check as proof of the
+inner daemon's network behavior. Failures expose closed categories, not
+subprocess output. This bounded prerequisite does not relax any native test.
 On a failed edge-side DNS positive, the network test may create one exact
 run-owned diagnostic peer. Its closed summary distinguishes resolver setup,
 default/explicit/dotted A lookups, named/direct-IP HTTP and cleanup without
@@ -53,14 +79,23 @@ diagnostics from bounded CLI output. A dual-homed app's edge IP is not an
 isolation oracle. Closed DNS and HTTP markers distinguish each stage. The
 executor allows only the run-owned network and
 container names, including exact `networks/{id}/connect` paths. The separate closed
-`network_probes` manifest field contains the nineteen checked network renderer
-shapes only after the exact ignored test passes; it does not extend
+`network_probes` manifest field retains the original nineteen network renderer
+shapes and appends `NetworkBridgeIccDisabled`,
+`NetworkBridgeMasqueradeEnabled`, and `NetworkCreateLabelsValueDomain` only
+after the exact ignored test passes; it does not extend
 `admitted_shapes`, catalog capabilities, or a compatibility claim. IPAM fields,
-labels, and bridge ICC, masquerade and host-binding options have request/inspect
-checks, not independent kernel-behavior proof. ICC is tested only as `true` and
-masquerade only as `false`; later positive admission of either boolean type
-requires both values on each claimed lane. IPv4 `/31` and `/32` bridge parents
-remain rejected by planning, independent of any Engine acceptance behavior.
+labels, masquerade and host-binding options have request/inspect checks, not
+independent kernel-behavior proof. Matched control bridges differ only in ICC;
+both have independently healthy same-bridge peers, with the same direct-IP
+inter-peer HTTP probe succeeding when enabled and failing when disabled. This
+uses no external DNS or Internet dependency. Both
+masquerade values are accepted and inspectable, but this does not prove their
+routing or NAT effect. Representative empty and non-ASCII/escaped network-label
+values are checked through independent CLI and inert-rendered creates and Engine
+inspects; this does not prove every key or length boundary.
+These additional names are non-admission evidence, and the historical nineteen
+names and manifests are unchanged. IPv4 `/31` and `/32` bridge parents remain
+rejected by planning, independent of any Engine acceptance behavior.
 The typed-container offline regressions cover exact grouped `PortBindings`
 and `ExposedPorts` bodies, host-IP privacy, wildcard conflicts, ephemeral
 allocation requests, command/entrypoint inheritance and clearing, shell and
@@ -141,9 +176,28 @@ Each HTTP attempt has a two-second connection and three-second total limit.
 A local in-container service check
 precedes each published-port assertion; for the IPv6 fixture either local
 address family may establish service readiness, and the `::1` local result is
-reported separately on publication failure. The ephemeral UDP sender uses
-the outer namespace with a validated numeric port and a fixed canary. Closed
-HTTP, IPv6 and health-disable subphase markers distinguish failures without
+reported separately on publication failure. Only after the original published
+IPv6 HTTP assertion fails, a fixed diagnostic reads `all/disable_ipv6` and
+`lo/disable_ipv6` in that exact run-owned inner container and checks TCP6
+creation, `::1` bind, and loopback connect in the separately verified,
+file-descriptor-pinned outer network namespace. It emits bounded closed states
+and a recognized curl exit-code token, never addresses, ports, or native output.
+If exact inner inspect or pinned outer probing fails, that optional field is
+`unavailable` or `probe_failed`; the original HTTP failure marker remains.
+Outer namespace availability does not establish inner-container IPv6 support
+or the cause of an HTTP failure; diagnostics neither reclassify nor pass the
+failed positive. The ephemeral UDP sender uses
+the outer namespace with a validated numeric port and a fixed canary.
+The disabled-health inheritance oracle now creates a run-owned CLI container
+with an explicit failing health check, commits it to a task-owned local image,
+and verifies the image's health test, timing, retry count, and ownership label
+before checking inherited unhealthy and disabled no-health behavior. This
+does not require image-build tooling. Run `36517967971` failed in the prior
+image-build setup on both upstream modes with only an unknown closed CLI
+category; that record does not establish a builder root cause. Its Debian
+modes failed the original fixed-IPv6 CLI published HTTP positive, with
+`local_service=fail`; the cause remains unproven pending fresh native evidence.
+Closed HTTP, IPv6 and health-disable subphase markers distinguish failures without
 publishing native output. A selected native test panic may expose only its
 allowlisted source basename and bounded numeric line and column, never its
 assertion text, path, or compared values. Exhaustion still fails the lane and
@@ -203,10 +257,31 @@ The rootless lane runs a rootless inner
 daemon; rootless outer Podman nesting is not assumed.
 
 The #28 selector and typed-observation fixtures are offline contract checks.
+The separate ignored `live_network_membership_matches_engine` native test runs
+after the existing selector test and before evidence emission. It creates two
+exact run-labelled active peers on the owned bridge, acquires only one exact
+container ID, and compares protected typed membership to direct network GETs
+before and after acquisition. The unselected peer must not gain a container
+inspect request. After stopping that peer it repeats the comparison to the
+actual Engine response without assuming that stopped peers remain listed.
+Only successful assertions and verified fixture cleanup append
+`NetworkActiveMembership` and `NetworkStoppedMembershipBoundary` to the original
+fifteen source probes. The emitter requires all seventeen; a failure cannot emit
+partial source evidence. These are source-observation checks, not ownership,
+atomic-snapshot, or target-capability admission. All four exact lanes still
+require genuine passing runs and independent review before compatibility claims.
 They cover protected predicate replay closure, canonical list identities,
 inspect response binding (including network-name fallback), explicit resource
 roots, typed inspected network IDs distinct from fallback names and empty
 endpoint IDs, and effective user namespace availability.
+The network-inspect membership fixtures additionally check protected canonical
+container-ID keys, entry versus `Name` availability, the 4096-entry bound,
+malformed-value diagnostics, and an unselected active member that does not
+expand container inspection. These are pure decoder contracts, not proof of
+Engine behavior. Independent source proof must compare a selected and an
+unselected active attachment, then a stopped-peer boundary, against direct
+network-inspect responses in all four exact lanes. A stopped peer's absence
+from an active snapshot cannot establish that no other resource is shared.
 They do not extend reviewed profile claims until fresh independent native tests
 cover each new source shape on the exact versions and daemon modes.
 

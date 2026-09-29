@@ -279,6 +279,8 @@ pub struct NetworkObservation {
     pub reference: ResourceRef,
     /// Validated native inspect `Id`, not the request selector or an authored name.
     pub id: Observed<ProtectedValue>,
+    /// Active endpoint snapshot from network inspect `Containers`, not authored ownership.
+    pub active_endpoints: Observed<Vec<NetworkActiveEndpoint>>,
     pub name: Observed<ProtectedValue>,
     pub driver: Observed<ProtectedValue>,
     pub internal: Observed<bool>,
@@ -287,6 +289,19 @@ pub struct NetworkObservation {
     pub ipam_configs: Observed<Vec<IpamConfigObservation>>,
     pub options: Observed<Vec<MapEntryObservation>>,
     pub labels: Observed<Vec<LabelObservation>>,
+}
+
+/// A network-inspect map entry; its key can identify an unselected container.
+pub struct NetworkActiveEndpoint {
+    /// Validated native map key, not a caller-local resource reference.
+    pub container_id: Observed<ProtectedValue>,
+    /// The entry may itself be null or redacted, independently of its `Name`.
+    pub endpoint: Observed<NetworkEndpointDetails>,
+}
+
+pub struct NetworkEndpointDetails {
+    /// Effective native endpoint name; absence does not erase the membership key.
+    pub name: Observed<ProtectedValue>,
 }
 
 pub struct IpamConfigObservation {
@@ -827,6 +842,32 @@ fn networks(value: &Value) -> Result<Vec<NetworkAttachment>, DecodeError> {
         .collect()
 }
 
+fn active_network_endpoints(value: &Value) -> Result<Vec<NetworkActiveEndpoint>, DecodeError> {
+    object(value, FieldPath::Network { index: 0 })?
+        .iter()
+        .enumerate()
+        .map(|(index, (id, entry))| {
+            let field = FieldPath::Network { index };
+            if id.len() != 64 || !id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Err(DecodeError::InvalidValue(field));
+            }
+            Ok(NetworkActiveEndpoint {
+                container_id: Observed::present(
+                    ProtectedValue::new(id.as_bytes().to_vec()),
+                    Availability::Present,
+                    Origin::RuntimeAssigned,
+                ),
+                endpoint: observed(entry, &[], field, Origin::RuntimeAssigned, |details| {
+                    object(details, field)?;
+                    Ok(NetworkEndpointDetails {
+                        name: string_field(details, &["Name"], field, Origin::Effective)?,
+                    })
+                })?,
+            })
+        })
+        .collect()
+}
+
 fn network_mode(value: &Value) -> Result<NetworkModeObservation, DecodeError> {
     let native_value = value
         .as_str()
@@ -1218,6 +1259,13 @@ fn network(root: &Value, reference: ResourceRef) -> Result<NetworkObservation, D
             &["Id"],
             FieldPath::Network { index: 0 },
             Origin::RuntimeAssigned,
+        )?,
+        active_endpoints: observed(
+            root,
+            &["Containers"],
+            FieldPath::Network { index: 0 },
+            Origin::RuntimeAssigned,
+            active_network_endpoints,
         )?,
         name: string_field(
             root,

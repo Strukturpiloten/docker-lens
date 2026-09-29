@@ -35,6 +35,7 @@ SOURCE_PROBES = (
     "IdentityFieldsOracle", "PortBindingsOracle",
     "MultipleHostIpBindingsOracle", "MountEnvironmentOracle",
     "HealthRestartOracle", "SelectedFieldOrigins",
+    "NetworkActiveMembership", "NetworkStoppedMembershipBoundary",
 )
 NETWORK_PROBES = (
     "ExternalNetworkReference", "InternalBridgeNetworkCreate",
@@ -44,6 +45,8 @@ NETWORK_PROBES = (
     "NetworkBridgeMasquerade", "NetworkBridgeHostBindingIp",
     "NetworkCreateLabels", "NetworkPrimaryAliases", "NetworkSecondaryAliases",
     "NetworkStaticIpv4", "NetworkStaticIpv6", "NetworkSecondaryConnect",
+    "NetworkBridgeIccDisabled", "NetworkBridgeMasqueradeEnabled",
+    "NetworkCreateLabelsValueDomain",
 )
 VOLUME_PROBES = (
     "ExistingVolumePrerequisite", "ExistingVolumeTargetIdentity",

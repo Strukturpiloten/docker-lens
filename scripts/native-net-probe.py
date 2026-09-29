@@ -34,6 +34,25 @@ else:
 print(outcome)
 sys.exit(0 if outcome == 'refused' else 1)
 """
+IPV6_SOCKET_SCRIPT = """import socket
+outcome = 'tcp6_unavailable'
+try:
+    with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as listener:
+        outcome = 'bind_unavailable'
+        listener.settimeout(1)
+        listener.bind(('::1', 0))
+        listener.listen(1)
+        outcome = 'loopback_unavailable'
+        with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as client:
+            client.settimeout(1)
+            client.connect(('::1', listener.getsockname()[1]))
+            accepted, _ = listener.accept()
+            accepted.close()
+            outcome = 'available'
+except (OSError, TimeoutError):
+    pass
+print(outcome)
+"""
 
 
 class ProbeFailure(Exception):
@@ -168,6 +187,8 @@ def verified_process(outer: str, run_id: str, expected: tuple[str, int, str]):
 def probe_command(mode: str, argument: str | None) -> list[str]:
     if mode == "tcp_refusal" and argument is None:
         return [sys.executable, "-c", TCP_REFUSAL_SCRIPT]
+    if mode == "ipv6_socket" and argument is None:
+        return [sys.executable, "-c", IPV6_SOCKET_SCRIPT]
     if mode == "curl_version" and argument is None:
         return ["curl", "--version"]
     if mode == "bash_version" and argument is None:

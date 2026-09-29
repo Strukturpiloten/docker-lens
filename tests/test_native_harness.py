@@ -4,6 +4,7 @@ import os
 import re
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,6 +13,49 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class NativeHarnessTests(unittest.TestCase):
+    def test_network_oracle_diagnostics_are_closed_and_do_not_hide_failure(self) -> None:
+        source = (ROOT / "src/native_network_tests.rs").read_text(encoding="utf-8")
+        negative_cli = source.split("fn cli(args:", 1)[1].split("fn network_cli_failure_category", 1)[0]
+        self.assertNotIn("DOCKERLENS_NATIVE_NETWORK_CLI_DIAG", negative_cli)
+        positive_cli = source.split("fn cli_ok(args:", 1)[1].split("struct BoundedDnsCliOutput", 1)[0]
+        self.assertIn("DOCKERLENS_NATIVE_NETWORK_CLI_DIAG", positive_cli)
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_network_tests::live_network_render_matches_engine: test'
+else
+  echo 'DOCKERLENS_NATIVE_CHECK: network_oracle_alternate_create' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: network_oracle_private' >&2
+  echo 'DOCKERLENS_NATIVE_NETWORK_CLI_DIAG: exit=other category=bridge_filter' >&2
+  echo 'DOCKERLENS_NATIVE_NETWORK_CLI_DIAG: exit=other category=private-canary' >&2
+  echo 'private-canary raw native output' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 101
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            result = subprocess.run(
+                [str(ROOT / "scripts/run-exact-native-test.sh"), "native_network",
+                 "live_network_render_matches_engine"],
+                env=env, capture_output=True, text=True, timeout=10,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("network_oracle_alternate_create", result.stderr)
+            self.assertIn("exit=other category=bridge_filter", result.stderr)
+            self.assertNotIn("private-canary", result.stdout + result.stderr)
+            self.assertNotIn("network_oracle_private", result.stdout + result.stderr)
+
+    def test_host_network_prerequisite_runs_before_owned_resources(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
+        preflight = 'python3 "$script_dir/native-bridge-prerequisite.py"'
+        self.assertIn(preflight, source)
+        self.assertLess(source.index(preflight), source.index('run_dir=$(mktemp -d'))
+        self.assertNotIn("sysctl -w", source)
+        self.assertNotIn("DOCKER_IGNORE_BR_NETFILTER_ERROR", source)
+
     def test_failure_exposes_only_selected_native_panic_location(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             bin_dir = Path(directory)
@@ -54,7 +98,6 @@ fi
                         self.assertIn("source=native_network_tests line=1931 column=5", result.stderr)
                     for private in ("protected-native-canary", "protected-name-canary", "/private/source", "(342)"):
                         self.assertNotIn(private, result.stdout + result.stderr)
-
     def test_isolation_positive_controls_query_ipv4_before_negative_controls(self) -> None:
         source = (ROOT / "src/native_network_tests.rs").read_text(encoding="utf-8")
         markers = [
@@ -359,8 +402,8 @@ else
   echo 'DOCKERLENS_NATIVE_CHECK: container_health_disabled_private'
   echo 'DOCKERLENS_NATIVE_HTTP_DIAG: exit=other category=connection_refused'
   echo 'DOCKERLENS_NATIVE_HTTP_DIAG: exit=other category=private'
-  echo 'DOCKERLENS_NATIVE_IPV6_DIAG: local_service=fail'
-  echo 'DOCKERLENS_NATIVE_IPV6_DIAG: local_service=private'
+  echo 'DOCKERLENS_NATIVE_IPV6_DIAG: local_service=fail inner_all=enabled inner_lo=disabled outer_tcp6=bind_unavailable curl_exit=7'
+  echo 'DOCKERLENS_NATIVE_IPV6_DIAG: local_service=private inner_all=enabled inner_lo=disabled outer_tcp6=bind_unavailable curl_exit=7'
   echo 'DOCKERLENS_NATIVE_ISOLATION_DIAG: result=connected'
   echo 'DOCKERLENS_NATIVE_ISOLATION_DIAG: result=private'
   echo 'DOCKERLENS_NATIVE_NAMESPACE_DIAG: category=changed'
@@ -380,10 +423,30 @@ fi
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("container_health_disabled_rendered_wait", result.stderr)
             self.assertIn("exit=other category=connection_refused", result.stderr)
-            self.assertIn("local_service=fail", result.stderr)
+            self.assertIn(
+                "local_service=fail inner_all=enabled inner_lo=disabled outer_tcp6=bind_unavailable curl_exit=7",
+                result.stderr,
+            )
             self.assertIn("DOCKERLENS_NATIVE_ISOLATION_DIAG: result=connected", result.stderr)
             self.assertIn("DOCKERLENS_NATIVE_NAMESPACE_DIAG: category=changed", result.stderr)
             self.assertNotIn("private", result.stdout + result.stderr)
+
+    def test_health_image_uses_run_owned_create_commit_and_closed_stage(self) -> None:
+        source = (ROOT / "src/native_container_tests.rs").read_text(encoding="utf-8")
+        health = source.split("fn image_with_failing_health(", 1)[1].split("\n}\n", 1)[0]
+        for token in (
+            '"health-default-source"', '"--health-cmd=/bin/false"',
+            '"--health-interval=1s"', '"--health-timeout=1s"',
+            '"--health-retries=2"', '"commit".into()',
+            '"Interval", "Timeout", "Retries"',
+            '"io.dockerlens.native-run"', 'self.delete(&source_id);',
+        ):
+            self.assertIn(token, health)
+        self.assertNotIn('"build".into()', health)
+        self.assertNotIn("fn cli_with_stdin", source)
+        runner = (ROOT / "scripts/run-exact-native-test.sh").read_text(encoding="utf-8")
+        self.assertIn("health_disabled(_(image_commit|", runner)
+        self.assertNotIn("health_disabled(_(image_build|", runner)
 
     def test_native_test_output_limit_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -449,6 +512,32 @@ fi
         self.assertLess(source.index(selected), source.index(manifest))
         self.assertIn('"$NATIVE_NETWORK_PROBES_PATH"', source)
 
+    def test_network_option_value_and_label_controls_are_closed(self) -> None:
+        source = (ROOT / "src/native_network_tests.rs").read_text(encoding="utf-8")
+        version = (ROOT / "src/version.rs").read_text(encoding="utf-8")
+        self.assertIn('"NetworkBridgeIccDisabled"', source)
+        self.assertIn('"NetworkBridgeMasqueradeEnabled"', source)
+        self.assertIn('"NetworkCreateLabelsValueDomain"', source)
+        self.assertIn('Self::NetworkBridgeIccDisabled,', version)
+        self.assertIn('Self::NetworkBridgeMasqueradeEnabled,', version)
+        self.assertIn('"com.docker.network.bridge.enable_icc=false"', source)
+        self.assertIn('"com.docker.network.bridge.enable_ip_masquerade=true"', source)
+        self.assertIn('NetworkLabel::new(EMPTY_LABEL_KEY.as_bytes().to_vec(), Vec::new())', source)
+        self.assertIn('SPECIAL_LABEL_VALUE.as_bytes().to_vec()', source)
+        self.assertIn('oracle_control_body["Labels"] == expected_labels', source)
+        self.assertIn('control_request["body"] == expected_option_control_body(&control, false)', source)
+        self.assertIn('enabled_request["body"] == expected_option_control_body(&control_enabled, true)', source)
+        self.assertIn('matched["Options"]["com.docker.network.bridge.enable_icc"] = json!("true")', source)
+        self.assertIn('control_body["Labels"] == expected_labels', source)
+        enabled = source.index('backend_http.as_slice()')
+        disabled = source.index('ICC-disabled control must block healthy same-bridge peers')
+        self.assertLess(enabled, disabled)
+        self.assertIn('"http://127.0.0.1:8080/"', source[enabled:disabled])
+        self.assertIn('let cross_url = format!("http://{server_ip}:8080/")', source[enabled:disabled])
+        self.assertIn('let enabled_cross_url = format!("http://{enabled_server_ip}:8080/")', source[enabled:disabled])
+        self.assertIn('enabled_cross_success && enabled_cross_body.as_slice() == b"control-server"', source[enabled:disabled])
+        self.assertIn('!cross_success && cross_body.is_empty()', source[enabled:disabled])
+
     def test_network_failure_marker_is_closed_and_private(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             bin_dir = Path(directory)
@@ -499,6 +588,42 @@ fi
         self.assertLess(source.index(selected), source.index(manifest))
         self.assertIn('"$NATIVE_SOURCE_PROBES_PATH"', source)
         self.assertIn('io.dockerlens.fixture=decoy', source)
+
+    def test_membership_probe_follows_source_and_precedes_manifest(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
+        baseline = 'native_selection live_native_selection_and_source_observations'
+        membership = ('"$(dirname "$0")/run-exact-native-test.sh" native_selection '
+                      'live_network_membership_matches_engine')
+        self.assertEqual(source.count(membership), 1)
+        self.assertLess(source.index(baseline), source.index(membership))
+        self.assertLess(source.index(membership), source.index('python3 "$script_dir/native-evidence.py"'))
+
+    def test_membership_failure_markers_remain_closed_and_private(self) -> None:
+        for marker in ("source_network_membership", "membership_cleanup_unverified"):
+            with self.subTest(marker=marker), tempfile.TemporaryDirectory() as directory:
+                bin_dir = Path(directory)
+                self._tool(bin_dir, "cargo", f'''#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'live_network_membership_matches_engine: test'
+else
+  echo 'private native response' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: {marker}' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: membership_private' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+''')
+                env = os.environ.copy()
+                env["PATH"] = f"{bin_dir}:{env['PATH']}"
+                result = subprocess.run(
+                    [str(ROOT / "scripts/run-exact-native-test.sh"), "native_selection",
+                     "live_network_membership_matches_engine"],
+                    env=env, capture_output=True, text=True, timeout=15, check=False,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f"DOCKERLENS_NATIVE_CHECK: {marker}", result.stderr)
+                self.assertNotIn("private", result.stdout + result.stderr)
 
     def test_existing_volume_probe_is_exact_and_precedes_manifest_emission(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
@@ -991,6 +1116,13 @@ esac
                            "#!/bin/sh\nprintf 'Filesystem 1024-blocks Used Available Capacity Mounted\n'"
                            "\nprintf 'fake 100000000 1 100000000 1%% /tmp\n'\n")
                 self._tool(bin_dir, "podman", fake_podman)
+                # These cleanup fixtures do not test kernel preflight. Admit
+                # that single helper in the fake PATH, leaving every other
+                # Python helper on the real interpreter.
+                self._tool(bin_dir, "python3", "#!/bin/sh\n"
+                           "case \"$1\" in */native-bridge-prerequisite.py) "
+                           "echo DOCKERLENS_NATIVE_HOST_NETWORK:bridge_filter=ready; exit 0;; esac\n"
+                           f'exec "{sys.executable}" "$@"\n')
                 env = os.environ.copy()
                 env.update(PATH=f"{bin_dir}:{env['PATH']}",
                            FAKE_NATIVE_STATE=str(state), FAKE_NATIVE_FAULT=fault)

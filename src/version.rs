@@ -558,7 +558,9 @@ pub(crate) enum NativeCapabilityShape {
     NetworkIpamDefaultDriver,
     NetworkBridgeMtu,
     NetworkBridgeIcc,
+    NetworkBridgeIccDisabled,
     NetworkBridgeMasquerade,
+    NetworkBridgeMasqueradeEnabled,
     NetworkBridgeHostBindingIp,
     NetworkCreateLabels,
     NetworkPrimaryAliases,
@@ -660,7 +662,9 @@ impl NativeCapabilityShape {
             Self::NetworkIpamDefaultDriver => Capability::NetworkIpamDriver,
             Self::NetworkBridgeMtu
             | Self::NetworkBridgeIcc
+            | Self::NetworkBridgeIccDisabled
             | Self::NetworkBridgeMasquerade
+            | Self::NetworkBridgeMasqueradeEnabled
             | Self::NetworkBridgeHostBindingIp => Capability::NetworkOptions,
             Self::NetworkCreateLabels => Capability::NetworkLabels,
             Self::NetworkPrimaryAliases | Self::NetworkSecondaryAliases => {
@@ -760,7 +764,9 @@ impl NativeCapabilityShape {
             Capability::NetworkOptions => Some(&[
                 Self::NetworkBridgeMtu,
                 Self::NetworkBridgeIcc,
+                Self::NetworkBridgeIccDisabled,
                 Self::NetworkBridgeMasquerade,
+                Self::NetworkBridgeMasqueradeEnabled,
                 Self::NetworkBridgeHostBindingIp,
             ]),
             Capability::NetworkLabels => Some(&[Self::NetworkCreateLabels]),
