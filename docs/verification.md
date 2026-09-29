@@ -207,6 +207,30 @@ outcomes fail the lane. This narrow expected negative is not an Engine 20.10,
 API 1.41, rootless, or general IPv6 rule. Upstream fixtures retain their
 positive IPv6 HTTP assertions without a Debian control binding. No profile
 or production capability is admitted by this test-only outcome.
+Run `36523854395` reached the Debian fixed IPv6 CLI fixture but failed before
+the TCP6 boundary because its runtime port-binding array did not satisfy the
+two-entry assertion. The log does not reveal which address or port was
+missing. A new closed diagnostic reports only runtime key state, count and
+exact-address cardinality buckets, and numeric/empty/malformed port-shape
+categories. It never prints a binding, address, assigned port, or native JSON;
+the two-entry assertion and all traffic oracles remain unchanged. In
+particular, an absent ephemeral IPv6 assignment is never guessed.
+The same run reached the command-clear literal on both upstream lanes and
+showed that `Cmd:[]` alone retained the image command rather than clearing it.
+The native oracle therefore requires that control to retain the image command
+and exit 7. A separate control sends an explicit `/bin/sh` entrypoint with
+`Cmd` omitted to show whether the entrypoint override itself removes the
+default command; its inspected arguments and exit status must agree with the
+observed branch. Only the paired explicit `/bin/sh` entrypoint plus `Cmd:[]`
+literal and identically rendered request may count as `ClearCommand`: each
+must inspect with exact entrypoint, `Config.Cmd` explicitly `[]` or `null`,
+runtime `Path=/bin/sh` and `Args=[]`, and exit 0. This proves only conditional
+no-argument behavior, not that `Cmd:[]` alone clears a command. `ClearEntrypoint`
+remains a separate native shape. Closed substage and command-shape diagnostics
+report failures without native values. Even successful native evidence does
+not admit a generic production `CommandClear` capability: #30 must first
+reject clearing with inherited or cleared entrypoint, and catalog admission
+requires separate review and an exact passing candidate.
 
 The manifest emitter requires both Debian API 1.41 start-interval negatives,
 accepts each of the two IPv6 fixture outcomes independently only on the

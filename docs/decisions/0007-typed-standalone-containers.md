@@ -32,6 +32,19 @@ inferred generic API floor: only an exact profile with independently reviewed
 native evidence can admit that branch. All new command and health branches
 likewise remain unadmitted by the historical profiles.
 
+The native `ClearCommand` oracle is conditional. An isolated Engine request
+with `Cmd:[]` and inherited entrypoint must retain the image command and its
+exit-7 behavior; no generic clear claim follows from that JSON field. The
+positive native shape instead pairs `Cmd:[]` with an explicitly authored,
+nonempty `/bin/sh` entrypoint and requires an empty effective command, exact
+runtime no-argument path, and exit 0 from both literal and rendered requests.
+A separate explicit-entrypoint request omitting `Cmd` distinguishes the
+entrypoint override's default effect, so the paired result is not attributed
+to `Cmd:[]` alone. Before any production `CommandClear` admission, #30 must
+reject that intent with inherited or cleared entrypoint and an independent
+review must accept exact passing native evidence. This does not alter or admit
+the separate `EntrypointClear` shape.
+
 Protected typed target fields cover labels, user, working directory, hostname,
 tmpfs mounts, read-only root filesystem, init, stop behavior, resource limits,
 devices, security and identity settings, resolver entries, and logging. They

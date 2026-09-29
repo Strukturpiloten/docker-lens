@@ -332,6 +332,9 @@ else
   echo 'DOCKERLENS_NATIVE_API_DIAG: status=protected-secret' >&2
   echo 'DOCKERLENS_NATIVE_IPV6_BOUNDARY_DIAG: result=refused' >&2
   echo 'DOCKERLENS_NATIVE_IPV6_BOUNDARY_DIAG: result=protected-secret' >&2
+  echo 'DOCKERLENS_NATIVE_PORT_BINDINGS_DIAG: key=array count=one ipv4=one ipv6=zero other=zero v4_port=nonzero v6_port=absent' >&2
+  echo 'DOCKERLENS_NATIVE_PORT_BINDINGS_DIAG: key=array count=protected-secret ipv4=one ipv6=zero other=zero v4_port=nonzero v6_port=absent' >&2
+  echo 'DOCKERLENS_NATIVE_PORT_BINDINGS_DIAG: key=array count=one ipv4=one ipv6=zero other=zero v4_port=nonzero v6_port=absent raw=protected-secret' >&2
   echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
   exit 23
 fi
@@ -360,6 +363,40 @@ fi
                     self.assertIn("DOCKERLENS_NATIVE_CLI_DIAG: exit=other stderr=address_family", result.stderr)
                     self.assertIn("DOCKERLENS_NATIVE_API_DIAG: status=conflict", result.stderr)
                     self.assertIn("DOCKERLENS_NATIVE_IPV6_BOUNDARY_DIAG: result=refused", result.stderr)
+                    self.assertIn("DOCKERLENS_NATIVE_PORT_BINDINGS_DIAG: key=array count=one ipv4=one ipv6=zero other=zero v4_port=nonzero v6_port=absent", result.stderr)
+                    self.assertNotIn("protected-secret", result.stdout + result.stderr)
+
+    def test_command_clear_stages_and_diagnostic_are_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_container_tests::live_container_settings_match_engine: test'
+else
+  echo "DOCKERLENS_NATIVE_CHECK: container_clear_$TEST_STAGE" >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: container_clear_protected-secret' >&2
+  echo 'DOCKERLENS_NATIVE_CLEAR_DIAG: phase=paired cmd=null entrypoint=shell path=shell args=empty' >&2
+  echo 'DOCKERLENS_NATIVE_CLEAR_DIAG: phase=paired cmd=protected-secret entrypoint=shell path=shell args=empty' >&2
+  echo 'DOCKERLENS_NATIVE_CLEAR_DIAG: phase=paired cmd=null entrypoint=shell path=shell args=empty raw=protected-secret' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            for stage in ("baseline", "cmd_alone", "override_omit", "paired_literal",
+                          "rendered", "entrypoint"):
+                with self.subTest(stage=stage):
+                    env["TEST_STAGE"] = stage
+                    result = subprocess.run(
+                        [str(ROOT / "scripts/run-exact-native-test.sh"), "native_container",
+                         "live_container_settings_match_engine"],
+                        env=env, capture_output=True, text=True, timeout=15, check=False,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(f"container_clear_{stage}", result.stderr)
+                    self.assertIn("DOCKERLENS_NATIVE_CLEAR_DIAG: phase=paired cmd=null entrypoint=shell path=shell args=empty", result.stderr)
                     self.assertNotIn("protected-secret", result.stdout + result.stderr)
 
     def test_ipv6_probe_name_and_repeated_ipv4_oracle_are_live_and_bounded(self) -> None:

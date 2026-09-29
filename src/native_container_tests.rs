@@ -1471,10 +1471,91 @@ fn assert_configured_binding_count(inspected: &Value, key: &str, count: usize) {
     );
 }
 
+fn binding_cardinality(count: usize) -> &'static str {
+    match count {
+        0 => "zero",
+        1 => "one",
+        2 => "two",
+        _ => "many",
+    }
+}
+
+fn runtime_port_shape(bindings: &[&Value]) -> &'static str {
+    match bindings {
+        [] => "absent",
+        [binding] => match binding["HostPort"].as_str() {
+            Some("") => "empty",
+            Some("0") => "zero",
+            Some(value) if value.parse::<u16>().is_ok_and(|port| port > 0) => "nonzero",
+            _ => "malformed",
+        },
+        _ => "multiple",
+    }
+}
+
+fn closed_runtime_binding_diagnostic(inspected: &Value, key: &str) -> String {
+    let binding = inspected["NetworkSettings"]["Ports"].get(key);
+    let state = match binding {
+        None => "missing",
+        Some(Value::Null) => "null",
+        Some(Value::Array(_)) => "array",
+        Some(_) => "other",
+    };
+    let entries = binding.and_then(Value::as_array);
+    let ipv4: Vec<_> = entries
+        .into_iter()
+        .flatten()
+        .filter(|item| item["HostIp"] == "127.0.0.1")
+        .collect();
+    let ipv6: Vec<_> = entries
+        .into_iter()
+        .flatten()
+        .filter(|item| item["HostIp"] == "::1")
+        .collect();
+    let count = entries.map_or(0, Vec::len);
+    let other = count.saturating_sub(ipv4.len() + ipv6.len());
+    format!(
+        "DOCKERLENS_NATIVE_PORT_BINDINGS_DIAG: key={state} count={} ipv4={} ipv6={} other={} v4_port={} v6_port={}",
+        binding_cardinality(count),
+        binding_cardinality(ipv4.len()),
+        binding_cardinality(ipv6.len()),
+        binding_cardinality(other),
+        runtime_port_shape(&ipv4),
+        runtime_port_shape(&ipv6),
+    )
+}
+
+#[test]
+fn runtime_binding_diagnostic_is_closed_and_value_free() {
+    let inspected = json!({"NetworkSettings":{"Ports":{"8083/tcp":[
+        {"HostIp":"127.0.0.1","HostPort":"18113","Secret":"protected-secret"},
+        {"HostIp":"protected-secret","HostPort":"protected-secret"}
+    ],"8084/tcp":null}}});
+    let diagnostic = closed_runtime_binding_diagnostic(&inspected, "8083/tcp");
+    assert_eq!(
+        diagnostic,
+        "DOCKERLENS_NATIVE_PORT_BINDINGS_DIAG: key=array count=two ipv4=one ipv6=zero other=one v4_port=nonzero v6_port=absent"
+    );
+    assert!(!diagnostic.contains("protected-secret"));
+    assert!(!diagnostic.contains("18113"));
+    assert!(closed_runtime_binding_diagnostic(&inspected, "8084/tcp").contains("key=null"));
+    assert!(closed_runtime_binding_diagnostic(&inspected, "8085/tcp").contains("key=missing"));
+    assert_eq!(
+        runtime_port_shape(&[&json!({"HostPort":"private"})]),
+        "malformed"
+    );
+}
+
 fn assigned_port(inspected: &Value, key: &str, host_ip: &str, expected_bindings: usize) -> u16 {
     let bindings = inspected["NetworkSettings"]["Ports"][key]
         .as_array()
-        .expect("runtime port bindings");
+        .unwrap_or_else(|| {
+            eprintln!("{}", closed_runtime_binding_diagnostic(inspected, key));
+            panic!("runtime port bindings are absent or malformed");
+        });
+    if bindings.len() != expected_bindings {
+        eprintln!("{}", closed_runtime_binding_diagnostic(inspected, key));
+    }
     assert_eq!(
         bindings.len(),
         expected_bindings,
@@ -1484,6 +1565,9 @@ fn assigned_port(inspected: &Value, key: &str, host_ip: &str, expected_bindings:
         .iter()
         .filter(|binding| binding["HostIp"] == host_ip)
         .collect();
+    if matches.len() != 1 {
+        eprintln!("{}", closed_runtime_binding_diagnostic(inspected, key));
+    }
     assert_eq!(
         matches.len(),
         1,
@@ -1491,10 +1575,12 @@ fn assigned_port(inspected: &Value, key: &str, host_ip: &str, expected_bindings:
     );
     let port: u16 = matches[0]["HostPort"]
         .as_str()
-        .expect("runtime host port string")
-        .parse()
-        .expect("numeric runtime host port");
-    assert!(port > 0, "nonzero runtime host port");
+        .and_then(|value| value.parse().ok())
+        .filter(|port| *port > 0)
+        .unwrap_or_else(|| {
+            eprintln!("{}", closed_runtime_binding_diagnostic(inspected, key));
+            panic!("nonzero numeric runtime host port required");
+        });
     port
 }
 
@@ -2544,6 +2630,85 @@ fn probe_health_start_period_zero(run: &mut NativeRun, evidence: &mut ProbeEvide
     evidence.positive("HealthStartPeriodZero");
 }
 
+fn explicit_no_arg_shell(inspected: &Value) -> bool {
+    let cmd_empty = match inspected["Config"].get("Cmd") {
+        Some(Value::Null) => true,
+        Some(Value::Array(values)) => values.is_empty(),
+        _ => false,
+    };
+    cmd_empty
+        && inspected["Config"]["Entrypoint"] == json!(["/bin/sh"])
+        && inspected["Path"] == "/bin/sh"
+        && inspected["Args"] == json!([])
+}
+
+fn closed_clear_diagnostic(inspected: &Value, phase: &'static str) -> String {
+    assert!(matches!(
+        phase,
+        "alone" | "override_omit" | "paired" | "rendered"
+    ));
+    let cmd = match inspected["Config"].get("Cmd") {
+        None => "missing",
+        Some(Value::Null) => "null",
+        Some(Value::Array(values)) if values.is_empty() => "empty_array",
+        Some(value) if *value == json!(["-c", "exit 7"]) => "image_default",
+        Some(_) => "other",
+    };
+    let entrypoint = match inspected["Config"].get("Entrypoint") {
+        None => "missing",
+        Some(value) if *value == json!(["/bin/sh"]) => "shell",
+        Some(_) => "other",
+    };
+    let path = match inspected.get("Path") {
+        None => "missing",
+        Some(Value::String(value)) if value == "/bin/sh" => "shell",
+        Some(_) => "other",
+    };
+    let args = match inspected.get("Args") {
+        None => "missing",
+        Some(Value::Array(values)) if values.is_empty() => "empty",
+        Some(value) if *value == json!(["-c", "exit 7"]) => "image_default",
+        Some(_) => "other",
+    };
+    format!(
+        "DOCKERLENS_NATIVE_CLEAR_DIAG: phase={phase} cmd={cmd} entrypoint={entrypoint} path={path} args={args}"
+    )
+}
+
+fn mark_clear_stage(phase: &'static str) {
+    assert!(matches!(
+        phase,
+        "baseline" | "cmd_alone" | "override_omit" | "paired_literal" | "rendered" | "entrypoint"
+    ));
+    eprintln!("DOCKERLENS_NATIVE_CHECK: container_clear_{phase}");
+}
+
+#[test]
+fn command_clear_requires_explicit_no_arg_runtime_and_closed_diagnostic() {
+    for command in [json!([]), Value::Null] {
+        let inspected = json!({
+            "Config":{"Cmd":command,"Entrypoint":["/bin/sh"]},
+            "Path":"/bin/sh","Args":[]
+        });
+        assert!(explicit_no_arg_shell(&inspected));
+    }
+    for inspected in [
+        json!({"Config":{"Entrypoint":["/bin/sh"]},"Path":"/bin/sh","Args":[]}),
+        json!({"Config":{"Cmd":[""],"Entrypoint":["/bin/sh"]},"Path":"/bin/sh","Args":[]}),
+        json!({"Config":{"Cmd":[],"Entrypoint":["/bin/sh"]},"Path":"/bin/sh","Args":["private"]}),
+        json!({"Config":{"Cmd":[],"Entrypoint":["/bin/sh"]},"Path":"private","Args":[]}),
+    ] {
+        assert!(!explicit_no_arg_shell(&inspected));
+    }
+    let private = json!({"Config":{"Cmd":["protected-secret"],"Entrypoint":["protected-secret"]},"Path":"protected-secret","Args":["protected-secret"]});
+    let diagnostic = closed_clear_diagnostic(&private, "paired");
+    assert_eq!(
+        diagnostic,
+        "DOCKERLENS_NATIVE_CLEAR_DIAG: phase=paired cmd=other entrypoint=other path=other args=other"
+    );
+    assert!(!diagnostic.contains("protected-secret"));
+}
+
 fn probe_clear_and_start_interval(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
     eprintln!("DOCKERLENS_NATIVE_CHECK: container_clear");
     // Two separate task-owned derivatives make image inheritance observable.
@@ -2556,42 +2721,70 @@ fn probe_clear_and_start_interval(run: &mut NativeRun, evidence: &mut ProbeEvide
         json!(["/bin/sh"]),
         json!(["-c", "exit 7"]),
     );
+    mark_clear_stage("baseline");
     let default = run.cli_create_image("command-default-oracle", &[], &command_image, &[]);
     let default_id = default["Id"].as_str().unwrap().to_owned();
     assert_eq!(default["Config"]["Cmd"], json!(["-c", "exit 7"]));
     assert_eq!(start_and_wait(run, &default_id), 7);
+    mark_clear_stage("cmd_alone");
     let (literal_id, literal) = run.literal_create(
         "clear-command-literal",
         json!({"Image":command_image,"Cmd":[]}),
     );
-    assert_ne!(literal["Config"]["Cmd"], default["Config"]["Cmd"]);
+    eprintln!("{}", closed_clear_diagnostic(&literal, "alone"));
+    assert_eq!(literal["Config"]["Cmd"], default["Config"]["Cmd"]);
     assert_eq!(
         literal["Config"]["Entrypoint"],
         default["Config"]["Entrypoint"]
     );
-    assert_eq!(start_and_wait(run, &literal_id), 0);
+    assert_eq!(literal["Path"], "/bin/sh");
+    assert_eq!(literal["Args"], json!(["-c", "exit 7"]));
+    assert_eq!(start_and_wait(run, &literal_id), 7);
+    mark_clear_stage("override_omit");
+    let (omitted_id, omitted) = run.literal_create(
+        "clear-command-override-omit",
+        json!({"Image":command_image,"Entrypoint":["/bin/sh"]}),
+    );
+    eprintln!("{}", closed_clear_diagnostic(&omitted, "override_omit"));
+    assert_eq!(omitted["Config"]["Entrypoint"], json!(["/bin/sh"]));
+    if omitted["Config"]["Cmd"] == default["Config"]["Cmd"] {
+        assert_eq!(omitted["Path"], "/bin/sh");
+        assert_eq!(omitted["Args"], json!(["-c", "exit 7"]));
+        assert_eq!(start_and_wait(run, &omitted_id), 7);
+    } else {
+        assert!(explicit_no_arg_shell(&omitted));
+        assert_eq!(start_and_wait(run, &omitted_id), 0);
+    }
+    mark_clear_stage("paired_literal");
+    let (paired_id, paired) = run.literal_create(
+        "clear-command-paired-literal",
+        json!({"Image":command_image,"Entrypoint":["/bin/sh"],"Cmd":[]}),
+    );
+    eprintln!("{}", closed_clear_diagnostic(&paired, "paired"));
+    assert!(explicit_no_arg_shell(&paired));
+    assert_eq!(start_and_wait(run, &paired_id), 0);
     let mut container = bare_container(&command_image);
     container.command = ImageCommand::Clear;
+    container.entrypoint = ImageCommand::Exec(vec![argument("/bin/sh")]);
     let expected_body = json!({
-        "Image":command_image, "Cmd":[],
+        "Image":command_image, "Cmd":[], "Entrypoint":["/bin/sh"],
         "Labels":{"io.dockerlens.native-run":run.run_id}, "HostConfig":{}
     });
+    mark_clear_stage("rendered");
     let (id, body, inspected) = run.rendered_create(
         "clear-command-rendered",
         container,
-        &[Capability::CommandClear],
+        &[Capability::CommandClear, Capability::Entrypoint],
         expected_body,
     );
     assert_eq!(body["Cmd"], json!([]));
-    assert!(body.get("Entrypoint").is_none());
-    assert_eq!(inspected["Config"]["Cmd"], literal["Config"]["Cmd"]);
-    assert_eq!(
-        inspected["Config"]["Entrypoint"],
-        literal["Config"]["Entrypoint"]
-    );
+    assert_eq!(body["Entrypoint"], json!(["/bin/sh"]));
+    eprintln!("{}", closed_clear_diagnostic(&inspected, "rendered"));
+    assert!(explicit_no_arg_shell(&inspected));
     assert_eq!(start_and_wait(run, &id), 0);
     evidence.positive("ClearCommand");
 
+    mark_clear_stage("entrypoint");
     let entrypoint_image = run.image_with_defaults(
         "entrypoint-default",
         "[\"/bin/false\"]",
