@@ -1,7 +1,7 @@
 //! Crate-owned admission of four independently reviewed native records.
 //! The JSON is part of the published crate; no caller-supplied bytes enter here.
 
-use std::num::NonZeroU16;
+use std::{collections::HashSet, num::NonZeroU16};
 
 use serde_json::Value;
 
@@ -15,6 +15,55 @@ use crate::version::{
 const SOURCE_CANDIDATE: &str = "d51d7dbfda5ee6f8fefe92605afe8baea3dc504e";
 const SOURCE_RUN: &str =
     "https://github.com/Strukturpiloten/docker-lens/actions/runs/36451790131/attempts/1";
+
+// This is the exact admission set for the currently compiled cohort. A later
+// reviewed cohort must explicitly replace the set for each lane; extending the
+// schema vocabulary or checking in a native probe never changes this list.
+const HISTORICAL_CAPABILITIES: &[Capability] = &[
+    Capability::StandaloneContainer,
+    Capability::NamedVolume,
+    Capability::BridgeNetwork,
+    Capability::PortPublish,
+    Capability::BindMount,
+    Capability::EnvironmentAssignment,
+    Capability::Command,
+    Capability::Entrypoint,
+    Capability::Healthcheck,
+    Capability::RestartPolicy,
+];
+const HISTORICAL_SHAPES: &[NativeCapabilityShape] = &[
+    NativeCapabilityShape::StandaloneCreate,
+    NativeCapabilityShape::NamedVolumeCreate,
+    NativeCapabilityShape::NamedVolumeMountReadWrite,
+    NativeCapabilityShape::NamedVolumeMountReadOnly,
+    NativeCapabilityShape::BridgeNetworkCreate,
+    NativeCapabilityShape::BridgeNetworkAttach,
+    NativeCapabilityShape::FixedTcpPort,
+    NativeCapabilityShape::FixedUdpPort,
+    NativeCapabilityShape::BindMountReadWrite,
+    NativeCapabilityShape::BindMountReadOnly,
+    NativeCapabilityShape::EnvironmentValue,
+    NativeCapabilityShape::EnvironmentEmptyValue,
+    NativeCapabilityShape::ExecCommand,
+    NativeCapabilityShape::ExecEntrypoint,
+    NativeCapabilityShape::ExecHealthcheck,
+    NativeCapabilityShape::RestartNo,
+    NativeCapabilityShape::RestartAlways,
+    NativeCapabilityShape::RestartUnlessStopped,
+    NativeCapabilityShape::RestartOnFailureUnlimited,
+    NativeCapabilityShape::RestartOnFailureLimited,
+];
+
+fn expected_admission(
+    lane: NativeEvidenceLane,
+) -> (&'static [Capability], &'static [NativeCapabilityShape]) {
+    match lane {
+        NativeEvidenceLane::Debian11Rootful
+        | NativeEvidenceLane::Debian11Rootless
+        | NativeEvidenceLane::UpstreamRootful
+        | NativeEvidenceLane::UpstreamRootless => (HISTORICAL_CAPABILITIES, HISTORICAL_SHAPES),
+    }
+}
 
 const RECORDS: [(NativeEvidenceLane, &str, &str); 4] = [
     (
@@ -111,24 +160,59 @@ fn record(lane: NativeEvidenceLane, record_hash: &str, source: &str) -> TargetCa
     let capabilities = data["capabilities"]
         .as_array()
         .expect("reviewed capability array");
-    assert_eq!(capabilities.len(), 10, "all ten reviewed capabilities");
-    let mut facts = Vec::with_capacity(10);
-    let mut shapes = Vec::with_capacity(20);
+    let (expected_capabilities, expected_shapes) = expected_admission(lane);
+    assert_eq!(
+        capabilities.len(),
+        expected_capabilities.len(),
+        "exact reviewed capability count"
+    );
+    let mut facts = Vec::with_capacity(expected_capabilities.len());
+    let mut shapes = Vec::with_capacity(expected_shapes.len());
     for entry in capabilities {
         assert_eq!(entry["state"], "available");
+        let name = capability(required(entry, "name"));
         facts.push(TargetCapabilityFact {
-            capability: capability(required(entry, "name")),
+            capability: name,
             state: CapabilityState::Available,
         });
-        shapes.extend(
-            entry["admitted_shapes"]
-                .as_array()
-                .expect("reviewed shape array")
-                .iter()
-                .map(|shape| native_shape(shape.as_str().expect("reviewed shape name"))),
+        let entry_shapes = entry["admitted_shapes"]
+            .as_array()
+            .expect("reviewed shape array")
+            .iter()
+            .map(|shape| native_shape(shape.as_str().expect("reviewed shape name")))
+            .collect::<Vec<_>>();
+        let required =
+            NativeCapabilityShape::required_for(name).expect("closed reviewed capability shape");
+        assert_eq!(
+            entry_shapes.len(),
+            required.len(),
+            "complete reviewed capability shape count"
         );
+        assert_eq!(
+            entry_shapes.iter().copied().collect::<HashSet<_>>(),
+            required.iter().copied().collect(),
+            "complete reviewed capability shapes"
+        );
+        shapes.extend(entry_shapes);
     }
-    assert_eq!(shapes.len(), 20, "all twenty reviewed renderer shapes");
+    assert_eq!(
+        facts
+            .iter()
+            .map(|fact| fact.capability)
+            .collect::<HashSet<_>>(),
+        expected_capabilities.iter().copied().collect(),
+        "exact reviewed capability set"
+    );
+    assert_eq!(
+        shapes.len(),
+        expected_shapes.len(),
+        "exact reviewed shape count"
+    );
+    assert_eq!(
+        shapes.iter().copied().collect::<HashSet<_>>(),
+        expected_shapes.iter().copied().collect(),
+        "exact reviewed shape set"
+    );
     TargetCapabilityRecord {
         profile: TargetProfile::new(identity, record_key),
         evidence,
@@ -162,44 +246,262 @@ fn digest(value: &str) -> CapabilityEvidenceKey {
     CapabilityEvidenceKey::sha256(bytes).expect("nonempty reviewed digest")
 }
 
+macro_rules! closed_name {
+    ($name:expr, $kind:ident, $($variant:ident),+ $(,)?) => {
+        match $name {
+            $(stringify!($variant) => $kind::$variant,)+
+            _ => panic!("unreviewed catalogue name"),
+        }
+    };
+}
+
 fn capability(name: &str) -> Capability {
-    match name {
-        "StandaloneContainer" => Capability::StandaloneContainer,
-        "NamedVolume" => Capability::NamedVolume,
-        "BridgeNetwork" => Capability::BridgeNetwork,
-        "PortPublish" => Capability::PortPublish,
-        "BindMount" => Capability::BindMount,
-        "EnvironmentAssignment" => Capability::EnvironmentAssignment,
-        "Command" => Capability::Command,
-        "Entrypoint" => Capability::Entrypoint,
-        "Healthcheck" => Capability::Healthcheck,
-        "RestartPolicy" => Capability::RestartPolicy,
-        _ => panic!("unreviewed capability name"),
-    }
+    closed_name!(
+        name,
+        Capability,
+        StandaloneContainer,
+        BindMount,
+        TmpfsMount,
+        NamedVolume,
+        VolumeLabels,
+        VolumeExternalReference,
+        BridgeNetwork,
+        NetworkExternalReference,
+        NetworkInternal,
+        NetworkIpv6,
+        NetworkIpam,
+        NetworkIpamDriver,
+        NetworkOptions,
+        NetworkLabels,
+        NetworkAliases,
+        NetworkStaticAddress,
+        NetworkMultipleAttachment,
+        HostNetwork,
+        PortPublish,
+        PortExposeOnly,
+        PortHostIpv4,
+        PortHostIpv6,
+        PortMultipleBindings,
+        PortEphemeral,
+        UserNamespace,
+        EnvironmentAssignment,
+        Command,
+        CommandClear,
+        Entrypoint,
+        EntrypointClear,
+        Healthcheck,
+        HealthShell,
+        HealthDisabled,
+        HealthStartPeriod,
+        HealthStartInterval,
+        RestartPolicy,
+        ContainerLabels,
+        ContainerUser,
+        ContainerWorkdir,
+        ContainerHostname,
+        ReadOnlyRootfs,
+        ContainerInit,
+        StopSignal,
+        StopTimeout,
+        MemoryLimit,
+        PidsLimit,
+        ShmSize,
+        Ulimits,
+        UlimitNofile,
+        DeviceMappings,
+        LinuxCapabilities,
+        CapAddNetBindService,
+        CapDropSysAdmin,
+        SecurityOptions,
+        Sysctls,
+        SysctlIpv4Forward,
+        SupplementaryGroups,
+        DnsServers,
+        ExtraHosts,
+        LogConfig,
+        LogOptionMaxSize,
+    )
 }
 
 fn native_shape(name: &str) -> NativeCapabilityShape {
-    match name {
-        "StandaloneCreate" => NativeCapabilityShape::StandaloneCreate,
-        "NamedVolumeCreate" => NativeCapabilityShape::NamedVolumeCreate,
-        "NamedVolumeMountReadWrite" => NativeCapabilityShape::NamedVolumeMountReadWrite,
-        "NamedVolumeMountReadOnly" => NativeCapabilityShape::NamedVolumeMountReadOnly,
-        "BridgeNetworkCreate" => NativeCapabilityShape::BridgeNetworkCreate,
-        "BridgeNetworkAttach" => NativeCapabilityShape::BridgeNetworkAttach,
-        "FixedTcpPort" => NativeCapabilityShape::FixedTcpPort,
-        "FixedUdpPort" => NativeCapabilityShape::FixedUdpPort,
-        "BindMountReadWrite" => NativeCapabilityShape::BindMountReadWrite,
-        "BindMountReadOnly" => NativeCapabilityShape::BindMountReadOnly,
-        "EnvironmentValue" => NativeCapabilityShape::EnvironmentValue,
-        "EnvironmentEmptyValue" => NativeCapabilityShape::EnvironmentEmptyValue,
-        "ExecCommand" => NativeCapabilityShape::ExecCommand,
-        "ExecEntrypoint" => NativeCapabilityShape::ExecEntrypoint,
-        "ExecHealthcheck" => NativeCapabilityShape::ExecHealthcheck,
-        "RestartNo" => NativeCapabilityShape::RestartNo,
-        "RestartAlways" => NativeCapabilityShape::RestartAlways,
-        "RestartUnlessStopped" => NativeCapabilityShape::RestartUnlessStopped,
-        "RestartOnFailureUnlimited" => NativeCapabilityShape::RestartOnFailureUnlimited,
-        "RestartOnFailureLimited" => NativeCapabilityShape::RestartOnFailureLimited,
-        _ => panic!("unreviewed renderer shape"),
+    closed_name!(
+        name,
+        NativeCapabilityShape,
+        StandaloneCreate,
+        NamedVolumeCreate,
+        VolumeCreateLabels,
+        NamedVolumeMountReadWrite,
+        NamedVolumeMountReadOnly,
+        ExternalVolumeReference,
+        BridgeNetworkCreate,
+        BridgeNetworkAttach,
+        ExternalNetworkReference,
+        InternalBridgeNetworkCreate,
+        Ipv6BridgeNetworkCreate,
+        NetworkIpamV4,
+        NetworkIpamV6,
+        NetworkIpamGateway,
+        NetworkIpamRange,
+        NetworkIpamAuxiliary,
+        NetworkIpamDefaultDriver,
+        NetworkBridgeMtu,
+        NetworkBridgeIcc,
+        NetworkBridgeIccDisabled,
+        NetworkBridgeMasquerade,
+        NetworkBridgeMasqueradeEnabled,
+        NetworkBridgeHostBindingIp,
+        NetworkCreateLabels,
+        NetworkPrimaryAliases,
+        NetworkSecondaryAliases,
+        NetworkStaticIpv4,
+        NetworkStaticIpv6,
+        NetworkSecondaryConnect,
+        FixedTcpPort,
+        FixedUdpPort,
+        ExposedOnlyPort,
+        FixedIpv4HostPort,
+        EphemeralIpv4HostPort,
+        FixedIpv6HostPort,
+        EphemeralIpv6HostPort,
+        MultipleFixedPortBindings,
+        MultipleEphemeralPortBindings,
+        EphemeralHostPort,
+        BindMountReadWrite,
+        BindMountReadOnly,
+        TmpfsMountReadWrite,
+        TmpfsMountReadOnly,
+        TmpfsMountOptions,
+        EnvironmentValue,
+        EnvironmentEmptyValue,
+        ExecCommand,
+        ClearCommand,
+        ExecEntrypoint,
+        ClearEntrypoint,
+        ExecHealthcheck,
+        ShellHealthcheck,
+        DisabledHealthcheck,
+        HealthStartPeriodZero,
+        HealthStartPeriodPositive,
+        HealthStartIntervalZero,
+        HealthStartIntervalPositive,
+        ContainerCreateLabels,
+        ContainerUser,
+        ContainerWorkdir,
+        ContainerHostname,
+        ReadOnlyRootfsTrue,
+        ReadOnlyRootfsFalse,
+        ContainerInitTrue,
+        ContainerInitFalse,
+        StopSignal,
+        StopTimeoutZero,
+        StopTimeoutPositive,
+        MemoryBytes,
+        MemoryUnlimited,
+        PidsCount,
+        PidsUnlimited,
+        ShmSize,
+        UlimitsFinite,
+        UlimitsUnlimited,
+        UlimitNofile,
+        DeviceMappings,
+        LinuxCapAdd,
+        LinuxCapDrop,
+        CapAddNetBindService,
+        CapDropSysAdmin,
+        NoNewPrivilegesEnabled,
+        NoNewPrivilegesDisabled,
+        Sysctls,
+        SysctlIpv4Forward,
+        SupplementaryGroups,
+        DnsIpv4,
+        DnsIpv6,
+        ExtraHostsIpv4,
+        ExtraHostsIpv6,
+        LogJsonFile,
+        LogLocal,
+        LogNone,
+        LogOptions,
+        LogOptionMaxSize,
+        RestartNo,
+        RestartAlways,
+        RestartUnlessStopped,
+        RestartOnFailureUnlimited,
+        RestartOnFailureLimited,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RECORDS, record};
+    use crate::version::{CapabilityError, TargetCapabilityCatalog};
+    use serde_json::Value;
+
+    fn rejected(mut change: impl FnMut(&mut Value)) {
+        let (lane, digest, source) = RECORDS[0];
+        let mut value: Value = serde_json::from_str(source).unwrap();
+        change(&mut value);
+        let changed = serde_json::to_string(&value).unwrap();
+        assert!(std::panic::catch_unwind(|| record(lane, digest, &changed)).is_err());
+    }
+
+    #[test]
+    fn rejects_unreviewed_or_incomplete_capability_groups() {
+        rejected(|value| value["capabilities"][0]["name"] = "NotACapability".into());
+        rejected(|value| value["capabilities"][0]["name"] = "VolumeLabels".into());
+        rejected(|value| {
+            let entry = value["capabilities"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|entry| entry["name"] == "Command")
+                .unwrap();
+            entry["name"] = "CommandClear".into();
+            entry["admitted_shapes"] = serde_json::json!(["ClearCommand"]);
+        });
+        rejected(|value| {
+            let entries = value["capabilities"].as_array_mut().unwrap();
+            entries[1] = entries[0].clone();
+        });
+        rejected(|value| {
+            value["capabilities"][1]["admitted_shapes"]
+                .as_array_mut()
+                .unwrap()
+                .pop();
+        });
+        rejected(|value| {
+            let shapes = value["capabilities"][1]["admitted_shapes"]
+                .as_array_mut()
+                .unwrap();
+            shapes[1] = shapes[0].clone();
+        });
+        rejected(|value| {
+            value["capabilities"][1]["admitted_shapes"][0] = "FixedTcpPort".into();
+        });
+        rejected(|value| {
+            value["capabilities"][1]["admitted_shapes"][0] = "NotAShape".into();
+        });
+    }
+
+    #[test]
+    fn rejects_forged_source_run_and_candidate() {
+        rejected(|value| value["candidate_sha"] = "a".repeat(40).into());
+        rejected(|value| value["run_url"] = "https://example.invalid/run".into());
+        rejected(|value| value["lane"] = "debian11-rootless".into());
+        rejected(|value| {
+            value["native_manifest_artifact_name"] = "dockerlens-native-debian11-rootless".into();
+        });
+    }
+
+    #[test]
+    fn swapped_mode_is_rejected_by_final_catalog_admission() {
+        let (lane, digest, source) = RECORDS[0];
+        let mut value: Value = serde_json::from_str(source).unwrap();
+        value["identity"]["mode"] = "rootless".into();
+        let source = serde_json::to_string(&value).unwrap();
+        let parsed = record(lane, digest, &source);
+        assert!(matches!(
+            TargetCapabilityCatalog::from_test_records(vec![parsed]),
+            Err(CapabilityError::EvidenceLaneMismatch)
+        ));
     }
 }

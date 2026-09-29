@@ -402,6 +402,17 @@ identity bind the distribution package revision (or upstream origin), reported
 Engine release, advertised maximum API, negotiated acquisition API, tested
 rendering API, and rootful or rootless mode. The run URL includes the attempt
 number. `candidate_sha` names the source tree actually executed by that run.
+The schema recognizes the capability and renderer-shape names already defined
+by DockerLens, but recognition is not admission. The compiled historical
+catalog still requires its exact ten capabilities and twenty shapes per lane.
+A later cohort must explicitly bind its candidate SHA, source run, each lane's
+identity and content digests, and the complete
+`NativeCapabilityShape::required_for` group for every positive capability.
+Each positive reviewed shape list must exactly match the linked raw manifest's
+admitted shapes, and its raw capability outcome must be `available`.
+Duplicate or missing lanes, partial groups, and shapes belonging to another
+capability cannot establish a catalog claim. Preserve historical evidence
+bytes unchanged when preparing that separate review.
 `native_manifest_artifact_name` identifies the run's per-lane artifact;
 `native_manifest_sha256` is the SHA-256 of its sanitized JSON manifest
 emitted by the native harness after success; that manifest contains observed
