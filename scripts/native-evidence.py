@@ -50,6 +50,74 @@ VOLUME_PROBES = (
     "ExistingVolumeReadOnlyData", "ExistingVolumeReadWriteData",
     "ExistingVolumePersistence", "MissingVolumePrecheck",
 )
+CONTAINER_PROBES = (
+    "ExposedOnlyPort", "FixedIpv4HostPort", "FixedIpv6HostPort", "EphemeralIpv6HostPort",
+    "EphemeralIpv4HostPort", "MultipleFixedPortBindings", "MultipleEphemeralPortBindings", "EphemeralHostPort",
+    "ClearCommand", "ClearEntrypoint", "ShellHealthcheck", "DisabledHealthcheck",
+    "HealthStartPeriodPositive", "HealthStartPeriodZero",
+    "HealthStartIntervalPositive", "HealthStartIntervalZero", "ContainerCreateLabels",
+    "ContainerUser", "ContainerWorkdir", "ContainerHostname", "TmpfsMountReadWrite",
+    "TmpfsMountReadOnly", "TmpfsMountOptions", "ReadOnlyRootfsTrue", "ReadOnlyRootfsFalse",
+    "ContainerInitTrue", "ContainerInitFalse", "StopSignal", "StopTimeoutPositive",
+    "StopTimeoutZero", "MemoryBytes", "MemoryUnlimited", "PidsCount", "PidsUnlimited",
+    "ShmSize", "UlimitsFinite", "UlimitsUnlimited", "UlimitNofile", "DeviceMappings",
+    "LinuxCapDrop", "LinuxCapAdd", "CapAddNetBindService", "CapDropSysAdmin",
+    "NoNewPrivilegesEnabled", "NoNewPrivilegesDisabled", "Sysctls", "SysctlIpv4Forward",
+    "SupplementaryGroups", "DnsIpv4", "DnsIpv6", "ExtraHostsIpv4", "ExtraHostsIpv6",
+    "LogJsonFile", "LogLocal", "LogNone", "LogOptions", "LogOptionMaxSize",
+)
+START_INTERVAL_NEGATIVES = [
+    {"shape": "HealthStartIntervalPositive", "reason": "api_1_41_no_start_interval"},
+    {"shape": "HealthStartIntervalZero", "reason": "api_1_41_start_interval_zero_unobservable"},
+]
+
+
+def unique_object(pairs: list[tuple[str, object]]) -> dict:
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate native container evidence key")
+        result[key] = value
+    return result
+
+
+def read_container_probes(path: Path, lane: str) -> dict:
+    # Match the volume-probe boundary: only a bounded, regular, non-symlink
+    # private test file can contribute to a sanitized lane manifest.
+    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    with os.fdopen(descriptor, "rb") as source:
+        metadata = os.fstat(source.fileno())
+        if not stat.S_ISREG(metadata.st_mode) or not 0 < metadata.st_size <= 4096:
+            raise ValueError("invalid native container probe file")
+        payload = source.read(4097)
+    if len(payload) != metadata.st_size:
+        raise ValueError("native container probe file changed")
+    probes = json.loads(payload, object_pairs_hook=unique_object)
+    if (not isinstance(probes, dict) or set(probes) !=
+            {"schema_version", "positive", "expected_negative"}
+            or type(probes["schema_version"]) is not int
+            or probes["schema_version"] != 1):
+        raise ValueError("invalid native container evidence schema")
+    positive = probes["positive"]
+    negative = probes["expected_negative"]
+    if (not isinstance(positive, list) or not isinstance(negative, list)
+            or any(not isinstance(shape, str) for shape in positive)
+            or any(not isinstance(item, dict) or set(item) != {"shape", "reason"}
+                   or not isinstance(item["shape"], str)
+                   or not isinstance(item["reason"], str) for item in negative)):
+        raise ValueError("invalid native container probe outcome")
+    negatives = [item["shape"] for item in negative]
+    if (len(positive) != len(set(positive)) or len(negatives) != len(set(negatives))
+            or set(positive) & set(negatives)
+            or set(positive) | set(negatives) != set(CONTAINER_PROBES)):
+        raise ValueError("native container probe set is incomplete")
+    expected_negative = START_INTERVAL_NEGATIVES if lane.startswith("debian11-") else []
+    if negative != expected_negative:
+        raise ValueError("native container probe outcome contradicts exact lane API")
+    negative_shapes = {item["shape"] for item in expected_negative}
+    expected_positive = [shape for shape in CONTAINER_PROBES if shape not in negative_shapes]
+    return {"schema_version": 1, "positive": expected_positive,
+            "expected_negative": expected_negative}
 
 
 def read_volume_probes(path: Path) -> list[str]:
@@ -71,7 +139,9 @@ def read_volume_probes(path: Path) -> list[str]:
     return list(VOLUME_PROBES)
 
 
-def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path: Path, volume_path: Path, destination: Path, lane: str, image: str,
+def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path: Path,
+         volume_path: Path, container_path: Path,
+         destination: Path, lane: str, image: str,
          mode: str, package: str, candidate_sha: str) -> None:
     if lane not in LANES or mode != lane.rsplit("-", 1)[1]:
         raise ValueError("invalid native lane or mode")
@@ -97,6 +167,8 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
     expected_engines = ("20.10.5", "20.10.5+dfsg1") if lane.startswith("debian11-") else ("29.8.1",)
     if engine not in expected_engines:
         raise ValueError("unexpected Engine release")
+    if maximum != ("1.41" if lane.startswith("debian11-") else "1.56"):
+        raise ValueError("unexpected exact lane API")
     if not all(isinstance(value, str) and re.fullmatch(r"1\.[0-9]{1,3}", value)
                for value in (maximum, minimum)):
         raise ValueError("invalid Engine API bounds")
@@ -148,6 +220,8 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
             or set(network_probes) != set(NETWORK_PROBES)):
         raise ValueError("native network probe set is incomplete")
 
+    container_probes = read_container_probes(container_path, lane)
+
     record = {
         "schema_version": 1,
         "lane": lane,
@@ -167,16 +241,17 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         "source_probes": list(SOURCE_PROBES),
         "network_probes": list(NETWORK_PROBES),
         "volume_probes": volume_probes,
+        "container_probes": container_probes,
     }
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(record, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 12:
-        raise SystemExit("usage: native-evidence.py VERSION_JSON SHAPES_JSON SOURCE_JSON NETWORK_JSON VOLUME_JSON DESTINATION LANE IMAGE MODE PACKAGE SHA")
+    if len(sys.argv) != 13:
+        raise SystemExit("usage: native-evidence.py VERSION_JSON SHAPES_JSON SOURCE_JSON NETWORK_JSON VOLUME_JSON CONTAINER_JSON DESTINATION LANE IMAGE MODE PACKAGE SHA")
     try:
         emit(Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]), Path(sys.argv[4]),
-             Path(sys.argv[5]), Path(sys.argv[6]), *sys.argv[7:])
+             Path(sys.argv[5]), Path(sys.argv[6]), Path(sys.argv[7]), *sys.argv[8:])
     except (ValueError, OSError, json.JSONDecodeError):
         raise SystemExit("native evidence rejected") from None

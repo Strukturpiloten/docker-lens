@@ -178,6 +178,104 @@ fi
                     self.assertNotIn("protected-secret", result.stdout + result.stderr)
                     self.assertNotIn("protected native response", result.stdout + result.stderr)
 
+    def test_container_probe_is_exact_and_precedes_manifest_emission(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
+        selected = '"$(dirname "$0")/run-exact-native-test.sh" native_container live_container_settings_match_engine'
+        network = '"$(dirname "$0")/run-exact-native-test.sh" native_network live_network_render_matches_engine'
+        manifest = 'python3 "$script_dir/native-evidence.py"'
+        self.assertEqual(source.count(selected), 1)
+        self.assertLess(source.index(network), source.index(selected))
+        self.assertLess(source.index(selected), source.index(manifest))
+        self.assertIn('export NATIVE_CONTAINER_PROBES_PATH="$run_dir/container-probes.json"', source)
+        self.assertIn('"$NATIVE_CONTAINER_PROBES_PATH"', source)
+
+    def test_container_failure_marker_is_closed_and_private(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_container_tests::live_container_settings_match_engine: test'
+else
+  echo 'protected native response' >&2
+  echo "DOCKERLENS_NATIVE_CHECK: container_$TEST_MARKER" >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: container_private' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            for marker in (
+                "ports", "ports_ipv6", "identity_health", "health_disabled", "clear",
+                "start_interval", "storage_lifecycle", "resources_security",
+                "resolver_logging",
+            ):
+                with self.subTest(marker=marker):
+                    env["TEST_MARKER"] = marker
+                    result = subprocess.run(
+                        [str(ROOT / "scripts/run-exact-native-test.sh"), "native_container",
+                         "live_container_settings_match_engine"],
+                        env=env, capture_output=True, text=True, timeout=15, check=False,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(f"DOCKERLENS_NATIVE_CHECK: container_{marker}", result.stderr)
+                    self.assertNotIn("private", result.stdout + result.stderr)
+
+    def test_native_test_output_limit_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  if [[ $TEST_PHASE == list ]]; then
+    head -c 300000 /dev/zero
+  else
+    echo 'native_container_tests::live_container_settings_match_engine: test'
+  fi
+else
+  head -c 300000 /dev/zero
+fi
+echo 'private-canary' >&2
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            for phase in ("list", "run"):
+                with self.subTest(phase=phase):
+                    env["TEST_PHASE"] = phase
+                    result = subprocess.run(
+                        [str(ROOT / "scripts/run-exact-native-test.sh"), "native_container",
+                         "live_container_settings_match_engine"],
+                        env=env, capture_output=True, text=True, timeout=15, check=False,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("output exceeded closed byte limit", result.stderr)
+                    self.assertNotIn("private-canary", result.stdout + result.stderr)
+
+    def test_native_test_output_limit_does_not_cap_build_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            artifact = bin_dir / "fake-build-artifact"
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_container_tests::live_container_settings_match_engine: test'
+else
+  head -c 300000 /dev/zero > "$TEST_ARTIFACT_PATH"
+  echo 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;'
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            env["TEST_ARTIFACT_PATH"] = str(artifact)
+            result = subprocess.run(
+                [str(ROOT / "scripts/run-exact-native-test.sh"), "native_container",
+                 "live_container_settings_match_engine"],
+                env=env, capture_output=True, text=True, timeout=15, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(artifact.stat().st_size, 300000)
+
     def test_network_probe_is_exact_and_precedes_manifest_emission(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
         selected = '"$(dirname "$0")/run-exact-native-test.sh" native_network live_network_render_matches_engine'

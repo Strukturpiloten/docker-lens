@@ -71,6 +71,69 @@ access, process identity, health behavior, and resource/security outcomes in
 each claimed mode and API. `StartInterval` needs exact native support and a
 1.41 negative boundary before any catalog admission; no generic introduction
 floor is inferred from Compose documentation.
+
+## Typed container native evidence checkpoint
+
+The isolated `native_container_tests::live_container_settings_match_engine`
+test is separate from the historical target test. It uses the pinned BusyBox
+fixture and task-owned names in the existing private inner daemon. Independent
+Docker CLI creates establish expected native fields before corresponding inert
+renderer bodies are compared against independently authored, closed JSON
+requests, applied only by the test, inspected directly, and checked for live
+effects. Clear command and entrypoint are an explicit exception to the CLI
+oracle: the test derives task-owned local images with nonempty defaults from
+the pinned BusyBox image, then compares independent literal Engine API and
+rendered empty-array creates, inspect results, and distinct inherited-versus-
+cleared process exit codes for command and entrypoint separately.
+The derived images are not downloaded or product dependencies.
+
+The test writes a private schema-1 `container-probes.json` only after every
+compiled expected shape has exactly one closed result and exact resource cleanup
+succeeds. `positive` contains exact `NativeCapabilityShape` names whose closed
+request, independent native inspect, and stated shape-specific effects passed.
+It is a non-admission checkpoint: timing, rotation, and resource-enforcement
+claims must be limited to the effects actually asserted, not inferred from
+acceptance alone. Unlimited nofile must exceed the independently checked
+1024/2048 finite control. NET_BIND_SERVICE is a Docker default: separate
+CLI drop-all and drop-all/add-back controls establish a causal runtime effect
+for the exact Engine and mode, while the rendered request proves its `CapAdd`
+body and inspect value and checks its resulting bit. That rendered bit alone
+does not establish a runtime delta. `expected_negative`
+contains only `{shape,reason}` with two distinct Debian API 1.41 boundaries:
+positive `StartInterval` is `HealthStartIntervalPositive` /
+`api_1_41_no_start_interval`, while explicit zero is
+`HealthStartIntervalZero` / `api_1_41_start_interval_zero_unobservable` because
+its inspect value is indistinguishable from an absent field. The zero probe
+first checks the positive support witness, then sends explicit zero and compares
+both inspected results against an absent-field baseline. Upstream API 1.56 must
+prove both shapes positively, including a healthy container after zero timing.
+An unexpected native rejection,
+transport/start failure, or semantic mismatch fails the lane; it is never
+converted into an unsupported pass. The test-only scoped facts enable an
+inert renderer branch after independent oracle checks and do not authorize a
+production profile. Raw Engine replies, labels, and authored values remain
+private. Native CLI stdout and stderr are each capped at 8 KiB before capture;
+the exact-test wrapper caps its private Cargo/libtest output file at 256 KiB
+before parsing closed diagnostics. Exceeding either cap fails the lane without
+printing raw output. The shared exact runner and manifest emitter own admission of this
+closed output. The runner selects the ignored library test by exact name after
+the other native probes. Only then does the emitter accept a bounded schema-1
+`container_probes` object with 57 unique, disjoint closed outcomes, the
+exact lane-specific start-interval boundary, and no additional fields or raw
+values. Missing, duplicate, overlapping, unexpected, or unexecuted results
+fail without a manifest; these outcomes do not expand `admitted_shapes`.
+
+The 57-shape draft adds explicit zero and false values, unlimited limits,
+IPv6 resolver entries, alternative IPv6 and ephemeral port combinations,
+capability addition, and local/none logging. These definitions are not native
+compatibility evidence until all four exact Engine lanes pass and their results
+are independently reviewed. This checkpoint still does not cover every finite
+field alternative required to admit aggregate capabilities; only the exact
+closed shapes actually asserted can support a future admission decision.
+Rootless or older-API limitations discovered by the probes require an
+independently reviewed negative outcome before the expected set may change.
+BoxFerry's six application routes and a coherent release gate remain separate.
+
 Run `./scripts/check-all.sh --check` for the complete offline gate: format,
 Clippy, a locked all-target check under the minimum Rust release declared by
 `Cargo.toml`, unit and documentation tests, policy tests, and documentation build.
