@@ -11,6 +11,12 @@ impl ResourceRef {
     pub const fn new(local_index: u64) -> Self {
         Self(local_index)
     }
+
+    /// Return the caller-local graph index, never a daemon resource identity.
+    #[must_use]
+    pub const fn local_index(self) -> u64 {
+        self.0
+    }
 }
 
 /// Closed field categories prevent native paths or values appearing in findings.

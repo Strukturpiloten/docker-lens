@@ -1,5 +1,11 @@
 # Verification
 
+The complete inert review artifact has offline exact-byte, schema, order,
+privacy, context-binding, and fail-closed opaque-artifact tests. These verify
+serialization, not destination existence, data migration, or native Engine
+compatibility. See [the version 1 format](complete-artifact.md) and
+[ADR 0009](decisions/0009-complete-inert-artifact.md).
+
 Run `./scripts/format-lint.sh --fix` for local formatting and lint feedback.
 The target-module checkpoint has an exact network request regression alongside
 the existing container and graph tests. These offline checks preserve the
