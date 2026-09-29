@@ -134,15 +134,22 @@ before and after acquisition. The unselected peer must not gain a container
 inspect request. After stopping that peer it repeats the comparison to the
 actual Engine response without assuming that stopped peers remain listed.
 Only successful assertions and verified fixture cleanup append
-`NetworkActiveMembership` and `NetworkStoppedMembershipBoundary` to the original
-fifteen source probes. The emitter requires all seventeen; a failure cannot emit
-partial source evidence. These are source-observation checks, not ownership,
-atomic-snapshot, or target-capability admission. All four exact lanes still
-require genuine passing runs and independent review before compatibility claims.
+`NetworkActiveMembership`, `NetworkStoppedMembershipBoundary`, and
+`ContainerInspectIdOracle` to the original fifteen source probes. The last
+marker follows comparisons of the protected container inspect ID with both the
+canonical narrowed-selection request ID and the direct inspect `Id` for exact
+ID, name, prefix, and label selectors. The emitter requires all eighteen; a
+failure cannot emit partial source evidence. These are source-observation
+checks, not ownership, atomic-snapshot, or target-capability admission. All
+four exact lanes still require genuine passing runs and independent review
+before compatibility claims.
 They cover protected predicate replay closure, canonical list identities,
 inspect response binding (including network-name fallback), explicit resource
 roots, typed inspected network IDs distinct from fallback names and empty
-endpoint IDs, and effective user namespace availability.
+endpoint IDs, and effective user namespace availability. Offline decoder tests
+cover the typed container ID's runtime origin, privacy, and fail-closed invalid
+identity cases, while a matching noncanonical caller-assembled capture remains
+accepted; acquisition tests retain the four-request narrowed-name path.
 The network-inspect membership fixtures additionally check protected canonical
 container-ID keys, entry versus `Name` availability, the 4096-entry bound,
 malformed-value diagnostics, and an unselected active member that does not

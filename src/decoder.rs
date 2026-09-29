@@ -90,6 +90,9 @@ impl std::fmt::Debug for ContainerSummary {
 
 pub struct ContainerObservation {
     pub reference: ResourceRef,
+    /// Request-bound inspect `Id`, not an authored name or ownership proof.
+    /// Caller-assembled captures may retain matching noncanonical IDs.
+    pub id: Observed<ProtectedValue>,
     /// Inspect `Name` is an effective identity, not evidence of who chose it.
     pub name: Observed<ProtectedValue>,
     pub image: Observed<ProtectedValue>,
@@ -1131,6 +1134,7 @@ fn container(root: &Value, reference: ResourceRef) -> Result<ContainerObservatio
     object(root, FieldPath::Other)?;
     Ok(ContainerObservation {
         reference,
+        id: string_field(root, &["Id"], FieldPath::Other, Origin::RuntimeAssigned)?,
         name: string_field(root, &["Name"], FieldPath::ContainerName, Origin::Effective)?,
         image: string_field(
             root,

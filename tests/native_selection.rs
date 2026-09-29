@@ -567,6 +567,7 @@ fn append_membership_probes(directory: &Path) {
     completed.extend([
         "NetworkActiveMembership",
         "NetworkStoppedMembershipBoundary",
+        "ContainerInspectIdOracle",
     ]);
     fs::write(source_path, serde_json::to_vec(&completed).unwrap())
         .expect("private membership source evidence write");
@@ -701,6 +702,29 @@ fn live_native_selection_and_source_observations() {
         assert_eq!(
             inspected_container_ids(&run),
             HashSet::from([selected_id.as_str()])
+        );
+        let inspected_id = run
+            .exchanges()
+            .iter()
+            .find_map(|exchange| match exchange.request() {
+                ReadRequest::InspectContainer(id) => Some(id.as_str()),
+                _ => None,
+            })
+            .expect("narrow selection inspects the canonical container ID");
+        let observed_id = &inventory.containers[0].id;
+        assert_eq!(observed_id.origin, Origin::RuntimeAssigned);
+        assert_eq!(observed_id.availability, Availability::Present);
+        assert!(canonical_container_id(inspected_id));
+        assert_eq!(
+            observed_id.value().unwrap().as_bytes(),
+            inspected_id.as_bytes()
+        );
+        assert_eq!(
+            observed_id.value().unwrap().as_bytes(),
+            oracle_container["Id"]
+                .as_str()
+                .expect("direct inspect ID")
+                .as_bytes()
         );
         assert_eq!(
             run.exchanges()

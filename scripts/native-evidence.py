@@ -36,6 +36,7 @@ SOURCE_PROBES = (
     "MultipleHostIpBindingsOracle", "MountEnvironmentOracle",
     "HealthRestartOracle", "SelectedFieldOrigins",
     "NetworkActiveMembership", "NetworkStoppedMembershipBoundary",
+    "ContainerInspectIdOracle",
 )
 NETWORK_PROBES = (
     "ExternalNetworkReference", "InternalBridgeNetworkCreate",
