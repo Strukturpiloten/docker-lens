@@ -150,7 +150,8 @@ class NativeHarnessTests(unittest.TestCase):
                         result.stderr.strip(),
                         "DOCKERLENS_NATIVE_SIDECAR_SETUP: "
                         f"phase=sidecar_failure category={category} source={origin} "
-                        f"write_stage={expected_stage} state_error={expected_state_error}",
+                        f"write_stage={expected_stage} httpd_stage=unknown "
+                        f"state_error={expected_state_error}",
                     )
                     self.assertNotIn("private-canary", result.stderr)
 
@@ -188,14 +189,28 @@ class NativeHarnessTests(unittest.TestCase):
             "classify_sidecar_error() {", 1
         )[1].split("\n}\nsidecar_failure_diagnostic()", 1)[0] + "\n}\n"
         cases = (
-            ("DOCKERLENS_SIDECAR_STAGE: write_ok\n", "write_ok|unknown"),
-            ("DOCKERLENS_SIDECAR_STAGE: write_failed\n", "write_failed|unknown"),
+            ("DOCKERLENS_SIDECAR_STAGE: write_ok\n", "write_ok|unknown|unknown"),
+            ("DOCKERLENS_SIDECAR_STAGE: write_failed\n", "write_failed|unknown|unknown"),
             ("DOCKERLENS_SIDECAR_STAGE: write_ok\nhttpd: permission denied private-canary\n",
-             "write_ok|permission"),
-            ("prefix DOCKERLENS_SIDECAR_STAGE: write_ok\n", "unknown|unknown"),
+             "write_ok|unknown|permission"),
+            ("DOCKERLENS_SIDECAR_STAGE: write_ok\nDOCKERLENS_SIDECAR_HTTPD: invoked\n",
+             "write_ok|invoked|unknown"),
+            ("DOCKERLENS_SIDECAR_STAGE: write_ok\nDOCKERLENS_SIDECAR_HTTPD: invoked\n"
+             "DOCKERLENS_SIDECAR_HTTPD: returned_nonzero\nprivate-canary\n",
+             "write_ok|returned_nonzero|unknown"),
+            ("DOCKERLENS_SIDECAR_STAGE: write_ok\nDOCKERLENS_SIDECAR_HTTPD: invoked\n"
+             "DOCKERLENS_SIDECAR_HTTPD: returned_zero\n", "write_ok|returned_zero|unknown"),
+            ("DOCKERLENS_SIDECAR_STAGE: write_ok\nDOCKERLENS_SIDECAR_HTTPD: returned_nonzero\n",
+             "write_ok|unknown|unknown"),
+            ("DOCKERLENS_SIDECAR_STAGE: write_failed\nDOCKERLENS_SIDECAR_HTTPD: invoked\n",
+             "write_failed|unknown|unknown"),
+            ("DOCKERLENS_SIDECAR_STAGE: write_ok\nDOCKERLENS_SIDECAR_HTTPD: invoked\n"
+             "DOCKERLENS_SIDECAR_HTTPD: returned_zero\n"
+             "DOCKERLENS_SIDECAR_HTTPD: returned_nonzero\n", "write_ok|unknown|unknown"),
+            ("prefix DOCKERLENS_SIDECAR_STAGE: write_ok\n", "unknown|unknown|unknown"),
             ("DOCKERLENS_SIDECAR_STAGE: write_ok\nDOCKERLENS_SIDECAR_STAGE: write_failed\n",
-             "unknown|unknown"),
-            ("DOCKERLENS_SIDECAR_STAGE: write_ok\n" + "x" * 9000, "unknown|unknown"),
+             "unknown|unknown|unknown"),
+            ("DOCKERLENS_SIDECAR_STAGE: write_ok\n" + "x" * 9000, "unknown|unknown|unknown"),
         )
         for logs, expected in cases:
             with self.subTest(expected=expected, size=len(logs)):
@@ -251,6 +266,12 @@ class NativeHarnessTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 1 if target_is_directory else
                                      42 if httpd_fails else 0)
                     self.assertIn(f"DOCKERLENS_SIDECAR_STAGE: {expected_stage}\n", result.stderr)
+                    if target_is_directory:
+                        self.assertNotIn("DOCKERLENS_SIDECAR_HTTPD:", result.stderr)
+                    else:
+                        self.assertIn("DOCKERLENS_SIDECAR_HTTPD: invoked\n", result.stderr)
+                        returned = "returned_nonzero" if httpd_fails else "returned_zero"
+                        self.assertIn(f"DOCKERLENS_SIDECAR_HTTPD: {returned}\n", result.stderr)
                     self.assertEqual(invoked.exists(), not target_is_directory)
                     if not target_is_directory:
                         self.assertEqual(target.read_text(), "proof-egress")
@@ -1190,7 +1211,9 @@ logs)
   elif [[ $FAKE_NATIVE_FAULT == sidecar_httpd_failed ||
     $FAKE_NATIVE_FAULT == sidecar_conflicting_state_error ]]; then
     echo 'DOCKERLENS_SIDECAR_STAGE: write_ok' >&2
+    echo 'DOCKERLENS_SIDECAR_HTTPD: invoked' >&2
     echo 'httpd: permission denied private-canary' >&2
+    echo 'DOCKERLENS_SIDECAR_HTTPD: returned_nonzero' >&2
   elif [[ $FAKE_NATIVE_FAULT == sidecar_logs_query_error ]]; then
     echo 'DOCKERLENS_SIDECAR_STAGE: write_ok' >&2
     echo 'permission denied private-canary' >&2
@@ -1393,12 +1416,12 @@ esac
                     )
                 if fault == "sidecar_httpd_failed":
                     self.assertIn(
-                        "phase=sidecar_failure category=permission source=logs_query write_stage=write_ok state_error=unknown",
+                        "phase=sidecar_failure category=permission source=logs_query write_stage=write_ok httpd_stage=returned_nonzero state_error=unknown",
                         result.stderr,
                     )
                 if fault == "sidecar_conflicting_state_error":
                     self.assertIn(
-                        "phase=sidecar_failure category=permission source=logs_query write_stage=write_ok state_error=bind_error",
+                        "phase=sidecar_failure category=permission source=logs_query write_stage=write_ok httpd_stage=returned_nonzero state_error=bind_error",
                         result.stderr,
                     )
                     self.assertTrue((state / "state_error_inspected").exists())
@@ -1409,7 +1432,7 @@ esac
                     )
                 if fault == "sidecar_state_error_field":
                     self.assertIn(
-                        "phase=sidecar_failure category=bind_error source=state_error write_stage=unknown state_error=bind_error",
+                        "phase=sidecar_failure category=bind_error source=state_error write_stage=unknown httpd_stage=unknown state_error=bind_error",
                         result.stderr,
                     )
                     self.assertFalse((state / "health-attempted").exists())
