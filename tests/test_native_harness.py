@@ -6,6 +6,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -305,6 +306,42 @@ fi
             self.assertNotIn("private-canary", result.stdout + result.stderr)
             self.assertNotIn("protected native response", result.stdout + result.stderr)
 
+    def test_internal_cleanup_diagnostics_are_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_network_tests::live_internal_network_blocks_external_egress: test'
+else
+  echo 'protected native response' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: network_internal_sidecar' >&2
+  printf '%s\n' "$TEST_ENDPOINT_DIAG" "$TEST_CLEANUP_DIAG" >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            for cleanup, accepted in (
+                ("DOCKERLENS_NATIVE_CLEANUP: internal_proof=pass", True),
+                ("DOCKERLENS_NATIVE_CLEANUP: internal_proof=fail", True),
+                ("DOCKERLENS_NATIVE_CLEANUP: internal_proof=private-canary", False),
+            ):
+                with self.subTest(accepted=accepted):
+                    env["TEST_ENDPOINT_DIAG"] = "DOCKERLENS_NATIVE_ENDPOINT_DIAG: phase=create category=host_mode_unsupported exit=other"
+                    env["TEST_CLEANUP_DIAG"] = cleanup
+                    result = subprocess.run(
+                        [str(ROOT / "scripts/run-exact-native-test.sh"), "native_network",
+                         "live_internal_network_blocks_external_egress"],
+                        env=env, capture_output=True, text=True, timeout=15, check=False,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(cleanup in result.stderr, accepted)
+                    self.assertNotIn("DOCKERLENS_NATIVE_ENDPOINT_DIAG", result.stderr)
+                    self.assertNotIn("private-canary", result.stdout + result.stderr)
+                    self.assertNotIn("protected native response", result.stdout + result.stderr)
+
     def test_network_option_value_and_label_controls_are_closed(self) -> None:
         source = (ROOT / "src/native_network_tests.rs").read_text(encoding="utf-8")
         version = (ROOT / "src/version.rs").read_text(encoding="utf-8")
@@ -565,7 +602,7 @@ fi
     def test_synthetic_bind_fixture_is_writable_but_parent_stays_private(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
         fixture = source.split(
-            "# A random directory, container, and volume belong to exactly this lane.", 1
+            "# A random directory, two containers, network, and volume belong to this lane.", 1
         )[1].split("\nwatchdog_pid=", 1)[0]
         with tempfile.TemporaryDirectory() as temporary:
             env = os.environ.copy()
@@ -766,9 +803,35 @@ case "$command" in
       *GraphRoot*) echo "$state" ;;
       *) exit 3 ;;
     esac ;;
-  container)
-    if [[ $1 == exists && $FAKE_NATIVE_FAULT == container_query_error && -e $state/ran ]]; then exit 125; fi
-    [[ $1 == exists && -e $state/container ]] ;;
+ container)
+ if [[ $1 == exists && $FAKE_NATIVE_FAULT == container_query_error && -e $state/ran ]]; then exit 125; fi
+ if [[ $1 != exists ]]; then exit 4; fi
+ case $2 in
+ dl-native-egress-*) [[ $FAKE_NATIVE_FAULT == sidecar_query_error && -e $state/sidecar ]] && exit 125
+ [[ -e $state/sidecar ]] ;;
+ *) [[ -e $state/container ]] ;;
+ esac ;;
+ network)
+ action=$1; shift
+ case $action in
+ exists) [[ $FAKE_NATIVE_FAULT == network_query_error && -e $state/network ]] && exit 125
+ [[ -e $state/network ]] ;;
+ create) for name; do :; done
+ printf '%s\n' "$name" > "$state/expected-network"
+ touch "$state/network"
+ [[ $FAKE_NATIVE_FAULT == network_create ]] && exit 42
+ echo "$name" ;;
+ inspect) for name; do :; done
+ echo "$name" | sed 's/^dl-native-net-//'
+ [[ $FAKE_NATIVE_FAULT == network_inspect_partial ]] && exit 42
+ exit 0 ;;
+ rm) for name; do :; done
+ read -r expected < "$state/expected-network"
+ [[ $name == "$expected" ]] || exit 66
+ touch "$state/network_removal_attempted"
+ [[ $FAKE_NATIVE_FAULT == network_remains ]] || rm -f "$state/network" ;;
+ *) exit 4 ;;
+ esac ;;
   volume)
     action=$1; shift
     case "$action" in
@@ -785,6 +848,8 @@ case "$command" in
         if [[ $* == *Labels* ]]; then
           for name; do :; done
           echo "$name" | sed 's/^dl-native-data-//'
+          [[ $FAKE_NATIVE_FAULT == volume_inspect_partial ]] && exit 42
+          true
         else echo "$state"; fi ;;
       rm)
         for name; do :; done
@@ -795,35 +860,68 @@ case "$command" in
       *) exit 4 ;;
     esac ;;
   pull) [[ $FAKE_NATIVE_FAULT != pull ]] ;;
-  run)
-    printf '%s\n' "$*" > "$state/run-args"
-    prior=
-    for item in "$@"; do
-      if [[ $prior == --name ]]; then printf '%s\n' "$item" > "$state/expected-container"; fi
-      prior=$item
-    done
-    touch "$state/ran"
-    touch "$state/container"
-    [[ $FAKE_NATIVE_FAULT == unexpected_mount ]] ;;
-  inspect)
-    if [[ $* == *Labels* ]]; then
-      for name; do :; done
-      echo "$name" | sed 's/^dl-native-//'
-    elif [[ $* == *HostConfig.Privileged* ]]; then echo true
+ run)
+ prior=
+ for item in "$@"; do
+ if [[ $prior == --name ]]; then name=$item; fi
+ prior=$item
+ done
+ if [[ $name == dl-native-egress-* ]]; then
+   printf '%s\n' "$*" > "$state/sidecar-run-args"
+   touch "$state/sidecar"
+   [[ $FAKE_NATIVE_FAULT == sidecar_start ]] && exit 42
+   if [[ $FAKE_NATIVE_FAULT == cancel_after_sidecar ]]; then sleep 2; fi
+ else
+   printf '%s\n' "$*" > "$state/run-args"
+   printf '%s\n' "$name" > "$state/expected-container"
+   touch "$state/ran" "$state/container"
+   [[ $FAKE_NATIVE_FAULT == run ]] && exit 42
+ fi
+ exit 0 ;;
+ inspect)
+ if [[ $* == *Labels* ]]; then
+ for name; do :; done
+ if [[ $name == dl-native-egress-* && $FAKE_NATIVE_FAULT == sidecar_inspect_hang ]]; then sleep 30; fi
+ echo "$name" | sed -e 's/^dl-native-egress-//' -e 's/^dl-native-//'
+ if [[ $name == dl-native-egress-* && $FAKE_NATIVE_FAULT == sidecar_inspect_partial ]]; then exit 42; fi
+ if [[ $name == dl-native-* && $name != dl-native-egress-* && $FAKE_NATIVE_FAULT == container_inspect_partial ]]; then exit 42; fi
+ elif [[ $* == *NetworkSettings.Networks* ]]; then
+ for name; do :; done
+ read -r network_name < "$state/expected-network"
+ if [[ $name == dl-native-egress-* ]]; then ip=10.88.0.2; else ip=10.88.0.3; fi
+ printf '{"%s":{"IPAddress":"%s"}}\n' "$network_name" "$ip"
+ elif [[ $* == *State.Running* ]]; then echo true
+ elif [[ $* == *HostConfig.Privileged* ]]; then echo true
     elif [[ $* == *'.Mounts'* ]]; then echo unexpected:/var/lib/docker
-    else exit 4; fi ;;
-  rm)
-    for name; do :; done
-    read -r expected < "$state/expected-container"
-    [[ $name == "$expected" ]] || exit 66
-    touch "$state/container_removal_attempted"
-    [[ $FAKE_NATIVE_FAULT == container_remains ]] || rm -f "$state/container" ;;
+ else exit 4; fi ;;
+ exec)
+ if [[ $FAKE_NATIVE_FAULT == sidecar_health_dead ]]; then exit 42; fi
+ if [[ $FAKE_NATIVE_FAULT == sidecar_health_race && ! -e $state/health-first ]]; then
+   touch "$state/health-first"; exit 42
+ fi
+ echo proof-egress ;;
+ rm)
+ for name; do :; done
+ if [[ $name == dl-native-egress-* ]]; then
+   touch "$state/sidecar_removal_attempted"
+   [[ $FAKE_NATIVE_FAULT == sidecar_remains ]] || rm -f "$state/sidecar"
+ else
+   read -r expected < "$state/expected-container"
+   [[ $name == "$expected" ]] || exit 66
+   touch "$state/container_removal_attempted"
+   [[ $FAKE_NATIVE_FAULT == container_remains ]] || rm -f "$state/container"
+ fi ;;
   *) exit 4 ;;
 esac
 """
         for lane, fault in (
             ("debian11-rootful", "volume"),
             ("debian11-rootful", "pull"),
+            ("debian11-rootful", "network_create"),
+            ("debian11-rootful", "sidecar_start"),
+            ("debian11-rootful", "sidecar_health_dead"),
+            ("debian11-rootful", "sidecar_health_race"),
+            ("debian11-rootful", "cancel_after_sidecar"),
             ("debian11-rootful", "run"),
             ("debian11-rootless", "unexpected_mount"),
             ("upstream-rootful", "unexpected_mount"),
@@ -832,6 +930,15 @@ esac
             ("debian11-rootless", "volume_query_error"),
             ("upstream-rootful", "container_remains"),
             ("upstream-rootless", "volume_remains"),
+            ("upstream-rootful", "sidecar_remains"),
+            ("upstream-rootless", "network_remains"),
+            ("debian11-rootful", "sidecar_query_error"),
+            ("debian11-rootless", "network_query_error"),
+            ("debian11-rootful", "container_inspect_partial"),
+            ("debian11-rootless", "sidecar_inspect_partial"),
+            ("debian11-rootless", "sidecar_inspect_hang"),
+            ("upstream-rootful", "network_inspect_partial"),
+            ("upstream-rootless", "volume_inspect_partial"),
         ):
             with self.subTest(lane=lane, fault=fault), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
@@ -855,18 +962,42 @@ esac
                 env = os.environ.copy()
                 env.update(PATH=f"{bin_dir}:{env['PATH']}",
                            FAKE_NATIVE_STATE=str(state), FAKE_NATIVE_FAULT=fault)
-                result = subprocess.run(
-                    ["bash", str(ROOT / "scripts/native-conformance.sh"), lane],
-                    env=env, capture_output=True, text=True, timeout=15, check=False,
-                )
+                command = ["bash", str(ROOT / "scripts/native-conformance.sh"), lane]
+                if fault == "cancel_after_sidecar":
+                    process = subprocess.Popen(
+                        command, env=env, stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE, text=True,
+                    )
+                    deadline = time.monotonic() + 5
+                    while not (state / "sidecar").exists() and time.monotonic() < deadline:
+                        time.sleep(0.02)
+                    self.assertTrue((state / "sidecar").exists())
+                    process.terminate()
+                    stdout, stderr = process.communicate(timeout=15)
+                    result = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+                else:
+                    started = time.monotonic()
+                    result = subprocess.run(
+                        command, env=env, capture_output=True, text=True,
+                        timeout=25 if fault == "sidecar_inspect_hang" else 15,
+                        check=False,
+                    )
+                    if fault == "sidecar_inspect_hang":
+                        self.assertLess(time.monotonic() - started, 18)
                 self.assertNotEqual(result.returncode, 0)
-                self.assertEqual((state / "volume").exists(), fault == "volume_remains")
-                self.assertEqual((state / "container").exists(), fault == "container_remains")
+                self.assertEqual((state / "volume").exists(), fault in ("volume_remains", "volume_inspect_partial"))
+                self.assertEqual((state / "container").exists(), fault in ("container_remains", "container_inspect_partial"))
+                self.assertEqual((state / "sidecar").exists(), fault in ("sidecar_remains", "sidecar_inspect_partial", "sidecar_inspect_hang"))
+                self.assertEqual((state / "network").exists(), fault in ("network_remains", "network_inspect_partial"))
                 self.assertEqual((state / "foreign-resource").read_text(), "untouched")
                 if fault in ("container_query_error", "container_remains"):
                     self.assertTrue((state / "container_removal_attempted").exists())
                 if fault in ("volume_query_error", "volume_remains"):
                     self.assertTrue((state / "volume_removal_attempted").exists())
+                if fault in ("sidecar_query_error", "sidecar_remains"):
+                    self.assertTrue((state / "sidecar_removal_attempted").exists())
+                if fault in ("network_query_error", "network_remains"):
+                    self.assertTrue((state / "network_removal_attempted").exists())
                 if fault == "container_query_error":
                     self.assertIn("could not verify whether owned container", result.stderr)
                 if fault == "volume_query_error":
@@ -875,6 +1006,28 @@ esac
                     self.assertIn("owned container cleanup readback failed", result.stderr)
                 if fault == "volume_remains":
                     self.assertIn("owned volume cleanup readback failed", result.stderr)
+                if fault == "sidecar_remains":
+                    self.assertIn("owned sidecar cleanup readback failed", result.stderr)
+                if fault == "sidecar_inspect_hang":
+                    self.assertIn("refusing to remove sidecar", result.stderr)
+                    self.assertFalse((state / "sidecar_removal_attempted").exists())
+                    self.assertTrue((state / "network_removal_attempted").exists())
+                    self.assertTrue((state / "volume_removal_attempted").exists())
+                if fault == "network_remains":
+                    self.assertIn("owned network cleanup readback failed", result.stderr)
+                for role in ("container", "sidecar", "network", "volume"):
+                    if fault == f"{role}_inspect_partial":
+                        self.assertIn(f"refusing to remove {role}", result.stderr)
+                        self.assertFalse((state / f"{role}_removal_attempted").exists())
+                if fault == "sidecar_health_dead":
+                    self.assertIn("DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=sidecar_health", result.stderr)
+                if fault == "sidecar_health_race":
+                    self.assertTrue((state / "health-first").exists())
+                    self.assertNotIn("phase=sidecar_health", result.stderr)
+                if (state / "sidecar-run-args").exists():
+                    sidecar_args = (state / "sidecar-run-args").read_text()
+                    self.assertIn("--network dl-native-net-", sidecar_args)
+                    self.assertIn("--cap-drop=all", sidecar_args)
                 if (state / "run-args").exists():
                     args = (state / "run-args").read_text()
                     self.assertIn("--image-volume=ignore", args)

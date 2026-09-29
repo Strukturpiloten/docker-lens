@@ -938,6 +938,114 @@ fn proof_cli(resources: &InternalProofResources, args: &[&str]) -> BoundedDnsCli
     bounded_cli(args, "6")
 }
 
+fn proof_podman(resources: &InternalProofResources, args: &[&str]) -> BoundedDnsCliOutput {
+    resources.require_budget(8);
+    let mut command = Command::new("timeout");
+    command.args(["--kill-after=1", "6"]);
+    if required("NATIVE_PODMAN_USE_SUDO") == "1" {
+        command.args(["sudo", "-n", "podman"]);
+    } else {
+        command.arg("podman");
+    }
+    bounded_cli_command(&mut command, args)
+}
+
+fn proof_podman_ok(resources: &InternalProofResources, args: &[&str]) -> Vec<u8> {
+    let result = proof_podman(resources, args);
+    assert!(
+        result.success && !result.output_limit,
+        "bounded task-owned Podman read succeeds"
+    );
+    result.stdout
+}
+
+fn private_sidecar_ipv4(text: &str) -> Option<Ipv4Addr> {
+    let address = text.parse::<Ipv4Addr>().ok()?;
+    (address.is_private()
+        && !address.is_loopback()
+        && !address.is_link_local()
+        && !address.is_unspecified())
+    .then_some(address)
+}
+
+fn outer_attachment_ipv4(
+    resources: &InternalProofResources,
+    name: &str,
+    network: &str,
+) -> Ipv4Addr {
+    let bytes = proof_podman_ok(
+        resources,
+        &[
+            "inspect",
+            "--format",
+            "{{json .NetworkSettings.Networks}}",
+            name,
+        ],
+    );
+    let value: Value = serde_json::from_slice(&bytes).expect("private outer network JSON");
+    let networks = value.as_object().expect("outer network map");
+    assert_eq!(networks.len(), 1, "outer fixture is single-homed");
+    let address = networks[network]["IPAddress"]
+        .as_str()
+        .expect("outer IPv4 text");
+    private_sidecar_ipv4(address).expect("private task-owned outer IPv4")
+}
+
+fn outer_namespace(resources: &InternalProofResources, name: &str) -> String {
+    let bytes = proof_podman_ok(resources, &["exec", name, "readlink", "/proc/self/ns/net"]);
+    let text = std::str::from_utf8(&bytes).expect("outer network namespace text");
+    let inode = text
+        .strip_prefix("net:[")
+        .and_then(|text| text.strip_suffix("]\n"))
+        .expect("outer network namespace shape");
+    assert!(!inode.is_empty() && inode.bytes().all(|byte| byte.is_ascii_digit()));
+    inode.to_owned()
+}
+
+fn assert_outer_sidecar_topology(
+    resources: &InternalProofResources,
+    run_id: &str,
+    sidecar_ip: Ipv4Addr,
+) {
+    let outer = required("NATIVE_OUTER_CONTAINER");
+    let sidecar = format!("dl-native-egress-{run_id}");
+    let network = format!("dl-native-net-{run_id}");
+    assert_eq!(outer, format!("dl-native-{run_id}"));
+    let observed_sidecar = outer_attachment_ipv4(resources, &sidecar, &network);
+    let daemon_ip = outer_attachment_ipv4(resources, &outer, &network);
+    assert_eq!(observed_sidecar, sidecar_ip);
+    assert_ne!(daemon_ip, sidecar_ip, "sidecar is not daemon address");
+    assert_ne!(
+        outer_namespace(resources, &outer),
+        outer_namespace(resources, &sidecar),
+        "sidecar and daemon have distinct network namespaces"
+    );
+    assert_eq!(
+        proof_podman_ok(
+            resources,
+            &["inspect", "--format", "{{.State.Running}}", &sidecar]
+        ),
+        b"true\n"
+    );
+}
+
+#[test]
+fn outer_sidecar_address_rejects_host_and_nonprivate_addresses() {
+    assert_eq!(
+        private_sidecar_ipv4("10.88.0.3"),
+        Some(Ipv4Addr::new(10, 88, 0, 3))
+    );
+    for address in [
+        "127.0.0.1",
+        "169.254.1.1",
+        "0.0.0.0",
+        "8.8.8.8",
+        "private-value",
+    ] {
+        assert_eq!(private_sidecar_ipv4(address), None);
+    }
+}
+
 fn proof_cli_ok(resources: &InternalProofResources, args: &[&str]) -> Vec<u8> {
     let result = proof_cli(resources, args);
     assert!(!result.output_limit, "bounded proof CLI output");
@@ -1033,51 +1141,33 @@ fn internal_proof_rejects_outer_timeout_or_failed_docker_exec() {
 
 impl Drop for InternalProofResources {
     fn drop(&mut self) {
-        if !self.containers.is_empty() || !self.networks.is_empty() {
+        if std::thread::panicking() {
+            let cleaned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if self.containers.is_empty() && self.networks.is_empty() {
+                    true
+                } else {
+                    self.cleanup()
+                }
+            }))
+            .unwrap_or(false);
+            eprintln!(
+                "DOCKERLENS_NATIVE_CLEANUP: internal_proof={}",
+                closed_cleanup_result(cleaned)
+            );
+        } else if !self.containers.is_empty() || !self.networks.is_empty() {
             let _ = self.cleanup();
         }
     }
 }
 
-fn task_host_eth0_ip(output: &[u8]) -> Option<Ipv4Addr> {
-    let output = std::str::from_utf8(output).ok()?;
-    let mut selected = None;
-    for line in output.lines() {
-        let mut words = line.split_whitespace();
-        while let Some(word) = words.next() {
-            if word != "inet" {
-                continue;
-            }
-            let (address, _) = words.next()?.split_once('/')?;
-            let address = address.parse::<Ipv4Addr>().ok()?;
-            if address.is_loopback() || address.is_link_local() || address.is_unspecified() {
-                return None;
-            }
-            if selected.replace(address).is_some() {
-                return None;
-            }
-        }
-    }
-    selected
+fn closed_cleanup_result(cleaned: bool) -> &'static str {
+    if cleaned { "pass" } else { "fail" }
 }
 
 #[test]
-fn task_host_endpoint_address_requires_one_non_loopback_ipv4() {
-    assert_eq!(
-        task_host_eth0_ip(
-            b"2: eth0: UP\n    inet 10.88.0.4/16 brd 10.88.255.255 scope global eth0\n"
-        ),
-        Some(Ipv4Addr::new(10, 88, 0, 4))
-    );
-    for output in [
-        &b"inet 127.0.0.1/8\n"[..],
-        &b"inet 169.254.1.1/16\n"[..],
-        &b"inet 10.0.0.2/24\ninet 10.0.0.3/24\n"[..],
-        &b"private-canary\n"[..],
-        &b"\xff\n"[..],
-    ] {
-        assert_eq!(task_host_eth0_ip(output), None);
-    }
+fn internal_proof_cleanup_markers_are_closed() {
+    assert_eq!(closed_cleanup_result(true), "pass");
+    assert_eq!(closed_cleanup_result(false), "fail");
 }
 
 fn diagnostic_remaining(deadline_epoch: u64, now: Duration) -> Option<Duration> {
@@ -1616,7 +1706,6 @@ fn allowed_request(
     let proof_control = format!("dl-network-{run_id}-proof-control");
     let proof_cli_internal = format!("dl-network-{run_id}-proof-cli-internal");
     let proof_cli_control = format!("dl-network-{run_id}-proof-cli-control");
-    let proof_endpoint = format!("dl-network-{run_id}-proof-endpoint");
     let proof_internal_server = format!("dl-network-{run_id}-proof-internal-server");
     let proof_internal_client = format!("dl-network-{run_id}-proof-internal-client");
     let proof_control_server = format!("dl-network-{run_id}-proof-control-server");
@@ -1647,7 +1736,6 @@ fn allowed_request(
                     control_client.as_str(),
                     enabled_server.as_str(),
                     enabled_client.as_str(),
-                    proof_endpoint.as_str(),
                     proof_internal_server.as_str(),
                     proof_internal_client.as_str(),
                     proof_control_server.as_str(),
@@ -3455,11 +3543,14 @@ fn live_internal_network_blocks_external_egress() {
         .expect("closed prior network proof");
     assert_eq!(prior, json!(PROBES), "base network suite must pass first");
     let mut resources = InternalProofResources::new(&run_id);
+    let sidecar_ip = private_sidecar_ipv4(&required("NATIVE_EGRESS_SIDECAR_IPV4"))
+        .expect("private task-owned sidecar IPv4");
+    eprintln!("DOCKERLENS_NATIVE_CHECK: network_internal_topology");
+    assert_outer_sidecar_topology(&resources, &run_id, sidecar_ip);
     let internal = format!("dl-network-{run_id}-proof-internal");
     let control = format!("dl-network-{run_id}-proof-control");
     let cli_internal = format!("dl-network-{run_id}-proof-cli-internal");
     let cli_control = format!("dl-network-{run_id}-proof-cli-control");
-    let endpoint = format!("dl-network-{run_id}-proof-endpoint");
     let internal_server = format!("dl-network-{run_id}-proof-internal-server");
     let internal_client = format!("dl-network-{run_id}-proof-internal-client");
     let control_server = format!("dl-network-{run_id}-proof-control-server");
@@ -3621,49 +3712,19 @@ fn live_internal_network_blocks_external_egress() {
         }
     }
 
-    // Host mode is local to the isolated outer Podman container. Its eth0
-    // address is the endpoint's own address, never a Docker bridge gateway.
-    eprintln!("DOCKERLENS_NATIVE_CHECK: network_internal_endpoint");
+    // The external endpoint lives in a separate outer Podman namespace, so
+    // packets from the inner bridge must traverse Docker's FORWARD path.
+    eprintln!("DOCKERLENS_NATIVE_CHECK: network_internal_sidecar");
     let owner = format!("io.dockerlens.native-run={run_id}");
-    resources.containers.push(endpoint.clone());
-    proof_cli_ok(
-        &resources,
-        &[
-            "create",
-            "--name",
-            &endpoint,
-            "--label",
-            &owner,
-            "--network",
-            "host",
-            &image,
-            "sh",
-            "-c",
-            "printf proof-egress > /tmp/index.html; httpd -f -p 18084 -h /tmp",
-        ],
-    );
-    proof_cli_ok(&resources, &["start", &endpoint]);
-    let endpoint_body = proof_inspect(
-        &resources,
-        &format!("/v{api_version}/containers/{endpoint}/json"),
-    );
-    assert_eq!(endpoint_body["State"]["Running"], true);
-    assert_eq!(endpoint_body["HostConfig"]["NetworkMode"], "host");
-    assert_eq!(
-        endpoint_body["Config"]["Labels"]["io.dockerlens.native-run"],
-        run_id
-    );
-    let address_output = proof_cli_ok(
-        &resources,
-        &["exec", &endpoint, "ip", "-4", "addr", "show", "dev", "eth0"],
-    );
-    let endpoint_ip = task_host_eth0_ip(&address_output).expect("one task host eth0 IPv4");
-    let local_health = proof_cli_ok(
+    let sidecar = format!("dl-native-egress-{run_id}");
+    let local_health = proof_podman_ok(
         &resources,
         &[
             "exec",
-            &endpoint,
+            &sidecar,
             "wget",
+            "-Y",
+            "off",
             "-T",
             "2",
             "-qO-",
@@ -3711,12 +3772,12 @@ fn live_internal_network_blocks_external_egress() {
         let url = format!("http://{server}:8080/");
         let response = proof_cli_ok(
             &resources,
-            &["exec", client, "wget", "-T", "2", "-qO-", &url],
+            &["exec", client, "wget", "-Y", "off", "-T", "2", "-qO-", &url],
         );
         assert_eq!(response, b"proof-peer", "healthy same-bridge HTTP");
         assert_single_homed_running(&resources, client, network, &api_version);
     }
-    let external_url = format!("http://{endpoint_ip}:18084/");
+    let external_url = format!("http://{sidecar_ip}:18084/");
     eprintln!("DOCKERLENS_NATIVE_CHECK: network_internal_control");
     let control_response = proof_cli_ok(
         &resources,
@@ -3724,6 +3785,8 @@ fn live_internal_network_blocks_external_egress() {
             "exec",
             &control_client,
             "wget",
+            "-Y",
+            "off",
             "-T",
             "2",
             "-qO-",
@@ -3736,7 +3799,7 @@ fn live_internal_network_blocks_external_egress() {
     );
     eprintln!("DOCKERLENS_NATIVE_CHECK: network_internal_blocked");
     let blocked_command = format!(
-        "if wget -T 2 -qO- {external_url} >/dev/null 2>&1; then printf reachable; else printf blocked; fi"
+        "if wget -Y off -T 2 -qO- {external_url} >/dev/null 2>&1; then printf reachable; else printf blocked; fi"
     );
     let blocked = proof_cli(
         &resources,
@@ -3747,12 +3810,11 @@ fn live_internal_network_blocks_external_egress() {
         "internal peer must fail direct-IP external HTTP"
     );
     assert_single_homed_running(&resources, &internal_client, &internal, &api_version);
-    let endpoint_after = proof_inspect(
+    let sidecar_after = proof_podman_ok(
         &resources,
-        &format!("/v{api_version}/containers/{endpoint}/json"),
+        &["inspect", "--format", "{{.State.Running}}", &sidecar],
     );
-    assert_eq!(endpoint_after["State"]["Running"], true);
-    assert_eq!(endpoint_after["HostConfig"]["NetworkMode"], "host");
+    assert_eq!(sidecar_after, b"true\n");
     assert!(
         proof_cli_ok(
             &resources,
@@ -3760,6 +3822,8 @@ fn live_internal_network_blocks_external_egress() {
                 "exec",
                 &control_client,
                 "wget",
+                "-Y",
+                "off",
                 "-T",
                 "2",
                 "-qO-",

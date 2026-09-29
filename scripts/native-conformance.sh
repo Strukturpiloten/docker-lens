@@ -51,11 +51,13 @@ fi
 # module load; these environment guards prevent accidents, not impersonation.
 python3 "$script_dir/native-bridge-prerequisite.py"
 
-# A random directory, container, and volume belong to exactly this lane.
+# A random directory, two containers, network, and volume belong to this lane.
 run_dir=$(mktemp -d "${TMPDIR:-/tmp}/dockerlens-native.XXXXXXXX")
 run_id=${run_dir##*.}
 container="dl-native-${run_id}"
 volume="dl-native-data-${run_id}"
+outer_network="dl-native-net-${run_id}"
+sidecar="dl-native-egress-${run_id}"
 socket_dir="$run_dir/socket"
 socket="$socket_dir/docker.sock"
 mkdir -m 0777 "$socket_dir"
@@ -67,6 +69,9 @@ printf 'native-tcp-canary\n' > "$socket_dir/native-bind/index.html"
 chmod 0644 "$socket_dir/native-bind/canary" "$socket_dir/native-bind/index.html"
 chmod 0700 "$run_dir"
 watchdog_pid=
+cleanup_podman() {
+  timeout --signal=TERM --kill-after=2s 8s "${podman_cmd[@]}" "$@"
+}
 cleanup() {
   status=$?
   trap - EXIT HUP INT TERM
@@ -74,39 +79,45 @@ cleanup() {
     kill "$watchdog_pid" 2>/dev/null || true
     wait "$watchdog_pid" 2>/dev/null || true
   fi
-  container_state=0
-  "${podman_cmd[@]}" container exists "$container" || container_state=$?
-  if (( container_state != 1 )); then
-    if (( container_state != 0 )); then
-      echo "could not verify whether owned container $container exists (exit $container_state)" >&2
+  cleanup_container "$container" container || status=1
+  cleanup_container "$sidecar" sidecar || status=1
+  network_state=0
+  cleanup_podman network exists "$outer_network" || network_state=$?
+  if (( network_state != 1 )); then
+    if (( network_state != 0 )); then
+      echo "could not verify whether owned network $outer_network exists (exit $network_state)" >&2
       status=1
     fi
-    owner=$("${podman_cmd[@]}" inspect --format '{{index .Config.Labels "io.dockerlens.native-run"}}' "$container") || status=1
-    if [[ ${owner:-} == "$run_id" ]]; then
-      "${podman_cmd[@]}" rm -f "$container" >/dev/null || status=1
+    owner=
+    owner_state=0
+    owner=$(cleanup_podman network inspect --format '{{index .Labels "io.dockerlens.native-run"}}' "$outer_network") || owner_state=$?
+    if (( owner_state == 0 )) && [[ $owner == "$run_id" ]]; then
+      cleanup_podman network rm "$outer_network" >/dev/null || status=1
       removed_state=0
-      "${podman_cmd[@]}" container exists "$container" || removed_state=$?
+      cleanup_podman network exists "$outer_network" || removed_state=$?
       if (( removed_state != 1 )); then
-        echo "owned container cleanup readback failed (exists exit $removed_state)" >&2
+        echo "owned network cleanup readback failed (exists exit $removed_state)" >&2
         status=1
       fi
     else
-      echo "refusing to remove container $container without matching ownership label" >&2
+      echo "refusing to remove network $outer_network without matching ownership label" >&2
       status=1
     fi
   fi
   volume_state=0
-  "${podman_cmd[@]}" volume exists "$volume" || volume_state=$?
+  cleanup_podman volume exists "$volume" || volume_state=$?
   if (( volume_state != 1 )); then
     if (( volume_state != 0 )); then
       echo "could not verify whether owned volume $volume exists (exit $volume_state)" >&2
       status=1
     fi
-    owner=$("${podman_cmd[@]}" volume inspect --format '{{index .Labels "io.dockerlens.native-run"}}' "$volume") || status=1
-    if [[ ${owner:-} == "$run_id" ]]; then
-      "${podman_cmd[@]}" volume rm "$volume" >/dev/null || status=1
+    owner=
+    owner_state=0
+    owner=$(cleanup_podman volume inspect --format '{{index .Labels "io.dockerlens.native-run"}}' "$volume") || owner_state=$?
+    if (( owner_state == 0 )) && [[ $owner == "$run_id" ]]; then
+      cleanup_podman volume rm "$volume" >/dev/null || status=1
       removed_state=0
-      "${podman_cmd[@]}" volume exists "$volume" || removed_state=$?
+      cleanup_podman volume exists "$volume" || removed_state=$?
       if (( removed_state != 1 )); then
         echo "owned volume cleanup readback failed (exists exit $removed_state)" >&2
         status=1
@@ -119,13 +130,38 @@ cleanup() {
   if [[ $run_dir == "${TMPDIR:-/tmp}"/dockerlens-native.* && -d $run_dir ]]; then
     rm -rf -- "$run_dir" || status=1
   fi
-  if (( status != 0 )); then echo "native lane $lane failed; verify owned resources $container and $volume" >&2; fi
+  if (( status != 0 )); then echo "native lane $lane failed; verify owned resources $container, $sidecar, $outer_network, and $volume" >&2; fi
   exit "$status"
+}
+cleanup_container() {
+  local name=$1 role=$2 container_state owner owner_state removed_state
+  container_state=0
+  cleanup_podman container exists "$name" || container_state=$?
+  if (( container_state == 1 )); then return; fi
+  if (( container_state != 0 )); then
+    echo "could not verify whether owned $role $name exists (exit $container_state)" >&2
+    status=1
+  fi
+  owner=
+  owner_state=0
+  owner=$(cleanup_podman inspect --format '{{index .Config.Labels "io.dockerlens.native-run"}}' "$name") || owner_state=$?
+  if (( owner_state == 0 )) && [[ $owner == "$run_id" ]]; then
+    cleanup_podman rm -f "$name" >/dev/null || status=1
+    removed_state=0
+    cleanup_podman container exists "$name" || removed_state=$?
+    if (( removed_state != 1 )); then
+      echo "owned $role cleanup readback failed (exists exit $removed_state)" >&2
+      status=1
+    fi
+  else
+    echo "refusing to remove $role $name without matching ownership label" >&2
+    status=1
+  fi
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-echo "native lane $lane owns Podman container $container and volume $volume"
+echo "native lane $lane owns Podman container $container, sidecar $sidecar, network $outer_network, and volume $volume"
 
 diagnose_native_startup() {
   local state diagnosis
@@ -133,7 +169,7 @@ diagnose_native_startup() {
   [[ $state =~ ^(running|exited|created|configured|paused|stopped)\|[0-9]+\|(true|false)$ ]] || state=unavailable
   # Retain only the final 64 KiB of the last 80 lines. Logs can contain protected
   # values, so only fixed stage and category names leave this function.
-  diagnosis=$(timeout 10 "${podman_cmd[@]}" logs --tail 80 "$container" 2>/dev/null |
+  diagnosis=$(timeout --signal=TERM --kill-after=2s 10s "${podman_cmd[@]}" logs --tail 80 "$container" 2>/dev/null |
     python3 -c 'import sys
 tail = bytearray()
 for chunk in iter(lambda: sys.stdin.buffer.read(65536), b""):
@@ -170,10 +206,15 @@ else
   available_kib=$(sudo -n df -Pk "$graph_root" | awk 'END {print $4}')
 fi
 (( available_kib >= 8 * 1024 * 1024 )) || { echo 'native lane needs at least 8 GiB free in Podman storage' >&2; exit 1; }
-for resource in container volume; do
-  if [[ $resource == container ]]; then name=$container; else name=$volume; fi
+for resource in container sidecar network volume; do
+  case $resource in
+    container) name=$container; query=container ;;
+    sidecar) name=$sidecar; query=container ;;
+    network) name=$outer_network; query=network ;;
+    volume) name=$volume; query=volume ;;
+  esac
   resource_state=0
-  "${podman_cmd[@]}" "$resource" exists "$name" || resource_state=$?
+  "${podman_cmd[@]}" "$query" exists "$name" || resource_state=$?
   case $resource_state in
     0) echo "generated native $resource name already exists" >&2; exit 1 ;;
     1) ;;
@@ -248,15 +289,66 @@ run_flags=(--image-volume=ignore)
 if [[ $lane == debian11-rootless ]]; then
   run_flags+=(--oom-score-adj=0 --security-opt apparmor=unconfined)
 fi
+validated_outer_ipv4() {
+  local attachment
+  attachment=$(timeout --signal=TERM --kill-after=2s 10s "${podman_cmd[@]}" inspect \
+    --format '{{json .NetworkSettings.Networks}}' "$1" 2>/dev/null) || return 1
+  (( ${#attachment} <= 4096 )) || return 1
+  printf '%s' "$attachment" | python3 -c '
+import ipaddress, json, sys
+try:
+    networks = json.load(sys.stdin)
+    if not isinstance(networks, dict) or set(networks) != {sys.argv[1]}:
+        raise ValueError()
+    address = ipaddress.IPv4Address(networks[sys.argv[1]]["IPAddress"])
+    if not address.is_private or address.is_loopback or address.is_link_local:
+        raise ValueError()
+except (ValueError, TypeError, KeyError, AttributeError):
+    raise SystemExit("invalid task-owned outer bridge address") from None
+print(address)
+' "$outer_network"
+}
+sidecar_setup_failed() {
+  echo "DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=$1" >&2
+  exit 1
+}
 watchdog &
 watchdog_pid=$!
 # Pull only the reviewed digest under the lane's time and free-space budget.
 # Prevent `run` from doing a second unbounded implicit pull.
-timeout 180 "${podman_cmd[@]}" pull "$image" >/dev/null
-timeout 120 "${podman_cmd[@]}" run --pull=never -d --name "$container" --label "io.dockerlens.native-run=$run_id" \
+timeout --signal=TERM --kill-after=2s 180s "${podman_cmd[@]}" pull "$image" >/dev/null
+timeout --signal=TERM --kill-after=2s 180s "${podman_cmd[@]}" pull "$FIXTURE_IMAGE" >/dev/null 2>&1 || sidecar_setup_failed image_pull
+timeout --signal=TERM --kill-after=2s 30s "${podman_cmd[@]}" network create --driver bridge \
+  --label "io.dockerlens.native-run=$run_id" "$outer_network" >/dev/null 2>&1 || sidecar_setup_failed network_create
+timeout --signal=TERM --kill-after=2s 120s "${podman_cmd[@]}" run --pull=never -d --name "$sidecar" \
+  --label "io.dockerlens.native-run=$run_id" --network "$outer_network" \
+  --cap-drop=all --security-opt no-new-privileges --pids-limit=64 --memory=128m \
+  "$FIXTURE_IMAGE" sh -c \
+  'printf proof-egress > /tmp/index.html; exec httpd -f -p 18084 -h /tmp' >/dev/null 2>&1 || sidecar_setup_failed sidecar_start
+timeout --signal=TERM --kill-after=2s 120s "${podman_cmd[@]}" run --pull=never -d --name "$container" --label "io.dockerlens.native-run=$run_id" \
+  --network "$outer_network" \
   --privileged --pids-limit=512 --memory=4g --cpus=2 "${run_flags[@]}" \
   --volume "$storage_mount" --volume "$socket_dir:/dockerlens-native" \
-  "$image" "${start[@]}" >/dev/null
+  "$image" "${start[@]}" >/dev/null 2>&1 || sidecar_setup_failed daemon_attach
+sidecar_ip=$(validated_outer_ipv4 "$sidecar") || {
+  sidecar_setup_failed sidecar_attachment
+}
+daemon_ip=$(validated_outer_ipv4 "$container") || {
+  sidecar_setup_failed daemon_attachment
+}
+[[ $sidecar_ip != "$daemon_ip" ]] || {
+  sidecar_setup_failed address_collision
+}
+sidecar_running=$(timeout --signal=TERM --kill-after=2s 10s "${podman_cmd[@]}" inspect --format '{{.State.Running}}' "$sidecar" 2>/dev/null) || sidecar_running=unavailable
+[[ $sidecar_running == true ]] || sidecar_setup_failed sidecar_state
+sidecar_health=
+for attempt in 1 2 3 4 5; do
+  sidecar_health=$(timeout --signal=TERM --kill-after=2s 3s "${podman_cmd[@]}" exec "$sidecar" wget -Y off -T 1 -qO- \
+    http://127.0.0.1:18084/ 2>/dev/null) || sidecar_health=
+  if [[ $sidecar_health == proof-egress ]]; then break; fi
+  if (( attempt < 5 )); then sleep 0.2; fi
+done
+[[ $sidecar_health == proof-egress ]] || sidecar_setup_failed sidecar_health
 privileged=$("${podman_cmd[@]}" inspect --format '{{.HostConfig.Privileged}}' "$container")
 [[ $privileged == true ]] || { echo 'outer container does not have reviewed nesting privilege' >&2; exit 1; }
 volume_mounts=$("${podman_cmd[@]}" inspect --format '{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}}:{{.Destination}}{{"\n"}}{{end}}{{end}}' "$container")
@@ -288,7 +380,7 @@ done
 if [[ $lane == debian11-rootless ]]; then
   # Linux mountinfo reports suid/dev by absence of nosuid/nodev. Check the
   # effective mount, not merely the requested Podman volume options.
-  if ! timeout 15 "${podman_cmd[@]}" exec "$container" cat /proc/self/mountinfo 2>/dev/null |
+  if ! timeout --signal=TERM --kill-after=2s 15s "${podman_cmd[@]}" exec "$container" cat /proc/self/mountinfo 2>/dev/null |
     python3 "$script_dir/native-storage-options.py" /home/docker/.local/share/docker; then
     echo 'Debian rootless outer data-root mount lacks required effective options' >&2
     exit 1
@@ -606,6 +698,7 @@ export NATIVE_ENGINE_VERSION="$server_version" NATIVE_DAEMON_MODE="$expected_mod
 export NATIVE_API_VERSION="$api_version"
 export NATIVE_LANE="$lane" NATIVE_DOCKER_PACKAGE="$installed_docker_package"
 export NATIVE_FIXTURE_IMAGE="$FIXTURE_IMAGE" NATIVE_OUTER_CONTAINER="$container"
+export NATIVE_EGRESS_SIDECAR_IPV4="$sidecar_ip"
 export NATIVE_BIND_SOURCE=/dockerlens-native/native-bind
 export NATIVE_SHAPES_PATH="$run_dir/target-shapes.json"
 export NATIVE_SOURCE_PROBES_PATH="$run_dir/source-probes.json"
