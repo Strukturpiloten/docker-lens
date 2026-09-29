@@ -33,6 +33,10 @@
    bridge networks and attachments, protected environment and metadata,
    explicit command/entrypoint inheritance or clearing, exec/shell/disabled
    health and timing, runtime settings, and restart policy.
+   Command inheritance means omitting the native field, not promising an image
+   default survives an entrypoint override. Command clear requires an explicit
+   exec entrypoint at intent validation; even that pair remains capability-gated
+   pending exact native proof. No planning step inspects the image.
    The public planner admits
    only profiles resolved from the reviewed catalog; caller-authored positive
    daemon claims cannot authorize planning. A profile distinguishes upstream

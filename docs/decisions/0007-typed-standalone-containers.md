@@ -32,6 +32,18 @@ inferred generic API floor: only an exact profile with independently reviewed
 native evidence can admit that branch. All new command and health branches
 likewise remain unadmitted by the historical profiles.
 
+For target commands, `Inherit` omits the native `Cmd` field and leaves the
+effective result to Engine merging; it does not promise that an image's default
+command survives an explicit entrypoint override. A requested command `Clear`
+with an inherited or cleared entrypoint is rejected during intent validation:
+the image executable is unknown and an empty `Cmd` array alone has no reviewed
+clear semantics. A nonempty exec entrypoint plus command `Clear` remains an
+inert, capability-gated candidate, not a claim that `Cmd:[]` clears the image
+default. Its literal Engine outcome, including the entrypoint-only control,
+must be proved in every exact native lane before `CommandClear` admission.
+`EntrypointClear` requires separate proof. No empty-string argument is silently
+substituted for command clearing, and no target planning inspects images.
+
 Protected typed target fields cover labels, user, working directory, hostname,
 tmpfs mounts, read-only root filesystem, init, stop behavior, resource limits,
 devices, security and identity settings, resolver entries, and logging. They
