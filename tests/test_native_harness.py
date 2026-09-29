@@ -27,15 +27,33 @@ class NativeHarnessTests(unittest.TestCase):
                                 for marker in markers))
         self.assertEqual(re.findall(r'"nslookup",\s*"-type=A",\s*"([^"]+)"', source),
                          ["edge-sentinel", "edge-sentinel", "edge-sentinel.",
-                          "edge-sentinel", "backend-app"])
-        self.assertIn("if nslookup -type=A edge-sentinel", source)
+                          "backend-app", "edge-sentinel."])
+        edge_dns = source[source.index('let edge_dns_outcome ='):source.index('if let Err(category) = edge_dns_outcome')]
+        self.assertTrue('exec nslookup -type=A edge-sentinel 127.0.0.11' in edge_dns)
+        self.assertTrue('/etc/resolv.conf || exit 42;' in edge_dns)
+        local_dns = source[source.index('network_isolation_local_dns"'):source.index('network_isolation_local_http"')]
+        self.assertIsNotNone(re.search(
+            r'"exec",\s*&backend_only,\s*"cat",\s*"/etc/resolv\.conf"', local_dns,
+        ))
+        self.assertIsNotNone(re.search(
+            r'"backend-app",\s*EMBEDDED_DNS_SERVER,', local_dns,
+        ))
+        self.assertTrue('resolver_category(&backend_resolver.stdout)' in local_dns)
+        foreign_dns = source[source.index('network_isolation_foreign_dns"'):source.index('network_isolation_foreign_route"')]
+        self.assertIsNotNone(re.search(
+            r'"edge-sentinel\.",\s*EMBEDDED_DNS_SERVER,', foreign_dns,
+        ))
+        self.assertTrue('dns_failure_category(&foreign_answer, "edge-sentinel", edge_ip) == "cli_lookup"' in foreign_dns)
+        edge_http = source[source.index('network_isolation_edge_http"'):source.index('network_isolation_local_dns"')]
+        local_http = source[source.index('network_isolation_local_http"'):source.index('network_isolation_foreign_dns"')]
+        self.assertTrue('"http://edge-sentinel:8080/"' in edge_http)
+        self.assertTrue('"http://backend-app:8080/"' in local_http)
         self.assertIn('let edge_dns_outcome = wait_for_exact_dns_answer(', source)
         self.assertIn('if category != "cli_lookup"', source)
         self.assertIn('edge_dns_outcome.is_ok()', source)
         self.assertIn('let edge_alias_present =', source)
         self.assertIn('aliases.iter().any(|alias| alias == "edge-sentinel")', source)
-        self.assertRegex(source,
-                         r'backend_resolved\s*&& nslookup_has_ipv4_answer\(&backend_answer, "backend-app", backend_ip\)')
+        self.assertTrue('nslookup_has_ipv4_answer(&backend_answer.stdout, "backend-app", backend_ip)' in local_dns)
         self.assertIn("fn nslookup_ipv4_answer_requires_exact_named_address_not_prefix_or_resolver()", source)
         self.assertIn('edge_only_body["State"]["Running"] != true', source)
         self.assertIn("fn edge_dns_failure_categories_are_closed_and_value_free()", source)

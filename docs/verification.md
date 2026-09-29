@@ -1,5 +1,11 @@
 # Verification
 
+The complete inert review artifact has offline exact-byte, schema, order,
+privacy, context-binding, and fail-closed opaque-artifact tests. These verify
+serialization, not destination existence, data migration, or native Engine
+compatibility. See [the version 1 format](complete-artifact.md) and
+[ADR 0009](decisions/0009-complete-inert-artifact.md).
+
 Run `./scripts/format-lint.sh --fix` for local formatting and lint feedback.
 The target-module checkpoint has an exact network request regression alongside
 the existing container and graph tests. These offline checks preserve the
@@ -28,8 +34,13 @@ bridge-interface MTU, and the unchanged external network identity. Isolation
 uses separate backend-only and edge-only CLI peers: each positive local DNS
 control explicitly queries the IPv4 A record and checks an exact parsed answer
 for the inspected endpoint IPv4, excluding the resolver's address and partial
-matches, before local HTTP succeeds. The backend peer must then fail the edge-only
-IPv4 A query and direct edge-IP HTTP. A dual-homed app's edge IP is not an
+matches, before local HTTP succeeds. Each DNS oracle verifies the peer's embedded
+resolver configuration and queries `127.0.0.11` explicitly; the backend peer's
+foreign-alias query uses a trailing-dot absolute name and must receive a lookup
+failure, not a timeout or other CLI failure. Ordinary unqualified named HTTP
+remains a separate positive traffic check. A failed default short-name CLI lookup
+is fixture/tool-path evidence, not by itself proof of a Docker DNS failure. The
+backend peer must also fail direct edge-IP HTTP. A dual-homed app's edge IP is not an
 isolation oracle. Closed DNS and HTTP markers distinguish each stage. The
 executor allows only the run-owned network and
 container names, including exact `networks/{id}/connect` paths. The separate closed

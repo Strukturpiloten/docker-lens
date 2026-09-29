@@ -49,6 +49,7 @@ const PROBES: [&str; 19] = [
 ];
 
 const DNS_CLI_HARD_LIMIT_SECS: u64 = 9;
+const EMBEDDED_DNS_SERVER: &str = "127.0.0.11";
 
 fn required(name: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| panic!("native harness must supply {name}"))
@@ -189,6 +190,9 @@ fn dns_failure_category(
     if !result.success {
         if matches!(result.code, Some(124 | 137)) {
             return "cli_timeout";
+        }
+        if result.code == Some(42) {
+            return "cli_resolver";
         }
         if result.code == Some(125) {
             return "cli_docker";
@@ -727,6 +731,11 @@ fn edge_dns_failure_categories_are_closed_and_value_free() {
     assert_eq!(
         dns_failure_category(&result, "edge-sentinel", expected),
         "cli_timeout"
+    );
+    result.code = Some(42);
+    assert_eq!(
+        dns_failure_category(&result, "edge-sentinel", expected),
+        "cli_resolver"
     );
     result.success = true;
     result.code = Some(0);
@@ -1915,9 +1924,9 @@ fn live_network_render_matches_engine() {
                 "--network",
                 &edge,
                 &image,
-                "nslookup",
-                "-type=A",
-                "edge-sentinel",
+                "sh",
+                "-c",
+                "grep -Eq '^[[:space:]]*nameserver[[:space:]]+127[.]0[.]0[.]11([[:space:]]|$)' /etc/resolv.conf || exit 42; exec nslookup -type=A edge-sentinel 127.0.0.11",
             ])
         },
         || inspect_running_with_dns_budget(&format!("/v{api_version}/containers/{edge_only}/json")),
@@ -1984,10 +1993,28 @@ fn live_network_render_matches_engine() {
         .parse::<Ipv4Addr>()
         .expect("bounded rendered backend IPv4");
     eprintln!("DOCKERLENS_NATIVE_CHECK: network_isolation_local_dns");
-    let (backend_resolved, backend_answer) =
-        cli(&["exec", &backend_only, "nslookup", "-type=A", "backend-app"]);
+    let backend_resolver = cli_dns(&["exec", &backend_only, "cat", "/etc/resolv.conf"]);
     assert!(
-        backend_resolved && nslookup_has_ipv4_answer(&backend_answer, "backend-app", backend_ip),
+        backend_resolver.success
+            && !backend_resolver.output_limit
+            && matches!(
+                resolver_category(&backend_resolver.stdout),
+                "embedded_search" | "embedded_plain"
+            ),
+        "backend-only peer must have the embedded DNS resolver"
+    );
+    let backend_answer = cli_dns(&[
+        "exec",
+        &backend_only,
+        "nslookup",
+        "-type=A",
+        "backend-app",
+        EMBEDDED_DNS_SERVER,
+    ]);
+    assert!(
+        backend_answer.success
+            && !backend_answer.output_limit
+            && nslookup_has_ipv4_answer(&backend_answer.stdout, "backend-app", backend_ip),
         "same backend-only peer must resolve its local alias to its inspected IPv4"
     );
     eprintln!("DOCKERLENS_NATIVE_CHECK: network_isolation_local_http");
@@ -2006,16 +2033,17 @@ fn live_network_render_matches_engine() {
         "same backend-only peer must reach the backend endpoint"
     );
     eprintln!("DOCKERLENS_NATIVE_CHECK: network_isolation_foreign_dns");
-    let (exec_ok, resolved) = cli(&[
+    let foreign_answer = cli_dns(&[
         "exec",
         &backend_only,
-        "sh",
-        "-c",
-        "if nslookup -type=A edge-sentinel >/dev/null 2>&1; then printf resolved; else printf absent; fi",
+        "nslookup",
+        "-type=A",
+        "edge-sentinel.",
+        EMBEDDED_DNS_SERVER,
     ]);
     assert!(
-        exec_ok && resolved == b"absent",
-        "running backend-only peer must not resolve edge-only alias"
+        dns_failure_category(&foreign_answer, "edge-sentinel", edge_ip) == "cli_lookup",
+        "running backend-only peer must receive an exact negative A lookup for the edge-only alias"
     );
     eprintln!("DOCKERLENS_NATIVE_CHECK: network_isolation_foreign_route");
     let edge_url = format!("http://{edge_ip}:8080/");
