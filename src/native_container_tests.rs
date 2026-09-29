@@ -229,11 +229,16 @@ fn mark_container_flow(phase: &'static str, outcome: &'static str) {
     eprintln!("DOCKERLENS_NATIVE_CONTAINER_FLOW: phase={phase} outcome={outcome}");
 }
 
-fn resource_control_start_outcome(status: Option<i32>) -> (&'static str, bool) {
-    match status {
-        Some(0) => ("started", false),
-        Some(124 | 137) | None => ("timeout", true),
-        Some(_) => ("uncertain", true),
+fn resource_control_start_outcome(status: u16, inspected: &Value) -> (&'static str, bool) {
+    if !(100..=599).contains(&status) {
+        return ("uncertain", true);
+    }
+    let state = &inspected["State"];
+    match (status, state["Status"].as_str(), state["Running"].as_bool()) {
+        (204, Some("running"), Some(true)) => ("started", false),
+        (204, _, _) => ("uncertain", true),
+        (_, Some("created"), Some(false)) => ("rejected", false),
+        _ => ("uncertain", true),
     }
 }
 
@@ -246,6 +251,80 @@ fn resource_control_options(control: &str) -> Option<&'static [&'static str]> {
         "pids" => Some(&["--pids-limit=32"]),
         "device" => Some(&["--device=/dev/null:/dev/native-null:r"]),
         _ => None,
+    }
+}
+
+fn resource_control_inspect_matches(
+    control: &str,
+    id: &str,
+    name: &str,
+    image: &str,
+    run_id: &str,
+    inspected: &Value,
+) -> bool {
+    if inspected["Id"] != id
+        || inspected["Name"] != format!("/{name}")
+        || inspected["Config"]["Image"] != image
+        || inspected["Config"]["Cmd"] != json!(["sh", "-c", "sleep 120"])
+        || inspected["Config"]["Labels"]["io.dockerlens.native-run"] != run_id
+        || inspected["State"]["Status"] != "created"
+        || inspected["State"]["Running"] != false
+    {
+        return false;
+    }
+    let host = &inspected["HostConfig"];
+    let memory = host["Memory"].as_u64();
+    let pids = &host["PidsLimit"];
+    let devices = &host["Devices"];
+    let default_pids = pids.is_null() || pids == 0;
+    let default_devices = devices.is_null() || devices.as_array().is_some_and(Vec::is_empty);
+    match control {
+        "baseline" => memory == Some(0) && default_pids && default_devices,
+        "memory" => memory == Some(67_108_864) && default_pids && default_devices,
+        "pids" => memory == Some(0) && pids == 32 && default_devices,
+        "device" => {
+            memory == Some(0)
+                && default_pids
+                && devices.as_array().is_some_and(|entries| {
+                    entries.len() == 1
+                        && entries[0]["PathOnHost"] == "/dev/null"
+                        && entries[0]["PathInContainer"] == "/dev/native-null"
+                        && entries[0]["CgroupPermissions"] == "r"
+                })
+        }
+        _ => false,
+    }
+}
+
+fn failed_oracle_start_state(
+    start_status: u16,
+    inspect_status: u16,
+    inspect_body: &[u8],
+    id: &str,
+) -> &'static str {
+    if start_status == 204 {
+        return "unavailable";
+    }
+    if inspect_status == 404 {
+        return "missing";
+    }
+    if inspect_status != 200 {
+        return "unavailable";
+    }
+    let Ok(inspected) = serde_json::from_slice::<Value>(inspect_body) else {
+        return "unavailable";
+    };
+    if inspected["Id"] != id {
+        return "mismatch";
+    }
+    match (
+        inspected["State"]["Status"].as_str(),
+        inspected["State"]["Running"].as_bool(),
+    ) {
+        (Some("created"), Some(false)) => "created",
+        (Some("running"), Some(true)) => "running",
+        (Some("exited"), Some(false)) => "exited",
+        _ => "unavailable",
     }
 }
 
@@ -1238,31 +1317,37 @@ impl NativeRun {
         self.inspect(&id)
     }
 
-    fn resource_control_start(&self, id: &str) -> &'static str {
+    fn resource_control_start(&self, control: &'static str, id: &str) -> &'static str {
         assert!(canonical_container_id(id));
         assert!(self.created.iter().any(|(_, created_id)| created_id == id));
-        let mut command = Command::new("timeout");
-        command.args(["--kill-after=1", "10"]);
-        if required("NATIVE_PODMAN_USE_SUDO") == "1" {
-            command.args(["sudo", "-n", "podman"]);
-        } else {
-            command.arg("podman");
+        let (status, body) = self.api(
+            "POST",
+            &format!("/v{}/containers/{id}/start", self.api_version),
+            None,
+        );
+        eprintln!("DOCKERLENS_NATIVE_RESOURCE_START_HTTP: control={control} status={status}");
+        if status != 204 {
+            eprintln!("{}", start_failure_body_diagnostic(&body));
         }
-        command.args([
-            "exec",
-            &required("NATIVE_OUTER_CONTAINER"),
-            "docker",
-            "-H",
-            "unix:///dockerlens-native/docker.sock",
-            "container",
-            "start",
-            id,
-        ]);
-        let previous_uncertainty = self.uncertain_mutation.replace(true);
-        let output = bounded_native_cli_output(&mut command);
-        let (outcome, uncertain) = resource_control_start_outcome(output.status.code());
-        if !uncertain {
-            self.uncertain_mutation.set(previous_uncertainty);
+        let inspected = self.inspect(id);
+        let (outcome, uncertain) = if inspected["Id"] == id {
+            resource_control_start_outcome(status, &inspected)
+        } else {
+            ("uncertain", true)
+        };
+        eprintln!(
+            "DOCKERLENS_NATIVE_RESOURCE_START_STATE: control={control} state={}",
+            match (
+                inspected["State"]["Status"].as_str(),
+                inspected["State"]["Running"].as_bool()
+            ) {
+                (Some("created"), Some(false)) => "created",
+                (Some("running"), Some(true)) => "running",
+                _ => "other",
+            }
+        );
+        if uncertain {
+            self.uncertain_mutation.set(true);
         }
         outcome
     }
@@ -4185,7 +4270,7 @@ fn mark_resource_control(control: &'static str, phase: &'static str, outcome: &'
     assert!(matches!(phase, "create" | "inspect" | "start"));
     assert!(matches!(
         outcome,
-        "begin" | "ready" | "started" | "timeout" | "uncertain" | "invalid" | "budget"
+        "begin" | "ready" | "started" | "rejected" | "timeout" | "uncertain" | "invalid" | "budget"
     ));
     eprintln!(
         "DOCKERLENS_NATIVE_RESOURCE_CONTROL: control={control} phase={phase} outcome={outcome}"
@@ -4238,14 +4323,26 @@ fn resource_start_control_matrix(run: &mut NativeRun) {
             );
             break;
         };
-        mark_resource_control(control, "inspect", "ready");
-        let Some(id) = inspected["Id"].as_str() else {
+        let (expected_name, expected_id) = run.created.last().unwrap();
+        let control_name = run.name(&format!("resource-control-{control}"));
+        if expected_name != &control_name
+            || !resource_control_inspect_matches(
+                control,
+                expected_id,
+                expected_name,
+                &run.image,
+                &run.run_id,
+                &inspected,
+            )
+        {
             mark_resource_control(control, "inspect", "invalid");
             break;
-        };
+        }
+        mark_resource_control(control, "inspect", "ready");
+        let id = expected_id.to_owned();
         mark_resource_control(control, "start", "begin");
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run.resource_control_start(id)
+            run.resource_control_start(control, &id)
         }))
         .unwrap_or_else(|_| {
             run.uncertain_mutation.set(true);
@@ -4428,7 +4525,21 @@ fn probe_resources_and_security(run: &mut NativeRun, evidence: &mut ProbeEvidenc
     );
     if oracle_start_status != 204 {
         eprintln!("{}", start_failure_body_diagnostic(&oracle_start_body));
-        resource_start_control_matrix(run);
+        let oracle_state = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let (status, body) = run.api(
+                "GET",
+                &format!("/v{}/containers/{oracle_id}/json", run.api_version),
+                None,
+            );
+            failed_oracle_start_state(oracle_start_status, status, &body, &oracle_id)
+        }))
+        .unwrap_or("unavailable");
+        eprintln!("DOCKERLENS_NATIVE_ORACLE_START_STATE: state={oracle_state}");
+        if oracle_state == "created" && !run.uncertain_mutation.get() {
+            resource_start_control_matrix(run);
+        } else {
+            run.uncertain_mutation.set(true);
+        }
     }
     assert_native_api_status(oracle_start_status, 204);
     assert_resource_effects(run, &oracle_id, "oracle");
@@ -5136,16 +5247,32 @@ fn failed_control_start_and_failed_probe_cannot_become_continuation_or_pass() {
         Some(&["--device=/dev/null:/dev/native-null:r"][..])
     );
     assert!(resource_control_options("resource").is_none());
-    for status in [Some(1), Some(125), Some(124), Some(137), None] {
-        let (outcome, uncertain) = resource_control_start_outcome(status);
-        assert!(matches!(outcome, "timeout" | "uncertain"));
+    let created = json!({"State":{"Status":"created","Running":false}});
+    let running = json!({"State":{"Status":"running","Running":true}});
+    let unknown = json!({"State":{"Status":"exited","Running":false}});
+    for (status, state) in [
+        (204, &created),
+        (500, &running),
+        (409, &running),
+        (500, &unknown),
+        (0, &created),
+    ] {
+        let (outcome, uncertain) = resource_control_start_outcome(status, state);
+        assert_eq!(outcome, "uncertain");
         assert!(uncertain);
         assert!(!resource_control_may_continue(uncertain, 180));
         let decision = group_decision(false, true, uncertain);
         assert_eq!(decision, GroupDecision::StopUncertain);
         assert_eq!(group_decision_outcome(decision), "mutation_uncertain");
     }
-    let (outcome, uncertain) = resource_control_start_outcome(Some(0));
+    let (outcome, uncertain) = resource_control_start_outcome(500, &created);
+    assert_eq!(outcome, "rejected");
+    assert!(!uncertain);
+    assert_eq!(
+        group_decision(false, true, uncertain),
+        GroupDecision::ContinueFailed
+    );
+    let (outcome, uncertain) = resource_control_start_outcome(204, &running);
     assert_eq!(outcome, "started");
     assert!(!uncertain);
     assert!(resource_control_may_continue(uncertain, 90));
@@ -5157,6 +5284,90 @@ fn failed_control_start_and_failed_probe_cannot_become_continuation_or_pass() {
     assert_eq!(
         group_decision_outcome(group_decision(true, true, false)),
         "merge"
+    );
+}
+
+#[test]
+fn isolated_resource_controls_reject_extra_or_unverified_host_settings() {
+    let id = "a".repeat(64);
+    let name = "dl-container-test-resource-control-baseline";
+    let image = "busybox:fixture";
+    let run_id = "test";
+    let baseline = json!({"Id":id,"Name":format!("/{name}"),
+        "State":{"Status":"created","Running":false},
+        "Config":{"Image":image,"Cmd":["sh","-c","sleep 120"],
+            "Labels":{"io.dockerlens.native-run":run_id}},
+        "HostConfig":{"Memory":0,"PidsLimit":null,"Devices":[]}});
+    let matches = |control, inspected: &Value| {
+        resource_control_inspect_matches(control, &id, name, image, run_id, inspected)
+    };
+    assert!(matches("baseline", &baseline));
+    assert!(!matches("memory", &baseline));
+    let mut memory = baseline.clone();
+    memory["HostConfig"]["Memory"] = json!(67_108_864);
+    assert!(matches("memory", &memory));
+    memory["HostConfig"]["PidsLimit"] = json!(32);
+    assert!(!matches("memory", &memory));
+    let mut pids = baseline.clone();
+    pids["HostConfig"]["PidsLimit"] = json!(32);
+    assert!(matches("pids", &pids));
+    let mut device = baseline.clone();
+    device["HostConfig"]["Devices"] = json!([{"PathOnHost":"/dev/null",
+        "PathInContainer":"/dev/native-null","CgroupPermissions":"r"}]);
+    assert!(matches("device", &device));
+    device["HostConfig"]["Devices"][0]["CgroupPermissions"] = json!("rw");
+    assert!(!matches("device", &device));
+    let mut wrong_id = baseline.clone();
+    wrong_id["Id"] = json!("b".repeat(64));
+    assert!(!matches("baseline", &wrong_id));
+    for (field, value) in [
+        ("Image", json!("busybox:other")),
+        ("Cmd", json!(["sh", "-c", "other"])),
+    ] {
+        let mut wrong = baseline.clone();
+        wrong["Config"][field] = value;
+        assert!(!matches("baseline", &wrong));
+    }
+    let mut wrong_label = baseline.clone();
+    wrong_label["Config"]["Labels"]["io.dockerlens.native-run"] = json!("other");
+    assert!(!matches("baseline", &wrong_label));
+    let mut wrong_name = baseline.clone();
+    wrong_name["Name"] = json!("/other");
+    assert!(!matches("baseline", &wrong_name));
+}
+
+#[test]
+fn failed_oracle_start_requires_exact_still_created_container_before_controls() {
+    let id = "a".repeat(64);
+    let state = |status, running| {
+        json!({"Id":id,"State":{"Status":status,"Running":running}})
+            .to_string()
+            .into_bytes()
+    };
+    assert_eq!(
+        failed_oracle_start_state(500, 200, &state("created", false), &id),
+        "created"
+    );
+    assert_eq!(
+        failed_oracle_start_state(500, 200, &state("running", true), &id),
+        "running"
+    );
+    assert_eq!(
+        failed_oracle_start_state(500, 200, &state("exited", false), &id),
+        "exited"
+    );
+    assert_eq!(failed_oracle_start_state(500, 404, b"", &id), "missing");
+    assert_eq!(
+        failed_oracle_start_state(500, 200, &state("created", true), &id),
+        "unavailable"
+    );
+    assert_eq!(
+        failed_oracle_start_state(500, 200, &state("created", false), &"b".repeat(64)),
+        "mismatch"
+    );
+    assert_eq!(
+        failed_oracle_start_state(204, 200, &state("created", false), &id),
+        "unavailable"
     );
 }
 

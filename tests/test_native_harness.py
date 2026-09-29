@@ -488,6 +488,45 @@ fi
             self.assertNotIn("protected-secret", result.stdout + result.stderr)
             self.assertNotIn("secret path", result.stdout + result.stderr)
 
+    def test_resource_start_diagnostics_allow_only_closed_markers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_container_tests::live_container_settings_match_engine: test'
+else
+  echo 'DOCKERLENS_NATIVE_RESOURCE_CONTROL: control=memory phase=start outcome=rejected' >&2
+  echo 'DOCKERLENS_NATIVE_RESOURCE_START_HTTP: control=memory status=500' >&2
+  echo 'DOCKERLENS_NATIVE_RESOURCE_START_STATE: control=memory state=created' >&2
+  echo 'DOCKERLENS_NATIVE_ORACLE_START_STATE: state=created' >&2
+  echo 'DOCKERLENS_NATIVE_RESOURCE_CONTROL: control=protected-secret phase=start outcome=rejected' >&2
+  echo 'DOCKERLENS_NATIVE_RESOURCE_START_HTTP: control=memory status=protected-secret' >&2
+  echo 'DOCKERLENS_NATIVE_RESOURCE_START_HTTP: control=memory status=500 raw=protected-secret' >&2
+  echo 'DOCKERLENS_NATIVE_RESOURCE_START_STATE: control=memory state=protected-secret' >&2
+  echo 'DOCKERLENS_NATIVE_ORACLE_START_STATE: state=protected-secret' >&2
+  echo 'protected-secret raw Engine response' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            result = subprocess.run(
+                [str(ROOT / "scripts/run-exact-native-test.sh"), "native_container",
+                 "live_container_settings_match_engine"],
+                env=env, capture_output=True, text=True, timeout=15, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            for marker in (
+                "DOCKERLENS_NATIVE_RESOURCE_CONTROL: control=memory phase=start outcome=rejected",
+                "DOCKERLENS_NATIVE_RESOURCE_START_HTTP: control=memory status=500",
+                "DOCKERLENS_NATIVE_RESOURCE_START_STATE: control=memory state=created",
+                "DOCKERLENS_NATIVE_ORACLE_START_STATE: state=created",
+            ):
+                self.assertEqual(result.stderr.count(marker), 1)
+            self.assertNotIn("protected-secret", result.stdout + result.stderr)
+
     def test_resource_controls_resolver_subphases_and_cleanup_flow_are_closed(self) -> None:
         source = (ROOT / "src/native_container_tests.rs").read_text(encoding="utf-8")
         self.assertIn("if oracle_start_status != 204 {", source)

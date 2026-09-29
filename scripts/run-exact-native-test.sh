@@ -77,7 +77,10 @@ isolation_diag=$(grep -Eo '^DOCKERLENS_NATIVE_ISOLATION_DIAG: result=(refused|co
 namespace_diag=$(grep -Eo '^DOCKERLENS_NATIVE_NAMESPACE_DIAG: category=(input|inspect|identity|changed|process|missing_tool|probe)$' "$capture_path" | tail -n 1 || true)
 api_diag=$(grep -Eo '^DOCKERLENS_NATIVE_API_DIAG: (transport=(timeout|other)|status=(invalid_request|not_found|conflict|server|other))$' "$capture_path" | tail -n 1 || true)
 start_body_diag=$(grep -Eo '^DOCKERLENS_NATIVE_START_BODY_DIAG: shape=(message|missing|malformed|oversize) cgroup_mention=(present|absent|unknown) device_mention=(present|absent|unknown) sysctl_mention=(present|absent|unknown) ulimit_mention=(present|absent|unknown) apparmor_mention=(present|absent|unknown) permission_phrase=(present|absent|unknown) errno_mention=(present|absent|unknown) controller_mention=(present|absent|unknown) bpf_mention=(present|absent|unknown)$' "$capture_path" | tail -n 1 || true)
-resource_control_diag=$(grep -E '^DOCKERLENS_NATIVE_RESOURCE_CONTROL: control=(baseline|memory|pids|device) phase=(create|inspect|start) outcome=(begin|ready|started|timeout|uncertain|invalid|budget)$' "$capture_path" | tail -n 24 || true)
+resource_control_diag=$(grep -E '^DOCKERLENS_NATIVE_RESOURCE_CONTROL: control=(baseline|memory|pids|device) phase=(create|inspect|start) outcome=(begin|ready|started|rejected|timeout|uncertain|invalid|budget)$' "$capture_path" | tail -n 24 || true)
+resource_start_http_diag=$(grep -E '^DOCKERLENS_NATIVE_RESOURCE_START_HTTP: control=(baseline|memory|pids|device) status=[1-5][0-9][0-9]$' "$capture_path" | tail -n 4 || true)
+resource_start_state_diag=$(grep -E '^DOCKERLENS_NATIVE_RESOURCE_START_STATE: control=(baseline|memory|pids|device) state=(created|running|other)$' "$capture_path" | tail -n 4 || true)
+oracle_start_state_diag=$(grep -E '^DOCKERLENS_NATIVE_ORACLE_START_STATE: state=(created|running|exited|missing|mismatch|unavailable)$' "$capture_path" | tail -n 1 || true)
 container_flow_diag=$(grep -E '^DOCKERLENS_NATIVE_CONTAINER_FLOW: (phase=mutation outcome=(timeout|uncertain)|phase=cleanup_(tracked|inventory|readback) outcome=(begin|pass|fail)|phase=decision outcome=(merge|probe_failed|cleanup_unverified|mutation_uncertain))$' "$capture_path" | tail -n 8 || true)
 group_failures=$(grep -E '^DOCKERLENS_NATIVE_GROUP_FAILURE: group=(ports|identity_health_clear|storage_lifecycle|resources_security|resolver_logging) reason=(preflight|probe|cleanup_unverified|mutation_uncertain)$' "$capture_path" | head -n 5 || true)
 reason_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: target_start_reason_(operation_not_permitted|permission_denied|invalid_argument|read_only_filesystem|not_found|timeout|unclassified)$' "$capture_path" | tail -n 1 || true)
@@ -110,6 +113,9 @@ if (( run_status != 0 )); then
   if [[ -n $api_diag ]]; then echo "$api_diag" >&2; fi
   if [[ -n $start_body_diag ]]; then echo "$start_body_diag" >&2; fi
   if [[ -n $resource_control_diag ]]; then printf '%s\n' "$resource_control_diag" >&2; fi
+  if [[ -n $resource_start_http_diag ]]; then printf '%s\n' "$resource_start_http_diag" >&2; fi
+  if [[ -n $resource_start_state_diag ]]; then printf '%s\n' "$resource_start_state_diag" >&2; fi
+  if [[ -n $oracle_start_state_diag ]]; then echo "$oracle_start_state_diag" >&2; fi
   if [[ -n $container_flow_diag ]]; then printf '%s\n' "$container_flow_diag" >&2; fi
   if [[ -n $group_failures ]]; then printf '%s\n' "$group_failures" >&2; fi
   if [[ -n $dns_diag ]]; then echo "$dns_diag" >&2; fi
