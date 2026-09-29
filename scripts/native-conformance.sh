@@ -423,7 +423,7 @@ timeout --signal=TERM --kill-after=2s 30s "${podman_cmd[@]}" network create --dr
   --label "io.dockerlens.native-run=$run_id" "$outer_network" >/dev/null 2>&1 || sidecar_setup_failed network_create
 sidecar_start_category=$(timeout --signal=TERM --kill-after=2s 120s "${podman_cmd[@]}" run --pull=never -d --name "$sidecar" \
   --label "io.dockerlens.native-run=$run_id" --network "$outer_network" \
-  --cap-drop=all --security-opt no-new-privileges --pids-limit=64 --memory=128m \
+  --user=65534:65534 --cap-drop=all --security-opt no-new-privileges --pids-limit=64 --memory=128m \
   "$FIXTURE_IMAGE" sh -c \
   'if { printf proof-egress > /tmp/index.html; } 2>/dev/null; then
      printf "DOCKERLENS_SIDECAR_STAGE: write_ok\n" >&2

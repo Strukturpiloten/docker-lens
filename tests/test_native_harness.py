@@ -1459,7 +1459,11 @@ esac
                 if (state / "sidecar-run-args").exists():
                     sidecar_args = (state / "sidecar-run-args").read_text()
                     self.assertIn("--network dl-native-net-", sidecar_args)
+                    self.assertIn("--user=65534:65534", sidecar_args)
                     self.assertIn("--cap-drop=all", sidecar_args)
+                    self.assertIn("--security-opt no-new-privileges", sidecar_args)
+                    self.assertIn("--pids-limit=64", sidecar_args)
+                    self.assertIn("--memory=128m", sidecar_args)
                 if (state / "run-args").exists():
                     args = (state / "run-args").read_text()
                     self.assertIn("--image-volume=ignore", args)
