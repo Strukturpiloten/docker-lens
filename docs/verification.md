@@ -254,10 +254,18 @@ bind assertion therefore tests mount behavior independently of host ownership.
 Every image declares a Docker data-root VOLUME. The harness disables
 automatic image volumes and mounts exactly one task-labeled named volume at
 the declared data root. It checks the mounted volume after launch; an
-unexpected anonymous or extra volume fails the lane. A watchdog bounds
-storage use and free space. This isolated nesting setup does not demonstrate
-compatibility with restrictive data-root mount flags or an enforcing outer
-AppArmor profile. Failure diagnostics show the exact native test,
+unexpected anonymous or extra volume fails the lane. A watchdog checks the
+owned volume and Podman storage every five seconds. It retries failed `du` or
+`df` measurements at most twice, one second apart, to tolerate disappearing
+overlay paths during traversal. Both measurements still run on each attempt,
+and any measured volume above 4 GiB, free space below 2 GiB, or elapsed time
+above 30 minutes terminates the lane immediately, even if that measurement's
+command also reported a traversal error. Persistent command errors
+and malformed measurements also terminate it with fixed reason markers;
+raw measurement paths and command errors are suppressed. The normal
+ownership-checked cleanup then runs. This isolated nesting setup does not
+demonstrate compatibility with restrictive data-root mount flags or an
+enforcing outer AppArmor profile. Failure diagnostics show the exact native test,
 exit status, numeric libtest summary, fixed native marker, and closed
 acquisition-error category where applicable. Daemon startup failures show
 bounded container state and a fixed category. Raw daemon logs and API
