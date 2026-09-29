@@ -59,3 +59,18 @@ repeated and ephemeral bindings, command clear behavior, shell/disabled
 health, timing, mount access, and resource/security outcomes. BoxFerry owns
 promotion of authored intent and structured loss decisions. Offline tests
 establish only local request and rejection behavior.
+
+The native Debian 11 nested default-bridge fixture may report a test-only
+`nested_default_bridge_ipv6_unavailable` outcome for fixed or ephemeral `::1`
+publication only after independently checking CLI and rendered configured and
+runtime bindings, running state, same-container local and published IPv4
+canaries, pinned outer TCP6 availability, inner IPv6-disabled state, and exact
+kernel `ECONNREFUSED` at the requested or assigned host port across five
+250 ms-spaced probes and one final post-control probe. Before a negative, the
+running/default-bridge state, bindings, IPv4 canaries, and outer TCP6 control
+are rechecked; a later connection is a positive candidate, never a negative.
+Both fixtures
+must agree. A connection requires successful IPv6 HTTP instead; all other
+outcomes fail. Upstream lanes retain positive IPv6 assertions. This scoped
+native fixture outcome does not admit or reject a production capability for
+Engine 20.10, API 1.41, or any general daemon mode.

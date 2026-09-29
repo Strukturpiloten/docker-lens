@@ -295,6 +295,7 @@ fn name_selection_and_discovery_keep_peer_inspects_out_of_scope() {
     )
     .unwrap();
     assert_eq!(capture.bounds().selected_resources, 1);
+    assert_eq!(capture.bounds().request_count, 4);
     assert_eq!(capture.selected_roots().len(), 1);
     assert_eq!(
         capture.selected_roots()[0].reason,
@@ -302,6 +303,12 @@ fn name_selection_and_discovery_keep_peer_inspects_out_of_scope() {
     );
     let decoded = decode_capture(&capture).unwrap();
     assert_eq!(decoded.containers.len(), 1);
+    assert_eq!(decoded.containers[0].id.origin, Origin::RuntimeAssigned);
+    assert_eq!(decoded.containers[0].id.availability, Availability::Present);
+    assert_eq!(
+        decoded.containers[0].id.value().unwrap().as_bytes(),
+        b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    );
     assert_eq!(decoded.discovered_containers.len(), 2);
     assert_eq!(
         decoded.selected_roots[0].resource,

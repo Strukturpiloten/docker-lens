@@ -34,6 +34,20 @@ else:
 print(outcome)
 sys.exit(0 if outcome == 'refused' else 1)
 """
+TCP6_REFUSAL_SCRIPT = """import errno, socket, sys
+try:
+    with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as connection:
+        connection.settimeout(3)
+        result = connection.connect_ex(('::1', int(sys.argv[1])))
+except (OSError, TimeoutError):
+    outcome = 'other'
+else:
+    outcome = ('refused' if result == errno.ECONNREFUSED else
+               'connected' if result == 0 else
+               'timeout' if result in (errno.ETIMEDOUT, errno.EAGAIN) else 'other')
+print(outcome)
+sys.exit(0 if outcome == 'refused' else 1)
+"""
 IPV6_SOCKET_SCRIPT = """import socket
 outcome = 'tcp6_unavailable'
 try:
@@ -187,6 +201,10 @@ def verified_process(outer: str, run_id: str, expected: tuple[str, int, str]):
 def probe_command(mode: str, argument: str | None) -> list[str]:
     if mode == "tcp_refusal" and argument is None:
         return [sys.executable, "-c", TCP_REFUSAL_SCRIPT]
+    if mode == "tcp6_refusal" and argument is not None:
+        if not re.fullmatch(r"[1-9][0-9]{0,4}", argument) or int(argument) > 65535:
+            raise ProbeFailure("input")
+        return [sys.executable, "-c", TCP6_REFUSAL_SCRIPT, argument]
     if mode == "ipv6_socket" and argument is None:
         return [sys.executable, "-c", IPV6_SOCKET_SCRIPT]
     if mode == "curl_version" and argument is None:

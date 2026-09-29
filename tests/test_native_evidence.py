@@ -33,6 +33,7 @@ SOURCE_PROBES = [
     "MultipleHostIpBindingsOracle", "MountEnvironmentOracle",
     "HealthRestartOracle", "SelectedFieldOrigins",
     "NetworkActiveMembership", "NetworkStoppedMembershipBoundary",
+    "ContainerInspectIdOracle",
 ]
 NETWORK_PROBES = [
     "ExternalNetworkReference", "InternalBridgeNetworkCreate", "Ipv6BridgeNetworkCreate",
@@ -71,11 +72,16 @@ INTERVAL_NEGATIVES = [
     {"shape": "HealthStartIntervalPositive", "reason": "api_1_41_no_start_interval"},
     {"shape": "HealthStartIntervalZero", "reason": "api_1_41_start_interval_zero_unobservable"},
 ]
+IPV6_NEGATIVES = [
+    {"shape": shape, "reason": "nested_default_bridge_ipv6_unavailable"}
+    for shape in ("EphemeralIpv6HostPort", "FixedIpv6HostPort")
+]
+DEBIAN_NEGATIVES = IPV6_NEGATIVES + INTERVAL_NEGATIVES
 DEBIAN_CONTAINER = {
     "schema_version": 1,
     "positive": [shape for shape in CONTAINER_PROBES
-                 if shape not in {item["shape"] for item in INTERVAL_NEGATIVES}],
-    "expected_negative": INTERVAL_NEGATIVES,
+                 if shape not in {item["shape"] for item in DEBIAN_NEGATIVES}],
+    "expected_negative": DEBIAN_NEGATIVES,
 }
 VOLUME_LABEL_PROBES = [
     "VolumeCreateLabels", "VolumeLabelInspect",
@@ -251,8 +257,28 @@ class NativeEvidenceTests(unittest.TestCase):
         version = {"Version": "20.10.5", "ApiVersion": "1.41", "MinAPIVersion": "1.12"}
         options = {"image": image, "lane": "debian11-rootful", "mode": "rootful",
                    "package": "20.10.5+dfsg1-1+deb11u2"}
+        for ipv6_shapes in ((), ("FixedIpv6HostPort",),
+                            ("EphemeralIpv6HostPort",),
+                            ("FixedIpv6HostPort", "EphemeralIpv6HostPort")):
+            with self.subTest(ipv6_shapes=ipv6_shapes):
+                negatives = sorted(INTERVAL_NEGATIVES + [
+                    item for item in IPV6_NEGATIVES if item["shape"] in ipv6_shapes
+                ], key=lambda item: item["shape"])
+                probes = {
+                    "schema_version": 1,
+                    "positive": [shape for shape in CONTAINER_PROBES
+                                 if shape not in {item["shape"] for item in negatives}],
+                    "expected_negative": negatives,
+                }
+                result, path = self.run_emit(version, container_probes=probes, **options)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["container_probes"], probes)
         for probes in (
             UPSTREAM_CONTAINER,
+            {**DEBIAN_CONTAINER, "expected_negative": [
+                {**IPV6_NEGATIVES[0], "reason": "private-canary"},
+                *DEBIAN_NEGATIVES[1:]]},
+            {**DEBIAN_CONTAINER, "expected_negative": list(reversed(DEBIAN_NEGATIVES))},
             {**DEBIAN_CONTAINER, "expected_negative": [
                 {"shape": "HealthStartIntervalPositive", "reason": "private-canary"}]},
             {**DEBIAN_CONTAINER, "expected_negative": [
@@ -298,6 +324,11 @@ class NativeEvidenceTests(unittest.TestCase):
 
     def test_source_probes_are_exact_closed_non_admission_evidence(self) -> None:
         version = {"Version": "29.8.1", "ApiVersion": "1.56", "MinAPIVersion": "1.44"}
+        self.assertEqual(len(SOURCE_PROBES), 18)
+        self.assertEqual(SOURCE_PROBES[-3:], [
+            "NetworkActiveMembership", "NetworkStoppedMembershipBoundary",
+            "ContainerInspectIdOracle",
+        ])
         for probes in (SOURCE_PROBES[:-1], SOURCE_PROBES + ["private-canary"],
                        SOURCE_PROBES[:-1] + [SOURCE_PROBES[0]]):
             with self.subTest(probes=probes):

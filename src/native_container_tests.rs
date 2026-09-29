@@ -128,6 +128,17 @@ fn cli_failure_stderr(stderr: &[u8]) -> &'static str {
         "no_route"
     } else if message.contains("permission denied") || message.contains("operation not permitted") {
         "permission"
+    } else if message.contains("no space left on device") || message.contains("disk quota exceeded")
+    {
+        "storage_exhausted"
+    } else if message.contains("invalid reference format") {
+        "invalid_reference"
+    } else if message.contains("no such container") || message.contains("no such image") {
+        "missing_resource"
+    } else if message.contains("failed to register layer")
+        || message.contains("failed to save image")
+    {
+        "image_storage"
     } else {
         "unknown"
     }
@@ -191,6 +202,16 @@ fn native_failure_categories_remain_closed_and_private() {
         ),
         ("no route to host protected-secret", "no_route"),
         ("permission denied protected-secret", "permission"),
+        (
+            "no space left on device protected-secret",
+            "storage_exhausted",
+        ),
+        (
+            "invalid reference format protected-secret",
+            "invalid_reference",
+        ),
+        ("no such container protected-secret", "missing_resource"),
+        ("failed to register layer protected-secret", "image_storage"),
         ("protected-secret", "unknown"),
     ] {
         assert_eq!(cli_failure_stderr(private.as_bytes()), expected);
@@ -379,6 +400,10 @@ impl ProbeEvidence {
                     "HealthStartIntervalZero",
                     "api_1_41_start_interval_zero_unobservable"
                 )
+                | (
+                    "FixedIpv6HostPort" | "EphemeralIpv6HostPort",
+                    "nested_default_bridge_ipv6_unavailable"
+                )
         ));
         assert!(
             self.expected_negative.insert((shape, reason)),
@@ -456,6 +481,26 @@ fn closed_container_probe_evidence_rejects_gaps_and_overlap() {
             {"shape":"HealthStartIntervalZero", "reason":"api_1_41_start_interval_zero_unobservable"}
         ])
     );
+    let mut debian = ProbeEvidence::default();
+    for shape in EXPECTED_SHAPES {
+        match *shape {
+            "FixedIpv6HostPort" | "EphemeralIpv6HostPort" => {
+                debian.expected_negative(shape, "nested_default_bridge_ipv6_unavailable");
+            }
+            "HealthStartIntervalPositive" => {
+                debian.expected_negative(shape, "api_1_41_no_start_interval");
+            }
+            "HealthStartIntervalZero" => {
+                debian.expected_negative(shape, "api_1_41_start_interval_zero_unobservable");
+            }
+            _ => debian.positive(shape),
+        }
+    }
+    let debian_output = debian.complete();
+    assert_eq!(
+        debian_output["expected_negative"].as_array().unwrap().len(),
+        4
+    );
     assert!(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             complete.positive("HealthStartIntervalPositive");
@@ -502,6 +547,40 @@ fn valid_container_suffix(suffix: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
+fn task_image_reference(role: &str, run_id: &str) -> Option<String> {
+    if !matches!(
+        role,
+        "health-default" | "command-default" | "entrypoint-default"
+    ) || run_id.is_empty()
+        || run_id.len() > 64
+        || !run_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        return None;
+    }
+    // Docker repository components are lowercase; a tag retains the exact
+    // mixed-case run ID without collision-inducing case folding.
+    Some(format!("dockerlens-native-{role}:r{run_id}"))
+}
+
+#[test]
+fn task_image_names_keep_lowercase_repository_and_exact_run_identity() {
+    for role in ["health-default", "command-default", "entrypoint-default"] {
+        let upper = task_image_reference(role, "hn5gNseb").unwrap();
+        let lower = task_image_reference(role, "hn5gnseb").unwrap();
+        assert_eq!(upper, format!("dockerlens-native-{role}:rhn5gNseb"));
+        assert_ne!(upper, lower);
+    }
+    for role in ["", "Health-Default", "health_default", "../health", "other"] {
+        assert!(task_image_reference(role, "hn5gNseb").is_none());
+    }
+    for run_id in ["", "invalid/name", "private:tag"] {
+        assert!(task_image_reference("health-default", run_id).is_none());
+    }
+    assert!(task_image_reference("health-default", &"a".repeat(65)).is_none());
+}
+
 #[test]
 fn native_container_suffix_accepts_ipv6_probe_without_widening_names() {
     assert!(valid_container_suffix("ipv6-oracle"));
@@ -543,6 +622,124 @@ struct NativeRun {
     images: Vec<String>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Tcp6Boundary {
+    Refused,
+    Connected,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Tcp6Probe {
+    Refused,
+    Connected,
+    Timeout,
+    Other,
+    Malformed,
+}
+
+fn closed_tcp6_probe(status: Option<i32>, output: &[u8]) -> Tcp6Probe {
+    match (status, output) {
+        (Some(0), b"refused\n") => Tcp6Probe::Refused,
+        (Some(1), b"connected\n") => Tcp6Probe::Connected,
+        (Some(1), b"timeout\n") => Tcp6Probe::Timeout,
+        (Some(1), b"other\n") => Tcp6Probe::Other,
+        _ => Tcp6Probe::Malformed,
+    }
+}
+
+fn require_tcp6_probe(probe: Tcp6Probe) -> Tcp6Boundary {
+    match probe {
+        Tcp6Probe::Refused => Tcp6Boundary::Refused,
+        Tcp6Probe::Connected => Tcp6Boundary::Connected,
+        Tcp6Probe::Timeout | Tcp6Probe::Other | Tcp6Probe::Malformed => {
+            let category = match probe {
+                Tcp6Probe::Timeout => "timeout",
+                Tcp6Probe::Other => "other",
+                _ => "malformed",
+            };
+            eprintln!("DOCKERLENS_NATIVE_IPV6_BOUNDARY_DIAG: result={category}");
+            panic!("default-bridge TCP6 boundary is not a kernel refusal or connection");
+        }
+    }
+}
+
+fn stable_tcp6_boundary(
+    mut probe: impl FnMut() -> Tcp6Probe,
+    mut pause: impl FnMut(),
+) -> Tcp6Boundary {
+    // Match the former published-HTTP five-attempt, 250 ms readiness window.
+    // A transient refusal can never authorize an expected negative.
+    for attempt in 0..5 {
+        match require_tcp6_probe(probe()) {
+            Tcp6Boundary::Connected => return Tcp6Boundary::Connected,
+            Tcp6Boundary::Refused if attempt < 4 => pause(),
+            Tcp6Boundary::Refused => return Tcp6Boundary::Refused,
+        }
+    }
+    unreachable!("closed five-attempt TCP6 window")
+}
+
+#[test]
+fn stable_tcp6_refusal_requires_full_window_and_reclassifies_late_connection() {
+    let mut attempts = 0;
+    let mut pauses = 0;
+    assert_eq!(
+        stable_tcp6_boundary(
+            || {
+                attempts += 1;
+                if attempts == 5 {
+                    Tcp6Probe::Connected
+                } else {
+                    Tcp6Probe::Refused
+                }
+            },
+            || pauses += 1,
+        ),
+        Tcp6Boundary::Connected
+    );
+    assert_eq!((attempts, pauses), (5, 4));
+    let mut attempts = 0;
+    assert_eq!(
+        stable_tcp6_boundary(
+            || {
+                attempts += 1;
+                Tcp6Probe::Refused
+            },
+            || {},
+        ),
+        Tcp6Boundary::Refused
+    );
+    assert_eq!(attempts, 5);
+}
+
+#[test]
+fn tcp6_timeout_unknown_and_malformed_fail_closed() {
+    assert_eq!(closed_tcp6_probe(Some(1), b"timeout\n"), Tcp6Probe::Timeout);
+    assert_eq!(closed_tcp6_probe(Some(1), b"other\n"), Tcp6Probe::Other);
+    assert_eq!(closed_tcp6_probe(Some(0), b"refused\n"), Tcp6Probe::Refused);
+    assert_eq!(
+        closed_tcp6_probe(Some(1), b"connected\n"),
+        Tcp6Probe::Connected
+    );
+    assert_eq!(closed_tcp6_probe(None, b"refused\n"), Tcp6Probe::Malformed);
+    for failure in [Tcp6Probe::Timeout, Tcp6Probe::Other, Tcp6Probe::Malformed] {
+        let mut attempts = 0;
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                stable_tcp6_boundary(
+                    || {
+                        attempts += 1;
+                        failure
+                    },
+                    || {},
+                );
+            }))
+            .is_err()
+        );
+        assert_eq!(attempts, 1, "non-refusal cannot be retried into a negative");
+    }
+}
+
 impl NativeRun {
     fn new() -> Self {
         let lane = required("NATIVE_LANE");
@@ -577,6 +774,15 @@ impl NativeRun {
     fn name(&self, suffix: &str) -> String {
         assert!(valid_container_suffix(suffix));
         format!("dl-container-{}-{suffix}", self.run_id)
+    }
+
+    fn debian_default_bridge_boundary(&self) -> bool {
+        // NativeRun::new binds these exact Debian lanes to API 1.41.
+        self.api_version == "1.41"
+    }
+
+    fn image_name(&self, role: &str) -> String {
+        task_image_reference(role, &self.run_id).expect("fixed task-owned image reference")
     }
 
     fn api(&self, method: &str, path: &str, body: Option<&Value>) -> (u16, Vec<u8>) {
@@ -864,6 +1070,42 @@ impl NativeRun {
         panic!("closed published endpoint HTTP assertion failed");
     }
 
+    fn assert_default_bridge_ipv6_context(&self, id: &str) {
+        let inspected = self.inspect(id);
+        assert_eq!(inspected["State"]["Running"], true);
+        assert!(matches!(
+            inspected["HostConfig"]["NetworkMode"].as_str(),
+            Some("default" | "bridge")
+        ));
+        assert!(inspected["NetworkSettings"]["Networks"]["bridge"].is_object());
+        let outer = self.namespace_probe("ipv6_socket", None);
+        assert!(
+            outer.status.success() && outer.stdout == b"available\n",
+            "verified outer TCP6 loopback positive control failed"
+        );
+    }
+
+    fn tcp6_probe(&self, port: u16) -> Tcp6Probe {
+        let output = self.namespace_probe("tcp6_refusal", Some(&port.to_string()));
+        closed_tcp6_probe(output.status.code(), &output.stdout)
+    }
+
+    fn assert_default_bridge_ipv6_boundary(&self, id: &str, port: u16) -> Tcp6Boundary {
+        self.assert_default_bridge_ipv6_context(id);
+        let result = stable_tcp6_boundary(
+            || self.tcp6_probe(port),
+            || std::thread::sleep(std::time::Duration::from_millis(250)),
+        );
+        eprintln!(
+            "DOCKERLENS_NATIVE_IPV6_BOUNDARY_DIAG: result={}",
+            match result {
+                Tcp6Boundary::Refused => "refused",
+                Tcp6Boundary::Connected => "connected",
+            }
+        );
+        result
+    }
+
     fn cli_create(&mut self, suffix: &str, options: &[String], command: &[&str]) -> Value {
         let image = self.image.clone();
         self.cli_create_image(suffix, options, &image, command)
@@ -888,10 +1130,16 @@ impl NativeRun {
         args.extend_from_slice(options);
         args.push(image.to_owned());
         args.extend(command.iter().map(|arg| (*arg).to_owned()));
+        if suffix == "health-default-source" {
+            eprintln!("DOCKERLENS_NATIVE_CHECK: container_health_disabled_source_create");
+        }
         let id = self.cli(&args).trim().to_owned();
         assert_eq!(id.len(), 64, "CLI-created container ID");
         self.created.push((name, id.clone()));
         mark_port_stage(suffix, "cli_inspect");
+        if suffix == "health-default-source" {
+            eprintln!("DOCKERLENS_NATIVE_CHECK: container_health_disabled_source_inspect");
+        }
         self.inspect(&id)
     }
 
@@ -1074,7 +1322,7 @@ impl NativeRun {
     ) -> String {
         let source = self.cli_create(&format!("{suffix}-source"), &[], &["true"]);
         let source_id = source["Id"].as_str().unwrap().to_owned();
-        let image = format!("{}:local", self.name(&format!("{suffix}-image")));
+        let image = self.image_name(suffix);
         self.cli(&[
             "commit".into(),
             "--change".into(),
@@ -1116,7 +1364,8 @@ impl NativeRun {
         for key in ["Test", "Interval", "Timeout", "Retries"] {
             assert_eq!(source["Config"]["Healthcheck"][key], expected_health[key]);
         }
-        let image = format!("{}:local", self.name("health-default-image"));
+        let image = self.image_name("health-default");
+        eprintln!("DOCKERLENS_NATIVE_CHECK: container_health_disabled_image_commit");
         self.cli(&[
             "commit".into(),
             "--change".into(),
@@ -1125,6 +1374,7 @@ impl NativeRun {
             image.clone(),
         ]);
         self.images.push(image.clone());
+        eprintln!("DOCKERLENS_NATIVE_CHECK: container_health_disabled_image_inspect");
         let inspected = self.cli(&["image".into(), "inspect".into(), image.clone()]);
         let inspected: Value = serde_json::from_str(&inspected).unwrap();
         for key in ["Test", "Interval", "Timeout", "Retries"] {
@@ -1137,6 +1387,7 @@ impl NativeRun {
             inspected[0]["Config"]["Labels"]["io.dockerlens.native-run"],
             self.run_id
         );
+        eprintln!("DOCKERLENS_NATIVE_CHECK: container_health_disabled_source_cleanup");
         self.delete(&source_id);
         image
     }
@@ -1209,6 +1460,164 @@ fn assert_port_binding(inspected: &Value, key: &str, host_ip: &str, host_port: &
     );
 }
 
+fn assert_configured_binding_count(inspected: &Value, key: &str, count: usize) {
+    assert_eq!(
+        inspected["HostConfig"]["PortBindings"][key]
+            .as_array()
+            .expect("configured port bindings")
+            .len(),
+        count,
+        "exact configured binding count"
+    );
+}
+
+fn assigned_port(inspected: &Value, key: &str, host_ip: &str, expected_bindings: usize) -> u16 {
+    let bindings = inspected["NetworkSettings"]["Ports"][key]
+        .as_array()
+        .expect("runtime port bindings");
+    assert_eq!(
+        bindings.len(),
+        expected_bindings,
+        "exact runtime binding count"
+    );
+    let matches: Vec<_> = bindings
+        .iter()
+        .filter(|binding| binding["HostIp"] == host_ip)
+        .collect();
+    assert_eq!(
+        matches.len(),
+        1,
+        "one runtime binding for exact host address"
+    );
+    let port: u16 = matches[0]["HostPort"]
+        .as_str()
+        .expect("runtime host port string")
+        .parse()
+        .expect("numeric runtime host port");
+    assert!(port > 0, "nonzero runtime host port");
+    port
+}
+
+fn assert_debian_ipv6_controls(
+    run: &NativeRun,
+    id: &str,
+    key: &str,
+    expected: &str,
+    suffix: &str,
+    fixed_ipv6_port: Option<u16>,
+) -> (u16, u16) {
+    let inspected = run.inspect(id);
+    assert_eq!(inspected["State"]["Running"], true);
+    assert_configured_binding_count(&inspected, key, 2);
+    let configured_port = fixed_ipv6_port.map_or_else(String::new, |port| port.to_string());
+    let configured_ipv4_port = fixed_ipv6_port.map_or("", |_| "18113");
+    assert_port_binding(&inspected, key, "::1", &configured_port);
+    assert_port_binding(&inspected, key, "127.0.0.1", configured_ipv4_port);
+    let ipv4_port = assigned_port(&inspected, key, "127.0.0.1", 2);
+    let ipv6_port = assigned_port(&inspected, key, "::1", 2);
+    if let Some(fixed) = fixed_ipv6_port {
+        assert_eq!(ipv6_port, fixed, "exact fixed IPv6 runtime binding");
+        assert_eq!(ipv4_port, 18113, "exact fixed IPv4 control binding");
+    }
+    let container_port = key
+        .split_once('/')
+        .expect("closed TCP port key")
+        .0
+        .parse()
+        .expect("numeric container TCP port");
+    assert_local_service(run, id, container_port, expected, suffix);
+    mark_port_stage(suffix, "cli_http");
+    run.assert_published_http(
+        &format!("http://127.0.0.1:{ipv4_port}/index.html"),
+        expected,
+        None,
+    );
+    mark_port_stage(suffix, "http_assert");
+    (ipv4_port, ipv6_port)
+}
+
+fn assert_debian_ipv6_fixture(
+    run: &NativeRun,
+    id: &str,
+    key: &str,
+    expected: &str,
+    suffix: &str,
+    fixed_ipv6_port: Option<u16>,
+) -> Tcp6Boundary {
+    let ports = assert_debian_ipv6_controls(run, id, key, expected, suffix, fixed_ipv6_port);
+    mark_port_stage(suffix, "tcp6_boundary");
+    let mut outcome = run.assert_default_bridge_ipv6_boundary(id, ports.1);
+    if outcome == Tcp6Boundary::Refused {
+        mark_port_stage(suffix, "negative_recheck");
+        let rechecked =
+            assert_debian_ipv6_controls(run, id, key, expected, suffix, fixed_ipv6_port);
+        assert_eq!(rechecked, ports, "runtime binding must remain stable");
+        run.assert_default_bridge_ipv6_context(id);
+        outcome = require_tcp6_probe(run.tcp6_probe(ports.1));
+        if outcome == Tcp6Boundary::Refused {
+            assert_eq!(
+                run.inner_ipv6_state(id),
+                ("disabled", "disabled"),
+                "only the reviewed nested default-bridge IPv6-disabled fixture admits a refusal"
+            );
+        }
+    }
+    if outcome == Tcp6Boundary::Connected {
+        mark_port_stage(suffix, "cli_http_secondary");
+        run.assert_published_http(
+            &format!("http://[::1]:{}/index.html", ports.1),
+            expected,
+            None,
+        );
+        mark_port_stage(suffix, "http_assert_secondary");
+    }
+    outcome
+}
+
+fn record_ipv6_fixture_outcomes(
+    evidence: &mut ProbeEvidence,
+    shape: &'static str,
+    oracle: Tcp6Boundary,
+    rendered: Tcp6Boundary,
+) {
+    assert_eq!(
+        oracle, rendered,
+        "CLI and rendered IPv6 outcomes must agree"
+    );
+    match oracle {
+        Tcp6Boundary::Connected => evidence.positive(shape),
+        Tcp6Boundary::Refused => {
+            evidence.expected_negative(shape, "nested_default_bridge_ipv6_unavailable");
+        }
+    }
+}
+
+#[test]
+fn ipv6_fixture_outcome_requires_agreement() {
+    let mut evidence = ProbeEvidence::default();
+    record_ipv6_fixture_outcomes(
+        &mut evidence,
+        "FixedIpv6HostPort",
+        Tcp6Boundary::Refused,
+        Tcp6Boundary::Refused,
+    );
+    assert!(evidence.expected_negative.contains(&(
+        "FixedIpv6HostPort",
+        "nested_default_bridge_ipv6_unavailable"
+    )));
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            record_ipv6_fixture_outcomes(
+                &mut evidence,
+                "EphemeralIpv6HostPort",
+                Tcp6Boundary::Connected,
+                Tcp6Boundary::Refused,
+            );
+        }))
+        .is_err()
+    );
+}
+
 // Only fixed, test-authored stage names cross the native output boundary.
 fn mark_port_stage(suffix: &str, phase: &'static str) {
     let group = match suffix {
@@ -1248,6 +1657,8 @@ fn mark_port_stage(suffix: &str, phase: &'static str) {
             | "udp_send"
             | "udp_receive"
             | "udp_assert"
+            | "tcp6_boundary"
+            | "negative_recheck"
     ));
     eprintln!("DOCKERLENS_NATIVE_CHECK: container_port_{group}_{phase}");
 }
@@ -1471,60 +1882,82 @@ fn probe_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
 
     eprintln!("DOCKERLENS_NATIVE_CHECK: container_ports_ipv6");
     let ipv6_script = "printf native-ipv6-canary >/tmp/index.html; httpd -f -p 8083 -h /tmp";
+    let mut oracle_options = vec!["--publish=[::1]:18112:8083/tcp".to_owned()];
+    if run.debian_default_bridge_boundary() {
+        oracle_options.push("--publish=127.0.0.1:18113:8083/tcp".to_owned());
+    }
     mark_port_stage("ipv6-oracle", "cli_create");
-    let oracle = run.cli_create(
-        "ipv6-oracle",
-        &["--publish=[::1]:18112:8083/tcp".to_owned()],
-        &["sh", "-c", ipv6_script],
-    );
+    let oracle = run.cli_create("ipv6-oracle", &oracle_options, &["sh", "-c", ipv6_script]);
     mark_port_stage("ipv6-oracle", "oracle_bindings");
+    assert_configured_binding_count(&oracle, "8083/tcp", oracle_options.len());
     assert_port_binding(&oracle, "8083/tcp", "::1", "18112");
+    if run.debian_default_bridge_boundary() {
+        assert_port_binding(&oracle, "8083/tcp", "127.0.0.1", "18113");
+    }
     let oracle_id = oracle["Id"].as_str().unwrap().to_owned();
     mark_port_stage("ipv6-oracle", "oracle_start");
     start_container(run, &oracle_id);
-    assert_ipv6_traffic(run, &oracle_id, "ipv6-oracle");
+    let oracle_outcome = if run.debian_default_bridge_boundary() {
+        Some(assert_debian_ipv6_fixture(
+            run,
+            &oracle_id,
+            "8083/tcp",
+            "native-ipv6-canary",
+            "ipv6-oracle",
+            Some(18112),
+        ))
+    } else {
+        assert_ipv6_traffic(run, &oracle_id, "ipv6-oracle");
+        None
+    };
     mark_port_stage("ipv6-oracle", "oracle_cleanup");
     run.delete(&oracle_id);
     let mut container = bare_container(&run.image);
     container.command =
         ImageCommand::Exec(vec![argument("sh"), argument("-c"), argument(ipv6_script)]);
+    let mut host_bindings = vec![HostBinding {
+        host_ip: PortHostIp::Address("::1".parse().unwrap()),
+        host_port: PortHostPort::Fixed(NonZeroU16::new(18112).unwrap()),
+    }];
+    let mut expected_bindings = vec![json!({"HostIp":"::1","HostPort":"18112"})];
+    if run.debian_default_bridge_boundary() {
+        host_bindings.push(HostBinding {
+            host_ip: PortHostIp::Address("127.0.0.1".parse().unwrap()),
+            host_port: PortHostPort::Fixed(NonZeroU16::new(18113).unwrap()),
+        });
+        expected_bindings.push(json!({"HostIp":"127.0.0.1","HostPort":"18113"}));
+    }
     container.ports = vec![
-        PortPublication::published(
-            NonZeroU16::new(8083).unwrap(),
-            Protocol::Tcp,
-            vec![HostBinding {
-                host_ip: PortHostIp::Address("::1".parse().unwrap()),
-                host_port: PortHostPort::Fixed(NonZeroU16::new(18112).unwrap()),
-            }],
-        )
-        .unwrap(),
+        PortPublication::published(NonZeroU16::new(8083).unwrap(), Protocol::Tcp, host_bindings)
+            .unwrap(),
     ];
     let expected_body = json!({
         "Image":run.image, "Cmd":["sh","-c",ipv6_script],
         "Labels":{"io.dockerlens.native-run":run.run_id},
         "ExposedPorts":{"8083/tcp":{}},
-        "HostConfig":{"PortBindings":{"8083/tcp":[
-            {"HostIp":"::1","HostPort":"18112"}
-        ]}}
+        "HostConfig":{"PortBindings":{"8083/tcp":expected_bindings}}
     });
+    let mut required_capabilities = vec![
+        Capability::Command,
+        Capability::PortPublish,
+        Capability::PortHostIpv6,
+    ];
+    if run.debian_default_bridge_boundary() {
+        required_capabilities.extend([Capability::PortHostIpv4, Capability::PortMultipleBindings]);
+    }
     let (id, body, inspected) = run.rendered_create(
         "ipv6-rendered",
         container,
-        &[
-            Capability::Command,
-            Capability::PortPublish,
-            Capability::PortHostIpv6,
-        ],
+        &required_capabilities,
         expected_body,
     );
     mark_port_stage("ipv6-rendered", "rendered_bindings");
-    assert_eq!(
-        body["HostConfig"]["PortBindings"]["8083/tcp"],
-        json!([
-            {"HostIp":"::1","HostPort":"18112"}
-        ])
-    );
+    assert_configured_binding_count(&body, "8083/tcp", oracle_options.len());
+    assert_configured_binding_count(&inspected, "8083/tcp", oracle_options.len());
     assert_port_binding(&inspected, "8083/tcp", "::1", "18112");
+    if run.debian_default_bridge_boundary() {
+        assert_port_binding(&inspected, "8083/tcp", "127.0.0.1", "18113");
+    }
     mark_port_stage("ipv6-rendered", "api_start");
     let (status, _) = run.api(
         "POST",
@@ -1532,8 +1965,25 @@ fn probe_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
         None,
     );
     assert_native_api_status(status, 204);
-    assert_ipv6_traffic(run, &id, "ipv6-rendered");
-    evidence.positive("FixedIpv6HostPort");
+    if let Some(oracle_outcome) = oracle_outcome {
+        let rendered_outcome = assert_debian_ipv6_fixture(
+            run,
+            &id,
+            "8083/tcp",
+            "native-ipv6-canary",
+            "ipv6-rendered",
+            Some(18112),
+        );
+        record_ipv6_fixture_outcomes(
+            evidence,
+            "FixedIpv6HostPort",
+            oracle_outcome,
+            rendered_outcome,
+        );
+    } else {
+        assert_ipv6_traffic(run, &id, "ipv6-rendered");
+        evidence.positive("FixedIpv6HostPort");
+    }
 }
 
 fn assert_ipv6_traffic(run: &NativeRun, id: &str, suffix: &str) {
@@ -1613,68 +2063,112 @@ fn assert_dynamic_http(run: &NativeRun, id: &str, key: &str, host_ip: &str, suff
 fn probe_complementary_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
     eprintln!("DOCKERLENS_NATIVE_CHECK: container_ports_ipv6");
     let ipv6_script = "printf native-dynamic-canary >/tmp/index.html; httpd -f -p 8084 -h /tmp";
+    let mut oracle_options = vec!["--publish=[::1]::8084/tcp".to_owned()];
+    if run.debian_default_bridge_boundary() {
+        oracle_options.push("--publish=127.0.0.1::8084/tcp".to_owned());
+    }
     mark_port_stage("ipv6-dynamic-oracle", "cli_create");
     let ipv6_oracle = run.cli_create(
         "ipv6-dynamic-oracle",
-        &["--publish=[::1]::8084/tcp".into()],
+        &oracle_options,
         &["sh", "-c", ipv6_script],
     );
     mark_port_stage("ipv6-dynamic-oracle", "oracle_bindings");
+    assert_configured_binding_count(&ipv6_oracle, "8084/tcp", oracle_options.len());
     assert_port_binding(&ipv6_oracle, "8084/tcp", "::1", "");
+    if run.debian_default_bridge_boundary() {
+        assert_port_binding(&ipv6_oracle, "8084/tcp", "127.0.0.1", "");
+    }
     let ipv6_oracle_id = ipv6_oracle["Id"].as_str().unwrap().to_owned();
     mark_port_stage("ipv6-dynamic-oracle", "oracle_start");
     start_container(run, &ipv6_oracle_id);
-    assert_dynamic_http(
-        run,
-        &ipv6_oracle_id,
-        "8084/tcp",
-        "::1",
-        "ipv6-dynamic-oracle",
-    );
+    let oracle_outcome = if run.debian_default_bridge_boundary() {
+        Some(assert_debian_ipv6_fixture(
+            run,
+            &ipv6_oracle_id,
+            "8084/tcp",
+            "native-dynamic-canary",
+            "ipv6-dynamic-oracle",
+            None,
+        ))
+    } else {
+        assert_dynamic_http(
+            run,
+            &ipv6_oracle_id,
+            "8084/tcp",
+            "::1",
+            "ipv6-dynamic-oracle",
+        );
+        None
+    };
     let mut container = bare_container(&run.image);
     container.command =
         ImageCommand::Exec(vec![argument("sh"), argument("-c"), argument(ipv6_script)]);
+    let mut host_bindings = vec![HostBinding {
+        host_ip: PortHostIp::Address("::1".parse().unwrap()),
+        host_port: PortHostPort::Ephemeral,
+    }];
+    let mut expected_bindings = vec![json!({"HostIp":"::1","HostPort":""})];
+    if run.debian_default_bridge_boundary() {
+        host_bindings.push(HostBinding {
+            host_ip: PortHostIp::Address("127.0.0.1".parse().unwrap()),
+            host_port: PortHostPort::Ephemeral,
+        });
+        expected_bindings.push(json!({"HostIp":"127.0.0.1","HostPort":""}));
+    }
     container.ports = vec![
-        PortPublication::published(
-            NonZeroU16::new(8084).unwrap(),
-            Protocol::Tcp,
-            vec![HostBinding {
-                host_ip: PortHostIp::Address("::1".parse().unwrap()),
-                host_port: PortHostPort::Ephemeral,
-            }],
-        )
-        .unwrap(),
+        PortPublication::published(NonZeroU16::new(8084).unwrap(), Protocol::Tcp, host_bindings)
+            .unwrap(),
     ];
     let expected = json!({
         "Image":run.image,"Cmd":["sh","-c",ipv6_script],
         "Labels":{"io.dockerlens.native-run":run.run_id},
         "ExposedPorts":{"8084/tcp":{}},
-        "HostConfig":{"PortBindings":{"8084/tcp":[{"HostIp":"::1","HostPort":""}]}}
+        "HostConfig":{"PortBindings":{"8084/tcp":expected_bindings}}
     });
+    let mut required_capabilities = vec![
+        Capability::Command,
+        Capability::PortPublish,
+        Capability::PortHostIpv6,
+        Capability::PortEphemeral,
+    ];
+    if run.debian_default_bridge_boundary() {
+        required_capabilities.extend([Capability::PortHostIpv4, Capability::PortMultipleBindings]);
+    }
     let (id, body, inspected) = run.rendered_create(
         "ipv6-dynamic-rendered",
         container,
-        &[
-            Capability::Command,
-            Capability::PortPublish,
-            Capability::PortHostIpv6,
-            Capability::PortEphemeral,
-        ],
+        &required_capabilities,
         expected,
     );
     mark_port_stage("ipv6-dynamic-rendered", "rendered_bindings");
-    assert_eq!(
-        body["HostConfig"]["PortBindings"],
-        ipv6_oracle["HostConfig"]["PortBindings"]
-    );
-    assert_eq!(
-        inspected["HostConfig"]["PortBindings"],
-        ipv6_oracle["HostConfig"]["PortBindings"]
-    );
+    assert_configured_binding_count(&body, "8084/tcp", oracle_options.len());
+    assert_configured_binding_count(&inspected, "8084/tcp", oracle_options.len());
+    assert_port_binding(&inspected, "8084/tcp", "::1", "");
+    if run.debian_default_bridge_boundary() {
+        assert_port_binding(&inspected, "8084/tcp", "127.0.0.1", "");
+    }
     mark_port_stage("ipv6-dynamic-rendered", "api_start");
     start_container(run, &id);
-    assert_dynamic_http(run, &id, "8084/tcp", "::1", "ipv6-dynamic-rendered");
-    evidence.positive("EphemeralIpv6HostPort");
+    if let Some(oracle_outcome) = oracle_outcome {
+        let rendered_outcome = assert_debian_ipv6_fixture(
+            run,
+            &id,
+            "8084/tcp",
+            "native-dynamic-canary",
+            "ipv6-dynamic-rendered",
+            None,
+        );
+        record_ipv6_fixture_outcomes(
+            evidence,
+            "EphemeralIpv6HostPort",
+            oracle_outcome,
+            rendered_outcome,
+        );
+    } else {
+        assert_dynamic_http(run, &id, "8084/tcp", "::1", "ipv6-dynamic-rendered");
+        evidence.positive("EphemeralIpv6HostPort");
+    }
 
     eprintln!("DOCKERLENS_NATIVE_CHECK: container_ports");
     let multiple_script = "printf native-dynamic-canary >/tmp/index.html; httpd -f -p 8085 -h /tmp";
@@ -1907,7 +2401,6 @@ fn probe_identity_and_health(run: &mut NativeRun, evidence: &mut ProbeEvidence) 
     );
 
     eprintln!("DOCKERLENS_NATIVE_CHECK: container_health_disabled");
-    eprintln!("DOCKERLENS_NATIVE_CHECK: container_health_disabled_image_commit");
     let health_image = run.image_with_failing_health();
     eprintln!("DOCKERLENS_NATIVE_CHECK: container_health_disabled_inherited_create");
     let inherited = run.cli_create_image(

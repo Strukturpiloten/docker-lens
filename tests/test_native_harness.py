@@ -330,6 +330,8 @@ else
   echo 'DOCKERLENS_NATIVE_CLI_DIAG: exit=other stderr=protected-secret' >&2
   echo 'DOCKERLENS_NATIVE_API_DIAG: status=conflict' >&2
   echo 'DOCKERLENS_NATIVE_API_DIAG: status=protected-secret' >&2
+  echo 'DOCKERLENS_NATIVE_IPV6_BOUNDARY_DIAG: result=refused' >&2
+  echo 'DOCKERLENS_NATIVE_IPV6_BOUNDARY_DIAG: result=protected-secret' >&2
   echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
   exit 23
 fi
@@ -338,7 +340,11 @@ fi
             env["PATH"] = f"{bin_dir}:{env['PATH']}"
             for stage in (
                 "fixed_ipv4_oracle_cli_inspect", "fixed_ipv6_rendered_cli_http",
+                "fixed_ipv6_rendered_tcp6_boundary",
+                "fixed_ipv6_rendered_negative_recheck",
                 "dynamic_ipv6_oracle_dynamic_binding",
+                "dynamic_ipv6_oracle_tcp6_boundary",
+                "dynamic_ipv6_oracle_negative_recheck",
                 "repeated_dynamic_ipv4_rendered_cli_http_secondary",
                 "fixed_ipv4_rendered_udp_assert",
             ):
@@ -353,6 +359,7 @@ fi
                     self.assertIn(f"container_port_{stage}", result.stderr)
                     self.assertIn("DOCKERLENS_NATIVE_CLI_DIAG: exit=other stderr=address_family", result.stderr)
                     self.assertIn("DOCKERLENS_NATIVE_API_DIAG: status=conflict", result.stderr)
+                    self.assertIn("DOCKERLENS_NATIVE_IPV6_BOUNDARY_DIAG: result=refused", result.stderr)
                     self.assertNotIn("protected-secret", result.stdout + result.stderr)
 
     def test_ipv6_probe_name_and_repeated_ipv4_oracle_are_live_and_bounded(self) -> None:
@@ -444,9 +451,47 @@ fi
             self.assertIn(token, health)
         self.assertNotIn('"build".into()', health)
         self.assertNotIn("fn cli_with_stdin", source)
+        self.assertIn('dockerlens-native-{role}:r{run_id}', source)
+        self.assertNotIn('format!("{}:local", self.name(', source)
         runner = (ROOT / "scripts/run-exact-native-test.sh").read_text(encoding="utf-8")
-        self.assertIn("health_disabled(_(image_commit|", runner)
+        self.assertIn("health_disabled(_(source_(create|inspect|cleanup)|image_(commit|inspect)|", runner)
         self.assertNotIn("health_disabled(_(image_build|", runner)
+
+    def test_health_substages_and_known_cli_categories_are_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_container_tests::live_container_settings_match_engine: test'
+else
+  echo "DOCKERLENS_NATIVE_CHECK: container_health_disabled_$TEST_STAGE"
+  echo 'DOCKERLENS_NATIVE_CHECK: container_health_disabled_private'
+  echo "DOCKERLENS_NATIVE_CLI_DIAG: exit=other stderr=$TEST_CATEGORY"
+  echo 'DOCKERLENS_NATIVE_CLI_DIAG: exit=other stderr=protected-secret'
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            for stage in ("source_create", "source_inspect", "image_commit",
+                          "image_inspect", "source_cleanup"):
+                for category in ("storage_exhausted", "invalid_reference",
+                                 "missing_resource", "image_storage", "unknown"):
+                    with self.subTest(stage=stage, category=category):
+                        env["TEST_STAGE"] = stage
+                        env["TEST_CATEGORY"] = category
+                        result = subprocess.run(
+                            [str(ROOT / "scripts/run-exact-native-test.sh"), "native_container",
+                             "live_container_settings_match_engine"],
+                            env=env, capture_output=True, text=True, timeout=15, check=False,
+                        )
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn(f"container_health_disabled_{stage}", result.stderr)
+                        self.assertIn(f"stderr={category}", result.stderr)
+                        self.assertNotIn("private", result.stdout + result.stderr)
+                        self.assertNotIn("protected-secret", result.stdout + result.stderr)
 
     def test_native_test_output_limit_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

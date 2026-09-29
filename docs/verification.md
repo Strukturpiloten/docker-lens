@@ -186,17 +186,54 @@ If exact inner inspect or pinned outer probing fails, that optional field is
 `unavailable` or `probe_failed`; the original HTTP failure marker remains.
 Outer namespace availability does not establish inner-container IPv6 support
 or the cause of an HTTP failure; diagnostics neither reclassify nor pass the
-failed positive. The ephemeral UDP sender uses
-the outer namespace with a validated numeric port and a fixed canary.
+failed positive. For the exact Debian 11 nested default-bridge fixture, both
+fixed and ephemeral IPv6 CLI and rendered requests additionally carry a
+Debian-only `127.0.0.1` binding to the same container service. Each must show
+its exact configured and runtime bindings, running container state, a local
+IPv4 service canary, and a successful published IPv4 canary. The pinned outer
+namespace must independently prove TCP6 loopback availability. Only then may
+the direct TCP6 probe accept kernel `ECONNREFUSED` at the exact fixed or
+runtime-assigned `::1` port, with both CLI and rendered fixtures agreeing, as
+`nested_default_bridge_ipv6_unavailable`. Five direct probes spaced 250 ms
+apart must all return exact refusal, covering the former positive HTTP
+readiness window. Before accepting a negative, the fixture repeats running
+state, default-bridge identity, configured and runtime bindings, local and
+published IPv4 canaries, and pinned outer TCP6 availability, then requires one
+final exact refusal and disabled inner IPv6 state. A connection at any probe,
+including that final check, must instead
+pass the published IPv6 HTTP canary and records a positive; timeout, routing
+or permission errors, malformed output, missing identity, or differing fixture
+outcomes fail the lane. This narrow expected negative is not an Engine 20.10,
+API 1.41, rootless, or general IPv6 rule. Upstream fixtures retain their
+positive IPv6 HTTP assertions without a Debian control binding. No profile
+or production capability is admitted by this test-only outcome.
+
+The manifest emitter requires both Debian API 1.41 start-interval negatives,
+accepts each of the two IPv6 fixture outcomes independently only on the
+Debian lanes, and preserves the observed positive or exact narrow negative in
+the sanitized manifest. It rejects reordered, unknown, duplicate, mismatched,
+or overlapping outcomes; an upstream negative is always rejected. The
+ephemeral UDP sender uses the outer namespace with a validated numeric port
+and a fixed canary.
 The disabled-health inheritance oracle now creates a run-owned CLI container
 with an explicit failing health check, commits it to a task-owned local image,
 and verifies the image's health test, timing, retry count, and ownership label
 before checking inherited unhealthy and disabled no-health behavior. This
-does not require image-build tooling. Run `36517967971` failed in the prior
-image-build setup on both upstream modes with only an unknown closed CLI
-category; that record does not establish a builder root cause. Its Debian
-modes failed the original fixed-IPv6 CLI published HTTP positive, with
-`local_service=fail`; the cause remains unproven pending fresh native evidence.
+does not require image-build tooling. The derived image uses a fixed lowercase
+repository role and retains the exact case-sensitive run ID in its tag; it
+never uses the mixed-case run-owned container name as a Docker repository.
+Run `36517967971` failed in the prior image-build setup on both upstream modes
+with only an unknown closed CLI category, and run `36521163238` failed during
+the revised image setup with the same broad category. Neither record proves a
+builder or daemon root cause. A local audit found the generated mixed-case
+repository name and motivates exact source-create, source-inspect, commit,
+image-inspect, and source-cleanup markers plus value-free recognized stderr
+categories. Its Debian modes failed the original fixed-IPv6 CLI published HTTP
+positive: inner `all` and `lo` IPv6 were disabled while the pinned outer
+namespace could create, bind, and connect TCP6. The explicit host `::1`
+publication returned curl exit 7. This is a context-specific failure, not a
+general Docker 20.10 or rootless rule; no failed positive becomes an expected
+negative without an independently checked contract.
 Closed HTTP, IPv6 and health-disable subphase markers distinguish failures without
 publishing native output. A selected native test panic may expose only its
 allowlisted source basename and bounded numeric line and column, never its
@@ -265,15 +302,22 @@ before and after acquisition. The unselected peer must not gain a container
 inspect request. After stopping that peer it repeats the comparison to the
 actual Engine response without assuming that stopped peers remain listed.
 Only successful assertions and verified fixture cleanup append
-`NetworkActiveMembership` and `NetworkStoppedMembershipBoundary` to the original
-fifteen source probes. The emitter requires all seventeen; a failure cannot emit
-partial source evidence. These are source-observation checks, not ownership,
-atomic-snapshot, or target-capability admission. All four exact lanes still
-require genuine passing runs and independent review before compatibility claims.
+`NetworkActiveMembership`, `NetworkStoppedMembershipBoundary`, and
+`ContainerInspectIdOracle` to the original fifteen source probes. The last
+marker follows comparisons of the protected container inspect ID with both the
+canonical narrowed-selection request ID and the direct inspect `Id` for exact
+ID, name, prefix, and label selectors. The emitter requires all eighteen; a
+failure cannot emit partial source evidence. These are source-observation
+checks, not ownership, atomic-snapshot, or target-capability admission. All
+four exact lanes still require genuine passing runs and independent review
+before compatibility claims.
 They cover protected predicate replay closure, canonical list identities,
 inspect response binding (including network-name fallback), explicit resource
 roots, typed inspected network IDs distinct from fallback names and empty
-endpoint IDs, and effective user namespace availability.
+endpoint IDs, and effective user namespace availability. Offline decoder tests
+cover the typed container ID's runtime origin, privacy, and fail-closed invalid
+identity cases, while a matching noncanonical caller-assembled capture remains
+accepted; acquisition tests retain the four-request narrowed-name path.
 The network-inspect membership fixtures additionally check protected canonical
 container-ID keys, entry versus `Name` availability, the 4096-entry bound,
 malformed-value diagnostics, and an unselected active member that does not

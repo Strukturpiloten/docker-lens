@@ -118,7 +118,15 @@ image defaults and runtime normalization can contribute to them. Observed
 `NetworkSettings.Ports`, network addresses, image IDs, and volume mountpoints
 have runtime-assigned origin. Network endpoint aliases are retained as
 protected effective values with missing, null, empty, and redacted states.
-An inspected network's validated native `Id` is separately exposed as a protected,
+An inspected container's request-bound native `Id` is separately exposed as a
+protected, runtime-assigned typed observation, distinct from its effective
+`Name` and any selector used to request the inspect. It adds no acquisition
+request. Missing, null, empty, wrong-shape, redacted, or mismatched inspect IDs
+fail capture decoding rather than becoming available observations. Socket
+selected container IDs are canonical; caller-assembled captures retain the
+historical acceptance of matching noncanonical strings. Runtime-assigned origin
+classifies the observed native field, not the container's ownership. An inspected
+network's validated native `Id` is separately exposed as a protected,
 runtime-assigned typed observation. A name-fallback request does not turn its
 selector or an empty endpoint `NetworkID` into that identity.
 Network inspect `Containers` is decoded as a bounded, protected snapshot of

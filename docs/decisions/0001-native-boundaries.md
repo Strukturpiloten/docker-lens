@@ -9,7 +9,13 @@ facts. Container inspect `Name`, `Config.Labels`, `Config.User`,
 `Config.WorkingDir`, and `Config.Hostname` are typed effective observations,
 including their missing, null, empty, and redacted states. Label keys and
 values remain protected; observed metadata does not claim authorship. Native
-values, daemon identifiers, paths, and endpoints must not enter
+container inspect `Id` is a protected, runtime-assigned typed observation only
+after request-versus-response validation; it is not an authored identity,
+ownership proof, or reason to inspect another container. Socket selection uses
+canonical IDs, while matching noncanonical strings in caller-assembled captures
+remain accepted. Missing, unavailable, wrong-shape, or mismatched inspect IDs
+fail closed without exposing source values or adding acquisition requests.
+Native values, daemon identifiers, paths, and endpoints must not enter
 Debug output or findings. A closed request vocabulary and explicit limits
 prevent accidental arbitrary Engine calls. The target types have no executor.
 

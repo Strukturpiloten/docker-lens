@@ -24,6 +24,32 @@ SPEC.loader.exec_module(PROBE)
 
 
 class NativeNetProbeTests(unittest.TestCase):
+    def test_tcp6_boundary_accepts_only_exact_kernel_refusal(self) -> None:
+        self.assertEqual(PROBE.probe_command("tcp6_refusal", "18112"),
+                         [sys.executable, "-c", PROBE.TCP6_REFUSAL_SCRIPT, "18112"])
+        for invalid in (None, "0", "65536", "private", "18112;touch /tmp/private"):
+            with self.subTest(invalid=invalid), self.assertRaises(PROBE.ProbeFailure):
+                PROBE.probe_command("tcp6_refusal", invalid)
+        for result, expected, status in (
+            (errno.ECONNREFUSED, "refused", 0), (0, "connected", 1),
+            (errno.ETIMEDOUT, "timeout", 1), (errno.ENETUNREACH, "other", 1),
+            (errno.EACCES, "other", 1), (OSError("private-canary"), "other", 1),
+        ):
+            with self.subTest(result=result), mock.patch.object(socket, "socket") as factory:
+                connection = factory.return_value.__enter__.return_value
+                if isinstance(result, Exception):
+                    connection.connect_ex.side_effect = result
+                else:
+                    connection.connect_ex.return_value = result
+                output = io.StringIO()
+                with mock.patch.object(sys, "argv", [str(SCRIPT), "18112"]), \
+                     contextlib.redirect_stdout(output), self.assertRaises(SystemExit) as exited:
+                    exec(PROBE.TCP6_REFUSAL_SCRIPT, {})
+                self.assertEqual(exited.exception.code, status)
+                self.assertEqual(output.getvalue(), expected + "\n")
+                connection.settimeout.assert_called_once_with(3)
+                connection.connect_ex.assert_called_once_with(("::1", 18112))
+
     def test_ipv6_socket_diagnostic_is_fixed_and_closed(self) -> None:
         self.assertEqual(PROBE.probe_command("ipv6_socket", None),
                          [sys.executable, "-c", PROBE.IPV6_SOCKET_SCRIPT])

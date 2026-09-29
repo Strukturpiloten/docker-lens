@@ -36,6 +36,7 @@ SOURCE_PROBES = (
     "MultipleHostIpBindingsOracle", "MountEnvironmentOracle",
     "HealthRestartOracle", "SelectedFieldOrigins",
     "NetworkActiveMembership", "NetworkStoppedMembershipBoundary",
+    "ContainerInspectIdOracle",
 )
 NETWORK_PROBES = (
     "ExternalNetworkReference", "InternalBridgeNetworkCreate",
@@ -78,6 +79,10 @@ START_INTERVAL_NEGATIVES = [
     {"shape": "HealthStartIntervalPositive", "reason": "api_1_41_no_start_interval"},
     {"shape": "HealthStartIntervalZero", "reason": "api_1_41_start_interval_zero_unobservable"},
 ]
+DEBIAN_IPV6_NEGATIVES = {
+    "FixedIpv6HostPort": "nested_default_bridge_ipv6_unavailable",
+    "EphemeralIpv6HostPort": "nested_default_bridge_ipv6_unavailable",
+}
 
 
 def unique_object(pairs: list[tuple[str, object]]) -> dict:
@@ -119,9 +124,16 @@ def read_container_probes(path: Path, lane: str) -> dict:
             or set(positive) & set(negatives)
             or set(positive) | set(negatives) != set(CONTAINER_PROBES)):
         raise ValueError("native container probe set is incomplete")
-    expected_negative = START_INTERVAL_NEGATIVES if lane.startswith("debian11-") else []
+    expected_negative = []
+    if lane.startswith("debian11-"):
+        expected_negative = START_INTERVAL_NEGATIVES + [
+            {"shape": shape, "reason": reason}
+            for shape, reason in DEBIAN_IPV6_NEGATIVES.items()
+            if shape in negatives
+        ]
+        expected_negative.sort(key=lambda item: item["shape"])
     if negative != expected_negative:
-        raise ValueError("native container probe outcome contradicts exact lane API")
+        raise ValueError("native container probe outcome contradicts exact lane boundary")
     negative_shapes = {item["shape"] for item in expected_negative}
     expected_positive = [shape for shape in CONTAINER_PROBES if shape not in negative_shapes]
     return {"schema_version": 1, "positive": expected_positive,
