@@ -1011,11 +1011,12 @@ impl OwnedInventory {
     }
 }
 
-fn mark_cleanup_readback(phase: &'static str, inventory: &OwnedInventory) {
+fn mark_cleanup_readback(group: &'static str, phase: &'static str, inventory: &OwnedInventory) {
+    assert!(GROUPS.iter().any(|(name, _)| *name == group));
     assert!(matches!(phase, "first" | "stable"));
     let (containers, images) = inventory.presence();
     eprintln!(
-        "DOCKERLENS_NATIVE_CLEANUP_READBACK: phase={phase} containers={containers} images={images}"
+        "DOCKERLENS_NATIVE_CLEANUP_READBACK: group={group} phase={phase} containers={containers} images={images}"
     );
 }
 
@@ -1459,7 +1460,7 @@ impl NativeRun {
     }
 
     fn cli_with_timeout(&self, args: &[String], limit: &'static str) -> String {
-        assert!(matches!(limit, "10" | "45"));
+        assert!(matches!(limit, "3" | "10" | "45"));
         let mutating = !cli_is_read_only(args);
         let previous_uncertainty = self.uncertain_mutation.get();
         if mutating {
@@ -2159,7 +2160,7 @@ impl NativeRun {
         inventory
     }
 
-    fn cleanup_verified(&mut self) -> bool {
+    fn cleanup_verified(&mut self, group: &'static str) -> bool {
         mark_container_flow("cleanup_tracked", "begin");
         let tracked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.cleanup_tracked_containers()
@@ -2212,13 +2213,13 @@ impl NativeRun {
         let readback = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             mark_cleanup_step("readback_first", "begin");
             let first = self.owned_inventory(true);
-            mark_cleanup_readback("first", &first);
+            mark_cleanup_readback(group, "first", &first);
             assert!(first.is_empty(), "owned resources absent");
             mark_cleanup_step("readback_first", "pass");
             std::thread::sleep(std::time::Duration::from_millis(200));
             mark_cleanup_step("readback_stable", "begin");
             let stable = self.owned_inventory(true);
-            mark_cleanup_readback("stable", &stable);
+            mark_cleanup_readback(group, "stable", &stable);
             assert!(stable.is_empty(), "owned absence stable");
             mark_cleanup_step("readback_stable", "pass");
         }))
@@ -5128,6 +5129,44 @@ fn mark_ipv4_log_canary(side: &'static str, present: bool) {
     eprintln!("DOCKERLENS_NATIVE_RESOLVER_LOG_CANARY: side={side} outcome={outcome}");
 }
 
+fn log_canary_ready(mut read_logs: impl FnMut() -> String) -> bool {
+    for attempt in 0..5 {
+        if read_logs().lines().any(|line| line == "native-log-canary") {
+            return true;
+        }
+        if attempt < 4 {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+    }
+    false
+}
+
+fn native_log_canary_ready(run: &NativeRun, id: &str) -> bool {
+    // Five reads with a three-second command timeout and one-second kill
+    // grace leave cleanup time inside the native lane's 180-second deadline.
+    log_canary_ready(|| run.cli_with_timeout(&["logs".into(), id.into()], "3"))
+}
+
+#[test]
+fn native_log_readiness_requires_exact_canary_after_bounded_reads() {
+    let mut reads = 0;
+    assert!(log_canary_ready(|| {
+        reads += 1;
+        if reads == 2 {
+            "native-log-canary\n".into()
+        } else {
+            String::new()
+        }
+    }));
+    assert_eq!(reads, 2);
+    let mut missing_reads = 0;
+    assert!(!log_canary_ready(|| {
+        missing_reads += 1;
+        "prefix-native-log-canary\n".into()
+    }));
+    assert_eq!(missing_reads, 5);
+}
+
 fn assert_resolver_and_logging(run: &NativeRun, id: &str, side: &'static str) {
     mark_resolver_stage("ipv4", side, "resolver");
     let resolver = run.cli(&[
@@ -5147,15 +5186,14 @@ fn assert_resolver_and_logging(run: &NativeRun, id: &str, side: &'static str) {
         line.split_whitespace().collect::<Vec<_>>() == ["10.0.0.2", "fixture.local"]
     }));
     mark_resolver_stage("ipv4", side, "logs");
-    let logs = run.cli(&["logs".into(), id.into()]);
-    let canary_present = logs.contains("native-log-canary");
+    let canary_present = native_log_canary_ready(run, id);
     mark_ipv4_log_canary(side, canary_present);
     assert!(canary_present, "expected native log canary");
 }
 
 fn probe_resolver_and_logging(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
     eprintln!("DOCKERLENS_NATIVE_CHECK: container_resolver_logging");
-    let command = "printf native-log-canary; sleep 120";
+    let oracle_command = "printf 'native-log-canary\\n'; sleep 120";
     mark_resolver_stage("ipv4", "oracle", "create");
     let oracle = run.cli_create(
         "resolver-oracle",
@@ -5165,7 +5203,7 @@ fn probe_resolver_and_logging(run: &mut NativeRun, evidence: &mut ProbeEvidence)
             "--log-driver=json-file".into(),
             "--log-opt=max-size=10m".into(),
         ],
-        &["sh", "-c", command],
+        &["sh", "-c", oracle_command],
     );
     mark_resolver_stage("ipv4", "oracle", "inspect");
     assert_eq!(oracle["HostConfig"]["Dns"], json!(["1.1.1.1"]));
@@ -5184,7 +5222,11 @@ fn probe_resolver_and_logging(run: &mut NativeRun, evidence: &mut ProbeEvidence)
     assert_resolver_and_logging(run, &oracle_id, "oracle");
 
     let mut container = bare_container(&run.image);
-    container.command = ImageCommand::Exec(vec![argument("sh"), argument("-c"), argument(command)]);
+    container.command = ImageCommand::Exec(vec![
+        argument("sh"),
+        argument("-c"),
+        argument("printf 'native-log-canary\\n'; sleep 120"),
+    ]);
     container.settings.dns = vec!["1.1.1.1".parse().unwrap()];
     container.settings.extra_hosts = vec![ExtraHost {
         name: ContainerHostname::new(b"fixture.local".to_vec()).unwrap(),
@@ -5195,7 +5237,7 @@ fn probe_resolver_and_logging(run: &mut NativeRun, evidence: &mut ProbeEvidence)
         options: vec![ContainerLabel::new(b"max-size".to_vec(), b"10m".to_vec()).unwrap()],
     });
     let expected_body = json!({
-        "Image":run.image, "Cmd":["sh","-c",command],
+        "Image":run.image, "Cmd":["sh","-c","printf 'native-log-canary\\n'; sleep 120"],
         "Labels":{"io.dockerlens.native-run":run.run_id},
         "HostConfig":{
             "Dns":["1.1.1.1"], "ExtraHosts":["fixture.local:10.0.0.2"],
@@ -5354,7 +5396,7 @@ fn assert_no_log_output(_run: &NativeRun, id: &str) {
 
 fn probe_alternative_logging(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
     eprintln!("DOCKERLENS_NATIVE_CHECK: container_resolver_logging");
-    let command = "printf native-log-canary; sleep 120";
+    let oracle_command = "printf 'native-log-canary\\n'; sleep 120";
     for (suffix, driver, name) in [
         ("local", LogDriver::Local, "local"),
         ("none", LogDriver::None, "none"),
@@ -5363,7 +5405,7 @@ fn probe_alternative_logging(run: &mut NativeRun, evidence: &mut ProbeEvidence) 
         let oracle = run.cli_create(
             &format!("log-{suffix}-oracle"),
             &[format!("--log-driver={name}")],
-            &["sh", "-c", command],
+            &["sh", "-c", oracle_command],
         );
         mark_resolver_stage(suffix, "oracle", "inspect");
         let oracle_id = oracle["Id"].as_str().unwrap().to_owned();
@@ -5377,21 +5419,21 @@ fn probe_alternative_logging(run: &mut NativeRun, evidence: &mut ProbeEvidence) 
         if suffix == "none" {
             assert_no_log_output(run, &oracle_id);
         } else {
-            assert!(
-                run.cli(&["logs".into(), oracle_id])
-                    .contains("native-log-canary")
-            );
+            assert!(native_log_canary_ready(run, &oracle_id));
         }
 
         let mut container = bare_container(&run.image);
-        container.command =
-            ImageCommand::Exec(vec![argument("sh"), argument("-c"), argument(command)]);
+        container.command = ImageCommand::Exec(vec![
+            argument("sh"),
+            argument("-c"),
+            argument("printf 'native-log-canary\\n'; sleep 120"),
+        ]);
         container.settings.log_config = Some(LogConfig {
             driver,
             options: vec![],
         });
         let expected = json!({
-            "Image":run.image,"Cmd":["sh","-c",command],
+            "Image":run.image,"Cmd":["sh","-c","printf 'native-log-canary\\n'; sleep 120"],
             "Labels":{"io.dockerlens.native-run":run.run_id},
             "HostConfig":{"LogConfig":{"Type":name,"Config":{}}}
         });
@@ -5419,7 +5461,7 @@ fn probe_alternative_logging(run: &mut NativeRun, evidence: &mut ProbeEvidence) 
             assert_no_log_output(run, &id);
             evidence.positive("LogNone");
         } else {
-            assert!(run.cli(&["logs".into(), id]).contains("native-log-canary"));
+            assert!(native_log_canary_ready(run, &id));
             evidence.positive("LogLocal");
         }
     }
@@ -5451,7 +5493,12 @@ fn live_container_settings_match_engine() {
             probe(&mut run, &mut group_evidence);
         }))
         .is_ok();
-        let cleaned = run.cleanup_verified();
+        eprintln!("DOCKERLENS_NATIVE_GROUP_CLEANUP: group={name} outcome=begin");
+        let cleaned = run.cleanup_verified(name);
+        eprintln!(
+            "DOCKERLENS_NATIVE_GROUP_CLEANUP: group={name} outcome={}",
+            if cleaned { "verified" } else { "unverified" }
+        );
         let uncertain = run.uncertain_mutation.get();
         let decision = group_decision(probe_ok, cleaned, uncertain);
         mark_container_flow("decision", group_decision_outcome(decision));

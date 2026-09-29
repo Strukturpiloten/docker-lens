@@ -553,9 +553,12 @@ else
   echo 'DOCKERLENS_NATIVE_CLEANUP_STEP: step=protected-secret outcome=begin' >&2
   echo 'DOCKERLENS_NATIVE_CLEANUP_STEP: step=readback_stable outcome=protected-secret' >&2
   echo 'DOCKERLENS_NATIVE_CLEANUP_STEP: step=readback_stable outcome=begin raw=protected-secret' >&2
-  echo 'DOCKERLENS_NATIVE_CLEANUP_READBACK: phase=first containers=nonzero images=zero' >&2
-  echo 'DOCKERLENS_NATIVE_CLEANUP_READBACK: phase=first containers=protected-secret images=zero' >&2
-  echo 'DOCKERLENS_NATIVE_CLEANUP_READBACK: phase=first containers=nonzero images=zero raw=protected-secret' >&2
+  echo 'DOCKERLENS_NATIVE_GROUP_CLEANUP: group=ports outcome=begin' >&2
+  echo 'DOCKERLENS_NATIVE_CLEANUP_READBACK: group=ports phase=first containers=nonzero images=zero' >&2
+  echo 'DOCKERLENS_NATIVE_GROUP_CLEANUP: group=ports outcome=unverified' >&2
+  echo 'DOCKERLENS_NATIVE_GROUP_CLEANUP: group=protected-secret outcome=verified' >&2
+  echo 'DOCKERLENS_NATIVE_CLEANUP_READBACK: group=ports phase=first containers=protected-secret images=zero' >&2
+  echo 'DOCKERLENS_NATIVE_CLEANUP_READBACK: group=ports phase=first containers=nonzero images=zero raw=protected-secret' >&2
   echo 'protected-secret raw Engine response' >&2
   echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
   exit 23
@@ -572,9 +575,10 @@ fi
             self.assertIn("DOCKERLENS_NATIVE_START_TIMEOUT_DIAG: state=unavailable reason=transport", result.stderr)
             self.assertIn("DOCKERLENS_NATIVE_CLEANUP_STEP: step=readback_stable outcome=begin", result.stderr)
             self.assertIn(
-                "DOCKERLENS_NATIVE_CLEANUP_READBACK: phase=first containers=nonzero images=zero",
+                "DOCKERLENS_NATIVE_CLEANUP_READBACK: group=ports phase=first containers=nonzero images=zero",
                 result.stderr,
             )
+            self.assertIn("DOCKERLENS_NATIVE_GROUP_CLEANUP: group=ports outcome=unverified", result.stderr)
             self.assertEqual(result.stderr.count("DOCKERLENS_NATIVE_CLEANUP_STEP:"), 32)
             self.assertNotIn("protected-secret", result.stdout + result.stderr)
 
@@ -696,6 +700,7 @@ fi
         self.assertIn('DOCKERLENS_NATIVE_API_DIAG: operation={} status={}', source)
         self.assertIn('DOCKERLENS_NATIVE_RESOLVER_LOGS_DIAG: operation=logs outcome=cli_failure', source)
         self.assertIn('mark_ipv4_log_canary(side, canary_present);', source)
+        self.assertIn('log_canary_ready(|| run.cli_with_timeout(&["logs".into(), id.into()], "3"))', source)
         with tempfile.TemporaryDirectory() as directory:
             bin_dir = Path(directory)
             self._tool(bin_dir, "cargo", """#!/usr/bin/env bash

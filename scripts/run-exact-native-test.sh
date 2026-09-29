@@ -85,7 +85,8 @@ resource_start_state_diag=$(grep -E '^DOCKERLENS_NATIVE_RESOURCE_START_STATE: co
 oracle_start_state_diag=$(grep -E '^DOCKERLENS_NATIVE_ORACLE_START_STATE: state=(created|running|exited|missing|mismatch|unavailable)$' "$capture_path" | tail -n 1 || true)
 start_timeout_diag=$(grep -E '^DOCKERLENS_NATIVE_START_TIMEOUT_DIAG: (state=(created|running|exited|other) reason=none|state=missing reason=status|state=identity_mismatch reason=identity_mismatch|state=unavailable reason=(input|transport|status|invalid_payload))$' "$capture_path" | tail -n 1 || true)
 cleanup_step_diag=$(grep -E '^DOCKERLENS_NATIVE_CLEANUP_STEP: step=(tracked_delete|delete_inspect|delete_request|container_name_list|container_label_list|container_inspect|image_label_list|image_reference_list|image_inspect|inventory_delete_container|inventory_delete_image|readback_first|readback_stable) outcome=(begin|pass)$' "$capture_path" | tail -n 32 || true)
-cleanup_readback_diag=$(grep -E '^DOCKERLENS_NATIVE_CLEANUP_READBACK: phase=(first|stable) containers=(zero|nonzero) images=(zero|nonzero)$' "$capture_path" | tail -n 2 || true)
+cleanup_readback_diag=$(grep -E '^DOCKERLENS_NATIVE_CLEANUP_READBACK: group=(ports|identity_health_clear|storage_lifecycle|resources_security|resolver_logging) phase=(first|stable) containers=(zero|nonzero) images=(zero|nonzero)$' "$capture_path" | tail -n 2 || true)
+group_cleanup_diag=$(grep -E '^DOCKERLENS_NATIVE_GROUP_CLEANUP: group=(ports|identity_health_clear|storage_lifecycle|resources_security|resolver_logging) outcome=(begin|verified|unverified)$' "$capture_path" | tail -n 4 || true)
 container_flow_diag=$(grep -E '^DOCKERLENS_NATIVE_CONTAINER_FLOW: (phase=mutation outcome=(timeout|uncertain)|phase=cleanup_(tracked|inventory|readback) outcome=(begin|pass|fail)|phase=decision outcome=(merge|probe_failed|cleanup_unverified|mutation_uncertain))$' "$capture_path" | tail -n 8 || true)
 group_failures=$(grep -E '^DOCKERLENS_NATIVE_GROUP_FAILURE: group=(ports|identity_health_clear|storage_lifecycle|resources_security|resolver_logging) reason=(preflight|probe|cleanup_unverified|mutation_uncertain)$' "$capture_path" | head -n 5 || true)
 reason_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: target_start_reason_(operation_not_permitted|permission_denied|invalid_argument|read_only_filesystem|not_found|timeout|unclassified)$' "$capture_path" | tail -n 1 || true)
@@ -126,6 +127,7 @@ if (( run_status != 0 )); then
   if [[ -n $start_timeout_diag ]]; then echo "$start_timeout_diag" >&2; fi
   if [[ -n $cleanup_step_diag ]]; then printf '%s\n' "$cleanup_step_diag" >&2; fi
   if [[ -n $cleanup_readback_diag ]]; then printf '%s\n' "$cleanup_readback_diag" >&2; fi
+  if [[ -n $group_cleanup_diag ]]; then printf '%s\n' "$group_cleanup_diag" >&2; fi
   if [[ -n $container_flow_diag ]]; then printf '%s\n' "$container_flow_diag" >&2; fi
   if [[ -n $group_failures ]]; then printf '%s\n' "$group_failures" >&2; fi
   if [[ -n $dns_diag ]]; then echo "$dns_diag" >&2; fi
