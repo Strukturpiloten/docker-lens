@@ -9,6 +9,44 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 const NATIVE_CLI_STREAM_LIMIT: usize = 8192;
+const NAMESPACE_PROBE_MODES: &[&str] = &[
+    "identity",
+    "curl_version",
+    "bash_version",
+    "http",
+    "udp",
+    "tcp_refusal",
+    "tcp6_refusal",
+    "ipv6_socket",
+];
+
+fn require_namespace_probe_mode(mode: &str) {
+    assert!(
+        NAMESPACE_PROBE_MODES.contains(&mode),
+        "closed namespace probe mode"
+    );
+}
+
+#[test]
+fn every_static_namespace_probe_mode_is_allowed() {
+    let source = include_str!("native_container_tests.rs");
+    let used: BTreeSet<_> = source
+        .split("namespace_probe(\"")
+        .skip(1)
+        .map(|tail| tail.split_once('"').expect("literal mode").0)
+        .collect();
+    let allowed: BTreeSet<_> = NAMESPACE_PROBE_MODES.iter().copied().collect();
+    assert_eq!(
+        used, allowed,
+        "static probe uses and closed allowlist drifted"
+    );
+    for mode in used {
+        require_namespace_probe_mode(mode);
+    }
+    for invalid in ["", "private", "tcp6_refusal; private"] {
+        assert!(std::panic::catch_unwind(|| require_namespace_probe_mode(invalid)).is_err());
+    }
+}
 
 fn cli_failure_exit(status: std::process::ExitStatus) -> &'static str {
     match status.code() {
@@ -171,6 +209,74 @@ fn api_status_category(status: u16) -> &'static str {
         500..=599 => "server",
         _ => "other",
     }
+}
+
+fn start_failure_body_diagnostic(body: &[u8]) -> String {
+    let (shape, message) = if body.len() > 8192 {
+        ("oversize", None)
+    } else {
+        match serde_json::from_slice::<Value>(body) {
+            Ok(value) => match value.get("message").and_then(Value::as_str) {
+                Some(message) if message.len() <= 4096 => ("message", Some(message.to_owned())),
+                Some(_) => ("oversize", None),
+                None => ("missing", None),
+            },
+            Err(_) => ("malformed", None),
+        }
+    };
+    let category = |matched: bool| if matched { "present" } else { "absent" };
+    if let Some(message) = message {
+        // These are lexical mentions only; protected paths can contain the same words.
+        let lower = message.to_ascii_lowercase();
+        return format!(
+            "DOCKERLENS_NATIVE_START_BODY_DIAG: shape={shape} cgroup_mention={} device_mention={} sysctl_mention={} ulimit_mention={} apparmor_mention={} permission_phrase={}",
+            category(lower.contains("cgroup")),
+            category(lower.contains("device")),
+            category(lower.contains("sysctl")),
+            category(lower.contains("ulimit") || lower.contains("rlimit")),
+            category(lower.contains("apparmor")),
+            category(
+                lower.contains("permission denied")
+                    || lower.contains("operation not permitted")
+                    || lower.contains("access denied")
+            ),
+        );
+    }
+    format!(
+        "DOCKERLENS_NATIVE_START_BODY_DIAG: shape={shape} cgroup_mention=unknown device_mention=unknown sysctl_mention=unknown ulimit_mention=unknown apparmor_mention=unknown permission_phrase=unknown"
+    )
+}
+
+#[test]
+fn start_failure_body_diagnostic_is_structured_closed_and_private() {
+    let body = br#"{"message":"cgroup device sysctl ulimit AppArmor operation not permitted protected-secret"}"#;
+    let diagnostic = start_failure_body_diagnostic(body);
+    assert_eq!(
+        diagnostic,
+        "DOCKERLENS_NATIVE_START_BODY_DIAG: shape=message cgroup_mention=present device_mention=present sysctl_mention=present ulimit_mention=present apparmor_mention=present permission_phrase=present"
+    );
+    assert!(!diagnostic.contains("protected-secret"));
+    for (word, field) in [
+        ("cgroup", "cgroup_mention=present"),
+        ("device", "device_mention=present"),
+        ("sysctl", "sysctl_mention=present"),
+        ("rlimit", "ulimit_mention=present"),
+        ("apparmor", "apparmor_mention=present"),
+        ("permission denied", "permission_phrase=present"),
+    ] {
+        let body = json!({"message":word}).to_string();
+        assert!(start_failure_body_diagnostic(body.as_bytes()).contains(field));
+    }
+    assert!(start_failure_body_diagnostic(b"not json").contains("shape=malformed"));
+    assert!(start_failure_body_diagnostic(br#"{}"#).contains("shape=missing"));
+    assert!(start_failure_body_diagnostic(&vec![b'x'; 8193]).contains("shape=oversize"));
+    let protected_path =
+        br#"{"message":"/private/cgroup-device-sysctl-ulimit-apparmor/permission denied/token"}"#;
+    let path_diagnostic = start_failure_body_diagnostic(protected_path);
+    assert!(path_diagnostic.contains("cgroup_mention=present"));
+    assert!(path_diagnostic.contains("permission_phrase=present"));
+    assert!(!path_diagnostic.contains("/private/"));
+    assert!(!path_diagnostic.contains("token"));
 }
 
 fn assert_native_api_status(actual: u16, expected: u16) {
@@ -890,16 +996,7 @@ impl NativeRun {
     }
 
     fn namespace_probe(&self, mode: &str, argument: Option<&str>) -> std::process::Output {
-        assert!(matches!(
-            mode,
-            "identity"
-                | "curl_version"
-                | "bash_version"
-                | "http"
-                | "udp"
-                | "tcp_refusal"
-                | "ipv6_socket"
-        ));
+        require_namespace_probe_mode(mode);
         let mut command = Command::new("timeout");
         command.args(["--kill-after=1", "16"]);
         if required("NATIVE_PODMAN_USE_SUDO") == "1" {
@@ -3304,11 +3401,14 @@ fn probe_clear_and_start_interval(run: &mut NativeRun, evidence: &mut ProbeEvide
 }
 
 fn start_container(run: &NativeRun, id: &str) {
-    let (status, _) = run.api(
+    let (status, body) = run.api(
         "POST",
         &format!("/v{}/containers/{id}/start", run.api_version),
         None,
     );
+    if status != 204 {
+        eprintln!("{}", start_failure_body_diagnostic(&body));
+    }
     assert_native_api_status(status, 204);
 }
 

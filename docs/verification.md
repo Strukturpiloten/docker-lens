@@ -269,6 +269,22 @@ each effective process/cgroup check without disclosing values. In particular,
 rootless `cgroup_driver=none` is diagnostic context, not permission to treat
 configured memory or PID limits as effective; both runtime assertions remain
 strict and have no expected-negative exception.
+Run `36527523744` failed in both Debian lanes before the fixed IPv6 refusal
+probe: the closed namespace-mode validator omitted the already-used
+`tcp6_refusal` mode. The validator now shares one explicit mode list with a
+local regression that enumerates static call sites and exercises allowed and
+rejected modes. This restores the intended probe; it does not establish an
+IPv6 result. Both upstream lanes reached the resource/security oracle START,
+where Engine returned unexpected HTTP 500 (rootful) and 400 (rootless). The
+closed API status alone does not establish why either request failed. On an
+unexpected START status, a bounded diagnostic now classifies the protected
+JSON response body's shape and emits only fixed lexical mention flags for
+`cgroup`, `device`, `sysctl`, `ulimit`/`rlimit`, `apparmor`, and fixed permission
+phrases. A mention may come from a protected path or secret and is not a cause,
+an effective-setting check, or native capability evidence. Missing, malformed,
+and oversized bodies report unknown flags. The exact-test runner accepts only
+the closed diagnostic line; it never prints body text. START must still return
+204, and all resource/security assertions and admission rules remain strict.
 
 The manifest emitter requires both Debian API 1.41 start-interval negatives,
 accepts each of the two IPv6 fixture outcomes independently only on the
