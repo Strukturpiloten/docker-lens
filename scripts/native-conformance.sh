@@ -192,57 +192,91 @@ storage_root_identity=$(timeout --kill-after=1 10 "${stat_cmd[@]}" -c '%F|%d:%i'
   exit 1
 }
 
-# Containerd can remove a snapshot between du's directory scan and stat. Only
-# that exact descendant ENOENT is resampled; no partial total is ever accepted.
+# A disappearing containerd snapshot is the only retriable storage error. Every
+# sample uses the same run-owned root identity and bounded native measurements.
 sample_storage_kib() {
-  local attempt du_output du_error du_status line descendant prefix suffix free_output free_kib used_kib current_root seen
-  local -a du_cmd df_cmd
-  if [[ $EUID == 0 ]]; then du_cmd=(du); df_cmd=(df); else du_cmd=(sudo -n du); df_cmd=(sudo -n df); fi
-  prefix="du: cannot access '$volume_path/"
-  suffix="': No such file or directory"
+  local attempt current_root df_output df_status df_error du_output du_status
+  local error_file free_kib used_kib reported_path line descendant seen
+  local prefix="du: cannot access '${volume_path}/"
+  local suffix="': No such file or directory"
+  local -a df_cmd du_cmd
+  if [[ $EUID == 0 ]]; then
+    df_cmd=(df); du_cmd=(du)
+  else
+    df_cmd=(sudo -n df); du_cmd=(sudo -n du)
+  fi
+  error_file=$(mktemp "${run_dir}/storage-measure.XXXXXXXX") || {
+    echo 'native lane storage measurement failed' >&2
+    return 1
+  }
   for attempt in 1 2 3; do
-    (( SECONDS <= 1800 )) || return 1
-    current_root=$(timeout --kill-after=1 10 "${stat_cmd[@]}" -c '%F|%d:%i' -- "$volume_path" 2>/dev/null) || return 1
-    [[ $current_root == "$storage_root_identity" ]] || return 1
-    free_output=$(timeout --kill-after=1 10 "${df_cmd[@]}" -Pk -- "$graph_root") || return 1
-    free_kib=$(awk 'END {print $4}' <<<"$free_output")
-    [[ $free_kib =~ ^[0-9]+$ ]] || return 1
-    (( free_kib >= 2 * 1024 * 1024 )) || return 1
-    du_error=$(mktemp "$run_dir/storage-du.XXXXXXXX") || return 1
+    if (( SECONDS > 1800 )); then
+      rm -f -- "$error_file"
+      echo 'native lane exceeded its storage, free-space, or 30-minute budget' >&2
+      return 1
+    fi
+    current_root=$(timeout --kill-after=1 10 "${stat_cmd[@]}" -c '%F|%d:%i' -- "$volume_path" 2>/dev/null | head -c 128) || break
+    [[ $current_root == "$storage_root_identity" ]] || break
+
+    : >"$error_file"
+    df_status=0
+    df_output=$( (ulimit -f 4; LC_ALL=C timeout --kill-after=1 10 "${df_cmd[@]}" -Pk -- "$graph_root") 2>"$error_file" | head -c 4097) || df_status=$?
+    df_error=$(wc -c <"$error_file")
+    free_kib=$(awk 'NR == 2 { print $4 } END { if (NR != 2) exit 1 }' <<<"$df_output") || free_kib=
+    [[ $free_kib =~ ^[0-9]{1,15}$ ]] || free_kib=
+
+    : >"$error_file"
     du_status=0
-    du_output=$( (ulimit -f 4; LC_ALL=C timeout --kill-after=1 10 "${du_cmd[@]}" -sk -- "$volume_path") 2>"$du_error") || du_status=$?
-    if (( du_status == 0 )); then
-      if [[ -s $du_error || $du_output != *$'\t'"$volume_path" ]]; then
-        rm -f -- "$du_error"
-        return 1
-      fi
+    du_output=$( (ulimit -f 4; LC_ALL=C timeout --kill-after=1 10 "${du_cmd[@]}" -sk -- "$volume_path") 2>"$error_file" | head -c 4097) || du_status=$?
+    used_kib=
+    reported_path=
+    if [[ $du_output == *$'\t'* ]]; then
       used_kib=${du_output%%$'\t'*}
-      rm -f -- "$du_error"
-      [[ $used_kib =~ ^[0-9]+$ ]] || return 1
-      (( used_kib <= 4 * 1024 * 1024 && SECONDS <= 1800 )) || return 1
+      reported_path=${du_output#*$'\t'}
+      if [[ ! $used_kib =~ ^[0-9]{1,15}$ || $reported_path != "$volume_path" ]]; then
+        used_kib=
+      fi
+    fi
+
+    # A partial du total is a lower bound. An observed breach is conclusive,
+    # even when the other command failed or the scan lost a descendant.
+    if { [[ -n $used_kib ]] && (( 10#$used_kib > 4 * 1024 * 1024 )); } ||
+      { [[ -n $free_kib ]] && (( 10#$free_kib < 2 * 1024 * 1024 )); } ||
+      (( SECONDS > 1800 )); then
+      rm -f -- "$error_file"
+      echo 'native lane exceeded its storage, free-space, or 30-minute budget' >&2
+      return 1
+    fi
+    if (( df_status != 0 || df_error != 0 || ${#df_output} > 4096 || ${#du_output} > 4096 )) ||
+      [[ -z $free_kib ]] || { [[ -n $du_output && -z $used_kib ]]; }; then
+      break
+    fi
+    if (( du_status == 0 )); then
+      [[ -n $used_kib && ! -s $error_file ]] || break
       SAMPLED_STORAGE_KIB=$used_kib
       SAMPLED_FREE_KIB=$free_kib
+      rm -f -- "$error_file"
       return 0
     fi
-    (( du_status == 1 )) || { rm -f -- "$du_error"; return 1; }
-    current_root=$(timeout --kill-after=1 10 "${stat_cmd[@]}" -c '%F|%d:%i' -- "$volume_path" 2>/dev/null) || { rm -f -- "$du_error"; return 1; }
-    [[ $current_root == "$storage_root_identity" && -s $du_error ]] || { rm -f -- "$du_error"; return 1; }
-    (( $(wc -c <"$du_error") <= 4096 )) || { rm -f -- "$du_error"; return 1; }
+    # Only exit 1 with bounded, exact descendant ENOENT is retryable.
+    (( du_status == 1 && $(wc -c <"$error_file") <= 4096 )) || break
+    [[ -s $error_file ]] || break
+    current_root=$(timeout --kill-after=1 10 "${stat_cmd[@]}" -c '%F|%d:%i' -- "$volume_path" 2>/dev/null | head -c 128) || break
+    [[ $current_root == "$storage_root_identity" ]] || break
     seen=0
     while IFS= read -r line || [[ -n $line ]]; do
-      [[ $line == "$prefix"*"$suffix" ]] || { rm -f -- "$du_error"; return 1; }
+      [[ $line == "$prefix"*"$suffix" ]] || { seen=0; break; }
       descendant=${line#"$prefix"}
       descendant=${descendant%"$suffix"}
-      [[ -n $descendant && $descendant != /* && $descendant != .. && $descendant != ../* && $descendant != */../* && $descendant != */.. ]] || {
-        rm -f -- "$du_error"
-        return 1
-      }
+      [[ -n $descendant && $descendant != /* && $descendant != .. &&
+        $descendant != ../* && $descendant != */../* && $descendant != */.. ]] || { seen=0; break; }
       seen=1
-    done <"$du_error"
-    rm -f -- "$du_error"
-    (( seen == 1 )) || return 1
-    (( attempt < 3 )) && sleep 0.2
+    done <"$error_file"
+    (( seen == 1 )) || break
+    if (( attempt < 3 )); then sleep 0.2 || break; fi
   done
+  rm -f -- "$error_file"
+  echo 'native lane storage measurement failed' >&2
   return 1
 }
 main_pid=$$
@@ -251,7 +285,6 @@ watchdog() {
   while :; do
     sleep 5
     if ! sample_storage_kib; then
-      echo "native lane storage, free-space, or 30-minute budget could not be verified" >&2
       kill -TERM "$main_pid"
       return
     fi

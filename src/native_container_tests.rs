@@ -229,6 +229,96 @@ fn mark_container_flow(phase: &'static str, outcome: &'static str) {
     eprintln!("DOCKERLENS_NATIVE_CONTAINER_FLOW: phase={phase} outcome={outcome}");
 }
 
+fn mark_cleanup_step(step: &'static str, outcome: &'static str) {
+    assert!(matches!(
+        step,
+        "tracked_delete"
+            | "delete_inspect"
+            | "delete_request"
+            | "container_name_list"
+            | "container_label_list"
+            | "container_inspect"
+            | "image_label_list"
+            | "image_reference_list"
+            | "image_inspect"
+            | "inventory_delete_container"
+            | "inventory_delete_image"
+            | "readback_first"
+            | "readback_stable"
+    ));
+    assert!(matches!(outcome, "begin" | "pass"));
+    eprintln!("DOCKERLENS_NATIVE_CLEANUP_STEP: step={step} outcome={outcome}");
+}
+
+fn closed_start_timeout_state(
+    status: Option<u16>,
+    body: &[u8],
+    id: &str,
+    name: &str,
+    run_id: &str,
+) -> &'static str {
+    if status == Some(404) {
+        return "missing";
+    }
+    if status != Some(200) || body.len() > 131_072 {
+        return "unavailable";
+    }
+    let Ok(inspected) = serde_json::from_slice::<Value>(body) else {
+        return "unavailable";
+    };
+    if inspected["Id"] != id
+        || inspected["Name"] != format!("/{name}")
+        || inspected["Config"]["Labels"]["io.dockerlens.native-run"] != run_id
+    {
+        return "identity_mismatch";
+    }
+    match (
+        inspected["State"]["Status"].as_str(),
+        inspected["State"]["Running"].as_bool(),
+    ) {
+        (Some("created"), Some(false)) => "created",
+        (Some("running"), Some(true)) => "running",
+        (Some("exited"), Some(false)) => "exited",
+        (Some(_), Some(_)) => "other",
+        _ => "unavailable",
+    }
+}
+
+#[test]
+fn start_timeout_diagnostic_requires_owned_identity_and_remains_closed() {
+    let body = json!({
+        "Id":"exact-id", "Name":"/exact-name",
+        "Config":{"Labels":{"io.dockerlens.native-run":"exact-run"}},
+        "State":{"Status":"running", "Running":true},
+        "Private":"protected-secret"
+    });
+    let bytes = serde_json::to_vec(&body).unwrap();
+    assert_eq!(
+        closed_start_timeout_state(Some(200), &bytes, "exact-id", "exact-name", "exact-run"),
+        "running"
+    );
+    assert_eq!(
+        closed_start_timeout_state(Some(200), &bytes, "other-id", "exact-name", "exact-run"),
+        "identity_mismatch"
+    );
+    assert_eq!(
+        closed_start_timeout_state(Some(200), &bytes, "exact-id", "exact-name", "other-run"),
+        "identity_mismatch"
+    );
+    assert_eq!(
+        closed_start_timeout_state(Some(404), b"protected-secret", "id", "name", "run"),
+        "missing"
+    );
+    assert_eq!(
+        closed_start_timeout_state(Some(500), b"protected-secret", "id", "name", "run"),
+        "unavailable"
+    );
+    assert_eq!(
+        closed_start_timeout_state(Some(200), b"protected-secret", "id", "name", "run"),
+        "unavailable"
+    );
+}
+
 fn resource_control_start_outcome(status: u16, inspected: &Value) -> (&'static str, bool) {
     if !(100..=599).contains(&status) {
         return ("uncertain", true);
@@ -1202,6 +1292,12 @@ impl NativeRun {
                 "other"
             };
             eprintln!("DOCKERLENS_NATIVE_API_DIAG: transport={category}");
+            if method == "POST" && category == "timeout" && path.ends_with("/start") {
+                eprintln!(
+                    "DOCKERLENS_NATIVE_START_TIMEOUT_DIAG: state={}",
+                    self.read_only_start_timeout_state(path)
+                );
+            }
             if method != "GET" {
                 mark_container_flow(
                     "mutation",
@@ -1240,6 +1336,56 @@ impl NativeRun {
             self.uncertain_mutation.set(previous_uncertainty);
         }
         (status, output.stdout[..split].to_vec())
+    }
+
+    fn read_only_start_timeout_state(&self, path: &str) -> &'static str {
+        let prefix = format!("/v{}/containers/", self.api_version);
+        let Some(id) = path
+            .strip_prefix(&prefix)
+            .and_then(|rest| rest.strip_suffix("/start"))
+        else {
+            return "unavailable";
+        };
+        if !canonical_container_id(id) {
+            return "unavailable";
+        }
+        let Some((name, _)) = self.created.iter().find(|(_, created_id)| created_id == id) else {
+            return "unavailable";
+        };
+        // The timed-out POST is uncertain. A short, read-only inspect can report
+        // observed state without altering that uncertainty or delaying cleanup
+        // beyond the fixed five-second diagnostic budget.
+        let output = Command::new("timeout")
+            .args([
+                "--kill-after=1",
+                "4",
+                "curl",
+                "-sS",
+                "--max-time",
+                "3",
+                "--max-filesize",
+                "131072",
+                "--unix-socket",
+                &required("NATIVE_ENGINE_SOCKET"),
+                "-w",
+                "\n%{http_code}",
+                &format!("http://localhost{prefix}{id}/json"),
+            ])
+            .stderr(Stdio::null())
+            .output();
+        let Ok(output) = output else {
+            return "unavailable";
+        };
+        if !output.status.success() || output.stdout.len() > 131_076 {
+            return "unavailable";
+        }
+        let Some(split) = output.stdout.iter().rposition(|byte| *byte == b'\n') else {
+            return "unavailable";
+        };
+        let status = std::str::from_utf8(&output.stdout[split + 1..])
+            .ok()
+            .and_then(|value| value.parse().ok());
+        closed_start_timeout_state(status, &output.stdout[..split], id, name, &self.run_id)
     }
 
     fn cli(&self, args: &[String]) -> String {
@@ -1757,18 +1903,25 @@ impl NativeRun {
     }
 
     fn delete(&mut self, id: &str) {
+        self.delete_with_diagnostics(id, false);
+    }
+
+    fn delete_with_diagnostics(&mut self, id: &str, cleanup_diagnostic: bool) {
         let name = self
             .created
             .iter()
             .find(|(_, created_id)| created_id == id)
             .map(|(name, _)| name.clone())
             .expect("tracked task-owned container ID");
-        self.delete_owned(&name, id);
+        self.delete_owned(&name, id, cleanup_diagnostic);
     }
 
-    fn delete_owned(&mut self, name: &str, id: &str) {
+    fn delete_owned(&mut self, name: &str, id: &str, cleanup_diagnostic: bool) {
         assert!(canonical_container_id(id), "canonical owned container ID");
         assert!(name.starts_with(&format!("dl-container-{}-", self.run_id)));
+        if cleanup_diagnostic {
+            mark_cleanup_step("delete_inspect", "begin");
+        }
         let inspected = self.inspect(id);
         assert_eq!(inspected["Id"], id);
         assert_eq!(inspected["Name"], format!("/{name}"));
@@ -1776,31 +1929,44 @@ impl NativeRun {
             inspected["Config"]["Labels"]["io.dockerlens.native-run"],
             self.run_id
         );
+        if cleanup_diagnostic {
+            mark_cleanup_step("delete_inspect", "pass");
+            mark_cleanup_step("delete_request", "begin");
+        }
         let (status, _) = self.api(
             "DELETE",
             &format!("/v{}/containers/{id}?force=1", self.api_version),
             None,
         );
         assert_eq!(status, 204, "remove only task-owned container");
+        if cleanup_diagnostic {
+            mark_cleanup_step("delete_request", "pass");
+        }
         self.created.retain(|(_, created_id)| created_id != id);
     }
 
     fn cleanup_tracked_containers(&mut self) {
         while let Some((_, id)) = self.created.last().cloned() {
-            self.delete(&id);
+            mark_cleanup_step("tracked_delete", "begin");
+            self.delete_with_diagnostics(&id, true);
+            mark_cleanup_step("tracked_delete", "pass");
         }
     }
 
-    fn owned_inventory(&self) -> OwnedInventory {
+    fn owned_inventory(&self, cleanup_diagnostic: bool) -> OwnedInventory {
         let prefix = format!("dl-container-{}-", self.run_id);
         let mut rows = BTreeSet::new();
-        for (filter, require_prefix) in [
-            (format!("name=^/{prefix}"), true),
+        for (filter, require_prefix, step) in [
+            (format!("name=^/{prefix}"), true, "container_name_list"),
             (
                 format!("label=io.dockerlens.native-run={}", self.run_id),
                 false,
+                "container_label_list",
             ),
         ] {
+            if cleanup_diagnostic {
+                mark_cleanup_step(step, "begin");
+            }
             let listed = self.cli(&[
                 "container".into(),
                 "ls".into(),
@@ -1822,9 +1988,15 @@ impl NativeRun {
                     rows.insert((id.to_owned(), name.to_owned()));
                 }
             }
+            if cleanup_diagnostic {
+                mark_cleanup_step(step, "pass");
+            }
         }
         let mut inventory = OwnedInventory::default();
         for (id, name) in rows {
+            if cleanup_diagnostic {
+                mark_cleanup_step("container_inspect", "begin");
+            }
             assert!(canonical_container_id(&id), "canonical inventory ID");
             assert!(name.starts_with(&prefix), "exact container-test namespace");
             assert!(valid_container_suffix(&name[prefix.len()..]));
@@ -1836,12 +2008,18 @@ impl NativeRun {
                 self.run_id
             );
             inventory.containers.push((name, id));
+            if cleanup_diagnostic {
+                mark_cleanup_step("container_inspect", "pass");
+            }
         }
         let references: BTreeSet<_> = ["health-default", "command-default", "entrypoint-default"]
             .into_iter()
             .map(|role| self.image_name(role))
             .collect();
         let mut image_rows = BTreeSet::new();
+        if cleanup_diagnostic {
+            mark_cleanup_step("image_label_list", "begin");
+        }
         let labelled = self.cli(&[
             "image".into(),
             "ls".into(),
@@ -1856,7 +2034,13 @@ impl NativeRun {
             let (id, found) = checked_labelled_image_row(line, &references);
             image_rows.insert((id.to_owned(), found.to_owned()));
         }
+        if cleanup_diagnostic {
+            mark_cleanup_step("image_label_list", "pass");
+        }
         for reference in &references {
+            if cleanup_diagnostic {
+                mark_cleanup_step("image_reference_list", "begin");
+            }
             let filter = format!("reference={reference}");
             let listed = self.cli(&[
                 "image".into(),
@@ -1872,8 +2056,14 @@ impl NativeRun {
                 assert_eq!(found, reference);
                 image_rows.insert((id.to_owned(), found.to_owned()));
             }
+            if cleanup_diagnostic {
+                mark_cleanup_step("image_reference_list", "pass");
+            }
         }
         for (id, found) in image_rows {
+            if cleanup_diagnostic {
+                mark_cleanup_step("image_inspect", "begin");
+            }
             assert!(canonical_image_id(&id), "canonical image inventory ID");
             let inspected = self.cli(&["image".into(), "inspect".into(), found.clone()]);
             let inspected: Value = serde_json::from_str(&inspected).expect("private image inspect");
@@ -1889,6 +2079,9 @@ impl NativeRun {
                 "exact task-owned image tag"
             );
             inventory.images.push((found, id));
+            if cleanup_diagnostic {
+                mark_cleanup_step("image_inspect", "pass");
+            }
         }
         inventory
     }
@@ -1902,7 +2095,7 @@ impl NativeRun {
         mark_container_flow("cleanup_tracked", if tracked { "pass" } else { "fail" });
         mark_container_flow("cleanup_inventory", "begin");
         let inventoried = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let inventory = self.owned_inventory();
+            let inventory = self.owned_inventory(true);
             for expected in &self.images {
                 assert!(
                     inventory
@@ -1913,9 +2106,12 @@ impl NativeRun {
                 );
             }
             for (name, id) in inventory.containers {
-                self.delete_owned(&name, &id);
+                mark_cleanup_step("inventory_delete_container", "begin");
+                self.delete_owned(&name, &id, true);
+                mark_cleanup_step("inventory_delete_container", "pass");
             }
             for (reference, id) in inventory.images {
+                mark_cleanup_step("inventory_delete_image", "begin");
                 self.cli(&["image".into(), "rm".into(), reference]);
                 let remaining = self.cli(&[
                     "image".into(),
@@ -1931,6 +2127,7 @@ impl NativeRun {
                     !remaining.lines().any(|line| line == id),
                     "owned image ID removed"
                 );
+                mark_cleanup_step("inventory_delete_image", "pass");
             }
         }))
         .is_ok();
@@ -1940,9 +2137,19 @@ impl NativeRun {
         );
         mark_container_flow("cleanup_readback", "begin");
         let readback = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            assert!(self.owned_inventory().is_empty(), "owned resources absent");
+            mark_cleanup_step("readback_first", "begin");
+            assert!(
+                self.owned_inventory(true).is_empty(),
+                "owned resources absent"
+            );
+            mark_cleanup_step("readback_first", "pass");
             std::thread::sleep(std::time::Duration::from_millis(200));
-            assert!(self.owned_inventory().is_empty(), "owned absence stable");
+            mark_cleanup_step("readback_stable", "begin");
+            assert!(
+                self.owned_inventory(true).is_empty(),
+                "owned absence stable"
+            );
+            mark_cleanup_step("readback_stable", "pass");
         }))
         .is_ok();
         mark_container_flow("cleanup_readback", if readback { "pass" } else { "fail" });
@@ -5153,7 +5360,7 @@ fn live_container_settings_match_engine() {
     for (name, probe) in GROUPS {
         let mut run = NativeRun::new();
         let initial = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run.owned_inventory().is_empty()
+            run.owned_inventory(false).is_empty()
         }));
         if !matches!(initial, Ok(true)) {
             eprintln!("DOCKERLENS_NATIVE_GROUP_FAILURE: group={name} reason=preflight");

@@ -364,16 +364,19 @@ allowlisted source basename and bounded numeric line and column, never its
 assertion text, path, or compared values. Exhaustion still fails the lane and
 cannot be classified as unsupported from the diagnostic alone.
 
-The storage watchdog and final size check retry at most three complete `du`
-samples only when a scan reports a disappearing descendant under the verified
-run-owned volume root. An explicitly privileged `stat` verifies the same
-directory device and inode before each sample and after each failed scan,
-including rootless outer lanes whose Podman storage is inaccessible to the
-unprivileged harness. Each attempt rechecks free space and deadline, and the
-`du` subprocess has a small file-size limit on its private stderr capture;
-root loss or replacement, permissions, timeout, malformed totals, persistent
-churn, and any other error fail closed. No partial `du` total is accepted. This bounds transient
-containerd snapshot churn without relaxing the 4 GiB storage budget.
+The five-second watchdog and final size check use one sampler. Before every
+attempt, a privileged, time-limited `stat` verifies the same run-owned volume
+directory device and inode, including rootless outer lanes whose Podman storage
+is inaccessible to the unprivileged harness. The sampler bounds `stat`, `df`
+and `du` output and execution time, and keeps command stderr in a private,
+size-limited file. Both `df` and `du` run on an attempt: an observed volume
+total above 4 GiB or free space below 2 GiB fails immediately, even if the
+other command failed. A partial `du` total can establish a breach but never
+establish success. Only an exact disappearing descendant beneath the unchanged
+owned root permits another complete sample, for at most three attempts.
+Root loss or replacement, permissions, timeout, malformed totals, persistent
+churn, and all other errors fail closed. The 30-minute deadline is enforced on
+every attempt. No raw paths or command errors are published.
 
 `ImageReference::new` rejects dollar-sign image references, including unresolved
 Compose interpolation such as `${IMAGE}`, before inert Engine create planning.
@@ -543,10 +546,15 @@ bind assertion therefore tests mount behavior independently of host ownership.
 Every image declares a Docker data-root VOLUME. The harness disables
 automatic image volumes and mounts exactly one task-labeled named volume at
 the declared data root. It checks the mounted volume after launch; an
-unexpected anonymous or extra volume fails the lane. A watchdog bounds
-storage use and free space. This isolated nesting setup does not demonstrate
-compatibility with restrictive data-root mount flags or an enforcing outer
-AppArmor profile. Failure diagnostics show the exact native test,
+unexpected anonymous or extra volume fails the lane. A watchdog samples the owned volume and Podman
+storage every five seconds with the same bounded sampler used for the final
+check. It retries only exact disappearing descendants beneath the unchanged
+owned root, at most twice after the first attempt. A volume above 4 GiB, free
+space below 2 GiB, or elapsed time above 30 minutes terminates the lane immediately;
+malformed or unverified measurements fail closed. The normal ownership-checked
+cleanup then runs. This isolated nesting setup does not
+demonstrate compatibility with restrictive data-root mount flags or an
+enforcing outer AppArmor profile. Failure diagnostics show the exact native test,
 exit status, numeric libtest summary, fixed native marker, and closed
 acquisition-error category where applicable. Daemon startup failures show
 bounded container state and a fixed category. Raw daemon logs and API
@@ -691,6 +699,17 @@ identity bind the distribution package revision (or upstream origin), reported
 Engine release, advertised maximum API, negotiated acquisition API, tested
 rendering API, and rootful or rootless mode. The run URL includes the attempt
 number. `candidate_sha` names the source tree actually executed by that run.
+The schema recognizes the capability and renderer-shape names already defined
+by DockerLens, but recognition is not admission. The compiled historical
+catalog still requires its exact ten capabilities and twenty shapes per lane.
+A later cohort must explicitly bind its candidate SHA, source run, each lane's
+identity and content digests, and the complete
+`NativeCapabilityShape::required_for` group for every positive capability.
+Each positive reviewed shape list must exactly match the linked raw manifest's
+admitted shapes, and its raw capability outcome must be `available`.
+Duplicate or missing lanes, partial groups, and shapes belonging to another
+capability cannot establish a catalog claim. Preserve historical evidence
+bytes unchanged when preparing that separate review.
 `native_manifest_artifact_name` identifies the run's per-lane artifact;
 `native_manifest_sha256` is the SHA-256 of its sanitized JSON manifest
 emitted by the native harness after success; that manifest contains observed

@@ -527,6 +527,45 @@ fi
                 self.assertEqual(result.stderr.count(marker), 1)
             self.assertNotIn("protected-secret", result.stdout + result.stderr)
 
+    def test_start_timeout_and_cleanup_diagnostics_are_closed_and_bounded(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_container_tests::live_container_settings_match_engine: test'
+else
+  echo 'DOCKERLENS_NATIVE_START_TIMEOUT_DIAG: state=running' >&2
+  echo 'DOCKERLENS_NATIVE_START_TIMEOUT_DIAG: state=protected-secret' >&2
+  echo 'DOCKERLENS_NATIVE_START_TIMEOUT_DIAG: state=running raw=protected-secret' >&2
+  echo 'DOCKERLENS_NATIVE_CLEANUP_STEP: step=tracked_delete outcome=begin' >&2
+  echo 'DOCKERLENS_NATIVE_CLEANUP_STEP: step=delete_inspect outcome=begin' >&2
+  echo 'DOCKERLENS_NATIVE_CLEANUP_STEP: step=delete_request outcome=begin' >&2
+  for ((i=0; i<40; i++)); do
+    echo 'DOCKERLENS_NATIVE_CLEANUP_STEP: step=container_name_list outcome=begin' >&2
+  done
+  echo 'DOCKERLENS_NATIVE_CLEANUP_STEP: step=readback_stable outcome=begin' >&2
+  echo 'DOCKERLENS_NATIVE_CLEANUP_STEP: step=protected-secret outcome=begin' >&2
+  echo 'DOCKERLENS_NATIVE_CLEANUP_STEP: step=readback_stable outcome=protected-secret' >&2
+  echo 'DOCKERLENS_NATIVE_CLEANUP_STEP: step=readback_stable outcome=begin raw=protected-secret' >&2
+  echo 'protected-secret raw Engine response' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            result = subprocess.run(
+                [str(ROOT / "scripts/run-exact-native-test.sh"), "native_container",
+                 "live_container_settings_match_engine"],
+                env=env, capture_output=True, text=True, timeout=15, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("DOCKERLENS_NATIVE_START_TIMEOUT_DIAG: state=running", result.stderr)
+            self.assertIn("DOCKERLENS_NATIVE_CLEANUP_STEP: step=readback_stable outcome=begin", result.stderr)
+            self.assertEqual(result.stderr.count("DOCKERLENS_NATIVE_CLEANUP_STEP:"), 32)
+            self.assertNotIn("protected-secret", result.stdout + result.stderr)
+
     def test_resource_controls_resolver_subphases_and_cleanup_flow_are_closed(self) -> None:
         source = (ROOT / "src/native_container_tests.rs").read_text(encoding="utf-8")
         self.assertIn("if oracle_start_status != 204 {", source)
