@@ -47,6 +47,7 @@ if [[ -n $network_marker ]]; then marker=$network_marker; fi
 volume_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: volume_(missing_precheck|seed|read_only|read_write|persistence|identity|cleanup_unverified)$' <<<"$result" | tail -n 1 || true)
 if [[ -n $volume_marker ]]; then marker=$volume_marker; fi
 dns_diag=$(grep -Eo '^DOCKERLENS_NATIVE_DNS_DIAG: peer=(ready|invalid|unavailable) resolver=(unrun|unavailable|embedded_(search|plain)|other_(search|plain)) default_a=(pass|fail|unrun) explicit_a=(pass|fail|unrun) dotted_a=(pass|fail|unrun) name_http=(pass|fail|unrun) ip_http=(pass|fail|unrun) edge_app=(pass|fail|unrun) cleanup=(pass|fail)$' <<<"$result" | tail -n 1 || true)
+foreign_dns_diag=$(grep -Eo '^DOCKERLENS_NATIVE_FOREIGN_DNS_DIAG: category=(output_limit|cli_(timeout|resolver|lookup|docker|exec|answer_present|unclassified)|answer_(missing|wrong_ip|malformed|inconsistent)|alias_missing) exit=(success|lookup|timeout|other) response=(nxdomain|servfail|refused|no_error_no_a|has_expected_a|other)$' <<<"$result" | tail -n 1 || true)
 reason_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: target_start_reason_(operation_not_permitted|permission_denied|invalid_argument|read_only_filesystem|not_found|timeout|unclassified)$' <<<"$result" | tail -n 1 || true)
 error_category=$(grep -Eo '^DOCKERLENS_NATIVE_ERROR: (endpoint|cancelled|deadline|io|protocol|status|version|shape|budget)$' <<<"$result" | tail -n 1 || true)
 selection_error=$(grep -Eo '^DOCKERLENS_NATIVE_ERROR: selection$' <<<"$result" | tail -n 1 || true)
@@ -55,6 +56,7 @@ if (( run_status != 0 )); then
   echo "required native test $target::$test_name failed (exit $run_status)" >&2
   if [[ -n $marker ]]; then echo "$marker" >&2; fi
   if [[ -n $dns_diag ]]; then echo "$dns_diag" >&2; fi
+  if [[ -n $foreign_dns_diag ]]; then echo "$foreign_dns_diag" >&2; fi
   if [[ -n $reason_marker ]]; then echo "$reason_marker" >&2; fi
   if [[ -n $error_category ]]; then echo "$error_category" >&2; fi
   if [[ -n $summary ]]; then

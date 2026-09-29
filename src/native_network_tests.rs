@@ -337,6 +337,139 @@ fn nslookup_has_ipv4_answer(output: &[u8], alias: &str, expected: Ipv4Addr) -> b
     false
 }
 
+fn foreign_dns_exit_category(result: &BoundedDnsCliOutput, category: &str) -> &'static str {
+    if result.success {
+        "success"
+    } else if matches!(result.code, Some(124 | 137)) {
+        "timeout"
+    } else if category == "cli_lookup" {
+        "lookup"
+    } else {
+        "other"
+    }
+}
+
+fn foreign_dns_response_indicator(
+    result: &BoundedDnsCliOutput,
+    alias: &str,
+    expected: Ipv4Addr,
+) -> &'static str {
+    if result.output_limit {
+        return "other";
+    }
+    let (Ok(stdout), Ok(stderr)) = (
+        std::str::from_utf8(&result.stdout),
+        std::str::from_utf8(&result.stderr),
+    ) else {
+        return "other";
+    };
+    let output = format!("{stdout}\n{stderr}");
+    if nslookup_has_ipv4_answer(output.as_bytes(), alias, expected) {
+        return "has_expected_a";
+    }
+    // A conflicting or malformed named answer must not be called no-A even
+    // when another line contains an apparent DNS status.
+    if matches!(
+        named_dns_answer_category(output.as_bytes(), alias, expected),
+        "answer_wrong_ip" | "answer_malformed"
+    ) {
+        return "other";
+    }
+    let words: Vec<String> = output
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_ascii_uppercase)
+        .collect();
+    let statuses = ["NXDOMAIN", "SERVFAIL", "REFUSED"]
+        .into_iter()
+        .filter(|status| words.iter().any(|word| word.as_str() == *status))
+        .collect::<Vec<_>>();
+    if statuses.len() == 1 {
+        return match statuses[0] {
+            "NXDOMAIN" => "nxdomain",
+            "SERVFAIL" => "servfail",
+            "REFUSED" => "refused",
+            _ => unreachable!(),
+        };
+    }
+    if statuses.is_empty()
+        && (words.iter().any(|word| word.as_str() == "NOERROR")
+            || words
+                .windows(2)
+                .any(|pair| pair[0].as_str() == "NO" && pair[1].as_str() == "ANSWER"))
+    {
+        return "no_error_no_a";
+    }
+    "other"
+}
+
+#[test]
+fn foreign_dns_diagnostic_categories_are_closed_and_conservative() {
+    let expected = Ipv4Addr::new(172, 29, 244, 20);
+    let mut result = BoundedDnsCliOutput {
+        success: false,
+        code: Some(1),
+        stdout: b"*** Can't find edge-sentinel.: NXDOMAIN\n".to_vec(),
+        stderr: Vec::new(),
+        output_limit: false,
+    };
+    assert_eq!(foreign_dns_exit_category(&result, "cli_lookup"), "lookup");
+    assert_eq!(
+        foreign_dns_response_indicator(&result, "edge-sentinel", expected),
+        "nxdomain"
+    );
+    for (message, indicator) in [
+        ("SERVFAIL", "servfail"),
+        ("REFUSED", "refused"),
+        ("No answer", "no_error_no_a"),
+        ("NOERROR", "no_error_no_a"),
+    ] {
+        result.stdout = format!("*** Can't find edge-sentinel.: {message}\n").into_bytes();
+        assert_eq!(
+            foreign_dns_response_indicator(&result, "edge-sentinel", expected),
+            indicator
+        );
+    }
+    result.stdout = b"Name: edge-sentinel\nAddress: 172.29.244.20\n".to_vec();
+    assert_eq!(
+        foreign_dns_response_indicator(&result, "edge-sentinel", expected),
+        "has_expected_a"
+    );
+    result.stdout = b"Name: edge-sentinel\nAddress: 172.29.244.21\nNOERROR\n".to_vec();
+    assert_eq!(
+        foreign_dns_response_indicator(&result, "edge-sentinel", expected),
+        "other"
+    );
+    result.stdout = b"NXDOMAIN SERVFAIL\n".to_vec();
+    assert_eq!(
+        foreign_dns_response_indicator(&result, "edge-sentinel", expected),
+        "other"
+    );
+    result.output_limit = true;
+    assert_eq!(
+        foreign_dns_response_indicator(&result, "edge-sentinel", expected),
+        "other"
+    );
+    result.output_limit = false;
+    result.stdout = b"\xff NXDOMAIN".to_vec();
+    assert_eq!(
+        foreign_dns_response_indicator(&result, "edge-sentinel", expected),
+        "other"
+    );
+    result.code = Some(124);
+    assert_eq!(foreign_dns_exit_category(&result, "cli_timeout"), "timeout");
+    result.code = Some(2);
+    assert_eq!(
+        foreign_dns_exit_category(&result, "cli_unclassified"),
+        "other"
+    );
+    result.success = true;
+    assert_eq!(
+        foreign_dns_exit_category(&result, "alias_missing"),
+        "success"
+    );
+}
+
 struct DnsDiagnostic {
     peer: &'static str,
     resolver: &'static str,
@@ -2041,8 +2174,17 @@ fn live_network_render_matches_engine() {
         "edge-sentinel.",
         EMBEDDED_DNS_SERVER,
     ]);
+    let foreign_category = dns_failure_category(&foreign_answer, "edge-sentinel", edge_ip);
+    if foreign_category != "cli_lookup" {
+        eprintln!(
+            "DOCKERLENS_NATIVE_FOREIGN_DNS_DIAG: category={} exit={} response={}",
+            foreign_category,
+            foreign_dns_exit_category(&foreign_answer, foreign_category),
+            foreign_dns_response_indicator(&foreign_answer, "edge-sentinel", edge_ip),
+        );
+    }
     assert!(
-        dns_failure_category(&foreign_answer, "edge-sentinel", edge_ip) == "cli_lookup",
+        foreign_category == "cli_lookup",
         "running backend-only peer must receive an exact negative A lookup for the edge-only alias"
     );
     eprintln!("DOCKERLENS_NATIVE_CHECK: network_isolation_foreign_route");

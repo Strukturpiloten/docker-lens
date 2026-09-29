@@ -40,7 +40,11 @@ foreign-alias query uses a trailing-dot absolute name and must receive a lookup
 failure, not a timeout or other CLI failure. Ordinary unqualified named HTTP
 remains a separate positive traffic check. A failed default short-name CLI lookup
 is fixture/tool-path evidence, not by itself proof of a Docker DNS failure. The
-backend peer must also fail direct edge-IP HTTP. A dual-homed app's edge IP is not an
+foreign-DNS failure path reports only closed exit and response indicators from
+bounded CLI output; these distinguish observable `NXDOMAIN`, `SERVFAIL`, `REFUSED`,
+apparent no-error/no-A and expected-A cases without printing the response or admitting a
+different failure as an isolation success.
+The backend peer must also fail direct edge-IP HTTP. A dual-homed app's edge IP is not an
 isolation oracle. Closed DNS and HTTP markers distinguish each stage. The
 executor allows only the run-owned network and
 container names, including exact `networks/{id}/connect` paths. The separate closed

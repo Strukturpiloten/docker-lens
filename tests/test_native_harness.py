@@ -43,7 +43,10 @@ class NativeHarnessTests(unittest.TestCase):
         self.assertIsNotNone(re.search(
             r'"edge-sentinel\.",\s*EMBEDDED_DNS_SERVER,', foreign_dns,
         ))
-        self.assertTrue('dns_failure_category(&foreign_answer, "edge-sentinel", edge_ip) == "cli_lookup"' in foreign_dns)
+        self.assertTrue('dns_failure_category(&foreign_answer, "edge-sentinel", edge_ip)' in foreign_dns)
+        self.assertTrue('foreign_category == "cli_lookup"' in foreign_dns)
+        self.assertLess(foreign_dns.index('DOCKERLENS_NATIVE_FOREIGN_DNS_DIAG:'),
+                        foreign_dns.index('foreign_category == "cli_lookup"'))
         edge_http = source[source.index('network_isolation_edge_http"'):source.index('network_isolation_local_dns"')]
         local_http = source[source.index('network_isolation_local_http"'):source.index('network_isolation_foreign_dns"')]
         self.assertTrue('"http://edge-sentinel:8080/"' in edge_http)
@@ -122,6 +125,42 @@ fi
                     self.assertNotEqual(result.returncode, 0)
                     self.assertEqual(valid in result.stderr, accepted)
                     self.assertIn("network_isolation_edge_dns_readiness_exhausted", result.stderr)
+                    self.assertNotIn("protected-secret", result.stdout + result.stderr)
+                    self.assertNotIn("protected native response", result.stdout + result.stderr)
+
+    def test_foreign_dns_diagnostic_is_closed_and_keeps_failure(self) -> None:
+        valid = ("DOCKERLENS_NATIVE_FOREIGN_DNS_DIAG: category=cli_unclassified "
+                 "exit=other response=no_error_no_a")
+        invalid = ("DOCKERLENS_NATIVE_FOREIGN_DNS_DIAG: category=protected-secret "
+                   "exit=other response=no_error_no_a")
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_network_tests::live_network_render_matches_engine: test'
+else
+  echo 'protected native response' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: network_isolation_foreign_dns' >&2
+  printf '%s\n' "$TEST_DIAG" >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            for supplied, accepted in ((valid, True), (invalid, False),
+                                       (valid + " raw=protected-secret", False)):
+                with self.subTest(accepted=accepted, supplied=supplied):
+                    env["TEST_DIAG"] = supplied
+                    result = subprocess.run(
+                        [str(ROOT / "scripts/run-exact-native-test.sh"), "native_network",
+                         "live_network_render_matches_engine"],
+                        env=env, capture_output=True, text=True, timeout=15, check=False,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(valid in result.stderr, accepted)
+                    self.assertIn("network_isolation_foreign_dns", result.stderr)
                     self.assertNotIn("protected-secret", result.stdout + result.stderr)
                     self.assertNotIn("protected native response", result.stdout + result.stderr)
 
