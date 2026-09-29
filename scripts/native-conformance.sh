@@ -183,20 +183,52 @@ done
 "${podman_cmd[@]}" volume create --label "io.dockerlens.native-run=$run_id" "$volume" >/dev/null
 volume_path=$("${podman_cmd[@]}" volume inspect --format '{{.Mountpoint}}' "$volume")
 main_pid=$$
+watchdog_measure() {
+  local attempt used free used_status free_status
+  local -a du_cmd df_cmd
+  if [[ $EUID == 0 ]]; then
+    du_cmd=(du)
+    df_cmd=(df)
+  else
+    du_cmd=(sudo -n du)
+    df_cmd=(sudo -n df)
+  fi
+  for (( attempt = 1; attempt <= 3; attempt++ )); do
+    if (( SECONDS > 1800 )); then
+      echo "native lane exceeded its storage, free-space, or 30-minute budget" >&2
+      return 1
+    fi
+    used_status=0
+    free_status=0
+    used=$("${du_cmd[@]}" -sk "$volume_path" 2>/dev/null | awk '{print $1}') || used_status=$?
+    free=$("${df_cmd[@]}" -Pk "$graph_root" 2>/dev/null | awk 'END {print $4}') || free_status=$?
+    if (( SECONDS > 1800 )); then
+      echo "native lane exceeded its storage, free-space, or 30-minute budget" >&2
+      return 1
+    fi
+    if { (( used_status == 0 )) && [[ ! $used =~ ^[0-9]{1,15}$ ]]; } ||
+      { (( free_status == 0 )) && [[ ! $free =~ ^[0-9]{1,15}$ ]]; }; then
+      echo 'native lane watchdog invalid measurement' >&2
+      return 1
+    fi
+    # GNU du can print a partial total before reporting a vanished child.
+    # Such a total is a lower bound, so an observed breach is conclusive.
+    if { [[ $used =~ ^[0-9]{1,15}$ ]] && (( 10#$used > 4 * 1024 * 1024 )); } ||
+      { [[ $free =~ ^[0-9]{1,15}$ ]] && (( 10#$free < 2 * 1024 * 1024 )); }; then
+      echo "native lane exceeded its storage, free-space, or 30-minute budget" >&2
+      return 1
+    fi
+    if (( used_status == 0 && free_status == 0 )); then return 0; fi
+    if (( attempt < 3 )); then sleep 1 || break; fi
+  done
+  echo 'native lane watchdog measurement failed' >&2
+  return 1
+}
 watchdog() {
   trap - EXIT HUP INT TERM
-  local used free
   while :; do
     sleep 5
-    if [[ $EUID == 0 ]]; then
-      used=$(du -sk "$volume_path" | awk '{print $1}') || { kill -TERM "$main_pid"; return; }
-      free=$(df -Pk "$graph_root" | awk 'END {print $4}') || { kill -TERM "$main_pid"; return; }
-    else
-      used=$(sudo -n du -sk "$volume_path" | awk '{print $1}') || { kill -TERM "$main_pid"; return; }
-      free=$(sudo -n df -Pk "$graph_root" | awk 'END {print $4}') || { kill -TERM "$main_pid"; return; }
-    fi
-    if (( used > 4 * 1024 * 1024 || free < 2 * 1024 * 1024 || SECONDS > 1800 )); then
-      echo "native lane exceeded its storage, free-space, or 30-minute budget" >&2
+    if ! watchdog_measure; then
       kill -TERM "$main_pid"
       return
     fi
