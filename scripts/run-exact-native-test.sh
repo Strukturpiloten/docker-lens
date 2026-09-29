@@ -69,6 +69,7 @@ if [[ -n $container_marker ]]; then marker=$container_marker; fi
 cli_diag=$(grep -Eo '^DOCKERLENS_NATIVE_CLI_DIAG: exit=(timeout|signal|other) stderr=(connection_refused|missing_tool|address_family|invalid_address|no_route|permission|unknown)$' "$capture_path" | tail -n 1 || true)
 http_diag=$(grep -Eo '^DOCKERLENS_NATIVE_HTTP_DIAG: exit=(success|timeout|signal|other) category=(body_mismatch|connection_refused|missing_tool|address_family|invalid_address|no_route|permission|unknown)$' "$capture_path" | tail -n 1 || true)
 ipv6_diag=$(grep -Eo '^DOCKERLENS_NATIVE_IPV6_DIAG: local_service=(pass|fail)$' "$capture_path" | tail -n 1 || true)
+isolation_diag=$(grep -Eo '^DOCKERLENS_NATIVE_ISOLATION_DIAG: result=(refused|connected|timeout|other)$' "$capture_path" | tail -n 1 || true)
 namespace_diag=$(grep -Eo '^DOCKERLENS_NATIVE_NAMESPACE_DIAG: category=(input|inspect|identity|changed|process|missing_tool|probe)$' "$capture_path" | tail -n 1 || true)
 api_diag=$(grep -Eo '^DOCKERLENS_NATIVE_API_DIAG: (transport=(timeout|other)|status=(invalid_request|not_found|conflict|server|other))$' "$capture_path" | tail -n 1 || true)
 reason_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: target_start_reason_(operation_not_permitted|permission_denied|invalid_argument|read_only_filesystem|not_found|timeout|unclassified)$' "$capture_path" | tail -n 1 || true)
@@ -91,6 +92,7 @@ if (( run_status != 0 )); then
   if [[ -n $cli_diag ]]; then echo "$cli_diag" >&2; fi
   if [[ -n $http_diag ]]; then echo "$http_diag" >&2; fi
   if [[ -n $ipv6_diag ]]; then echo "$ipv6_diag" >&2; fi
+  if [[ -n $isolation_diag ]]; then echo "$isolation_diag" >&2; fi
   if [[ -n $namespace_diag ]]; then echo "$namespace_diag" >&2; fi
   if [[ -n $api_diag ]]; then echo "$api_diag" >&2; fi
   if [[ -n $dns_diag ]]; then echo "$dns_diag" >&2; fi

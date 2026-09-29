@@ -132,8 +132,13 @@ container and its PID/start identity, opens its network namespace through a
 held file descriptor, and invokes only closed host `curl` or Bash probes via
 `nsenter`; identity is checked again before and after. The host tools and
 namespace entry are preflighted. HTTP requests disable proxies and have five
-bounded attempts with a two-second
-connection and three-second total limit. A local in-container service check
+bounded attempts. The separate negative loopback-isolation check uses a direct
+three-second TCP connection in the same pinned namespace and accepts only the
+kernel's `ECONNREFUSED`; an open connection, timeout, permission/routing error,
+or malformed result fails. It does not depend on curl's version-dependent error
+wording. The preceding exact-canary positive proves the service is available.
+Each HTTP attempt has a two-second connection and three-second total limit.
+A local in-container service check
 precedes each published-port assertion; for the IPv6 fixture either local
 address family may establish service readiness, and the `::1` local result is
 reported separately on publication failure. The ephemeral UDP sender uses

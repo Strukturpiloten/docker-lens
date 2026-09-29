@@ -1,6 +1,10 @@
 """Closed outer-network probe identity, namespace pin, and argument checks."""
 
 import importlib.util
+import contextlib
+import errno
+import io
+import socket
 import os
 import subprocess
 import sys
@@ -20,6 +24,30 @@ SPEC.loader.exec_module(PROBE)
 
 
 class NativeNetProbeTests(unittest.TestCase):
+    def test_tcp_isolation_accepts_only_kernel_connection_refusal(self) -> None:
+        self.assertEqual(PROBE.probe_command("tcp_refusal", None),
+                         [sys.executable, "-c", PROBE.TCP_REFUSAL_SCRIPT])
+        with self.assertRaises(PROBE.ProbeFailure):
+            PROBE.probe_command("tcp_refusal", "private-input")
+        for result, expected, status in (
+            (errno.ECONNREFUSED, "refused", 0), (0, "connected", 1),
+            (errno.ETIMEDOUT, "timeout", 1), (errno.EHOSTUNREACH, "other", 1),
+            (errno.EACCES, "other", 1), (OSError("private-canary"), "other", 1),
+        ):
+            with self.subTest(result=result), mock.patch.object(socket, "socket") as factory:
+                connection = factory.return_value.__enter__.return_value
+                if isinstance(result, Exception):
+                    connection.connect_ex.side_effect = result
+                else:
+                    connection.connect_ex.return_value = result
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output), self.assertRaises(SystemExit) as exited:
+                    exec(PROBE.TCP_REFUSAL_SCRIPT, {})
+                self.assertEqual(exited.exception.code, status)
+                self.assertEqual(output.getvalue(), expected + "\n")
+                connection.settimeout.assert_called_once_with(3)
+                connection.connect_ex.assert_called_once_with(("127.0.0.2", 18110))
+
     def setUp(self) -> None:
         self.outer = "dl-native-Safe123"
         self.run_id = "Safe123"

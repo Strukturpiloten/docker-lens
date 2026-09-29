@@ -20,6 +20,20 @@ INSPECT_FORMAT = (
     '{{.Id}}|{{.State.Pid}}|{{.State.StartedAt}}|{{.State.Running}}|'
     '{{index .Config.Labels "io.dockerlens.native-run"}}'
 )
+TCP_REFUSAL_SCRIPT = """import errno, socket, sys
+try:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as connection:
+        connection.settimeout(3)
+        result = connection.connect_ex(('127.0.0.2', 18110))
+except (OSError, TimeoutError):
+    outcome = 'other'
+else:
+    outcome = ('refused' if result == errno.ECONNREFUSED else
+               'connected' if result == 0 else
+               'timeout' if result in (errno.ETIMEDOUT, errno.EAGAIN) else 'other')
+print(outcome)
+sys.exit(0 if outcome == 'refused' else 1)
+"""
 
 
 class ProbeFailure(Exception):
@@ -152,6 +166,8 @@ def verified_process(outer: str, run_id: str, expected: tuple[str, int, str]):
 
 
 def probe_command(mode: str, argument: str | None) -> list[str]:
+    if mode == "tcp_refusal" and argument is None:
+        return [sys.executable, "-c", TCP_REFUSAL_SCRIPT]
     if mode == "curl_version" and argument is None:
         return ["curl", "--version"]
     if mode == "bash_version" and argument is None:

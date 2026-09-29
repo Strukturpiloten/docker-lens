@@ -592,7 +592,7 @@ impl NativeRun {
     fn namespace_probe(&self, mode: &str, argument: Option<&str>) -> std::process::Output {
         assert!(matches!(
             mode,
-            "identity" | "curl_version" | "bash_version" | "http" | "udp"
+            "identity" | "curl_version" | "bash_version" | "http" | "udp" | "tcp_refusal"
         ));
         let mut command = Command::new("timeout");
         command.args(["--kill-after=1", "16"]);
@@ -1278,10 +1278,19 @@ fn probe_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
     assert_fixed_ipv4_http(run, &id, "port-rendered", false);
     assert_fixed_ipv4_http(run, &id, "port-rendered", true);
     mark_port_stage("port-rendered", "isolated_http");
-    let isolated = run.try_outer_http("http://127.0.0.2:18110/index.html");
+    let isolated = run.namespace_probe("tcp_refusal", None);
+    let isolation_result = match isolated.stdout.as_slice() {
+        b"refused\n" => "refused",
+        b"connected\n" => "connected",
+        b"timeout\n" => "timeout",
+        _ => "other",
+    };
+    if !isolated.status.success() || isolation_result != "refused" {
+        eprintln!("DOCKERLENS_NATIVE_ISOLATION_DIAG: result={isolation_result}");
+    }
     mark_port_stage("port-rendered", "isolated_assert");
     assert!(
-        matches!(isolated, Err((_, "connection_refused"))),
+        isolated.status.success() && isolation_result == "refused",
         "127.0.0.1 publication must not widen to 127.0.0.2"
     );
     mark_port_stage("port-rendered", "udp_assignment");

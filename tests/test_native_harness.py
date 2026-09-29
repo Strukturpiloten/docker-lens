@@ -333,7 +333,8 @@ fi
         source = (ROOT / "src/native_container_tests.rs").read_text(encoding="utf-8")
         port_source = source.split("fn probe_ports(", 1)[1].split("fn probe_complementary_ports(", 1)[0]
         self.assertNotIn('"--network".into(),', port_source)
-        self.assertIn('run.try_outer_http("http://127.0.0.2:18110/index.html")', port_source)
+        self.assertIn('run.namespace_probe("tcp_refusal", None)', port_source)
+        self.assertIn('isolated.status.success() && isolation_result == "refused"', port_source)
         self.assertIn('run.require_outer_identity();', port_source)
         self.assertIn('run.require_outer_curl();', port_source)
         self.assertIn('run.require_outer_bash();', port_source)
@@ -360,6 +361,8 @@ else
   echo 'DOCKERLENS_NATIVE_HTTP_DIAG: exit=other category=private'
   echo 'DOCKERLENS_NATIVE_IPV6_DIAG: local_service=fail'
   echo 'DOCKERLENS_NATIVE_IPV6_DIAG: local_service=private'
+  echo 'DOCKERLENS_NATIVE_ISOLATION_DIAG: result=connected'
+  echo 'DOCKERLENS_NATIVE_ISOLATION_DIAG: result=private'
   echo 'DOCKERLENS_NATIVE_NAMESPACE_DIAG: category=changed'
   echo 'DOCKERLENS_NATIVE_NAMESPACE_DIAG: category=private'
   echo 'private native response' >&2
@@ -378,6 +381,7 @@ fi
             self.assertIn("container_health_disabled_rendered_wait", result.stderr)
             self.assertIn("exit=other category=connection_refused", result.stderr)
             self.assertIn("local_service=fail", result.stderr)
+            self.assertIn("DOCKERLENS_NATIVE_ISOLATION_DIAG: result=connected", result.stderr)
             self.assertIn("DOCKERLENS_NATIVE_NAMESPACE_DIAG: category=changed", result.stderr)
             self.assertNotIn("private", result.stdout + result.stderr)
 
