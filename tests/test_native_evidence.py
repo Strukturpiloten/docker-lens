@@ -32,6 +32,7 @@ SOURCE_PROBES = [
     "MultipleHostIpBindingsOracle", "MountEnvironmentOracle",
     "HealthRestartOracle", "SelectedFieldOrigins",
     "NetworkActiveMembership", "NetworkStoppedMembershipBoundary",
+    "ContainerInspectIdOracle",
 ]
 NETWORK_PROBES = [
     "ExternalNetworkReference", "InternalBridgeNetworkCreate", "Ipv6BridgeNetworkCreate",
@@ -183,6 +184,11 @@ class NativeEvidenceTests(unittest.TestCase):
 
     def test_source_probes_are_exact_closed_non_admission_evidence(self) -> None:
         version = {"Version": "29.8.1", "ApiVersion": "1.56", "MinAPIVersion": "1.44"}
+        self.assertEqual(len(SOURCE_PROBES), 18)
+        self.assertEqual(SOURCE_PROBES[-3:], [
+            "NetworkActiveMembership", "NetworkStoppedMembershipBoundary",
+            "ContainerInspectIdOracle",
+        ])
         for probes in (SOURCE_PROBES[:-1], SOURCE_PROBES + ["private-canary"],
                        SOURCE_PROBES[:-1] + [SOURCE_PROBES[0]]):
             with self.subTest(probes=probes):

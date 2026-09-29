@@ -308,6 +308,57 @@ fn inspected_network_id_is_typed_runtime_identity_and_private() {
 }
 
 #[test]
+fn inspected_container_id_is_typed_runtime_identity_and_private() {
+    let id = "a".repeat(64);
+    let fixture = capture(vec![(
+        ReadRequest::InspectContainer(NativeId::new(id.clone()).unwrap()),
+        Some(ResourceRef::new(1)),
+        Some(api(41)),
+        200,
+        &format!(r#"{{"Id":"{id}","Name":"/app"}}"#),
+    )]);
+    let decoded = decode_capture(&fixture).unwrap();
+    let observed = &decoded.containers[0].id;
+    assert_eq!(observed.availability, Availability::Present);
+    assert_eq!(observed.origin, Origin::RuntimeAssigned);
+    assert_eq!(observed.value().unwrap().as_bytes(), id.as_bytes());
+    assert!(!format!("{observed:?}").contains(&id));
+    assert!(!format!("{decoded:?}").contains(&id));
+}
+
+#[test]
+fn matching_noncanonical_inspect_container_id_preserves_capture_compatibility() {
+    let fixture = container(r#"{"Id":"container-1"}"#);
+    let decoded = decode_capture(&fixture).unwrap();
+    let observed = &decoded.containers[0].id;
+    assert_eq!(observed.origin, Origin::RuntimeAssigned);
+    assert_eq!(observed.availability, Availability::Present);
+    assert_eq!(observed.value().unwrap().as_bytes(), b"container-1");
+}
+
+#[test]
+fn inspected_container_id_rejects_unavailable_wrong_shape_or_mismatched() {
+    for body in [
+        r#"{"Id":null}"#,
+        r#"{"Id":{"__docker_lens_redacted__":true}}"#,
+        r#"{"Id":""}"#,
+        r#"{"Id":42}"#,
+        r#"{"Id":"private-canary"}"#,
+    ] {
+        let fixture = capture(vec![(
+            ReadRequest::InspectContainer(NativeId::new("expected-id".into()).unwrap()),
+            Some(ResourceRef::new(1)),
+            Some(api(41)),
+            200,
+            body,
+        )]);
+        let error = decode_capture(&fixture).unwrap_err();
+        assert_eq!(error, DecodeError::ConflictingFacts);
+        assert!(!format!("{error:?}").contains("private-canary"));
+    }
+}
+
+#[test]
 fn inspected_network_id_cannot_be_null_redacted_empty_or_mismatched() {
     for body in [
         r#"{"Id":null}"#,
