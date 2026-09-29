@@ -340,6 +340,44 @@ sidecar_setup_failed() {
   echo "DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=$1" >&2
   exit 1
 }
+# Sidecar logs and Podman State.Error can contain authored values. Consume only
+# a bounded tail and emit a closed cause category; never print native text.
+classify_sidecar_error() {
+  python3 -c 'import re, sys
+tail = bytearray()
+for chunk in iter(lambda: sys.stdin.buffer.read(4096), b""):
+    tail.extend(chunk)
+    if len(tail) > 8192:
+        del tail[:-8192]
+message = tail.decode("utf-8", "replace").lower()
+checks = (
+    ("applet_missing", (r"\b(?:httpd|wget|sh): (?:applet )?not found\b",
+                        r"\bapplet not found\b", r"\bhttpd: applet not found\b")),
+    ("shell_error", (r"\bsyntax error\b", r"\bunexpected (?:token|end of file)\b")),
+    ("config_error", (r"\b(?:invalid|unknown|unrecognized) option\b",
+                      r"\bconfiguration error\b", r"\busage: httpd\b")),
+    ("bind_error", (r"\baddress already in use\b", r"\b(?:cannot|can.t|failed to) bind\b",
+                    r"\bbind:.*\b(?:denied|unavailable)\b")),
+    ("permission", (r"\bpermission denied\b", r"\boperation not permitted\b")),
+    ("storage", (r"\bno space left\b", r"\bdisk quota exceeded\b")),
+    ("runtime_error", (r"\berror\b", r"\bfailed\b", r"\bfailure\b")),
+)
+print(next((category for category, patterns in checks
+            if any(re.search(pattern, message) for pattern in patterns)), "unknown"))'
+}
+sidecar_failure_diagnostic() {
+  local category=unknown observed
+  if observed=$(timeout --signal=TERM --kill-after=2s 5s "${podman_cmd[@]}" logs --tail 32 "$sidecar" 2>&1 |
+    classify_sidecar_error); then
+    category=$observed
+  fi
+  if [[ $category == unknown ]] &&
+    observed=$(timeout --signal=TERM --kill-after=2s 5s "${podman_cmd[@]}" inspect \
+      --format '{{.State.Error}}' "$sidecar" 2>&1 | classify_sidecar_error); then
+    category=$observed
+  fi
+  echo "DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=sidecar_failure category=$category" >&2
+}
 watchdog &
 watchdog_pid=$!
 # Pull only the reviewed digest under the lane's time and free-space budget.
@@ -348,11 +386,19 @@ timeout --signal=TERM --kill-after=2s 180s "${podman_cmd[@]}" pull "$image" >/de
 timeout --signal=TERM --kill-after=2s 180s "${podman_cmd[@]}" pull "$FIXTURE_IMAGE" >/dev/null 2>&1 || sidecar_setup_failed image_pull
 timeout --signal=TERM --kill-after=2s 30s "${podman_cmd[@]}" network create --driver bridge \
   --label "io.dockerlens.native-run=$run_id" "$outer_network" >/dev/null 2>&1 || sidecar_setup_failed network_create
-timeout --signal=TERM --kill-after=2s 120s "${podman_cmd[@]}" run --pull=never -d --name "$sidecar" \
+sidecar_start_category=$(timeout --signal=TERM --kill-after=2s 120s "${podman_cmd[@]}" run --pull=never -d --name "$sidecar" \
   --label "io.dockerlens.native-run=$run_id" --network "$outer_network" \
   --cap-drop=all --security-opt no-new-privileges --pids-limit=64 --memory=128m \
   "$FIXTURE_IMAGE" sh -c \
-  'printf proof-egress > /tmp/index.html; exec httpd -f -p 18084 -h /tmp' >/dev/null 2>&1 || sidecar_setup_failed sidecar_start
+  'printf proof-egress > /tmp/index.html; exec httpd -f -p 18084 -h /tmp' 2>&1 >/dev/null |
+  classify_sidecar_error) || {
+  case $sidecar_start_category in
+    applet_missing | shell_error | config_error | bind_error | permission | storage | runtime_error | unknown) ;;
+    *) sidecar_start_category=unknown ;;
+  esac
+  echo "DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=sidecar_failure category=$sidecar_start_category" >&2
+  sidecar_setup_failed sidecar_start
+}
 timeout --signal=TERM --kill-after=2s 120s "${podman_cmd[@]}" run --pull=never -d --name "$container" --label "io.dockerlens.native-run=$run_id" \
   --network "$outer_network" \
   --privileged --pids-limit=512 --memory=4g --cpus=2 "${run_flags[@]}" \
@@ -377,6 +423,7 @@ if [[ $sidecar_running != true || $sidecar_status != running ]]; then
   fi
   if (( 10#$sidecar_exit == 0 )); then exit_class=zero; else exit_class=nonzero; fi
   echo "DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=sidecar_state category=$sidecar_status exit=$exit_class" >&2
+  sidecar_failure_diagnostic
   exit 1
 fi
 sidecar_health=
@@ -386,7 +433,10 @@ for attempt in 1 2 3 4 5; do
   if [[ $sidecar_health == proof-egress ]]; then break; fi
   if (( attempt < 5 )); then sleep 0.2; fi
 done
-[[ $sidecar_health == proof-egress ]] || sidecar_setup_failed sidecar_health
+[[ $sidecar_health == proof-egress ]] || {
+  sidecar_failure_diagnostic
+  sidecar_setup_failed sidecar_health
+}
 sidecar_ip=$(validated_outer_ipv4 sidecar "$sidecar") || exit 1
 daemon_ip=$(validated_outer_ipv4 daemon "$container") || exit 1
 [[ $sidecar_ip != "$daemon_ip" ]] || {

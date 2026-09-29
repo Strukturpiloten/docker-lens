@@ -15,6 +15,34 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class NativeHarnessTests(unittest.TestCase):
+    def test_sidecar_failure_categories_are_closed_and_hide_native_text(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
+        classifier = "classify_sidecar_error() {" + source.split(
+            "classify_sidecar_error() {", 1
+        )[1].split("\n}\nsidecar_failure_diagnostic()", 1)[0] + "\n}\n"
+        cases = (
+            ("sh: httpd: not found private-canary", "applet_missing"),
+            ("sh: syntax error: private-canary", "shell_error"),
+            ("httpd: invalid option private-canary", "config_error"),
+            ("httpd: can't bind to port private-canary", "bind_error"),
+            ("permission denied private-canary", "permission"),
+            ("no space left on device private-canary", "storage"),
+            ("runtime error private-canary", "runtime_error"),
+            ("private-canary", "unknown"),
+            ("", "unknown"),
+        )
+        for native_text, expected in cases:
+            with self.subTest(category=expected):
+                result = subprocess.run(
+                    ["bash", "-c", classifier + "classify_sidecar_error"],
+                    input=native_text, capture_output=True, text=True, timeout=5,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, expected + "\n")
+                self.assertEqual(result.stderr, "")
+                self.assertNotIn("private-canary", result.stdout + result.stderr)
+
     def test_outer_ipv4_diagnostics_are_closed_for_each_rejection(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
         helper = source.split("validated_outer_ipv4() {", 1)[1].split(
@@ -930,7 +958,10 @@ case "$command" in
  if [[ $name == dl-native-egress-* ]]; then
    printf '%s\n' "$*" > "$state/sidecar-run-args"
    touch "$state/sidecar"
-   [[ $FAKE_NATIVE_FAULT == sidecar_start ]] && exit 42
+   if [[ $FAKE_NATIVE_FAULT == sidecar_start || $FAKE_NATIVE_FAULT == sidecar_start_classifier_failure ]]; then
+     echo 'sh: syntax error private-canary' >&2
+     exit 42
+   fi
    if [[ $FAKE_NATIVE_FAULT == cancel_after_sidecar ]]; then sleep 2; fi
  else
    printf '%s\n' "$*" > "$state/run-args"
@@ -939,6 +970,14 @@ case "$command" in
    [[ $FAKE_NATIVE_FAULT == run ]] && exit 42
  fi
  exit 0 ;;
+ logs)
+ if [[ $FAKE_NATIVE_FAULT == sidecar_exited_empty_ip ]]; then
+   echo 'sh: httpd: not found private-canary' >&2
+ elif [[ $FAKE_NATIVE_FAULT == sidecar_state_error_field ]]; then
+   :
+ else
+   echo 'private-canary' >&2
+ fi ;;
  inspect)
  if [[ $* == *Labels* ]]; then
  for name; do :; done
@@ -955,10 +994,14 @@ case "$command" in
  printf '{"%s":{"IPAddress":"%s"}}\n' "$network_name" "$ip"
  elif [[ $* == *State.Running* ]]; then
  if [[ $FAKE_NATIVE_FAULT == sidecar_state_unavailable ]]; then exit 42; fi
- if [[ $FAKE_NATIVE_FAULT == sidecar_exited_empty_ip ]]; then
+ if [[ $FAKE_NATIVE_FAULT == sidecar_exited_empty_ip || $FAKE_NATIVE_FAULT == sidecar_state_error_field ]]; then
    echo 'false|exited|127'
  else
    echo 'true|running|0'
+ fi
+ elif [[ $* == *State.Error* ]]; then
+ if [[ $FAKE_NATIVE_FAULT == sidecar_state_error_field ]]; then
+   echo 'bind: address already in use private-canary'
  fi
  elif [[ $* == *HostConfig.Privileged* ]]; then echo true
     elif [[ $* == *'.Mounts'* ]]; then echo unexpected:/var/lib/docker
@@ -989,9 +1032,11 @@ esac
             ("debian11-rootful", "pull"),
             ("debian11-rootful", "network_create"),
             ("debian11-rootful", "sidecar_start"),
+            ("debian11-rootful", "sidecar_start_classifier_failure"),
             ("debian11-rootful", "sidecar_health_dead"),
             ("debian11-rootful", "sidecar_health_race"),
             ("debian11-rootful", "sidecar_exited_empty_ip"),
+            ("debian11-rootful", "sidecar_state_error_field"),
             ("debian11-rootful", "sidecar_running_empty_ip"),
             ("debian11-rootful", "sidecar_state_unavailable"),
             ("debian11-rootful", "cancel_after_sidecar"),
@@ -1031,6 +1076,9 @@ esac
                 self._tool(bin_dir, "python3", "#!/bin/sh\n"
                            "case \"$1\" in */native-bridge-prerequisite.py) "
                            "echo DOCKERLENS_NATIVE_HOST_NETWORK:bridge_filter=ready; exit 0;; esac\n"
+                           "if [ \"${FAKE_NATIVE_FAULT:-}\" = sidecar_start_classifier_failure ] "
+                           "&& [ \"$1\" = -c ]; then "
+                           "echo private-canary; exit 87; fi\n"
                            f'exec "{sys.executable}" "$@"\n')
                 env = os.environ.copy()
                 env.update(PATH=f"{bin_dir}:{env['PATH']}",
@@ -1104,6 +1152,18 @@ esac
                     )
                     self.assertNotIn("phase=attachment", result.stderr)
                     self.assertFalse((state / "health-attempted").exists())
+                    self.assertIn("phase=sidecar_failure category=applet_missing", result.stderr)
+                if fault == "sidecar_state_error_field":
+                    self.assertIn("phase=sidecar_failure category=bind_error", result.stderr)
+                    self.assertFalse((state / "health-attempted").exists())
+                if fault == "sidecar_start":
+                    self.assertIn("phase=sidecar_failure category=shell_error", result.stderr)
+                if fault == "sidecar_start_classifier_failure":
+                    self.assertIn("phase=sidecar_failure category=unknown", result.stderr)
+                    self.assertIn("phase=sidecar_start", result.stderr)
+                    self.assertFalse((state / "sidecar").exists())
+                    self.assertTrue((state / "sidecar_removal_attempted").exists())
+                self.assertNotIn("private-canary", result.stdout + result.stderr)
                 if fault == "sidecar_running_empty_ip":
                     self.assertTrue((state / "health-attempted").exists())
                     self.assertIn(
