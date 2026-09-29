@@ -125,9 +125,35 @@ category. These diagnostics do not print native output, change the assertion,
 skip a probe, or permit a failed lane to produce evidence.
 The repeated fixed-IPv4 CLI oracle must also start and serve both exact
 loopback publications before the rendered container is created. Each HTTP
-check has five attempts with a two-second per-request limit inside the
-existing 45-second CLI bound; exhaustion still fails the lane and cannot be
-classified as unsupported from the diagnostic alone.
+check now observes the outer Podman namespace directly, with no extra Docker
+host-network probe container. Outer `curl` and Bash availability are preflighted;
+HTTP requests disable proxies and have five bounded attempts with a two-second
+connection and three-second total limit. A local in-container service check
+precedes each published-port assertion; for the IPv6 fixture either local
+address family may establish service readiness, and the `::1` local result is
+reported separately on publication failure. The ephemeral UDP sender uses
+the outer namespace with a validated numeric port and a fixed canary. Closed
+HTTP, IPv6 and health-disable subphase markers distinguish failures without
+publishing native output. A selected native test panic may expose only its
+allowlisted source basename and bounded numeric line and column, never its
+assertion text, path, or compared values. Exhaustion still fails the lane and
+cannot be classified as unsupported from the diagnostic alone.
+
+The storage watchdog and final size check retry at most three complete `du`
+samples only when a scan reports a disappearing descendant under the verified
+run-owned volume root. An explicitly privileged `stat` verifies the same
+directory device and inode before each sample and after each failed scan,
+including rootless outer lanes whose Podman storage is inaccessible to the
+unprivileged harness. Each attempt rechecks free space and deadline, and the
+`du` subprocess has a small file-size limit on its private stderr capture;
+root loss or replacement, permissions, timeout, malformed totals, persistent
+churn, and any other error fail closed. No partial `du` total is accepted. This bounds transient
+containerd snapshot churn without relaxing the 4 GiB storage budget.
+
+`ImageReference::new` rejects dollar-sign image references, including unresolved
+Compose interpolation such as `${IMAGE}`, before inert Engine create planning.
+This is a narrow native invalid-input boundary, not a complete Docker image
+reference grammar; tagged, digest and image-ID forms remain accepted.
 
 The runner selects the ignored library test by exact name after
 the other native probes. Only then does the emitter accept a bounded schema-1

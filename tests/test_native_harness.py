@@ -12,6 +12,49 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class NativeHarnessTests(unittest.TestCase):
+    def test_failure_exposes_only_selected_native_panic_location(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_network_tests::live_network_render_matches_engine: test'
+else
+  printf '%s\\n' "$TEST_PANIC"
+  echo 'assertion contains protected-native-canary and private path' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 101
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            # Current libtest includes a numeric thread ID; older Rust omits it.
+            # Observed independently in an actual local Rust panic, not inferred
+            # from the extractor's synthetic fixture. Never disclose that ID.
+            for location, thread_suffix, expected in (
+                ("src/native_network_tests.rs:1931:5", "", True),
+                ("src/native_network_tests.rs:1931:5", " (342)", True),
+                ("src/native_network_tests.rs:1931:5", " (private)", False),
+                ("src/native_network_tests.rs:1931:5", " (12345678901)", False),
+                ("/private/source/native_network_tests.rs:1931:5", " (342)", False),
+                ("src/native_target_tests.rs:1931:5", " (342)", False),
+                ("src/native_network_tests.rs:private:5", "", False),
+                ("src/native_network_tests.rs:1931:50000", "", False),
+            ):
+                with self.subTest(location=location, thread_suffix=thread_suffix):
+                    env["TEST_PANIC"] = f"thread 'protected-name-canary'{thread_suffix} panicked at {location}:"
+                    result = subprocess.run(
+                        [str(ROOT / "scripts/run-exact-native-test.sh"), "native_network",
+                         "live_network_render_matches_engine"],
+                        env=env, text=True, capture_output=True, timeout=10,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual("DOCKERLENS_NATIVE_PANIC:" in result.stderr, expected)
+                    if expected:
+                        self.assertIn("source=native_network_tests line=1931 column=5", result.stderr)
+                    for private in ("protected-native-canary", "protected-name-canary", "/private/source", "(342)"):
+                        self.assertNotIn(private, result.stdout + result.stderr)
+
     def test_isolation_positive_controls_query_ipv4_before_negative_controls(self) -> None:
         source = (ROOT / "src/native_network_tests.rs").read_text(encoding="utf-8")
         markers = [
@@ -274,8 +317,8 @@ fi
         self.assertIn("byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'", source)
         self.assertIn('assert!(valid_container_suffix("ipv6-oracle"));', source)
         oracle_start = source.index('mark_port_stage("port-oracle", "oracle_start");')
-        oracle_primary = source.index('assert_fixed_ipv4_http(run, "port-oracle", false);')
-        oracle_secondary = source.index('assert_fixed_ipv4_http(run, "port-oracle", true);')
+        oracle_primary = source.index('assert_fixed_ipv4_http(run, &oracle_id, "port-oracle", false);')
+        oracle_secondary = source.index('assert_fixed_ipv4_http(run, &oracle_id, "port-oracle", true);')
         oracle_cleanup = source.index('mark_port_stage("port-oracle", "oracle_cleanup");')
         rendered_start = source.index('mark_port_stage("port-rendered", "api_start");')
         self.assertLess(oracle_start, oracle_primary)
@@ -284,7 +327,53 @@ fi
         self.assertLess(oracle_cleanup, rendered_start)
         self.assertIn('for attempt in 1 2 3 4 5;', source)
         self.assertIn('wget -qO- -T 2', source)
-        self.assertIn('assert_fixed_ipv4_http(run, "port-rendered", true);', source)
+        self.assertIn('assert_fixed_ipv4_http(run, &id, "port-rendered", true);', source)
+
+    def test_port_probes_use_outer_namespace_without_new_probe_containers(self) -> None:
+        source = (ROOT / "src/native_container_tests.rs").read_text(encoding="utf-8")
+        port_source = source.split("fn probe_ports(", 1)[1].split("fn probe_complementary_ports(", 1)[0]
+        self.assertNotIn('"--network".into(),', port_source)
+        self.assertIn('run.try_outer_http("http://127.0.0.2:18110/index.html")', port_source)
+        self.assertIn('run.require_outer_curl();', port_source)
+        self.assertIn('run.require_outer_bash();', port_source)
+        self.assertRegex(port_source, r'"bash",\s*"-c",\s*"printf')
+        self.assertRegex(port_source, r'"udp-probe",\s*"native-udp-canary",\s*&assigned')
+        self.assertIn('let assigned: u16 = assigned.parse()', port_source)
+        self.assertIn('assert!(assigned > 0);', port_source)
+        self.assertRegex(source, r'"--noproxy",\s*"\*",\s*"--proxy",\s*""')
+        self.assertRegex(source, r'"--connect-timeout",\s*"2",\s*"--max-time",\s*"3"')
+
+    def test_container_http_and_health_diagnostics_are_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_container_tests::live_container_settings_match_engine: test'
+else
+  echo 'DOCKERLENS_NATIVE_CHECK: container_health_disabled_rendered_wait'
+  echo 'DOCKERLENS_NATIVE_CHECK: container_health_disabled_private'
+  echo 'DOCKERLENS_NATIVE_HTTP_DIAG: exit=other category=connection_refused'
+  echo 'DOCKERLENS_NATIVE_HTTP_DIAG: exit=other category=private'
+  echo 'DOCKERLENS_NATIVE_IPV6_DIAG: local_service=fail'
+  echo 'DOCKERLENS_NATIVE_IPV6_DIAG: local_service=private'
+  echo 'private native response' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            result = subprocess.run(
+                [str(ROOT / "scripts/run-exact-native-test.sh"), "native_container",
+                 "live_container_settings_match_engine"],
+                env=env, capture_output=True, text=True, timeout=15, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("container_health_disabled_rendered_wait", result.stderr)
+            self.assertIn("exit=other category=connection_refused", result.stderr)
+            self.assertIn("local_service=fail", result.stderr)
+            self.assertNotIn("private", result.stdout + result.stderr)
 
     def test_native_test_output_limit_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -535,6 +624,70 @@ fi
                 self.assertEqual("native-work-admitted" in result.stdout, admitted)
                 self.assertNotIn("protected-secret", result.stdout + result.stderr)
                 self.assertNotIn("private-source", result.stdout + result.stderr)
+
+    def test_storage_sampling_resamples_only_transient_descendant_loss(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text()
+        sampler = "sample_storage_kib() {" + source.split("sample_storage_kib() {", 1)[1].split(
+            "\nmain_pid=$$", 1
+        )[0]
+        self.assertIn('ulimit -f 4; LC_ALL=C timeout --kill-after=1 10 "${du_cmd[@]}"', sampler)
+        self.assertIn('timeout --kill-after=1 10 "${df_cmd[@]}" -Pk -- "$graph_root"', sampler)
+        self.assertIn('timeout --kill-after=1 10 "${stat_cmd[@]}" -c', sampler)
+        self.assertIn('stat_cmd=(sudo -n stat)', source)
+        bash = """set -euo pipefail
+volume_path=$TEST_VOLUME_PATH
+run_dir=$TEST_RUN_DIR
+graph_root=$run_dir
+storage_root_identity='directory|1:1'
+stat_cmd=(stat)
+timeout() { shift 2; "$@"; }
+sudo() { shift; "$@"; }
+stat() {
+  [[ -d $volume_path ]] || return 1
+  if [[ $TEST_STORAGE_CASE == identity_change ]]; then printf 'directory|1:2'; else printf 'directory|1:1'; fi
+}
+df() { printf 'Filesystem 1024-blocks Used Available Capacity Mounted\\nmock 9000000 0 8000000 0%% /\\n'; }
+du() {
+  mock_calls=$(<"$TEST_COUNT_FILE")
+  mock_calls=$((mock_calls + 1))
+  printf '%s' "$mock_calls" >"$TEST_COUNT_FILE"
+  case $TEST_STORAGE_CASE in
+    transient) if (( mock_calls == 1 )); then printf "du: cannot access '%s/vanished': No such file or directory\\n" "$volume_path" >&2; return 1; fi ;;
+    unterminated) if (( mock_calls == 1 )); then printf "du: cannot access '%s/vanished': No such file or directory" "$volume_path" >&2; return 1; fi ;;
+    persistent) printf "du: cannot access '%s/vanished': No such file or directory\\n" "$volume_path" >&2; return 1 ;;
+    root_loss) rmdir "$volume_path"; printf "du: cannot access '%s': No such file or directory\\n" "$volume_path" >&2; return 1 ;;
+    permission) printf "du: cannot read directory '%s/private': Permission denied\\n" "$volume_path" >&2; return 1 ;;
+    stderr_overflow) head -c 100000 /dev/zero >&2; return 1 ;;
+    timeout) return 124 ;;
+    malformed) printf 'not-a-total\\t%s\\n' "$volume_path"; return 0 ;;
+    large) printf '5000000\\t%s\\n' "$volume_path"; return 0 ;;
+  esac
+  printf '100\\t%s\\n' "$volume_path"
+}
+""" + sampler + """
+if sample_storage_kib; then printf 'admitted:%s\\n' "$SAMPLED_STORAGE_KIB"; else printf 'rejected\\n'; fi
+"""
+        for case, admitted in (
+            ("transient", True), ("unterminated", True), ("persistent", False),
+            ("identity_change", False), ("root_loss", False),
+            ("permission", False), ("stderr_overflow", False), ("timeout", False),
+            ("malformed", False),
+            ("large", False),
+        ):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                volume = Path(directory) / "owned-volume"
+                volume.mkdir()
+                counter = Path(directory) / "du-calls"
+                counter.write_text("0")
+                env = os.environ.copy()
+                env.update(TEST_VOLUME_PATH=str(volume), TEST_RUN_DIR=directory,
+                           TEST_STORAGE_CASE=case, TEST_COUNT_FILE=str(counter))
+                result = subprocess.run(
+                    ["bash", "-c", bash], env=env, text=True,
+                    capture_output=True, timeout=5, check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), "admitted:100" if admitted else "rejected")
 
     def test_read_only_volume_start_keeps_classified_failure_probe(self) -> None:
         source = (ROOT / "src/native_target_tests.rs").read_text(encoding="utf-8")

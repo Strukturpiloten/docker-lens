@@ -20,8 +20,13 @@ fn cli_failure_exit(status: std::process::ExitStatus) -> &'static str {
 
 fn cli_failure_stderr(stderr: &[u8]) -> &'static str {
     let message = String::from_utf8_lossy(stderr).to_ascii_lowercase();
-    if message.contains("connection refused") {
+    if message.contains("connection refused") || message.contains("could not connect to server") {
         "connection_refused"
+    } else if message.contains("executable file not found")
+        || message.contains("executable not found")
+        || message.contains("command not found")
+    {
+        "missing_tool"
     } else if message.contains("address family not supported") {
         "address_family"
     } else if message.contains("cannot assign requested address")
@@ -62,6 +67,11 @@ fn assert_native_api_status(actual: u16, expected: u16) {
 fn native_failure_categories_remain_closed_and_private() {
     for (private, expected) in [
         ("connection refused protected-secret", "connection_refused"),
+        (
+            "could not connect to server protected-secret",
+            "connection_refused",
+        ),
+        ("executable file not found protected-secret", "missing_tool"),
         (
             "address family not supported protected-secret",
             "address_family",
@@ -558,6 +568,102 @@ impl NativeRun {
         String::from_utf8(output.stdout).expect("CLI output UTF-8")
     }
 
+    fn outer_exec(&self, args: &[&str], seconds: &str) -> std::process::Output {
+        let mut command = Command::new("timeout");
+        command.args(["--kill-after=1", seconds]);
+        if required("NATIVE_PODMAN_USE_SUDO") == "1" {
+            command.args(["sudo", "-n", "podman"]);
+        } else {
+            command.arg("podman");
+        }
+        let outer = format!("dl-native-{}", self.run_id);
+        command.args(["exec", &outer]);
+        command.args(args);
+        bounded_native_cli_output(&mut command, None)
+    }
+
+    fn require_outer_curl(&self) {
+        eprintln!("DOCKERLENS_NATIVE_CHECK: container_outer_curl_preflight");
+        let output = self.outer_exec(&["curl", "--version"], "8");
+        if !output.status.success() {
+            eprintln!(
+                "DOCKERLENS_NATIVE_HTTP_DIAG: exit={} category={}",
+                cli_failure_exit(output.status),
+                cli_failure_stderr(&output.stderr)
+            );
+        }
+        assert!(output.status.success(), "outer namespace curl is required");
+    }
+
+    fn require_outer_bash(&self) {
+        eprintln!("DOCKERLENS_NATIVE_CHECK: container_outer_bash_preflight");
+        let output = self.outer_exec(&["bash", "--version"], "8");
+        if !output.status.success() {
+            eprintln!(
+                "DOCKERLENS_NATIVE_CLI_DIAG: exit={} stderr={}",
+                cli_failure_exit(output.status),
+                cli_failure_stderr(&output.stderr)
+            );
+        }
+        assert!(output.status.success(), "outer namespace bash is required");
+    }
+
+    fn try_outer_http(&self, url: &str) -> Result<String, (&'static str, &'static str)> {
+        let output = self.outer_exec(
+            &[
+                "curl",
+                "--noproxy",
+                "*",
+                "--proxy",
+                "",
+                "--globoff",
+                "--fail",
+                "--silent",
+                "--show-error",
+                "--connect-timeout",
+                "2",
+                "--max-time",
+                "3",
+                "--max-filesize",
+                "8192",
+                url,
+            ],
+            "8",
+        );
+        if !output.status.success() {
+            return Err((
+                cli_failure_exit(output.status),
+                cli_failure_stderr(&output.stderr),
+            ));
+        }
+        Ok(String::from_utf8(output.stdout).expect("bounded outer HTTP UTF-8"))
+    }
+
+    fn assert_published_http(&self, url: &str, expected: &str, local_ipv6: Option<bool>) {
+        let mut outcome = ("other", "unknown");
+        for attempt in 0..5 {
+            match self.try_outer_http(url) {
+                Ok(body) if body == expected => return,
+                Ok(_) => outcome = ("success", "body_mismatch"),
+                Err(category) => outcome = category,
+            }
+            if attempt < 4 {
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
+        }
+        if let Some(local_ipv6) = local_ipv6 {
+            eprintln!(
+                "DOCKERLENS_NATIVE_IPV6_DIAG: local_service={}",
+                if local_ipv6 { "pass" } else { "fail" }
+            );
+        }
+        eprintln!(
+            "DOCKERLENS_NATIVE_HTTP_DIAG: exit={} category={}",
+            outcome.0, outcome.1
+        );
+        panic!("closed published endpoint HTTP assertion failed");
+    }
+
     fn cli_with_stdin(&self, args: &[String], input: &[u8]) -> String {
         assert!(input.len() <= 4096, "bounded synthetic Dockerfile");
         let mut command = Command::new("timeout");
@@ -939,6 +1045,7 @@ fn mark_port_stage(suffix: &str, phase: &'static str) {
             | "oracle_start"
             | "cli_http"
             | "cli_http_secondary"
+            | "local_service"
             | "http_assert"
             | "http_assert_secondary"
             | "render"
@@ -959,7 +1066,22 @@ fn mark_port_stage(suffix: &str, phase: &'static str) {
     eprintln!("DOCKERLENS_NATIVE_CHECK: container_port_{group}_{phase}");
 }
 
-fn assert_fixed_ipv4_http(run: &NativeRun, suffix: &str, secondary: bool) {
+fn assert_local_service(run: &NativeRun, id: &str, port: u16, expected: &str, suffix: &str) {
+    mark_port_stage(suffix, "local_service");
+    let url = format!("http://127.0.0.1:{port}/index.html");
+    let body = run.cli(&[
+        "exec".into(),
+        id.into(),
+        "sh".into(),
+        "-c".into(),
+        "for attempt in 1 2 3 4 5; do if body=$(wget -qO- -T 2 \"$1\"); then printf '%s' \"$body\"; exit 0; fi; [ \"$attempt\" = 5 ] || sleep 1; done; exit 1".into(),
+        "service-probe".into(),
+        url,
+    ]);
+    assert_eq!(body, expected);
+}
+
+fn assert_fixed_ipv4_http(run: &NativeRun, id: &str, suffix: &str, secondary: bool) {
     let (url, request_stage, assertion_stage) = if secondary {
         (
             "http://127.0.0.2:18111/index.html",
@@ -973,27 +1095,16 @@ fn assert_fixed_ipv4_http(run: &NativeRun, suffix: &str, secondary: bool) {
             "http_assert",
         )
     };
-    // The primary success establishes service readiness. Each request still
-    // gets a short, closed retry window for asynchronous port-forward setup.
+    assert_local_service(run, id, 8080, "native-tcp-canary", suffix);
     mark_port_stage(suffix, request_stage);
-    let output = run.cli(&[
-        "run".into(),
-        "--rm".into(),
-        "--network".into(),
-        "host".into(),
-        run.image.clone(),
-        "sh".into(),
-        "-c".into(),
-        "for attempt in 1 2 3 4 5; do if body=$(wget -qO- -T 2 \"$1\"); then printf '%s' \"$body\"; exit 0; fi; [ \"$attempt\" = 5 ] || sleep 1; done; exit 1".into(),
-        "port-probe".into(),
-        url.into(),
-    ]);
+    run.assert_published_http(url, "native-tcp-canary", None);
     mark_port_stage(suffix, assertion_stage);
-    assert_eq!(output, "native-tcp-canary");
 }
 
 fn probe_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
     eprintln!("DOCKERLENS_NATIVE_CHECK: container_ports");
+    run.require_outer_curl();
+    run.require_outer_bash();
     let script = "printf native-tcp-canary >/tmp/index.html; httpd -f -p 8080 -h /tmp & nc -u -l -p 8081 > /tmp/udp-received & wait";
     mark_port_stage("port-oracle", "cli_create");
     let oracle = run.cli_create(
@@ -1018,8 +1129,8 @@ fn probe_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
     let oracle_id = oracle["Id"].as_str().unwrap().to_owned();
     mark_port_stage("port-oracle", "oracle_start");
     start_container(run, &oracle_id);
-    assert_fixed_ipv4_http(run, "port-oracle", false);
-    assert_fixed_ipv4_http(run, "port-oracle", true);
+    assert_fixed_ipv4_http(run, &oracle_id, "port-oracle", false);
+    assert_fixed_ipv4_http(run, &oracle_id, "port-oracle", true);
     mark_port_stage("port-oracle", "oracle_cleanup");
     run.delete(&oracle_id);
 
@@ -1107,17 +1218,13 @@ fn probe_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
         None,
     );
     assert_native_api_status(status, 204);
-    assert_fixed_ipv4_http(run, "port-rendered", false);
-    assert_fixed_ipv4_http(run, "port-rendered", true);
+    assert_fixed_ipv4_http(run, &id, "port-rendered", false);
+    assert_fixed_ipv4_http(run, &id, "port-rendered", true);
     mark_port_stage("port-rendered", "isolated_http");
-    let isolated = run.cli(&[
-        "run".into(), "--rm".into(), "--network".into(), "host".into(),
-        run.image.clone(), "sh".into(), "-c".into(),
-        "if wget -qO- -T 3 http://127.0.0.2:18110/index.html >/dev/null 2>&1; then printf reachable; else printf blocked; fi".into(),
-    ]);
+    let isolated = run.try_outer_http("http://127.0.0.2:18110/index.html");
     mark_port_stage("port-rendered", "isolated_assert");
-    assert_eq!(
-        isolated, "blocked",
+    assert!(
+        matches!(isolated, Err((_, "connection_refused"))),
         "127.0.0.1 publication must not widen to 127.0.0.2"
     );
     mark_port_stage("port-rendered", "udp_assignment");
@@ -1128,16 +1235,26 @@ fn probe_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
     let assigned: u16 = assigned.parse().expect("numeric dynamic UDP port");
     assert!(assigned > 0);
     mark_port_stage("port-rendered", "udp_send");
-    run.cli(&[
-        "run".into(),
-        "--rm".into(),
-        "--network".into(),
-        "host".into(),
-        run.image.clone(),
-        "sh".into(),
-        "-c".into(),
-        format!("printf native-udp-canary | nc -u -w 1 127.0.0.1 {assigned}"),
-    ]);
+    let assigned = assigned.to_string();
+    let sent = run.outer_exec(
+        &[
+            "bash",
+            "-c",
+            "printf '%s' \"$1\" >\"/dev/udp/127.0.0.1/$2\"",
+            "udp-probe",
+            "native-udp-canary",
+            &assigned,
+        ],
+        "8",
+    );
+    if !sent.status.success() {
+        eprintln!(
+            "DOCKERLENS_NATIVE_CLI_DIAG: exit={} stderr={}",
+            cli_failure_exit(sent.status),
+            cli_failure_stderr(&sent.stderr)
+        );
+    }
+    assert!(sent.status.success(), "outer namespace UDP send failed");
     mark_port_stage("port-rendered", "udp_receive");
     let mut received = String::new();
     for _ in 0..10 {
@@ -1179,7 +1296,7 @@ fn probe_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
     let oracle_id = oracle["Id"].as_str().unwrap().to_owned();
     mark_port_stage("ipv6-oracle", "oracle_start");
     start_container(run, &oracle_id);
-    assert_ipv6_traffic(run, "ipv6-oracle");
+    assert_ipv6_traffic(run, &oracle_id, "ipv6-oracle");
     mark_port_stage("ipv6-oracle", "oracle_cleanup");
     run.delete(&oracle_id);
     let mut container = bare_container(&run.image);
@@ -1229,24 +1346,28 @@ fn probe_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
         None,
     );
     assert_native_api_status(status, 204);
-    assert_ipv6_traffic(run, "ipv6-rendered");
+    assert_ipv6_traffic(run, &id, "ipv6-rendered");
     evidence.positive("FixedIpv6HostPort");
 }
 
-fn assert_ipv6_traffic(run: &NativeRun, suffix: &str) {
-    mark_port_stage(suffix, "cli_http");
-    let output = run.cli(&[
-        "run".into(),
-        "--rm".into(),
-        "--network".into(),
-        "host".into(),
-        run.image.clone(),
-        "wget".into(),
-        "-qO-".into(),
-        "http://[::1]:18112/index.html".into(),
+fn assert_ipv6_traffic(run: &NativeRun, id: &str, suffix: &str) {
+    mark_port_stage(suffix, "local_service");
+    let local_body = run.cli(&[
+        "exec".into(), id.into(), "sh".into(), "-c".into(),
+        "for attempt in 1 2 3 4 5; do for url in http://127.0.0.1:8083/index.html http://[::1]:8083/index.html; do if body=$(wget -qO- -T 2 \"$url\"); then printf '%s' \"$body\"; exit 0; fi; done; [ \"$attempt\" = 5 ] || sleep 1; done; exit 1".into(),
     ]);
+    assert_eq!(local_body, "native-ipv6-canary");
+    let local_ipv6 = run.cli(&[
+        "exec".into(), id.into(), "sh".into(), "-c".into(),
+        "if wget -qO- -T 2 http://[::1]:8083/index.html >/dev/null 2>&1; then printf pass; else printf fail; fi".into(),
+    ]) == "pass";
+    mark_port_stage(suffix, "cli_http");
+    run.assert_published_http(
+        "http://[::1]:18112/index.html",
+        "native-ipv6-canary",
+        Some(local_ipv6),
+    );
     mark_port_stage(suffix, "http_assert");
-    assert_eq!(output, "native-ipv6-canary");
 }
 
 fn assert_dynamic_http(run: &NativeRun, id: &str, key: &str, host_ip: &str, suffix: &str) {
@@ -1273,6 +1394,13 @@ fn assert_dynamic_http(run: &NativeRun, id: &str, key: &str, host_ip: &str, suff
     } else {
         host_ip.to_owned()
     };
+    let container_port: u16 = key
+        .split_once('/')
+        .expect("closed TCP port key")
+        .0
+        .parse()
+        .expect("numeric container TCP port");
+    assert_local_service(run, id, container_port, "native-dynamic-canary", suffix);
     mark_port_stage(
         suffix,
         if secondary {
@@ -1281,16 +1409,11 @@ fn assert_dynamic_http(run: &NativeRun, id: &str, key: &str, host_ip: &str, suff
             "cli_http"
         },
     );
-    let output = run.cli(&[
-        "run".into(),
-        "--rm".into(),
-        "--network".into(),
-        "host".into(),
-        run.image.clone(),
-        "wget".into(),
-        "-qO-".into(),
-        format!("http://{address}:{port}/index.html"),
-    ]);
+    run.assert_published_http(
+        &format!("http://{address}:{port}/index.html"),
+        "native-dynamic-canary",
+        None,
+    );
     mark_port_stage(
         suffix,
         if secondary {
@@ -1299,7 +1422,6 @@ fn assert_dynamic_http(run: &NativeRun, id: &str, key: &str, host_ip: &str, suff
             "http_assert"
         },
     );
-    assert_eq!(output, "native-dynamic-canary");
 }
 
 fn probe_complementary_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
@@ -1599,7 +1721,9 @@ fn probe_identity_and_health(run: &mut NativeRun, evidence: &mut ProbeEvidence) 
     );
 
     eprintln!("DOCKERLENS_NATIVE_CHECK: container_health_disabled");
+    eprintln!("DOCKERLENS_NATIVE_CHECK: container_health_disabled_image_build");
     let health_image = run.image_with_failing_health();
+    eprintln!("DOCKERLENS_NATIVE_CHECK: container_health_disabled_inherited_create");
     let inherited = run.cli_create_image(
         "health-inherited-oracle",
         &[],
@@ -1611,7 +1735,9 @@ fn probe_identity_and_health(run: &mut NativeRun, evidence: &mut ProbeEvidence) 
         inherited["Config"]["Healthcheck"]["Test"],
         json!(["CMD-SHELL", "/bin/false"])
     );
+    eprintln!("DOCKERLENS_NATIVE_CHECK: container_health_disabled_inherited_start");
     start_container(run, &inherited_id);
+    eprintln!("DOCKERLENS_NATIVE_CHECK: container_health_disabled_inherited_wait");
     for _ in 0..10 {
         if run.inspect(&inherited_id)["State"]["Health"]["Status"] == "unhealthy" {
             break;
@@ -1622,6 +1748,7 @@ fn probe_identity_and_health(run: &mut NativeRun, evidence: &mut ProbeEvidence) 
         run.inspect(&inherited_id)["State"]["Health"]["Status"],
         "unhealthy"
     );
+    eprintln!("DOCKERLENS_NATIVE_CHECK: container_health_disabled_oracle_create");
     let oracle = run.cli_create_image(
         "disabled-oracle",
         &["--no-healthcheck".into()],
@@ -1630,6 +1757,7 @@ fn probe_identity_and_health(run: &mut NativeRun, evidence: &mut ProbeEvidence) 
     );
     assert_eq!(oracle["Config"]["Healthcheck"]["Test"], json!(["NONE"]));
     let oracle_id = oracle["Id"].as_str().unwrap().to_owned();
+    eprintln!("DOCKERLENS_NATIVE_CHECK: container_health_disabled_oracle_start");
     start_container(run, &oracle_id);
     assert!(run.inspect(&oracle_id)["State"]["Health"].is_null());
     let mut container = bare_container(&health_image);
@@ -1640,6 +1768,7 @@ fn probe_identity_and_health(run: &mut NativeRun, evidence: &mut ProbeEvidence) 
         "Labels":{"io.dockerlens.native-run":run.run_id},
         "Healthcheck":{"Test":["NONE"]}, "HostConfig":{}
     });
+    eprintln!("DOCKERLENS_NATIVE_CHECK: container_health_disabled_rendered_create");
     let (id, body, inspected) = run.rendered_create(
         "disabled-rendered",
         container,
@@ -1651,7 +1780,9 @@ fn probe_identity_and_health(run: &mut NativeRun, evidence: &mut ProbeEvidence) 
         inspected["Config"]["Healthcheck"]["Test"],
         oracle["Config"]["Healthcheck"]["Test"]
     );
+    eprintln!("DOCKERLENS_NATIVE_CHECK: container_health_disabled_rendered_start");
     start_container(run, &id);
+    eprintln!("DOCKERLENS_NATIVE_CHECK: container_health_disabled_rendered_wait");
     assert!(run.inspect(&id)["State"]["Health"].is_null());
     std::thread::sleep(std::time::Duration::from_secs(2));
     assert!(run.inspect(&id)["State"]["Health"].is_null());

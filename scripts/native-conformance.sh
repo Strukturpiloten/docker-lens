@@ -177,21 +177,76 @@ for resource in container volume; do
 done
 "${podman_cmd[@]}" volume create --label "io.dockerlens.native-run=$run_id" "$volume" >/dev/null
 volume_path=$("${podman_cmd[@]}" volume inspect --format '{{.Mountpoint}}' "$volume")
+if [[ $EUID == 0 ]]; then stat_cmd=(stat); else stat_cmd=(sudo -n stat); fi
+storage_root_identity=$(timeout --kill-after=1 10 "${stat_cmd[@]}" -c '%F|%d:%i' -- "$volume_path" 2>/dev/null) || {
+  echo 'owned native storage root is unavailable' >&2
+  exit 1
+}
+[[ $volume_path == /* && $storage_root_identity =~ ^directory\|[0-9]+:[0-9]+$ ]] || {
+  echo 'owned native storage root is unavailable' >&2
+  exit 1
+}
+
+# Containerd can remove a snapshot between du's directory scan and stat. Only
+# that exact descendant ENOENT is resampled; no partial total is ever accepted.
+sample_storage_kib() {
+  local attempt du_output du_error du_status line descendant prefix suffix free_output free_kib used_kib current_root seen
+  local -a du_cmd df_cmd
+  if [[ $EUID == 0 ]]; then du_cmd=(du); df_cmd=(df); else du_cmd=(sudo -n du); df_cmd=(sudo -n df); fi
+  prefix="du: cannot access '$volume_path/"
+  suffix="': No such file or directory"
+  for attempt in 1 2 3; do
+    (( SECONDS <= 1800 )) || return 1
+    current_root=$(timeout --kill-after=1 10 "${stat_cmd[@]}" -c '%F|%d:%i' -- "$volume_path" 2>/dev/null) || return 1
+    [[ $current_root == "$storage_root_identity" ]] || return 1
+    free_output=$(timeout --kill-after=1 10 "${df_cmd[@]}" -Pk -- "$graph_root") || return 1
+    free_kib=$(awk 'END {print $4}' <<<"$free_output")
+    [[ $free_kib =~ ^[0-9]+$ ]] || return 1
+    (( free_kib >= 2 * 1024 * 1024 )) || return 1
+    du_error=$(mktemp "$run_dir/storage-du.XXXXXXXX") || return 1
+    du_status=0
+    du_output=$( (ulimit -f 4; LC_ALL=C timeout --kill-after=1 10 "${du_cmd[@]}" -sk -- "$volume_path") 2>"$du_error") || du_status=$?
+    if (( du_status == 0 )); then
+      if [[ -s $du_error || $du_output != *$'\t'"$volume_path" ]]; then
+        rm -f -- "$du_error"
+        return 1
+      fi
+      used_kib=${du_output%%$'\t'*}
+      rm -f -- "$du_error"
+      [[ $used_kib =~ ^[0-9]+$ ]] || return 1
+      (( used_kib <= 4 * 1024 * 1024 && SECONDS <= 1800 )) || return 1
+      SAMPLED_STORAGE_KIB=$used_kib
+      SAMPLED_FREE_KIB=$free_kib
+      return 0
+    fi
+    (( du_status == 1 )) || { rm -f -- "$du_error"; return 1; }
+    current_root=$(timeout --kill-after=1 10 "${stat_cmd[@]}" -c '%F|%d:%i' -- "$volume_path" 2>/dev/null) || { rm -f -- "$du_error"; return 1; }
+    [[ $current_root == "$storage_root_identity" && -s $du_error ]] || { rm -f -- "$du_error"; return 1; }
+    (( $(wc -c <"$du_error") <= 4096 )) || { rm -f -- "$du_error"; return 1; }
+    seen=0
+    while IFS= read -r line || [[ -n $line ]]; do
+      [[ $line == "$prefix"*"$suffix" ]] || { rm -f -- "$du_error"; return 1; }
+      descendant=${line#"$prefix"}
+      descendant=${descendant%"$suffix"}
+      [[ -n $descendant && $descendant != /* && $descendant != .. && $descendant != ../* && $descendant != */../* && $descendant != */.. ]] || {
+        rm -f -- "$du_error"
+        return 1
+      }
+      seen=1
+    done <"$du_error"
+    rm -f -- "$du_error"
+    (( seen == 1 )) || return 1
+    (( attempt < 3 )) && sleep 0.2
+  done
+  return 1
+}
 main_pid=$$
 watchdog() {
   trap - EXIT HUP INT TERM
-  local used free
   while :; do
     sleep 5
-    if [[ $EUID == 0 ]]; then
-      used=$(du -sk "$volume_path" | awk '{print $1}') || { kill -TERM "$main_pid"; return; }
-      free=$(df -Pk "$graph_root" | awk 'END {print $4}') || { kill -TERM "$main_pid"; return; }
-    else
-      used=$(sudo -n du -sk "$volume_path" | awk '{print $1}') || { kill -TERM "$main_pid"; return; }
-      free=$(sudo -n df -Pk "$graph_root" | awk 'END {print $4}') || { kill -TERM "$main_pid"; return; }
-    fi
-    if (( used > 4 * 1024 * 1024 || free < 2 * 1024 * 1024 || SECONDS > 1800 )); then
-      echo "native lane exceeded its storage, free-space, or 30-minute budget" >&2
+    if ! sample_storage_kib; then
+      echo "native lane storage, free-space, or 30-minute budget could not be verified" >&2
       kill -TERM "$main_pid"
       return
     fi
@@ -554,12 +609,8 @@ api_get "/v$api_version/containers/json?all=1" "$run_dir/list.json"
 api_get "/v$api_version/networks/$network_id" "$run_dir/network.json"
 api_get "/v$api_version/volumes/$volume_name" "$run_dir/volume.json"
 
-if [[ $EUID == 0 ]]; then
-  used_kib=$(du -sk "$volume_path" | awk '{print $1}')
-else
-  used_kib=$(sudo -n du -sk "$volume_path" | awk '{print $1}')
-fi
-(( used_kib <= 4 * 1024 * 1024 )) || { echo 'nested daemon exceeded 4 GiB storage budget' >&2; exit 1; }
+sample_storage_kib || { echo 'nested daemon storage budget could not be verified' >&2; exit 1; }
+used_kib=$SAMPLED_STORAGE_KIB
 
 export NATIVE_ENGINE_SOCKET="$socket" NATIVE_CAPTURE_DIR="$run_dir" NATIVE_CONTAINER_ID="$container_id"
 export NATIVE_NETWORK_ID="$network_id" NATIVE_VOLUME_NAME="$volume_name"
