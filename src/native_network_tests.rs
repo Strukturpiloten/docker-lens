@@ -116,29 +116,67 @@ fn identity(text: &str) -> TargetIdentity {
 }
 
 fn cli(args: &[&str]) -> (bool, Vec<u8>) {
-    let mut command = Command::new("timeout");
-    command.arg("45");
-    if required("NATIVE_PODMAN_USE_SUDO") == "1" {
-        command.args(["sudo", "-n", "podman"]);
+    let output = bounded_cli(args, "45");
+    assert!(!output.output_limit, "bounded native CLI output limit");
+    (output.success, output.stdout)
+}
+
+fn network_cli_failure_category(stderr: &[u8]) -> &'static str {
+    let message = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+    if message.contains("iptables is disabled") || message.contains("ip6tables is disabled") {
+        "firewall_disabled"
+    } else if message.contains("iptables") || message.contains("ip6tables") {
+        "firewall"
+    } else if message.contains("permission denied") || message.contains("operation not permitted") {
+        "permission"
+    } else if message.contains("overlap") || message.contains("address pool") {
+        "address_pool"
+    } else if message.contains("invalid label") {
+        "invalid_label"
+    } else if message.contains("invalid option") || message.contains("unknown flag") {
+        "invalid_option"
     } else {
-        command.arg("podman");
+        "unknown"
     }
-    command.args([
-        "exec",
-        &required("NATIVE_OUTER_CONTAINER"),
-        "docker",
-        "-H",
-        "unix:///dockerlens-native/docker.sock",
-    ]);
-    command.args(args).stderr(Stdio::null());
-    let output = command.output().expect("isolated Docker CLI available");
-    (output.status.success(), output.stdout)
+}
+
+#[test]
+fn network_cli_failure_categories_never_disclose_native_values() {
+    for (message, expected) in [
+        (
+            "Cannot restrict communication if iptables is disabled: private-canary",
+            "firewall_disabled",
+        ),
+        ("ip6tables private-canary failed", "firewall"),
+        ("operation not permitted private-canary", "permission"),
+        ("address pool overlaps private-canary", "address_pool"),
+        ("invalid label private-canary", "invalid_label"),
+        ("unknown flag private-canary", "invalid_option"),
+        ("private-canary", "unknown"),
+    ] {
+        assert_eq!(network_cli_failure_category(message.as_bytes()), expected);
+    }
 }
 
 fn cli_ok(args: &[&str]) -> Vec<u8> {
-    let (success, output) = cli(args);
-    assert!(success, "independent isolated Docker CLI probe failed");
-    output
+    let output = bounded_cli(args, "45");
+    assert!(!output.output_limit, "bounded native CLI output limit");
+    if !output.success {
+        let exit = if matches!(output.code, Some(124 | 137)) {
+            "timeout"
+        } else {
+            "other"
+        };
+        eprintln!(
+            "DOCKERLENS_NATIVE_NETWORK_CLI_DIAG: exit={exit} category={}",
+            network_cli_failure_category(&output.stderr)
+        );
+    }
+    assert!(
+        output.success,
+        "independent isolated Docker CLI probe failed"
+    );
+    output.stdout
 }
 
 struct BoundedDnsCliOutput {
@@ -185,6 +223,15 @@ fn cli_dns(args: &[&str]) -> BoundedDnsCliOutput {
     // The DNS readiness loop has four at-most-nine-second CLI calls and four
     // three-second state reads, plus three 250-ms waits in the retry case.
     let mut command = private_docker_command("8");
+    bounded_cli_command(&mut command, args)
+}
+
+fn bounded_cli(args: &[&str], seconds: &str) -> BoundedDnsCliOutput {
+    let mut command = private_docker_command(seconds);
+    bounded_cli_command(&mut command, args)
+}
+
+fn bounded_cli_command(command: &mut Command, args: &[&str]) -> BoundedDnsCliOutput {
     command
         .args(args)
         .stdout(Stdio::piped())
@@ -1844,6 +1891,7 @@ fn live_network_render_matches_engine() {
     // The CLI oracle is independent of the inert renderer. Direct GETs check
     // Engine normalization, including options, labels, both IP families and IPAM.
     eprintln!("DOCKERLENS_NATIVE_CHECK: network_oracle");
+    eprintln!("DOCKERLENS_NATIVE_CHECK: network_oracle_primary_create");
     cli_ok(&[
         "network",
         "create",
@@ -1879,7 +1927,9 @@ fn live_network_render_matches_engine() {
         "io.dockerlens.network.special=Grüße \"quoted\" \\ path",
         &oracle,
     ]);
+    eprintln!("DOCKERLENS_NATIVE_CHECK: network_oracle_primary_inspect");
     let oracle_body = inspect(&format!("/v{api_version}/networks/{oracle}"));
+    eprintln!("DOCKERLENS_NATIVE_CHECK: network_oracle_primary_assert");
     assert_eq!(oracle_body["Driver"], "bridge");
     assert_eq!(oracle_body["Internal"], true);
     assert_eq!(oracle_body["EnableIPv6"], true);
@@ -1930,6 +1980,7 @@ fn live_network_render_matches_engine() {
         oracle_body["Labels"] == expected_labels,
         "closed CLI network label oracle"
     );
+    eprintln!("DOCKERLENS_NATIVE_CHECK: network_oracle_alternate_create");
     cli_ok(&[
         "network",
         "create",
@@ -1947,7 +1998,9 @@ fn live_network_render_matches_engine() {
         "io.dockerlens.network.special=Grüße \"quoted\" \\ path",
         &oracle_control,
     ]);
+    eprintln!("DOCKERLENS_NATIVE_CHECK: network_oracle_alternate_inspect");
     let oracle_control_body = inspect(&format!("/v{api_version}/networks/{oracle_control}"));
+    eprintln!("DOCKERLENS_NATIVE_CHECK: network_oracle_alternate_assert");
     assert_eq!(oracle_control_body["Driver"], "bridge");
     assert_eq!(
         oracle_control_body["Options"]["com.docker.network.bridge.enable_icc"],
@@ -1961,7 +2014,9 @@ fn live_network_render_matches_engine() {
         oracle_control_body["Labels"] == expected_labels,
         "closed CLI control labels"
     );
+    eprintln!("DOCKERLENS_NATIVE_CHECK: network_oracle_external_create");
     cli_ok(&["network", "create", "--driver", "bridge", &external]);
+    eprintln!("DOCKERLENS_NATIVE_CHECK: network_oracle_external_inspect");
     let external_before = inspect(&format!("/v{api_version}/networks/{external}"));
     let external_id = external_before["Id"].as_str().unwrap().to_owned();
 

@@ -12,6 +12,41 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class NativeHarnessTests(unittest.TestCase):
+    def test_network_oracle_diagnostics_are_closed_and_do_not_hide_failure(self) -> None:
+        source = (ROOT / "src/native_network_tests.rs").read_text(encoding="utf-8")
+        negative_cli = source.split("fn cli(args:", 1)[1].split("fn network_cli_failure_category", 1)[0]
+        self.assertNotIn("DOCKERLENS_NATIVE_NETWORK_CLI_DIAG", negative_cli)
+        positive_cli = source.split("fn cli_ok(args:", 1)[1].split("struct BoundedDnsCliOutput", 1)[0]
+        self.assertIn("DOCKERLENS_NATIVE_NETWORK_CLI_DIAG", positive_cli)
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_network_tests::live_network_render_matches_engine: test'
+else
+  echo 'DOCKERLENS_NATIVE_CHECK: network_oracle_alternate_create' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: network_oracle_private' >&2
+  echo 'DOCKERLENS_NATIVE_NETWORK_CLI_DIAG: exit=other category=firewall_disabled' >&2
+  echo 'DOCKERLENS_NATIVE_NETWORK_CLI_DIAG: exit=other category=private-canary' >&2
+  echo 'private-canary raw native output' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 101
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            result = subprocess.run(
+                [str(ROOT / "scripts/run-exact-native-test.sh"), "native_network",
+                 "live_network_render_matches_engine"],
+                env=env, capture_output=True, text=True, timeout=10,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("network_oracle_alternate_create", result.stderr)
+            self.assertIn("exit=other category=firewall_disabled", result.stderr)
+            self.assertNotIn("private-canary", result.stdout + result.stderr)
+            self.assertNotIn("network_oracle_private", result.stdout + result.stderr)
+
     def test_failure_exposes_only_selected_native_panic_location(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             bin_dir = Path(directory)

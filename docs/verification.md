@@ -22,6 +22,11 @@ For native assertion failures, the exact-test wrapper may expose the selected
 native test's fixed source basename and bounded numeric line/column. It does not
 print the assertion message, compared values, thread name, or absolute build
 path. The location is diagnostic only and never changes a failed outcome.
+The CLI network oracle also emits only its closed create/inspect/assert phase
+and, on a failed command, a closed exit and stderr category. Native stdout and
+stderr are bounded independently to 8 KiB; raw bytes remain private. A category
+such as a disabled firewall identifies a failure to investigate, not permission
+to skip the assertion or admit an unsupported result as positive evidence.
 On a failed edge-side DNS positive, the network test may create one exact
 run-owned diagnostic peer. Its closed summary distinguishes resolver setup,
 default/explicit/dotted A lookups, named/direct-IP HTTP and cleanup without
