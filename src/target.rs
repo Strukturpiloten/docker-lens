@@ -1649,6 +1649,116 @@ mod tests {
     }
 
     #[test]
+    fn command_clear_requires_explicit_exec_entrypoint_without_leaking_intent() {
+        for entrypoint in [ImageCommand::Inherit, ImageCommand::Clear] {
+            let mut container = bare_container();
+            container.image = ImageReference::new(b"private.example/image:1".to_vec()).unwrap();
+            container.entrypoint = entrypoint;
+            container.command = ImageCommand::Clear;
+            let error = TargetIntent::new(vec![TargetResource::Container(Box::new(container))])
+                .unwrap_err();
+            assert_eq!(error, IntentError::CommandClearRequiresEntrypoint);
+            assert!(!format!("{error:?}").contains("private.example"));
+        }
+        let mut container = bare_container();
+        container.entrypoint = ImageCommand::Exec(vec![]);
+        container.command = ImageCommand::Clear;
+        assert_eq!(
+            TargetIntent::new(vec![TargetResource::Container(Box::new(container))]).unwrap_err(),
+            IntentError::InvalidArgument
+        );
+        let mut container = bare_container();
+        container.entrypoint = ImageCommand::Exec(vec![Argument::new(Vec::new()).unwrap()]);
+        container.command = ImageCommand::Clear;
+        assert_eq!(
+            TargetIntent::new(vec![TargetResource::Container(Box::new(container))]).unwrap_err(),
+            IntentError::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn explicit_entrypoint_with_clear_command_is_an_exact_gated_candidate() {
+        let mut container = bare_container();
+        container.entrypoint =
+            ImageCommand::Exec(vec![Argument::new(b"/bin/private-entry".to_vec()).unwrap()]);
+        container.command = ImageCommand::Clear;
+        let intent =
+            TargetIntent::new(vec![TargetResource::Container(Box::new(container))]).unwrap();
+        let daemon = facts(
+            41,
+            DaemonMode::Rootful,
+            &[Capability::StandaloneContainer, Capability::Entrypoint],
+        );
+        let capabilities = ValidatedCapabilities::new(&daemon).unwrap();
+        assert_eq!(
+            DockerPlanner.plan(&intent, &capabilities).unwrap_err(),
+            PlanningError::MissingCapability {
+                resource: ResourceRef::new(1),
+                field: TargetField::CommandClear,
+                capability: Capability::CommandClear,
+            }
+        );
+        let daemon = facts(
+            41,
+            DaemonMode::Rootful,
+            &[
+                Capability::StandaloneContainer,
+                Capability::CommandClear,
+                Capability::Entrypoint,
+            ],
+        );
+        let capabilities = ValidatedCapabilities::new(&daemon).unwrap();
+        let graph = DockerPlanner.plan(&intent, &capabilities).unwrap();
+        let artifact = DockerApiRenderer.render(&graph).unwrap();
+        assert_eq!(
+            artifact.bytes(),
+            b"{\"method\":\"POST\",\"path\":\"/v1.41/containers/create?name=app\",\"body\":{\"Image\":\"image:1\",\"Entrypoint\":[\"/bin/private-entry\"],\"Cmd\":[],\"HostConfig\":{}}}\n"
+        );
+        assert!(!format!("{intent:?} {graph:?} {artifact:?}").contains("/bin/private-entry"));
+    }
+
+    #[test]
+    fn inherited_entrypoint_and_exec_command_remain_renderable() {
+        let mut container = bare_container();
+        container.command = ImageCommand::Exec(vec![Argument::new(b"/bin/echo".to_vec()).unwrap()]);
+        let intent =
+            TargetIntent::new(vec![TargetResource::Container(Box::new(container))]).unwrap();
+        let daemon = facts(
+            41,
+            DaemonMode::Rootful,
+            &[Capability::StandaloneContainer, Capability::Command],
+        );
+        let capabilities = ValidatedCapabilities::new(&daemon).unwrap();
+        let graph = DockerPlanner.plan(&intent, &capabilities).unwrap();
+        let artifact = DockerApiRenderer.render(&graph).unwrap();
+        assert_eq!(
+            artifact.bytes(),
+            b"{\"method\":\"POST\",\"path\":\"/v1.41/containers/create?name=app\",\"body\":{\"Image\":\"image:1\",\"Cmd\":[\"/bin/echo\"],\"HostConfig\":{}}}\n"
+        );
+    }
+
+    #[test]
+    fn explicit_entrypoint_and_inherited_command_omit_native_cmd() {
+        let mut container = bare_container();
+        container.entrypoint =
+            ImageCommand::Exec(vec![Argument::new(b"/bin/custom-entry".to_vec()).unwrap()]);
+        let intent =
+            TargetIntent::new(vec![TargetResource::Container(Box::new(container))]).unwrap();
+        let daemon = facts(
+            41,
+            DaemonMode::Rootful,
+            &[Capability::StandaloneContainer, Capability::Entrypoint],
+        );
+        let capabilities = ValidatedCapabilities::new(&daemon).unwrap();
+        let graph = DockerPlanner.plan(&intent, &capabilities).unwrap();
+        let artifact = DockerApiRenderer.render(&graph).unwrap();
+        assert_eq!(
+            artifact.bytes(),
+            b"{\"method\":\"POST\",\"path\":\"/v1.41/containers/create?name=app\",\"body\":{\"Image\":\"image:1\",\"Entrypoint\":[\"/bin/custom-entry\"],\"HostConfig\":{}}}\n"
+        );
+    }
+
+    #[test]
     fn typed_port_publications_preserve_exposure_scope_and_repeated_bindings() {
         let mut container = bare_container();
         container.ports = vec![

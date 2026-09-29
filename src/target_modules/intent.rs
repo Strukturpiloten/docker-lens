@@ -83,6 +83,7 @@ pub enum IntentError {
     InvalidImage,
     InvalidEnvironment,
     InvalidArgument,
+    CommandClearRequiresEntrypoint,
     InvalidMount,
     InvalidHealthcheck,
     InvalidRestart,
@@ -382,6 +383,11 @@ impl TargetIntent {
                             return Err(IntentError::InvalidArgument);
                         }
                     }
+                }
+                if matches!(&container.command, ImageCommand::Clear)
+                    && !matches!(&container.entrypoint, ImageCommand::Exec(_))
+                {
+                    return Err(IntentError::CommandClearRequiresEntrypoint);
                 }
                 if container
                     .settings

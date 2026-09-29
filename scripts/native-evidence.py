@@ -79,9 +79,15 @@ START_INTERVAL_NEGATIVES = [
     {"shape": "HealthStartIntervalPositive", "reason": "api_1_41_no_start_interval"},
     {"shape": "HealthStartIntervalZero", "reason": "api_1_41_start_interval_zero_unobservable"},
 ]
-DEBIAN_IPV6_NEGATIVES = {
-    "FixedIpv6HostPort": "nested_default_bridge_ipv6_unavailable",
-    "EphemeralIpv6HostPort": "nested_default_bridge_ipv6_unavailable",
+DEBIAN_IPV6_NEGATIVE_REASONS = {
+    "FixedIpv6HostPort": {
+        "nested_default_bridge_ipv6_unavailable",
+        "nested_default_bridge_ipv6_runtime_binding_absent",
+    },
+    "EphemeralIpv6HostPort": {
+        "nested_default_bridge_ipv6_unavailable",
+        "nested_default_bridge_ipv6_runtime_binding_absent",
+    },
 }
 
 
@@ -126,11 +132,12 @@ def read_container_probes(path: Path, lane: str) -> dict:
         raise ValueError("native container probe set is incomplete")
     expected_negative = []
     if lane.startswith("debian11-"):
-        expected_negative = START_INTERVAL_NEGATIVES + [
-            {"shape": shape, "reason": reason}
-            for shape, reason in DEBIAN_IPV6_NEGATIVES.items()
-            if shape in negatives
-        ]
+        ipv6_negative = [item for item in negative
+                         if item["shape"] in DEBIAN_IPV6_NEGATIVE_REASONS]
+        if any(item["reason"] not in DEBIAN_IPV6_NEGATIVE_REASONS[item["shape"]]
+               for item in ipv6_negative):
+            raise ValueError("native IPv6 probe outcome contradicts exact lane boundary")
+        expected_negative = START_INTERVAL_NEGATIVES + ipv6_negative
         expected_negative.sort(key=lambda item: item["shape"])
     if negative != expected_negative:
         raise ValueError("native container probe outcome contradicts exact lane boundary")

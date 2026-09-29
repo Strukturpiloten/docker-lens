@@ -99,8 +99,11 @@ rejected by planning, independent of any Engine acceptance behavior.
 The typed-container offline regressions cover exact grouped `PortBindings`
 and `ExposedPorts` bodies, host-IP privacy, wildcard conflicts, ephemeral
 allocation requests, command/entrypoint inheritance and clearing, shell and
-disabled health, timing, metadata, tmpfs, and runtime settings. These are
-local contract tests only. #31's independent native assertions must check
+disabled health, timing, metadata, tmpfs, and runtime settings. Command clear
+with an inherited or cleared entrypoint fails intent validation; only an
+explicit exec entrypoint plus clear command reaches capability-gated inert
+rendering. This candidate is not a native clear claim. These are local contract
+tests only. #31's independent native assertions must check
 resulting loopback and IPv6 exposure, repeated/dynamic assignments, mount
 access, process identity, health behavior, and resource/security outcomes in
 each claimed mode and API. `StartInterval` needs exact native support and a
@@ -207,13 +210,31 @@ outcomes fail the lane. This narrow expected negative is not an Engine 20.10,
 API 1.41, rootless, or general IPv6 rule. Upstream fixtures retain their
 positive IPv6 HTTP assertions without a Debian control binding. No profile
 or production capability is admitted by this test-only outcome.
+Run `36525280564` established a narrower Debian fixture observation in both
+daemon modes: the fixed CLI request had both exact configured bindings, but
+runtime inspect reported only the exact IPv4 control binding. A separate
+`nested_default_bridge_ipv6_runtime_binding_absent` outcome now requires an
+exact one-entry IPv4 runtime array with a numeric host port, no IPv6 or other
+entry, and unchanged running/configured/default-bridge state. Five inspected
+snapshots spaced 250 ms apart and a final post-control snapshot must retain
+that exact shape and IPv4 port. The local and published IPv4 canaries, pinned
+outer TCP6 loopback, and inner `all`/`lo` IPv6-disabled states are checked
+before and after the window. For a fixed requested IPv6 port, every snapshot
+and the final check additionally require exact kernel `ECONNREFUSED` at that
+requested port. For an ephemeral request there is no inspected IPv6 host port:
+the harness never guesses an allocation or probes an unrelated port. Any
+transition to an assigned binding, malformed value, mismatched CLI/rendered
+outcome, or failed control fails the lane. This reason means an IPv6 runtime
+binding is absent from inspect, not that no hidden host port exists or that
+Docker 20.10 generically lacks IPv6. It does not admit `PortHostIpv6`.
 Run `36523854395` reached the Debian fixed IPv6 CLI fixture but failed before
 the TCP6 boundary because its runtime port-binding array did not satisfy the
 two-entry assertion. The log does not reveal which address or port was
 missing. A new closed diagnostic reports only runtime key state, count and
 exact-address cardinality buckets, and numeric/empty/malformed port-shape
 categories. It never prints a binding, address, assigned port, or native JSON;
-the two-entry assertion and all traffic oracles remain unchanged. In
+the original two-entry assigned-binding branch and all traffic oracles remain
+unchanged. In
 particular, an absent ephemeral IPv6 assignment is never guessed.
 The same run reached the command-clear literal on both upstream lanes and
 showed that `Cmd:[]` alone retained the image command rather than clearing it.
@@ -228,9 +249,26 @@ runtime `Path=/bin/sh` and `Args=[]`, and exit 0. This proves only conditional
 no-argument behavior, not that `Cmd:[]` alone clears a command. `ClearEntrypoint`
 remains a separate native shape. Closed substage and command-shape diagnostics
 report failures without native values. Even successful native evidence does
-not admit a generic production `CommandClear` capability: #30 must first
-reject clearing with inherited or cleared entrypoint, and catalog admission
+not admit a generic production `CommandClear` capability: intent validation
+now rejects clearing with inherited or cleared entrypoint, and catalog admission
 requires separate review and an exact passing candidate.
+Run `36525280564` passed that conditional command-clear region on both
+upstream lanes, then failed the resource/security oracle at exact inspected
+`HostConfig.CapDrop` spelling. Docker's published container-run reference
+accepts capability names with or without `CAP_`; native inspect may therefore
+be checked against only a singleton `SYS_ADMIN` or `CAP_SYS_ADMIN`. The
+rendered request remains exactly `SYS_ADMIN`, and the existing effective
+runtime `CapBnd` check requires bit 21 to be absent. Docker's default capability
+set already omits `SYS_ADMIN`: this proves request preservation and observed
+absence, not causal removal by the drop operation, and does not independently
+authorize production admission of `CapDropSysAdmin`. A closed spelling
+and cardinality diagnostic exposes no native value. Any other spelling,
+case, extra drop, or failed effective check still fails the lane.
+Closed resource/security substages distinguish create, inspect, start, and
+each effective process/cgroup check without disclosing values. In particular,
+rootless `cgroup_driver=none` is diagnostic context, not permission to treat
+configured memory or PID limits as effective; both runtime assertions remain
+strict and have no expected-negative exception.
 
 The manifest emitter requires both Debian API 1.41 start-interval negatives,
 accepts each of the two IPv6 fixture outcomes independently only on the

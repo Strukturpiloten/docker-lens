@@ -73,7 +73,7 @@ INTERVAL_NEGATIVES = [
     {"shape": "HealthStartIntervalZero", "reason": "api_1_41_start_interval_zero_unobservable"},
 ]
 IPV6_NEGATIVES = [
-    {"shape": shape, "reason": "nested_default_bridge_ipv6_unavailable"}
+    {"shape": shape, "reason": "nested_default_bridge_ipv6_runtime_binding_absent"}
     for shape in ("EphemeralIpv6HostPort", "FixedIpv6HostPort")
 ]
 DEBIAN_NEGATIVES = IPV6_NEGATIVES + INTERVAL_NEGATIVES
@@ -257,22 +257,26 @@ class NativeEvidenceTests(unittest.TestCase):
         version = {"Version": "20.10.5", "ApiVersion": "1.41", "MinAPIVersion": "1.12"}
         options = {"image": image, "lane": "debian11-rootful", "mode": "rootful",
                    "package": "20.10.5+dfsg1-1+deb11u2"}
-        for ipv6_shapes in ((), ("FixedIpv6HostPort",),
-                            ("EphemeralIpv6HostPort",),
-                            ("FixedIpv6HostPort", "EphemeralIpv6HostPort")):
-            with self.subTest(ipv6_shapes=ipv6_shapes):
-                negatives = sorted(INTERVAL_NEGATIVES + [
-                    item for item in IPV6_NEGATIVES if item["shape"] in ipv6_shapes
-                ], key=lambda item: item["shape"])
-                probes = {
-                    "schema_version": 1,
-                    "positive": [shape for shape in CONTAINER_PROBES
-                                 if shape not in {item["shape"] for item in negatives}],
-                    "expected_negative": negatives,
-                }
-                result, path = self.run_emit(version, container_probes=probes, **options)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["container_probes"], probes)
+        reasons = (None, "nested_default_bridge_ipv6_unavailable",
+                   "nested_default_bridge_ipv6_runtime_binding_absent")
+        for fixed_reason in reasons:
+            for ephemeral_reason in reasons:
+                with self.subTest(fixed=fixed_reason, ephemeral=ephemeral_reason):
+                    negatives = sorted(INTERVAL_NEGATIVES + [
+                        {"shape": shape, "reason": reason}
+                        for shape, reason in (("FixedIpv6HostPort", fixed_reason),
+                                              ("EphemeralIpv6HostPort", ephemeral_reason))
+                        if reason is not None
+                    ], key=lambda item: item["shape"])
+                    probes = {
+                        "schema_version": 1,
+                        "positive": [shape for shape in CONTAINER_PROBES
+                                     if shape not in {item["shape"] for item in negatives}],
+                        "expected_negative": negatives,
+                    }
+                    result, path = self.run_emit(version, container_probes=probes, **options)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["container_probes"], probes)
         for probes in (
             UPSTREAM_CONTAINER,
             {**DEBIAN_CONTAINER, "expected_negative": [

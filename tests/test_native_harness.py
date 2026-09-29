@@ -296,6 +296,10 @@ fi
                 "ports", "ports_ipv6", "identity_health", "health_disabled", "clear",
                 "start_interval", "storage_lifecycle", "resources_security",
                 "resolver_logging",
+                "resources_security_oracle_inspect",
+                "resources_security_oracle_memory",
+                "resources_security_rendered_pids",
+                "resources_security_rendered_shm",
             ):
                 with self.subTest(marker=marker):
                     env["TEST_MARKER"] = marker
@@ -345,9 +349,11 @@ fi
                 "fixed_ipv4_oracle_cli_inspect", "fixed_ipv6_rendered_cli_http",
                 "fixed_ipv6_rendered_tcp6_boundary",
                 "fixed_ipv6_rendered_negative_recheck",
+                "fixed_ipv6_rendered_runtime_absence",
                 "dynamic_ipv6_oracle_dynamic_binding",
                 "dynamic_ipv6_oracle_tcp6_boundary",
                 "dynamic_ipv6_oracle_negative_recheck",
+                "dynamic_ipv6_oracle_runtime_absence",
                 "repeated_dynamic_ipv4_rendered_cli_http_secondary",
                 "fixed_ipv4_rendered_udp_assert",
             ):
@@ -398,6 +404,33 @@ fi
                     self.assertIn(f"container_clear_{stage}", result.stderr)
                     self.assertIn("DOCKERLENS_NATIVE_CLEAR_DIAG: phase=paired cmd=null entrypoint=shell path=shell args=empty", result.stderr)
                     self.assertNotIn("protected-secret", result.stdout + result.stderr)
+
+    def test_cap_drop_diagnostic_is_exact_and_private(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_container_tests::live_container_settings_match_engine: test'
+else
+  echo 'DOCKERLENS_NATIVE_CHECK: container_resources_security' >&2
+  echo 'DOCKERLENS_NATIVE_CAP_DROP_DIAG: phase=oracle state=array count=one spelling=cap_sys_admin' >&2
+  echo 'DOCKERLENS_NATIVE_CAP_DROP_DIAG: phase=oracle state=array count=one spelling=protected-secret' >&2
+  echo 'DOCKERLENS_NATIVE_CAP_DROP_DIAG: phase=oracle state=array count=one spelling=cap_sys_admin raw=protected-secret' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            result = subprocess.run(
+                [str(ROOT / "scripts/run-exact-native-test.sh"), "native_container",
+                 "live_container_settings_match_engine"],
+                env=env, capture_output=True, text=True, timeout=15, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("DOCKERLENS_NATIVE_CAP_DROP_DIAG: phase=oracle state=array count=one spelling=cap_sys_admin", result.stderr)
+            self.assertNotIn("protected-secret", result.stdout + result.stderr)
 
     def test_ipv6_probe_name_and_repeated_ipv4_oracle_are_live_and_bounded(self) -> None:
         source = (ROOT / "src/native_container_tests.rs").read_text(encoding="utf-8")

@@ -200,7 +200,10 @@ impl std::fmt::Debug for PortPublication {
     }
 }
 
-/// Omission inherits the image value; clearing is an explicit authored choice.
+/// `Inherit` omits the native field; Engine merging determines the effective value.
+/// In particular, overriding the entrypoint may reset an image's default command.
+/// `Clear` is authored intent, not a guarantee that an empty native array clears
+/// an image default. Clearing a command requires an explicit exec entrypoint.
 #[derive(Debug, Default)]
 pub enum ImageCommand {
     #[default]

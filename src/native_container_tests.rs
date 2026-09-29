@@ -404,6 +404,10 @@ impl ProbeEvidence {
                     "FixedIpv6HostPort" | "EphemeralIpv6HostPort",
                     "nested_default_bridge_ipv6_unavailable"
                 )
+                | (
+                    "FixedIpv6HostPort" | "EphemeralIpv6HostPort",
+                    "nested_default_bridge_ipv6_runtime_binding_absent"
+                )
         ));
         assert!(
             self.expected_negative.insert((shape, reason)),
@@ -626,6 +630,18 @@ struct NativeRun {
 enum Tcp6Boundary {
     Refused,
     Connected,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Ipv6FixtureOutcome {
+    Assigned(Tcp6Boundary),
+    RuntimeBindingAbsent,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DebianIpv6Runtime {
+    Assigned { ipv4_port: u16, ipv6_port: u16 },
+    BindingAbsent { ipv4_port: u16 },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1584,6 +1600,120 @@ fn assigned_port(inspected: &Value, key: &str, host_ip: &str, expected_bindings:
     port
 }
 
+fn classify_debian_ipv6_runtime(
+    inspected: &Value,
+    key: &str,
+    fixed_ipv6_port: Option<u16>,
+) -> DebianIpv6Runtime {
+    assert_eq!(inspected["State"]["Running"], true);
+    assert_configured_binding_count(inspected, key, 2);
+    let configured_port = fixed_ipv6_port.map_or_else(String::new, |port| port.to_string());
+    let configured_ipv4_port = fixed_ipv6_port.map_or("", |_| "18113");
+    assert_port_binding(inspected, key, "::1", &configured_port);
+    assert_port_binding(inspected, key, "127.0.0.1", configured_ipv4_port);
+    let bindings = inspected["NetworkSettings"]["Ports"][key]
+        .as_array()
+        .unwrap_or_else(|| {
+            eprintln!("{}", closed_runtime_binding_diagnostic(inspected, key));
+            panic!("runtime port binding array required");
+        });
+    let runtime = match bindings.len() {
+        2 => {
+            // Preserve the original assigned-port oracle in this branch.
+            let ipv4_port = assigned_port(inspected, key, "127.0.0.1", 2);
+            let ipv6_port = assigned_port(inspected, key, "::1", 2);
+            DebianIpv6Runtime::Assigned {
+                ipv4_port,
+                ipv6_port,
+            }
+        }
+        1 => {
+            // This is an independent boundary, never an inferred IPv6 port.
+            if bindings[0]["HostIp"] != "127.0.0.1" {
+                eprintln!("{}", closed_runtime_binding_diagnostic(inspected, key));
+                panic!("only the exact IPv4 control binding may remain");
+            }
+            let ipv4_port = assigned_port(inspected, key, "127.0.0.1", 1);
+            DebianIpv6Runtime::BindingAbsent { ipv4_port }
+        }
+        _ => {
+            eprintln!("{}", closed_runtime_binding_diagnostic(inspected, key));
+            panic!("unexpected runtime binding cardinality");
+        }
+    };
+    if let Some(fixed) = fixed_ipv6_port {
+        assert_eq!(
+            runtime.ipv4_port(),
+            18113,
+            "exact fixed IPv4 control binding"
+        );
+        if let DebianIpv6Runtime::Assigned { ipv6_port, .. } = runtime {
+            assert_eq!(ipv6_port, fixed, "exact fixed IPv6 runtime binding");
+        }
+    }
+    runtime
+}
+
+impl DebianIpv6Runtime {
+    fn ipv4_port(self) -> u16 {
+        match self {
+            Self::Assigned { ipv4_port, .. } | Self::BindingAbsent { ipv4_port } => ipv4_port,
+        }
+    }
+}
+
+#[test]
+fn debian_ipv6_runtime_absence_requires_exact_single_ipv4_binding() {
+    let fixture = |runtime: Value| {
+        json!({
+            "State":{"Running":true},
+            "HostConfig":{"PortBindings":{"8083/tcp":[
+                {"HostIp":"::1","HostPort":"18112"},
+                {"HostIp":"127.0.0.1","HostPort":"18113"}
+            ]}},
+            "NetworkSettings":{"Ports":{"8083/tcp":runtime}}
+        })
+    };
+    let absent = fixture(json!([{"HostIp":"127.0.0.1","HostPort":"18113"}]));
+    assert_eq!(
+        classify_debian_ipv6_runtime(&absent, "8083/tcp", Some(18112)),
+        DebianIpv6Runtime::BindingAbsent { ipv4_port: 18113 }
+    );
+    let assigned = fixture(json!([
+        {"HostIp":"127.0.0.1","HostPort":"18113"},
+        {"HostIp":"::1","HostPort":"18112"}
+    ]));
+    assert_eq!(
+        classify_debian_ipv6_runtime(&assigned, "8083/tcp", Some(18112)),
+        DebianIpv6Runtime::Assigned {
+            ipv4_port: 18113,
+            ipv6_port: 18112,
+        }
+    );
+    assert_ne!(
+        classify_debian_ipv6_runtime(&absent, "8083/tcp", Some(18112)),
+        classify_debian_ipv6_runtime(&assigned, "8083/tcp", Some(18112)),
+        "absence-to-assigned transition cannot remain a negative"
+    );
+    for runtime in [
+        Value::Null,
+        json!([]),
+        json!([{"HostIp":"::1","HostPort":"18112"}]),
+        json!([{"HostIp":"127.0.0.2","HostPort":"18113"}]),
+        json!([{"HostIp":"127.0.0.1","HostPort":""}]),
+        json!([{"HostIp":"127.0.0.1","HostPort":"18113"},
+               {"HostIp":"private","HostPort":"18112"}]),
+    ] {
+        let inspected = fixture(runtime);
+        assert!(
+            std::panic::catch_unwind(|| {
+                classify_debian_ipv6_runtime(&inspected, "8083/tcp", Some(18112));
+            })
+            .is_err()
+        );
+    }
+}
+
 fn assert_debian_ipv6_controls(
     run: &NativeRun,
     id: &str,
@@ -1591,20 +1721,9 @@ fn assert_debian_ipv6_controls(
     expected: &str,
     suffix: &str,
     fixed_ipv6_port: Option<u16>,
-) -> (u16, u16) {
+) -> DebianIpv6Runtime {
     let inspected = run.inspect(id);
-    assert_eq!(inspected["State"]["Running"], true);
-    assert_configured_binding_count(&inspected, key, 2);
-    let configured_port = fixed_ipv6_port.map_or_else(String::new, |port| port.to_string());
-    let configured_ipv4_port = fixed_ipv6_port.map_or("", |_| "18113");
-    assert_port_binding(&inspected, key, "::1", &configured_port);
-    assert_port_binding(&inspected, key, "127.0.0.1", configured_ipv4_port);
-    let ipv4_port = assigned_port(&inspected, key, "127.0.0.1", 2);
-    let ipv6_port = assigned_port(&inspected, key, "::1", 2);
-    if let Some(fixed) = fixed_ipv6_port {
-        assert_eq!(ipv6_port, fixed, "exact fixed IPv6 runtime binding");
-        assert_eq!(ipv4_port, 18113, "exact fixed IPv4 control binding");
-    }
+    let runtime = classify_debian_ipv6_runtime(&inspected, key, fixed_ipv6_port);
     let container_port = key
         .split_once('/')
         .expect("closed TCP port key")
@@ -1614,12 +1733,12 @@ fn assert_debian_ipv6_controls(
     assert_local_service(run, id, container_port, expected, suffix);
     mark_port_stage(suffix, "cli_http");
     run.assert_published_http(
-        &format!("http://127.0.0.1:{ipv4_port}/index.html"),
+        &format!("http://127.0.0.1:{}/index.html", runtime.ipv4_port()),
         expected,
         None,
     );
     mark_port_stage(suffix, "http_assert");
-    (ipv4_port, ipv6_port)
+    runtime
 }
 
 fn assert_debian_ipv6_fixture(
@@ -1629,51 +1748,113 @@ fn assert_debian_ipv6_fixture(
     expected: &str,
     suffix: &str,
     fixed_ipv6_port: Option<u16>,
-) -> Tcp6Boundary {
-    let ports = assert_debian_ipv6_controls(run, id, key, expected, suffix, fixed_ipv6_port);
-    mark_port_stage(suffix, "tcp6_boundary");
-    let mut outcome = run.assert_default_bridge_ipv6_boundary(id, ports.1);
-    if outcome == Tcp6Boundary::Refused {
-        mark_port_stage(suffix, "negative_recheck");
-        let rechecked =
-            assert_debian_ipv6_controls(run, id, key, expected, suffix, fixed_ipv6_port);
-        assert_eq!(rechecked, ports, "runtime binding must remain stable");
-        run.assert_default_bridge_ipv6_context(id);
-        outcome = require_tcp6_probe(run.tcp6_probe(ports.1));
-        if outcome == Tcp6Boundary::Refused {
+) -> Ipv6FixtureOutcome {
+    let runtime = assert_debian_ipv6_controls(run, id, key, expected, suffix, fixed_ipv6_port);
+    match runtime {
+        DebianIpv6Runtime::Assigned { ipv6_port, .. } => {
+            mark_port_stage(suffix, "tcp6_boundary");
+            let mut outcome = run.assert_default_bridge_ipv6_boundary(id, ipv6_port);
+            if outcome == Tcp6Boundary::Refused {
+                mark_port_stage(suffix, "negative_recheck");
+                let rechecked =
+                    assert_debian_ipv6_controls(run, id, key, expected, suffix, fixed_ipv6_port);
+                assert_eq!(rechecked, runtime, "runtime binding must remain stable");
+                run.assert_default_bridge_ipv6_context(id);
+                outcome = require_tcp6_probe(run.tcp6_probe(ipv6_port));
+                if outcome == Tcp6Boundary::Refused {
+                    assert_eq!(
+                        run.inner_ipv6_state(id),
+                        ("disabled", "disabled"),
+                        "only the reviewed nested default-bridge IPv6-disabled fixture admits a refusal"
+                    );
+                }
+            }
+            if outcome == Tcp6Boundary::Connected {
+                mark_port_stage(suffix, "cli_http_secondary");
+                run.assert_published_http(
+                    &format!("http://[::1]:{ipv6_port}/index.html"),
+                    expected,
+                    None,
+                );
+                mark_port_stage(suffix, "http_assert_secondary");
+            }
+            Ipv6FixtureOutcome::Assigned(outcome)
+        }
+        DebianIpv6Runtime::BindingAbsent { .. } => {
+            run.assert_default_bridge_ipv6_context(id);
+            assert_eq!(run.inner_ipv6_state(id), ("disabled", "disabled"));
+            for attempt in 0..5 {
+                mark_port_stage(suffix, "runtime_absence");
+                let inspected = run.inspect(id);
+                assert_eq!(
+                    classify_debian_ipv6_runtime(&inspected, key, fixed_ipv6_port),
+                    runtime,
+                    "runtime IPv6 binding absence and IPv4 control must stay exact"
+                );
+                if let Some(port) = fixed_ipv6_port {
+                    mark_port_stage(suffix, "tcp6_boundary");
+                    assert_exact_unassigned_refusal(run, port);
+                }
+                if attempt < 4 {
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                }
+            }
+            mark_port_stage(suffix, "negative_recheck");
+            let rechecked =
+                assert_debian_ipv6_controls(run, id, key, expected, suffix, fixed_ipv6_port);
             assert_eq!(
-                run.inner_ipv6_state(id),
-                ("disabled", "disabled"),
-                "only the reviewed nested default-bridge IPv6-disabled fixture admits a refusal"
+                rechecked, runtime,
+                "runtime binding absence must remain stable"
             );
+            run.assert_default_bridge_ipv6_context(id);
+            assert_eq!(run.inner_ipv6_state(id), ("disabled", "disabled"));
+            let final_inspected = run.inspect(id);
+            assert_eq!(
+                classify_debian_ipv6_runtime(&final_inspected, key, fixed_ipv6_port),
+                runtime,
+                "final runtime absence and IPv4 control must remain exact"
+            );
+            if let Some(port) = fixed_ipv6_port {
+                assert_exact_unassigned_refusal(run, port);
+            }
+            Ipv6FixtureOutcome::RuntimeBindingAbsent
         }
     }
-    if outcome == Tcp6Boundary::Connected {
-        mark_port_stage(suffix, "cli_http_secondary");
-        run.assert_published_http(
-            &format!("http://[::1]:{}/index.html", ports.1),
-            expected,
-            None,
-        );
-        mark_port_stage(suffix, "http_assert_secondary");
-    }
-    outcome
+}
+
+fn assert_exact_unassigned_refusal(run: &NativeRun, requested_port: u16) {
+    let outcome = require_tcp6_probe(run.tcp6_probe(requested_port));
+    eprintln!(
+        "DOCKERLENS_NATIVE_IPV6_BOUNDARY_DIAG: result={}",
+        match outcome {
+            Tcp6Boundary::Refused => "refused",
+            Tcp6Boundary::Connected => "connected",
+        }
+    );
+    assert_eq!(
+        outcome,
+        Tcp6Boundary::Refused,
+        "an unassigned fixed IPv6 binding must refuse at its requested port"
+    );
 }
 
 fn record_ipv6_fixture_outcomes(
     evidence: &mut ProbeEvidence,
     shape: &'static str,
-    oracle: Tcp6Boundary,
-    rendered: Tcp6Boundary,
+    oracle: Ipv6FixtureOutcome,
+    rendered: Ipv6FixtureOutcome,
 ) {
     assert_eq!(
         oracle, rendered,
         "CLI and rendered IPv6 outcomes must agree"
     );
     match oracle {
-        Tcp6Boundary::Connected => evidence.positive(shape),
-        Tcp6Boundary::Refused => {
+        Ipv6FixtureOutcome::Assigned(Tcp6Boundary::Connected) => evidence.positive(shape),
+        Ipv6FixtureOutcome::Assigned(Tcp6Boundary::Refused) => {
             evidence.expected_negative(shape, "nested_default_bridge_ipv6_unavailable");
+        }
+        Ipv6FixtureOutcome::RuntimeBindingAbsent => {
+            evidence.expected_negative(shape, "nested_default_bridge_ipv6_runtime_binding_absent");
         }
     }
 }
@@ -1684,20 +1865,42 @@ fn ipv6_fixture_outcome_requires_agreement() {
     record_ipv6_fixture_outcomes(
         &mut evidence,
         "FixedIpv6HostPort",
-        Tcp6Boundary::Refused,
-        Tcp6Boundary::Refused,
+        Ipv6FixtureOutcome::Assigned(Tcp6Boundary::Refused),
+        Ipv6FixtureOutcome::Assigned(Tcp6Boundary::Refused),
     );
     assert!(evidence.expected_negative.contains(&(
         "FixedIpv6HostPort",
         "nested_default_bridge_ipv6_unavailable"
+    )));
+    let mut absent = ProbeEvidence::default();
+    record_ipv6_fixture_outcomes(
+        &mut absent,
+        "EphemeralIpv6HostPort",
+        Ipv6FixtureOutcome::RuntimeBindingAbsent,
+        Ipv6FixtureOutcome::RuntimeBindingAbsent,
+    );
+    assert!(absent.expected_negative.contains(&(
+        "EphemeralIpv6HostPort",
+        "nested_default_bridge_ipv6_runtime_binding_absent"
     )));
     assert!(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             record_ipv6_fixture_outcomes(
                 &mut evidence,
                 "EphemeralIpv6HostPort",
-                Tcp6Boundary::Connected,
-                Tcp6Boundary::Refused,
+                Ipv6FixtureOutcome::RuntimeBindingAbsent,
+                Ipv6FixtureOutcome::Assigned(Tcp6Boundary::Refused),
+            );
+        }))
+        .is_err()
+    );
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            record_ipv6_fixture_outcomes(
+                &mut evidence,
+                "EphemeralIpv6HostPort",
+                Ipv6FixtureOutcome::Assigned(Tcp6Boundary::Connected),
+                Ipv6FixtureOutcome::Assigned(Tcp6Boundary::Refused),
             );
         }))
         .is_err()
@@ -1745,6 +1948,7 @@ fn mark_port_stage(suffix: &str, phase: &'static str) {
             | "udp_assert"
             | "tcp6_boundary"
             | "negative_recheck"
+            | "runtime_absence"
     ));
     eprintln!("DOCKERLENS_NATIVE_CHECK: container_port_{group}_{phase}");
 }
@@ -3418,7 +3622,27 @@ fn runtime_status(run: &NativeRun, id: &str) -> String {
     ])
 }
 
-fn assert_resource_effects(run: &NativeRun, id: &str) {
+fn mark_resource_stage(side: &'static str, phase: &'static str) {
+    assert!(matches!(side, "oracle" | "rendered"));
+    assert!(matches!(
+        phase,
+        "create"
+            | "inspect"
+            | "start"
+            | "ulimit"
+            | "status"
+            | "groups"
+            | "sysctl"
+            | "device"
+            | "memory"
+            | "pids"
+            | "shm"
+    ));
+    eprintln!("DOCKERLENS_NATIVE_CHECK: container_resources_security_{side}_{phase}");
+}
+
+fn assert_resource_effects(run: &NativeRun, id: &str, side: &'static str) {
+    mark_resource_stage(side, "ulimit");
     let limits = run.cli(&[
         "exec".into(),
         id.into(),
@@ -3427,6 +3651,7 @@ fn assert_resource_effects(run: &NativeRun, id: &str) {
         "ulimit -Sn; ulimit -Hn".into(),
     ]);
     assert_eq!(limits.lines().collect::<Vec<_>>(), ["1024", "2048"]);
+    mark_resource_stage(side, "status");
     let status = runtime_status(run, id);
     assert!(status.lines().any(|line| line.trim() == "NoNewPrivs:\t1"));
     let bounding = status
@@ -3437,10 +3662,12 @@ fn assert_resource_effects(run: &NativeRun, id: &str) {
     assert_eq!(
         bounding & (1 << 21),
         0,
-        "SYS_ADMIN removed from capability bound"
+        "SYS_ADMIN absent from capability bound"
     );
+    mark_resource_stage(side, "groups");
     let groups = run.cli(&["exec".into(), id.into(), "id".into(), "-G".into()]);
     assert!(groups.split_whitespace().any(|group| group == "27"));
+    mark_resource_stage(side, "sysctl");
     let sysctl = run.cli(&[
         "exec".into(),
         id.into(),
@@ -3448,11 +3675,13 @@ fn assert_resource_effects(run: &NativeRun, id: &str) {
         "/proc/sys/net/ipv4/ip_forward".into(),
     ]);
     assert_eq!(sysctl.trim(), "0");
+    mark_resource_stage(side, "device");
     let device = run.cli(&[
         "exec".into(), id.into(), "sh".into(), "-c".into(),
         "if test -c /dev/native-null && cat /dev/native-null >/dev/null; then printf present; else printf absent; fi".into(),
     ]);
     assert_eq!(device, "present");
+    mark_resource_stage(side, "memory");
     let memory = run.cli(&[
         "exec".into(), id.into(), "sh".into(), "-c".into(),
         "cat /sys/fs/cgroup/memory.max 2>/dev/null || cat /sys/fs/cgroup/memory/memory.limit_in_bytes".into(),
@@ -3462,6 +3691,7 @@ fn assert_resource_effects(run: &NativeRun, id: &str) {
         "67108864",
         "memory cgroup limit is effective"
     );
+    mark_resource_stage(side, "pids");
     let pids = run.cli(&[
         "exec".into(),
         id.into(),
@@ -3470,6 +3700,7 @@ fn assert_resource_effects(run: &NativeRun, id: &str) {
         "cat /sys/fs/cgroup/pids.max 2>/dev/null || cat /sys/fs/cgroup/pids/pids.max".into(),
     ]);
     assert_eq!(pids.trim(), "32", "PID cgroup limit is effective");
+    mark_resource_stage(side, "shm");
     let shm = run.cli(&[
         "exec".into(),
         id.into(),
@@ -3480,8 +3711,63 @@ fn assert_resource_effects(run: &NativeRun, id: &str) {
     assert_eq!(shm.trim(), "32768", "shared-memory mount size is effective");
 }
 
+fn singleton_sys_admin_cap_drop(value: &Value) -> bool {
+    matches!(
+        value.as_array(),
+        Some(items)
+            if items.len() == 1
+                && matches!(items[0].as_str(), Some("SYS_ADMIN" | "CAP_SYS_ADMIN"))
+    )
+}
+
+fn closed_cap_drop_diagnostic(value: &Value, phase: &'static str) -> String {
+    assert!(matches!(phase, "oracle" | "rendered"));
+    let (state, count, spelling) = match value {
+        Value::Array(items) => {
+            let spelling = match items.as_slice() {
+                [Value::String(name)] if name == "SYS_ADMIN" => "sys_admin",
+                [Value::String(name)] if name == "CAP_SYS_ADMIN" => "cap_sys_admin",
+                [_] => "other",
+                [] => "absent",
+                _ => "multiple",
+            };
+            ("array", binding_cardinality(items.len()), spelling)
+        }
+        Value::Null => ("null", "zero", "absent"),
+        _ => ("other", "zero", "other"),
+    };
+    format!(
+        "DOCKERLENS_NATIVE_CAP_DROP_DIAG: phase={phase} state={state} count={count} spelling={spelling}"
+    )
+}
+
+#[test]
+fn cap_drop_alias_requires_one_exact_documented_name() {
+    for name in ["SYS_ADMIN", "CAP_SYS_ADMIN"] {
+        assert!(singleton_sys_admin_cap_drop(&json!([name])));
+    }
+    for value in [
+        json!([]),
+        json!(["NET_ADMIN"]),
+        json!(["cap_sys_admin"]),
+        json!(["SYS_ADMIN", "CAP_SYS_ADMIN"]),
+        json!("SYS_ADMIN"),
+        Value::Null,
+    ] {
+        assert!(!singleton_sys_admin_cap_drop(&value));
+    }
+    let private = json!(["protected-secret"]);
+    let diagnostic = closed_cap_drop_diagnostic(&private, "oracle");
+    assert_eq!(
+        diagnostic,
+        "DOCKERLENS_NATIVE_CAP_DROP_DIAG: phase=oracle state=array count=one spelling=other"
+    );
+    assert!(!diagnostic.contains("protected-secret"));
+}
+
 fn probe_resources_and_security(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
     eprintln!("DOCKERLENS_NATIVE_CHECK: container_resources_security");
+    mark_resource_stage("oracle", "create");
     let oracle = run.cli_create(
         "resource-oracle",
         &[
@@ -3497,6 +3783,7 @@ fn probe_resources_and_security(run: &mut NativeRun, evidence: &mut ProbeEvidenc
         ],
         &["sh", "-c", "sleep 120"],
     );
+    mark_resource_stage("oracle", "inspect");
     let host = &oracle["HostConfig"];
     assert_eq!(host["Memory"], 67_108_864);
     assert_eq!(host["PidsLimit"], 32);
@@ -3505,7 +3792,8 @@ fn probe_resources_and_security(run: &mut NativeRun, evidence: &mut ProbeEvidenc
         host["Ulimits"][0],
         json!({"Name":"nofile","Soft":1024,"Hard":2048})
     );
-    assert_eq!(host["CapDrop"], json!(["SYS_ADMIN"]));
+    eprintln!("{}", closed_cap_drop_diagnostic(&host["CapDrop"], "oracle"));
+    assert!(singleton_sys_admin_cap_drop(&host["CapDrop"]));
     assert_eq!(host["Sysctls"]["net.ipv4.ip_forward"], "0");
     assert!(
         host["SecurityOpt"]
@@ -3515,8 +3803,9 @@ fn probe_resources_and_security(run: &mut NativeRun, evidence: &mut ProbeEvidenc
             .any(|item| { item == "no-new-privileges:true" })
     );
     let oracle_id = oracle["Id"].as_str().unwrap().to_owned();
+    mark_resource_stage("oracle", "start");
     start_container(run, &oracle_id);
-    assert_resource_effects(run, &oracle_id);
+    assert_resource_effects(run, &oracle_id, "oracle");
 
     let mut container = bare_container(&run.image);
     container.settings.memory_limit =
@@ -3556,6 +3845,7 @@ fn probe_resources_and_security(run: &mut NativeRun, evidence: &mut ProbeEvidenc
             "GroupAdd":["27"]
         }
     });
+    mark_resource_stage("rendered", "create");
     let (id, body, inspected) = run.rendered_create(
         "resource-rendered",
         container,
@@ -3576,6 +3866,7 @@ fn probe_resources_and_security(run: &mut NativeRun, evidence: &mut ProbeEvidenc
         ],
         expected_body,
     );
+    mark_resource_stage("rendered", "inspect");
     let body = &body["HostConfig"];
     assert_eq!(body["Memory"], 67_108_864);
     assert_eq!(body["PidsLimit"], 32);
@@ -3588,18 +3879,19 @@ fn probe_resources_and_security(run: &mut NativeRun, evidence: &mut ProbeEvidenc
     assert_eq!(body["SecurityOpt"], json!(["no-new-privileges:true"]));
     assert_eq!(body["Sysctls"]["net.ipv4.ip_forward"], "0");
     assert_eq!(body["GroupAdd"], json!(["27"]));
-    for key in [
-        "Memory",
-        "PidsLimit",
-        "ShmSize",
-        "Ulimits",
-        "CapDrop",
-        "Sysctls",
-    ] {
+    for key in ["Memory", "PidsLimit", "ShmSize", "Ulimits", "Sysctls"] {
         assert_eq!(inspected["HostConfig"][key], oracle["HostConfig"][key]);
     }
+    eprintln!(
+        "{}",
+        closed_cap_drop_diagnostic(&inspected["HostConfig"]["CapDrop"], "rendered")
+    );
+    assert!(singleton_sys_admin_cap_drop(
+        &inspected["HostConfig"]["CapDrop"]
+    ));
+    mark_resource_stage("rendered", "start");
     start_container(run, &id);
-    assert_resource_effects(run, &id);
+    assert_resource_effects(run, &id, "rendered");
     record_many(
         evidence,
         &[
