@@ -104,8 +104,11 @@ peer must fetch the sidecar by direct IPv4 before and after the internal peer
 fails to fetch that same address. The sidecar is not in the inner Docker host
 namespace: traffic from inner bridges crosses Docker's FORWARD path. No public
 Internet or DNS result is involved. Sidecar setup failures expose only closed
-phases; a panic-time inner cleanup attempt separately reports a closed pass/fail
-result. Neither marker prints native output or turns a failed lane into evidence.
+phases, error categories, and a fixed canary-write stage. A successful write-stage
+marker proves only that the health file was written, not that HTTP started or
+that the permission text came from the sidecar rather than the Podman logs query.
+A panic-time inner cleanup attempt separately reports a closed pass/fail result.
+Neither marker prints native output or turns a failed lane into evidence.
 A positive ordinary-bridge control and a blocked internal
 probe are both required independently; reachable internal traffic fails the
 proof even when all request and inspect fields match.

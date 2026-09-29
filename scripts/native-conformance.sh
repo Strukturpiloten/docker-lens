@@ -349,7 +349,8 @@ for chunk in iter(lambda: sys.stdin.buffer.read(4096), b""):
     tail.extend(chunk)
     if len(tail) > 8192:
         del tail[:-8192]
-message = tail.decode("utf-8", "replace").lower()
+output = tail.decode("utf-8", "replace")
+message = output.lower()
 checks = (
     ("applet_missing", (r"\b(?:httpd|wget|sh): (?:applet )?not found\b",
                         r"\bapplet not found\b", r"\bhttpd: applet not found\b")),
@@ -362,17 +363,30 @@ checks = (
     ("storage", (r"\bno space left\b", r"\bdisk quota exceeded\b")),
     ("runtime_error", (r"\berror\b", r"\bfailed\b", r"\bfailure\b")),
 )
-print(next((category for category, patterns in checks
-            if any(re.search(pattern, message) for pattern in patterns)), "unknown"))'
+category = next((category for category, patterns in checks
+                 if any(re.search(pattern, message) for pattern in patterns)), "unknown")
+if sys.argv[1:] == ["--with-stage"]:
+    markers = set(re.findall(
+        r"(?m)^DOCKERLENS_SIDECAR_STAGE: (write_ok|write_failed)\r?$", output))
+    stage = next(iter(markers)) if len(markers) == 1 else "unknown"
+    print(f"{stage}|{category}")
+else:
+    print(category)' "$@"
 }
 sidecar_failure_diagnostic() {
-  local category=unknown source=none observed
+  local category=unknown source=none write_stage=unknown observed logs_stage logs_category
   # A successful Podman logs query may replay container output on either CLI
   # stream. The query cannot identify which stream supplied the category.
   if observed=$(timeout --signal=TERM --kill-after=2s 5s "${podman_cmd[@]}" logs --tail 32 "$sidecar" 2>&1 |
-    classify_sidecar_error) && [[ $observed != unknown ]]; then
-    category=$observed
-    source=logs_query
+    classify_sidecar_error --with-stage) &&
+    [[ $observed =~ ^(write_ok|write_failed|unknown)\|(applet_missing|shell_error|config_error|bind_error|permission|storage|runtime_error|unknown)$ ]]; then
+    logs_stage=${BASH_REMATCH[1]}
+    logs_category=${BASH_REMATCH[2]}
+    write_stage=$logs_stage
+    if [[ $logs_category != unknown ]]; then
+      category=$logs_category
+      source=logs_query
+    fi
   fi
   if [[ $category == unknown ]] &&
     observed=$(timeout --signal=TERM --kill-after=2s 5s "${podman_cmd[@]}" inspect \
@@ -381,7 +395,7 @@ sidecar_failure_diagnostic() {
     category=$observed
     source=state_error
   fi
-  echo "DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=sidecar_failure category=$category source=$source" >&2
+  echo "DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=sidecar_failure category=$category source=$source write_stage=$write_stage" >&2
 }
 watchdog &
 watchdog_pid=$!
@@ -395,7 +409,13 @@ sidecar_start_category=$(timeout --signal=TERM --kill-after=2s 120s "${podman_cm
   --label "io.dockerlens.native-run=$run_id" --network "$outer_network" \
   --cap-drop=all --security-opt no-new-privileges --pids-limit=64 --memory=128m \
   "$FIXTURE_IMAGE" sh -c \
-  'printf proof-egress > /tmp/index.html; exec httpd -f -p 18084 -h /tmp' 2>&1 >/dev/null |
+  'if { printf proof-egress > /tmp/index.html; } 2>/dev/null; then
+     printf "DOCKERLENS_SIDECAR_STAGE: write_ok\n" >&2
+   else
+     printf "DOCKERLENS_SIDECAR_STAGE: write_failed\n" >&2
+     exit 1
+   fi
+   exec httpd -f -p 18084 -h /tmp' 2>&1 >/dev/null |
   classify_sidecar_error) || {
   case $sidecar_start_category in
     applet_missing | shell_error | config_error | bind_error | permission | storage | runtime_error | unknown) ;;

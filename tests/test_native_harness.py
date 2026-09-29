@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import shlex
 import stat
 import subprocess
 import sys
@@ -65,6 +66,31 @@ class NativeHarnessTests(unittest.TestCase):
                 "bind: address already in use private-canary", 42, "unknown", "none",
                 "permission denied private-canary", "permission denied private-canary",
             ),
+            (
+                "DOCKERLENS_SIDECAR_STAGE: write_ok", 0,
+                "private-canary", 0, "unknown", "none",
+                "private-canary", "private-canary",
+            ),
+            (
+                "private-canary", 0,
+                "private-canary", 0, "unknown", "none",
+                "DOCKERLENS_SIDECAR_STAGE: write_ok\nprivate-canary", "private-canary",
+            ),
+            (
+                "DOCKERLENS_SIDECAR_STAGE: write_failed", 0,
+                "private-canary", 0, "unknown", "none",
+                "private-canary", "private-canary",
+            ),
+            (
+                "DOCKERLENS_SIDECAR_STAGE: write_ok\nhttpd: permission denied private-canary", 0,
+                "private-canary", 0, "permission", "logs_query",
+                "private-canary", "private-canary",
+            ),
+            (
+                "DOCKERLENS_SIDECAR_STAGE: write_ok", 42,
+                "private-canary", 0, "unknown", "none",
+                "permission denied private-canary", "private-canary",
+            ),
         )
         with tempfile.TemporaryDirectory() as directory:
             fake = Path(directory) / "podman"
@@ -110,10 +136,21 @@ class NativeHarnessTests(unittest.TestCase):
                     )
                     self.assertEqual(result.returncode, 0)
                     self.assertEqual(result.stdout, "")
+                    if logs_status == 0:
+                        logs_query_output = logs + "\n" + logs_stderr
+                        if "DOCKERLENS_SIDECAR_STAGE: write_failed" in logs_query_output:
+                            expected_stage = "write_failed"
+                        elif "DOCKERLENS_SIDECAR_STAGE: write_ok" in logs_query_output:
+                            expected_stage = "write_ok"
+                        else:
+                            expected_stage = "unknown"
+                    else:
+                        expected_stage = "unknown"
                     self.assertEqual(
                         result.stderr.strip(),
                         "DOCKERLENS_NATIVE_SIDECAR_SETUP: "
-                        f"phase=sidecar_failure category={category} source={origin}",
+                        f"phase=sidecar_failure category={category} source={origin} "
+                        f"write_stage={expected_stage}",
                     )
                     self.assertNotIn("private-canary", result.stderr)
 
@@ -144,6 +181,79 @@ class NativeHarnessTests(unittest.TestCase):
                 self.assertEqual(result.stdout, expected + "\n")
                 self.assertEqual(result.stderr, "")
                 self.assertNotIn("private-canary", result.stdout + result.stderr)
+
+    def test_sidecar_stage_classifier_is_bounded_and_requires_exact_marker(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
+        classifier = "classify_sidecar_error() {" + source.split(
+            "classify_sidecar_error() {", 1
+        )[1].split("\n}\nsidecar_failure_diagnostic()", 1)[0] + "\n}\n"
+        cases = (
+            ("DOCKERLENS_SIDECAR_STAGE: write_ok\n", "write_ok|unknown"),
+            ("DOCKERLENS_SIDECAR_STAGE: write_failed\n", "write_failed|unknown"),
+            ("DOCKERLENS_SIDECAR_STAGE: write_ok\nhttpd: permission denied private-canary\n",
+             "write_ok|permission"),
+            ("prefix DOCKERLENS_SIDECAR_STAGE: write_ok\n", "unknown|unknown"),
+            ("DOCKERLENS_SIDECAR_STAGE: write_ok\nDOCKERLENS_SIDECAR_STAGE: write_failed\n",
+             "unknown|unknown"),
+            ("DOCKERLENS_SIDECAR_STAGE: write_ok\n" + "x" * 9000, "unknown|unknown"),
+        )
+        for logs, expected in cases:
+            with self.subTest(expected=expected, size=len(logs)):
+                result = subprocess.run(
+                    ["bash", "-c", classifier + "classify_sidecar_error --with-stage"],
+                    input=logs, capture_output=True, text=True, timeout=5, check=False,
+                )
+                self.assertEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, expected + "\n")
+                self.assertEqual(result.stderr, "")
+                self.assertNotIn("private-canary", result.stdout + result.stderr)
+
+    def test_sidecar_command_marks_write_stage_before_httpd(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
+        quoted_command = source.split('  "$FIXTURE_IMAGE" sh -c \\\n  ', 1)[1].split(
+            " 2>&1 >/dev/null |", 1
+        )[0]
+        command = shlex.split(quoted_command)
+        self.assertEqual(len(command), 1)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "index.html"
+            fake_httpd = root / "httpd"
+            invoked = root / "httpd-invoked"
+            fake_httpd.write_text(
+                '#!/bin/sh\nprintf "yes" > "$FAKE_HTTPD_INVOKED"\n'
+                'if [ "$FAKE_HTTPD_FAIL" = 1 ]; then '
+                'echo "permission denied private-canary" >&2; exit 42; fi\n',
+                encoding="utf-8",
+            )
+            fake_httpd.chmod(0o755)
+            env = os.environ.copy()
+            env.update(PATH=f"{root}:{env['PATH']}", FAKE_HTTPD_INVOKED=str(invoked))
+            for target_is_directory, httpd_fails, expected_stage in (
+                (False, False, "write_ok"),
+                (True, False, "write_failed"),
+                (False, True, "write_ok"),
+            ):
+                with self.subTest(write_failure=target_is_directory, httpd_failure=httpd_fails):
+                    if target.exists():
+                        if target.is_dir():
+                            target.rmdir()
+                        else:
+                            target.unlink()
+                    invoked.unlink(missing_ok=True)
+                    if target_is_directory:
+                        target.mkdir()
+                    env["FAKE_HTTPD_FAIL"] = "1" if httpd_fails else "0"
+                    result = subprocess.run(
+                        ["sh", "-c", command[0].replace("/tmp/index.html", str(target))],
+                        env=env, capture_output=True, text=True, timeout=5, check=False,
+                    )
+                    self.assertEqual(result.returncode, 1 if target_is_directory else
+                                     42 if httpd_fails else 0)
+                    self.assertIn(f"DOCKERLENS_SIDECAR_STAGE: {expected_stage}\n", result.stderr)
+                    self.assertEqual(invoked.exists(), not target_is_directory)
+                    if not target_is_directory:
+                        self.assertEqual(target.read_text(), "proof-egress")
 
     def test_outer_ipv4_diagnostics_are_closed_for_each_rejection(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
@@ -1072,10 +1182,19 @@ case "$command" in
    [[ $FAKE_NATIVE_FAULT == run ]] && exit 42
  fi
  exit 0 ;;
- logs)
- if [[ $FAKE_NATIVE_FAULT == sidecar_exited_empty_ip ]]; then
-   echo 'sh: httpd: not found private-canary' >&2
- elif [[ $FAKE_NATIVE_FAULT == sidecar_state_error_field ]]; then
+logs)
+  if [[ $FAKE_NATIVE_FAULT == sidecar_exited_empty_ip ]]; then
+    echo 'sh: httpd: not found private-canary' >&2
+  elif [[ $FAKE_NATIVE_FAULT == sidecar_write_failed ]]; then
+    echo 'DOCKERLENS_SIDECAR_STAGE: write_failed' >&2
+  elif [[ $FAKE_NATIVE_FAULT == sidecar_httpd_failed ]]; then
+    echo 'DOCKERLENS_SIDECAR_STAGE: write_ok' >&2
+    echo 'httpd: permission denied private-canary' >&2
+  elif [[ $FAKE_NATIVE_FAULT == sidecar_logs_query_error ]]; then
+    echo 'DOCKERLENS_SIDECAR_STAGE: write_ok' >&2
+    echo 'permission denied private-canary' >&2
+    exit 42
+  elif [[ $FAKE_NATIVE_FAULT == sidecar_state_error_field ]]; then
    :
  else
    echo 'private-canary' >&2
@@ -1096,7 +1215,11 @@ case "$command" in
  printf '{"%s":{"IPAddress":"%s"}}\n' "$network_name" "$ip"
  elif [[ $* == *State.Running* ]]; then
  if [[ $FAKE_NATIVE_FAULT == sidecar_state_unavailable ]]; then exit 42; fi
- if [[ $FAKE_NATIVE_FAULT == sidecar_exited_empty_ip || $FAKE_NATIVE_FAULT == sidecar_state_error_field ]]; then
+    if [[ $FAKE_NATIVE_FAULT == sidecar_exited_empty_ip ||
+      $FAKE_NATIVE_FAULT == sidecar_state_error_field ||
+      $FAKE_NATIVE_FAULT == sidecar_write_failed ||
+      $FAKE_NATIVE_FAULT == sidecar_httpd_failed ||
+      $FAKE_NATIVE_FAULT == sidecar_logs_query_error ]]; then
    echo 'false|exited|127'
  else
    echo 'true|running|0'
@@ -1138,6 +1261,9 @@ esac
             ("debian11-rootful", "sidecar_health_dead"),
             ("debian11-rootful", "sidecar_health_race"),
             ("debian11-rootful", "sidecar_exited_empty_ip"),
+            ("debian11-rootful", "sidecar_write_failed"),
+            ("debian11-rootful", "sidecar_httpd_failed"),
+            ("debian11-rootful", "sidecar_logs_query_error"),
             ("debian11-rootful", "sidecar_state_error_field"),
             ("debian11-rootful", "sidecar_running_empty_ip"),
             ("debian11-rootful", "sidecar_state_unavailable"),
@@ -1255,6 +1381,21 @@ esac
                     self.assertNotIn("phase=attachment", result.stderr)
                     self.assertFalse((state / "health-attempted").exists())
                     self.assertIn("phase=sidecar_failure category=applet_missing source=logs_query", result.stderr)
+                if fault == "sidecar_write_failed":
+                    self.assertIn(
+                        "phase=sidecar_failure category=unknown source=none write_stage=write_failed",
+                        result.stderr,
+                    )
+                if fault == "sidecar_httpd_failed":
+                    self.assertIn(
+                        "phase=sidecar_failure category=permission source=logs_query write_stage=write_ok",
+                        result.stderr,
+                    )
+                if fault == "sidecar_logs_query_error":
+                    self.assertIn(
+                        "phase=sidecar_failure category=unknown source=none write_stage=unknown",
+                        result.stderr,
+                    )
                 if fault == "sidecar_state_error_field":
                     self.assertIn("phase=sidecar_failure category=bind_error source=state_error", result.stderr)
                     self.assertFalse((state / "health-attempted").exists())
