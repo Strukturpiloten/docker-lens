@@ -1,6 +1,7 @@
 """Closed native evidence cannot admit unreviewed identity or leak API bodies."""
 
 import json
+import re
 import subprocess
 import tempfile
 import unittest
@@ -56,13 +57,23 @@ VOLUME_LABEL_PROBES = [
 
 
 class NativeEvidenceTests(unittest.TestCase):
-    def test_reviewed_record_schema_names_exact_native_shapes(self) -> None:
+    def test_reviewed_record_schema_recognizes_defined_vocabulary_without_admission(self) -> None:
         schema = json.loads((ROOT / "docs/native-evidence.schema.json").read_text(encoding="utf-8"))
         reviewed = schema["properties"]["capabilities"]["items"]["properties"]
         names = set(reviewed["name"]["enum"])
         shape_names = set(reviewed["admitted_shapes"]["items"]["enum"])
+        version = (ROOT / "src/version.rs").read_text(encoding="utf-8")
+
+        def variants(declaration: str) -> set[str]:
+            body = version.split(declaration, 1)[1].split("\n}", 1)[0]
+            return set(re.findall(r"^    ([A-Za-z0-9_]+),$", body, re.MULTILINE))
+
+        self.assertEqual(names, variants("pub enum Capability {"))
+        self.assertEqual(shape_names, variants("pub(crate) enum NativeCapabilityShape {"))
+        self.assertEqual(len(SHAPES), 10)
+        self.assertEqual(sum(map(len, SHAPES.values())), 20)
         self.assertTrue(set(SHAPES).issubset(names))
-        self.assertEqual(shape_names, {shape for values in SHAPES.values() for shape in values})
+        self.assertTrue({shape for values in SHAPES.values() for shape in values}.issubset(shape_names))
 
     def test_acquisition_cap_matches_manifest_calculation(self) -> None:
         acquisition = (ROOT / "src/acquisition.rs").read_text(encoding="utf-8")
