@@ -106,6 +106,7 @@ fn complete_created_volume_has_exact_versioned_schema_and_legacy_bytes() {
     let intent = TargetIntent::new(vec![TargetResource::Volume {
         reference: ResourceRef::new(7),
         identity: TargetIdentity::new(b"created_data".to_vec()).unwrap(),
+        labels: vec![],
     }])
     .unwrap();
     let artifact = render(&intent, &[Capability::NamedVolume]);

@@ -115,6 +115,17 @@ capability admissions. Existing reviewed manifests and the reviewed catalog
 remain historical evidence for their original shapes. The new assertions need
 genuine runs in all four exact lanes before a source compatibility claim.
 
+The created-volume label probe is a separate exact ignored library test,
+`native_volume_label_tests::live_created_volume_labels_match_engine`. Each lane
+runs it before manifest emission and reads its private, bounded
+`NATIVE_VOLUME_LABEL_PROBES_PATH` file. The manifest records only the closed
+`volume_label_probes` names: `VolumeCreateLabels`, `VolumeLabelInspect`,
+`VolumeLabelPersistence`, and `VolumeLabelOwnershipCleanup`. These are
+non-admission evidence; they do not add `VolumeLabels` or
+`VolumeCreateLabels` to the reviewed capability catalog or admitted shapes.
+Native compatibility still requires genuine passing lanes and independent
+review of the exact candidate evidence.
+
 Each lane reads live Engine API version, info, container, network, and volume
 responses. The harness creates only synthetic test resources and stores live
 responses in a private temporary directory. The Rust integration test checks
@@ -299,6 +310,18 @@ historical reviewed catalog or its schema, establish that an arbitrary
 destination volume exists or is populated, or authorize copying or applying
 data. Fresh, independently reviewed rootful and rootless runs on every claimed
 Engine profile remain necessary before an existing-volume compatibility claim.
+
+DockerLens #49 adds a separate ignored `live_created_volume_labels_match_engine`
+test for created-volume labels. Offline tests enforce protected key/value,
+count, aggregate-byte, duplicate and exact-wire boundaries, including unchanged
+unlabelled requests and label-free external prerequisites. The native probe
+compares an independent CLI-created volume with the inert labelled request,
+including empty and non-ASCII/escaped values, then checks direct Engine inspect
+labels, data persistence across task-owned containers, ownership labels and
+exact cleanup. Its closed results are not catalogue admission: all four exact
+lanes must pass and be independently
+reviewed before an exact capability claim. Historical unlabelled `NamedVolume`
+evidence cannot prove `VolumeLabels`.
 
 ## Reviewed target-profile records
 

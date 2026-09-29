@@ -473,6 +473,7 @@ fn render_and_inspect_variant(
         resources.push(TargetResource::Volume {
             reference: ResourceRef::new(2),
             identity: TargetIdentity::new(volume.as_bytes().to_vec()).unwrap(),
+            labels: vec![],
         });
     }
     resources.push(TargetResource::Container(Box::new(ContainerIntent {
@@ -737,6 +738,7 @@ fn live_target_render_matches_engine() {
         TargetResource::Volume {
             reference: ResourceRef::new(2),
             identity: TargetIdentity::new(target_volume.as_bytes().to_vec()).unwrap(),
+            labels: vec![],
         },
         TargetResource::Container(Box::new(ContainerIntent {
             reference: ResourceRef::new(3),

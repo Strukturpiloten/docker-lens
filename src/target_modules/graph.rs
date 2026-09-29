@@ -156,6 +156,7 @@ pub enum TargetField {
     BindMount,
     TmpfsMount,
     NamedVolume,
+    VolumeLabels,
     Network,
     NetworkInternal,
     NetworkIpv6,
@@ -393,8 +394,11 @@ impl<'a> OperationGraph<'a> {
                         Capability::NetworkExternalReference,
                     )?,
                 },
-                TargetResource::Volume { .. } => {
-                    require(TargetField::Resource, Capability::NamedVolume)?
+                TargetResource::Volume { labels, .. } => {
+                    require(TargetField::Resource, Capability::NamedVolume)?;
+                    if !labels.is_empty() {
+                        require(TargetField::VolumeLabels, Capability::VolumeLabels)?;
+                    }
                 }
                 TargetResource::ExternalVolume { .. } => require(
                     TargetField::VolumeExternalReference,

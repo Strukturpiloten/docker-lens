@@ -12,6 +12,8 @@ mod intent;
 mod network;
 #[path = "target_modules/render.rs"]
 mod render;
+#[path = "target_modules/volume.rs"]
+mod volume;
 
 pub use container::{
     Argument, ContainerHostname, ContainerIntent, ContainerLabel, ContainerSettings,
@@ -36,6 +38,7 @@ pub use render::{
     CompleteArtifactError, DockerApiRenderer, NetworkPrerequisite, RenderError, RenderedArtifact,
     Renderer, VolumePrerequisite,
 };
+pub use volume::VolumeLabel;
 
 #[cfg(test)]
 mod tests {
@@ -135,6 +138,7 @@ mod tests {
             TargetResource::Volume {
                 reference: ResourceRef::new(2),
                 identity: TargetIdentity::new(b"app_data".to_vec()).unwrap(),
+                labels: vec![],
             },
             bridge(1, b"app_net"),
         ])
@@ -152,6 +156,72 @@ mod tests {
         Capability::Healthcheck,
         Capability::RestartPolicy,
     ];
+
+    #[test]
+    fn created_volume_labels_require_separate_capability_and_render_exact_bytes() {
+        let intent = TargetIntent::new(vec![TargetResource::Volume {
+            reference: ResourceRef::new(1),
+            identity: TargetIdentity::new(b"app_data".to_vec()).unwrap(),
+            labels: vec![
+                VolumeLabel::new(b"io.boxferry.owner".to_vec(), b"fixture".to_vec()).unwrap(),
+                VolumeLabel::new(b"private-key".to_vec(), b"private\"\\\nvalue".to_vec()).unwrap(),
+            ],
+        }])
+        .unwrap();
+        let unlabelled_facts = facts(41, DaemonMode::Rootful, &[Capability::NamedVolume]);
+        let unlabelled_caps = ValidatedCapabilities::new(&unlabelled_facts).unwrap();
+        assert_eq!(
+            DockerPlanner.plan(&intent, &unlabelled_caps).unwrap_err(),
+            PlanningError::MissingCapability {
+                resource: ResourceRef::new(1),
+                field: TargetField::VolumeLabels,
+                capability: Capability::VolumeLabels,
+            }
+        );
+        assert_eq!(
+            NativeCapabilityShape::required_for(Capability::VolumeLabels),
+            Some(&[NativeCapabilityShape::VolumeCreateLabels][..])
+        );
+        let daemon = facts(
+            41,
+            DaemonMode::Rootful,
+            &[Capability::NamedVolume, Capability::VolumeLabels],
+        );
+        let capabilities = ValidatedCapabilities::new(&daemon).unwrap();
+        let graph = DockerPlanner.plan(&intent, &capabilities).unwrap();
+        let artifact = DockerApiRenderer.render(&graph).unwrap();
+        assert_eq!(
+            artifact.bytes(),
+            b"{\"method\":\"POST\",\"path\":\"/v1.41/volumes/create\",\"body\":{\"Name\":\"app_data\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"private-key\":\"private\\\"\\\\\\nvalue\"}}}\n"
+        );
+        let complete: serde_json::Value =
+            serde_json::from_slice(&artifact.complete_bytes().unwrap()).unwrap();
+        assert_eq!(
+            complete["requests"][0]["body"]["Labels"],
+            serde_json::json!({
+                "io.boxferry.owner":"fixture", "private-key":"private\"\\\nvalue"
+            })
+        );
+        for hidden in [
+            format!("{intent:?}"),
+            format!("{graph:?}"),
+            format!("{artifact:?}"),
+        ] {
+            assert!(!hidden.contains("private"));
+        }
+        let unlabelled = TargetIntent::new(vec![TargetResource::Volume {
+            reference: ResourceRef::new(2),
+            identity: TargetIdentity::new(b"app_data".to_vec()).unwrap(),
+            labels: vec![],
+        }])
+        .unwrap();
+        let unlabelled_graph = DockerPlanner.plan(&unlabelled, &unlabelled_caps).unwrap();
+        let unlabelled_artifact = DockerApiRenderer.render(&unlabelled_graph).unwrap();
+        assert_eq!(
+            unlabelled_artifact.bytes(),
+            b"{\"method\":\"POST\",\"path\":\"/v1.41/volumes/create\",\"body\":{\"Name\":\"app_data\"}}\n"
+        );
+    }
 
     fn external_volume_intent() -> TargetIntent {
         TargetIntent::new(vec![
@@ -250,6 +320,7 @@ mod tests {
                 TargetResource::Volume {
                     reference: ResourceRef::new(1),
                     identity: TargetIdentity::new(b"same_name".to_vec()).unwrap(),
+                    labels: vec![],
                 },
                 TargetResource::ExternalVolume {
                     reference: ResourceRef::new(2),
@@ -774,10 +845,12 @@ mod tests {
                 TargetResource::Volume {
                     reference: ResourceRef::new(1),
                     identity: TargetIdentity::new(b"shared".to_vec()).unwrap(),
+                    labels: vec![],
                 },
                 TargetResource::Volume {
                     reference: ResourceRef::new(2),
                     identity: TargetIdentity::new(b"shared".to_vec()).unwrap(),
+                    labels: vec![],
                 },
             ])
             .unwrap_err(),
@@ -820,6 +893,7 @@ mod tests {
             TargetResource::Volume {
                 reference: ResourceRef::new(2),
                 identity: TargetIdentity::new(b"volume".to_vec()).unwrap(),
+                labels: vec![],
             },
             TargetResource::Container(Box::new(ContainerIntent {
                 reference: ResourceRef::new(3),
@@ -942,6 +1016,7 @@ mod tests {
         let intent = TargetIntent::new(vec![TargetResource::Volume {
             reference: ResourceRef::new(1),
             identity: TargetIdentity::new(b"private-volume".to_vec()).unwrap(),
+            labels: vec![],
         }])
         .unwrap();
         let graph = OperationGraph::new(

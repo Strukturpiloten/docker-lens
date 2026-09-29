@@ -16,6 +16,9 @@ Typed container intent also distinguishes host-IP scoped, repeated and
 ephemeral publications, exposed-only ports, command clearing, shell and
 disabled health checks, and protected runtime settings. These new branches
 likewise remain capability-unadmitted pending exact native evidence.
+Created named volumes can carry bounded protected labels in the inert target
+contract. Labelled creation has its own unadmitted capability; external-volume
+prerequisites cannot carry labels or mutate an existing volume.
 The [standalone migration ledger](docs/standalone-migration-ledger.md) records
 the finite remaining shapes, evidence, and implementation owners; the current
 0.1.0 surface is the foundation, not completion of that ledger.

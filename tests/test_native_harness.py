@@ -249,6 +249,43 @@ fi
         self.assertIn('export NATIVE_VOLUME_PROBES_PATH="$run_dir/volume-probes.json"', source)
         self.assertIn('"$NATIVE_VOLUME_PROBES_PATH"', source)
 
+    def test_created_volume_label_probe_is_exact_and_precedes_manifest_emission(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
+        selected = ('"$(dirname "$0")/run-exact-native-test.sh" native_volume_label '
+                    'live_created_volume_labels_match_engine')
+        manifest = 'python3 "$script_dir/native-evidence.py"'
+        self.assertEqual(source.count(selected), 1)
+        self.assertLess(source.index(selected), source.index(manifest))
+        self.assertIn('export NATIVE_VOLUME_LABEL_PROBES_PATH="$run_dir/volume-label-probes.json"', source)
+        self.assertIn('"$NATIVE_VOLUME_LABEL_PROBES_PATH"', source)
+
+    def test_volume_label_failure_markers_remain_closed_and_private(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_volume_label_tests::live_created_volume_labels_match_engine: test'
+else
+  echo 'private native volume label response' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: volume_labels_create' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: volume_labels_private' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: volume_labels_cleanup_unverified' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            result = subprocess.run(
+                [str(ROOT / "scripts/run-exact-native-test.sh"), "native_volume_label",
+                 "live_created_volume_labels_match_engine"],
+                env=env, capture_output=True, text=True, timeout=15, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("DOCKERLENS_NATIVE_CHECK: volume_labels_cleanup_unverified", result.stderr)
+            self.assertNotIn("private", result.stdout + result.stderr)
+
     def test_volume_failure_markers_remain_closed_and_private(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             bin_dir = Path(directory)
@@ -921,6 +958,33 @@ fi
             capture_output=True, text=True, timeout=15, check=False,
         )
         self.assertEqual(invalid.returncode, 2)
+
+    def test_native_volume_label_uses_private_library_test_by_exact_name(self) -> None:
+        selected = "native_volume_label_tests::live_created_volume_labels_match_engine"
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+printf '%s\n' "$*" >> "$FAKE_NATIVE_INVOCATIONS"
+if [[ $* == *--list* ]]; then
+  echo 'native_volume_label_tests::live_created_volume_labels_match_engine: test'
+else
+  echo 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;'
+fi
+""")
+            invocation = bin_dir / "invocations"
+            env = os.environ.copy()
+            env.update(PATH=f"{bin_dir}:{env['PATH']}", FAKE_NATIVE_INVOCATIONS=str(invocation))
+            result = subprocess.run(
+                [str(ROOT / "scripts/run-exact-native-test.sh"), "native_volume_label",
+                 "live_created_volume_labels_match_engine"],
+                env=env, capture_output=True, text=True, timeout=15, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = invocation.read_text().splitlines()
+            self.assertEqual(len(calls), 2)
+            self.assertTrue(all("--lib" in call and "--test" not in call for call in calls))
+            self.assertIn(f"--ignored --exact {selected}", calls[1])
 
     @staticmethod
     def _tool(directory: Path, name: str, content: str) -> None:
