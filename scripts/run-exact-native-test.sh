@@ -96,12 +96,12 @@ volume_label_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: volume_labels_(create|
 if [[ -n $volume_label_marker ]]; then marker=$volume_label_marker; fi
 if [[ -n $selection_error ]]; then error_category=$selection_error; fi
 network_cli_diag=$(grep -Eo '^DOCKERLENS_NATIVE_NETWORK_CLI_DIAG: exit=(timeout|other) category=(bridge_filter|icc_configuration|firewall_disabled|firewall|permission|address_pool|invalid_label|invalid_option|unknown)$' "$capture_path" | tail -n 1 || true)
-# A panic's selected test source and numeric location identify an assertion
-# without disclosing its message, compared values, or an absolute build path.
+# The first panic's selected test source and numeric location identify the
+# original assertion without disclosing its message, values, or build path.
 panic_site=
 case $target in
   native_target | native_volume | native_network | native_volume_label | native_container)
-    panic_site=$(sed -nE "s/^thread '.*'( \([0-9]{1,10}\))? panicked at src\/(${target}_tests)\.rs:([0-9]{1,6}):([0-9]{1,4}):$/DOCKERLENS_NATIVE_PANIC: source=\2 line=\3 column=\4/p" "$capture_path" | tail -n 1)
+    panic_site=$(sed -nE "s/^thread '.*'( \([0-9]{1,10}\))? panicked at src\/(${target}_tests)\.rs:([0-9]{1,6}):([0-9]{1,4}):$/DOCKERLENS_NATIVE_PANIC: source=\2 line=\3 column=\4/p; t matched; b; :matched; q" "$capture_path")
     ;;
 esac
 if (( run_status != 0 )); then

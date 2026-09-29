@@ -98,6 +98,45 @@ fi
                         self.assertIn("source=native_network_tests line=1931 column=5", result.stderr)
                     for private in ("protected-native-canary", "protected-name-canary", "/private/source", "(342)"):
                         self.assertNotIn(private, result.stdout + result.stderr)
+
+    def test_failure_reports_first_panic_before_aggregate_panic(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_container_tests::live_container_settings_match_engine: test'
+else
+  echo 'DOCKERLENS_NATIVE_CHECK: container_resolver_logging_ipv6_rendered_create' >&2
+  echo "thread 'protected-first-name' (342) panicked at src/native_container_tests.rs:4111:7:" >&2
+  echo 'protected-first-message and native value' >&2
+  echo "thread 'protected-aggregate-name' panicked at src/native_container_tests.rs:5527:9:" >&2
+  echo 'protected-aggregate-message and private path' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 101
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            result = subprocess.run(
+                [str(ROOT / "scripts/run-exact-native-test.sh"), "native_container",
+                 "live_container_settings_match_engine"],
+                env=env, text=True, capture_output=True, timeout=10, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "DOCKERLENS_NATIVE_CHECK: container_resolver_logging_ipv6_rendered_create",
+                result.stderr,
+            )
+            self.assertEqual(
+                ["DOCKERLENS_NATIVE_PANIC: source=native_container_tests line=4111 column=7"],
+                [line for line in result.stderr.splitlines()
+                 if line.startswith("DOCKERLENS_NATIVE_PANIC:")],
+            )
+            for private in ("protected-first", "protected-aggregate", "native value",
+                            "private path", "(342)"):
+                self.assertNotIn(private, result.stdout + result.stderr)
+
     def test_isolation_positive_controls_query_ipv4_before_negative_controls(self) -> None:
         source = (ROOT / "src/native_network_tests.rs").read_text(encoding="utf-8")
         markers = [
