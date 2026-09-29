@@ -46,6 +46,11 @@ fi
   exit 1
 }
 
+# The helper reads host bridge prerequisites before creating run-owned resources.
+# Only a positively identified hosted main native job may attempt one bounded
+# module load; these environment guards prevent accidents, not impersonation.
+python3 "$script_dir/native-bridge-prerequisite.py"
+
 # A random directory, container, and volume belong to exactly this lane.
 run_dir=$(mktemp -d "${TMPDIR:-/tmp}/dockerlens-native.XXXXXXXX")
 run_id=${run_dir##*.}

@@ -12,11 +12,37 @@ the existing container and graph tests. These offline checks preserve the
 0.1.0 contract; they do not prove new migration shapes or native compatibility.
 The typed-network offline cases exercise create/external separation, multiple
 attachment request order, alias and IPAM encoding, redacted prerequisites,
-invalid topology, missing capabilities and the API floor. The native #31
-negative cases include overlapping IPAM pools, subnet-base and broadcast
-gateway/auxiliary/static addresses, and static-address collisions. IPv4 `/31`
-and `/32` bridge parent subnets remain an explicit planning rejection; this
-extension does not establish their Engine behavior on any API or daemon mode.
+invalid topology, missing capabilities and the API floor. The #31 negative
+cases for overlapping IPAM pools, subnet-base and broadcast gateway/auxiliary/
+static addresses, and static-address collisions are offline library-policy
+rejections before any Engine request. IPv4 `/31` and `/32` bridge parent subnets
+remain an explicit planning rejection; this extension does not establish their
+Engine behavior on any API or daemon mode.
+For native assertion failures, the exact-test wrapper may expose the selected
+native test's fixed source basename and bounded numeric line/column. It does not
+print the assertion message, compared values, thread name, or absolute build
+path. The location is diagnostic only and never changes a failed outcome.
+The CLI network oracle also emits only its closed create/inspect/assert phase
+and, on a failed command, a closed exit and stderr category. Native stdout and
+stderr are bounded independently to 8 KiB; raw bytes remain private. A category
+such as a disabled firewall identifies a failure to investigate, not permission
+to skip the assertion or admit an unsupported result as positive evidence.
+Before creating run-owned resources, the canonical native harness requires the
+host `br_netfilter` module and both `bridge-nf-call-iptables` and
+`bridge-nf-call-ip6tables` to read back as `1`. Already-ready hosts need no
+load. Local, unknown, and other untrusted environments perform read-only
+checks and fail if a prerequisite is absent or disabled. Only a positively
+identified GitHub-hosted Linux `native-conformance` job for this repository on
+trusted `main` push or workflow dispatch may attempt only
+`sudo -n timeout --signal=TERM --kill-after=2s 10s modprobe br_netfilter`;
+the root-owned timeout bounds that exact module load, and the helper then
+requires the same readback. A separate outer deadline is only a fallback:
+an unprivileged runner cannot necessarily signal sudo's root process group.
+These environment values prevent accidental local mutation, not impersonation by a
+root caller. The harness never changes sysctls, unloads modules, installs
+packages, changes forwarding policy, or treats the host check as proof of the
+inner daemon's network behavior. Failures expose closed categories, not
+subprocess output. This bounded prerequisite does not relax any native test.
 On a failed edge-side DNS positive, the network test may create one exact
 run-owned diagnostic peer. Its closed summary distinguishes resolver setup,
 default/explicit/dotted A lookups, named/direct-IP HTTP and cleanup without
@@ -53,14 +79,23 @@ diagnostics from bounded CLI output. A dual-homed app's edge IP is not an
 isolation oracle. Closed DNS and HTTP markers distinguish each stage. The
 executor allows only the run-owned network and
 container names, including exact `networks/{id}/connect` paths. The separate closed
-`network_probes` manifest field contains the nineteen checked network renderer
-shapes only after the exact ignored test passes; it does not extend
+`network_probes` manifest field retains the original nineteen network renderer
+shapes and appends `NetworkBridgeIccDisabled`,
+`NetworkBridgeMasqueradeEnabled`, and `NetworkCreateLabelsValueDomain` only
+after the exact ignored test passes; it does not extend
 `admitted_shapes`, catalog capabilities, or a compatibility claim. IPAM fields,
-labels, and bridge ICC, masquerade and host-binding options have request/inspect
-checks, not independent kernel-behavior proof. ICC is tested only as `true` and
-masquerade only as `false`; later positive admission of either boolean type
-requires both values on each claimed lane. IPv4 `/31` and `/32` bridge parents
-remain rejected by planning, independent of any Engine acceptance behavior.
+labels, masquerade and host-binding options have request/inspect checks, not
+independent kernel-behavior proof. Matched control bridges differ only in ICC;
+both have independently healthy same-bridge peers, with the same direct-IP
+inter-peer HTTP probe succeeding when enabled and failing when disabled. This
+uses no external DNS or Internet dependency. Both
+masquerade values are accepted and inspectable, but this does not prove their
+routing or NAT effect. Representative empty and non-ASCII/escaped network-label
+values are checked through independent CLI and inert-rendered creates and Engine
+inspects; this does not prove every key or length boundary.
+These additional names are non-admission evidence, and the historical nineteen
+names and manifests are unchanged. IPv4 `/31` and `/32` bridge parents remain
+rejected by planning, independent of any Engine acceptance behavior.
 The typed-container offline regressions cover exact grouped `PortBindings`
 and `ExposedPorts` bodies, host-IP privacy, wildcard conflicts, ephemeral
 allocation requests, command/entrypoint inheritance and clearing, shell and

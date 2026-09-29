@@ -4,6 +4,7 @@ import os
 import re
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,6 +13,92 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class NativeHarnessTests(unittest.TestCase):
+    def test_network_oracle_diagnostics_are_closed_and_do_not_hide_failure(self) -> None:
+        source = (ROOT / "src/native_network_tests.rs").read_text(encoding="utf-8")
+        negative_cli = source.split("fn cli(args:", 1)[1].split("fn network_cli_failure_category", 1)[0]
+        self.assertNotIn("DOCKERLENS_NATIVE_NETWORK_CLI_DIAG", negative_cli)
+        positive_cli = source.split("fn cli_ok(args:", 1)[1].split("struct BoundedDnsCliOutput", 1)[0]
+        self.assertIn("DOCKERLENS_NATIVE_NETWORK_CLI_DIAG", positive_cli)
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_network_tests::live_network_render_matches_engine: test'
+else
+  echo 'DOCKERLENS_NATIVE_CHECK: network_oracle_alternate_create' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: network_oracle_private' >&2
+  echo 'DOCKERLENS_NATIVE_NETWORK_CLI_DIAG: exit=other category=bridge_filter' >&2
+  echo 'DOCKERLENS_NATIVE_NETWORK_CLI_DIAG: exit=other category=private-canary' >&2
+  echo 'private-canary raw native output' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 101
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            result = subprocess.run(
+                [str(ROOT / "scripts/run-exact-native-test.sh"), "native_network",
+                 "live_network_render_matches_engine"],
+                env=env, capture_output=True, text=True, timeout=10,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("network_oracle_alternate_create", result.stderr)
+            self.assertIn("exit=other category=bridge_filter", result.stderr)
+            self.assertNotIn("private-canary", result.stdout + result.stderr)
+            self.assertNotIn("network_oracle_private", result.stdout + result.stderr)
+
+    def test_host_network_prerequisite_runs_before_owned_resources(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
+        preflight = 'python3 "$script_dir/native-bridge-prerequisite.py"'
+        self.assertIn(preflight, source)
+        self.assertLess(source.index(preflight), source.index('run_dir=$(mktemp -d'))
+        self.assertNotIn("sysctl -w", source)
+        self.assertNotIn("DOCKER_IGNORE_BR_NETFILTER_ERROR", source)
+
+    def test_failure_exposes_only_selected_native_panic_location(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_network_tests::live_network_render_matches_engine: test'
+else
+  printf '%s\\n' "$TEST_PANIC"
+  echo 'assertion contains protected-native-canary and private path' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 101
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            # Current libtest includes a numeric thread ID; older Rust omits it.
+            # Observed independently in an actual local Rust panic, not inferred
+            # from the extractor's synthetic fixture. Never disclose that ID.
+            for location, thread_suffix, expected in (
+                ("src/native_network_tests.rs:1931:5", "", True),
+                ("src/native_network_tests.rs:1931:5", " (342)", True),
+                ("src/native_network_tests.rs:1931:5", " (private)", False),
+                ("src/native_network_tests.rs:1931:5", " (12345678901)", False),
+                ("/private/source/native_network_tests.rs:1931:5", " (342)", False),
+                ("src/native_target_tests.rs:1931:5", " (342)", False),
+                ("src/native_network_tests.rs:private:5", "", False),
+                ("src/native_network_tests.rs:1931:50000", "", False),
+            ):
+                with self.subTest(location=location, thread_suffix=thread_suffix):
+                    env["TEST_PANIC"] = f"thread 'protected-name-canary'{thread_suffix} panicked at {location}:"
+                    result = subprocess.run(
+                        [str(ROOT / "scripts/run-exact-native-test.sh"), "native_network",
+                         "live_network_render_matches_engine"],
+                        env=env, text=True, capture_output=True, timeout=10,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual("DOCKERLENS_NATIVE_PANIC:" in result.stderr, expected)
+                    if expected:
+                        self.assertIn("source=native_network_tests line=1931 column=5", result.stderr)
+                    for private in ("protected-native-canary", "protected-name-canary", "/private/source", "(342)"):
+                        self.assertNotIn(private, result.stdout + result.stderr)
+
     def test_isolation_positive_controls_query_ipv4_before_negative_controls(self) -> None:
         source = (ROOT / "src/native_network_tests.rs").read_text(encoding="utf-8")
         markers = [
@@ -187,6 +274,32 @@ fi
         self.assertLess(source.index(target), source.index(selected))
         self.assertLess(source.index(selected), source.index(manifest))
         self.assertIn('"$NATIVE_NETWORK_PROBES_PATH"', source)
+
+    def test_network_option_value_and_label_controls_are_closed(self) -> None:
+        source = (ROOT / "src/native_network_tests.rs").read_text(encoding="utf-8")
+        version = (ROOT / "src/version.rs").read_text(encoding="utf-8")
+        self.assertIn('"NetworkBridgeIccDisabled"', source)
+        self.assertIn('"NetworkBridgeMasqueradeEnabled"', source)
+        self.assertIn('"NetworkCreateLabelsValueDomain"', source)
+        self.assertIn('Self::NetworkBridgeIccDisabled,', version)
+        self.assertIn('Self::NetworkBridgeMasqueradeEnabled,', version)
+        self.assertIn('"com.docker.network.bridge.enable_icc=false"', source)
+        self.assertIn('"com.docker.network.bridge.enable_ip_masquerade=true"', source)
+        self.assertIn('NetworkLabel::new(EMPTY_LABEL_KEY.as_bytes().to_vec(), Vec::new())', source)
+        self.assertIn('SPECIAL_LABEL_VALUE.as_bytes().to_vec()', source)
+        self.assertIn('oracle_control_body["Labels"] == expected_labels', source)
+        self.assertIn('control_request["body"] == expected_option_control_body(&control, false)', source)
+        self.assertIn('enabled_request["body"] == expected_option_control_body(&control_enabled, true)', source)
+        self.assertIn('matched["Options"]["com.docker.network.bridge.enable_icc"] = json!("true")', source)
+        self.assertIn('control_body["Labels"] == expected_labels', source)
+        enabled = source.index('backend_http.as_slice()')
+        disabled = source.index('ICC-disabled control must block healthy same-bridge peers')
+        self.assertLess(enabled, disabled)
+        self.assertIn('"http://127.0.0.1:8080/"', source[enabled:disabled])
+        self.assertIn('let cross_url = format!("http://{server_ip}:8080/")', source[enabled:disabled])
+        self.assertIn('let enabled_cross_url = format!("http://{enabled_server_ip}:8080/")', source[enabled:disabled])
+        self.assertIn('enabled_cross_success && enabled_cross_body.as_slice() == b"control-server"', source[enabled:disabled])
+        self.assertIn('!cross_success && cross_body.is_empty()', source[enabled:disabled])
 
     def test_network_failure_marker_is_closed_and_private(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -702,6 +815,13 @@ esac
                            "#!/bin/sh\nprintf 'Filesystem 1024-blocks Used Available Capacity Mounted\n'"
                            "\nprintf 'fake 100000000 1 100000000 1%% /tmp\n'\n")
                 self._tool(bin_dir, "podman", fake_podman)
+                # These cleanup fixtures do not test kernel preflight. Admit
+                # that single helper in the fake PATH, leaving every other
+                # Python helper on the real interpreter.
+                self._tool(bin_dir, "python3", "#!/bin/sh\n"
+                           "case \"$1\" in */native-bridge-prerequisite.py) "
+                           "echo DOCKERLENS_NATIVE_HOST_NETWORK:bridge_filter=ready; exit 0;; esac\n"
+                           f'exec "{sys.executable}" "$@"\n')
                 env = os.environ.copy()
                 env.update(PATH=f"{bin_dir}:{env['PATH']}",
                            FAKE_NATIVE_STATE=str(state), FAKE_NATIVE_FAULT=fault)

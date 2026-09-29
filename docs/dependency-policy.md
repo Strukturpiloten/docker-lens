@@ -62,3 +62,20 @@ library, so it needs no separate tool or manager. Shared workflow rollout
 decisions remain repository-specific: the scaffold uses the workspace's
 canonical scripts/format-lint.sh and scripts/check-all.sh entry points; the
 other five repositories retain their independent native and product gates.
+
+The native bridge prerequisite uses the Ubuntu runner's kernel-provided
+`br_netfilter` and its installed `sudo`/`modprobe`; it downloads no tool and
+pins no independently versioned module. Kernel/module bytes follow the
+version-selected but mutable `ubuntu-24.04` GitHub-hosted runner image;
+GitHub exposes no stable per-image or per-module digest to this repository.
+This is an explicit unavailable-integrity and manual-review exception, not
+a floating new package dependency: no package or
+module installation, sysctl write, or fallback pin is introduced. Renovate's
+existing GitHub Actions manager continues to own full Action refs, and the
+native-image regex manager continues to extract the same five references
+from `scripts/native-conformance.sh`; neither gains a moved or duplicate pin.
+The canonical harness is consumed by `check.yml` main push,
+`native-validation.yml` trusted-main dispatch, and `release-validation.yml`
+exact-main dispatch. All three inherit the same prerequisite without a
+workflow edit. The other five workspace repositories do not invoke this
+DockerLens native harness, so no cross-repository consumer changes are needed.
