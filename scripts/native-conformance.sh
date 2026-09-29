@@ -366,17 +366,20 @@ print(next((category for category, patterns in checks
             if any(re.search(pattern, message) for pattern in patterns)), "unknown"))'
 }
 sidecar_failure_diagnostic() {
-  local category=unknown observed
+  local category=unknown source=none observed
   if observed=$(timeout --signal=TERM --kill-after=2s 5s "${podman_cmd[@]}" logs --tail 32 "$sidecar" 2>&1 |
-    classify_sidecar_error); then
+    classify_sidecar_error) && [[ $observed != unknown ]]; then
     category=$observed
+    source=logs
   fi
   if [[ $category == unknown ]] &&
     observed=$(timeout --signal=TERM --kill-after=2s 5s "${podman_cmd[@]}" inspect \
-      --format '{{.State.Error}}' "$sidecar" 2>&1 | classify_sidecar_error); then
+      --format '{{.State.Error}}' "$sidecar" 2>&1 | classify_sidecar_error) &&
+    [[ $observed != unknown ]]; then
     category=$observed
+    source=state_error
   fi
-  echo "DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=sidecar_failure category=$category" >&2
+  echo "DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=sidecar_failure category=$category source=$source" >&2
 }
 watchdog &
 watchdog_pid=$!

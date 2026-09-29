@@ -15,6 +15,75 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class NativeHarnessTests(unittest.TestCase):
+    def test_sidecar_failure_source_requires_successful_classification(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
+        helpers = "classify_sidecar_error() {" + source.split(
+            "classify_sidecar_error() {", 1
+        )[1].split("\n}\nwatchdog &", 1)[0] + "\n}\n"
+        cases = (
+            (
+                "permission denied private-canary", 0,
+                "bind: address already in use private-canary", 0, "permission", "logs",
+            ),
+            (
+                "private-canary", 0,
+                "bind: address already in use private-canary", 0, "bind_error", "state_error",
+            ),
+            (
+                "permission denied private-canary", 42,
+                "bind: address already in use private-canary", 0, "bind_error", "state_error",
+            ),
+            ("permission denied private-canary", 42, "private-canary", 0, "unknown", "none"),
+            ("private-canary", 0, "private-canary", 0, "unknown", "none"),
+            (
+                "permission denied private-canary", 42,
+                "bind: address already in use private-canary", 42, "unknown", "none",
+            ),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            fake = Path(directory) / "podman"
+            fake.write_text(
+                '#!/usr/bin/env bash\n'
+                'case "$1" in\n'
+                '  logs) printf "%s\\n" "$FAKE_LOGS"; exit "$FAKE_LOGS_STATUS" ;;\n'
+                '  inspect) printf "%s\\n" "$FAKE_STATE_ERROR"; exit "$FAKE_STATE_STATUS" ;;\n'
+                '  *) exit 42 ;;\n'
+                'esac\n',
+                encoding="utf-8",
+            )
+            fake.chmod(0o755)
+            script = (
+                "set -euo pipefail\n"
+                f"podman_cmd=({fake})\n"
+                "sidecar=synthetic\n"
+                + helpers
+                + "sidecar_failure_diagnostic\n"
+            )
+            for logs, logs_status, state, state_status, category, origin in cases:
+                with self.subTest(
+                    category=category, source=origin,
+                    logs_status=logs_status, state_status=state_status,
+                ):
+                    env = os.environ.copy()
+                    env.update(
+                        FAKE_LOGS=logs,
+                        FAKE_LOGS_STATUS=str(logs_status),
+                        FAKE_STATE_ERROR=state,
+                        FAKE_STATE_STATUS=str(state_status),
+                    )
+                    result = subprocess.run(
+                        ["bash", "-c", script], env=env, capture_output=True,
+                        text=True, timeout=10, check=False,
+                    )
+                    self.assertEqual(result.returncode, 0)
+                    self.assertEqual(result.stdout, "")
+                    self.assertEqual(
+                        result.stderr.strip(),
+                        "DOCKERLENS_NATIVE_SIDECAR_SETUP: "
+                        f"phase=sidecar_failure category={category} source={origin}",
+                    )
+                    self.assertNotIn("private-canary", result.stderr)
+
     def test_sidecar_failure_categories_are_closed_and_hide_native_text(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
         classifier = "classify_sidecar_error() {" + source.split(
