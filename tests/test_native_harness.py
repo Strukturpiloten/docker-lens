@@ -1,6 +1,7 @@
 """Fault injection for exact resource cleanup and ignored native test selection."""
 
 import os
+import re
 import stat
 import subprocess
 import tempfile
@@ -11,6 +12,224 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class NativeHarnessTests(unittest.TestCase):
+    def test_isolation_positive_controls_query_ipv4_before_negative_controls(self) -> None:
+        source = (ROOT / "src/native_network_tests.rs").read_text(encoding="utf-8")
+        markers = [
+            "network_isolation_edge_dns", "network_isolation_edge_http",
+            "network_isolation_local_dns", "network_isolation_local_http",
+            "network_isolation_collision_dns", "network_isolation_collision_http",
+            "network_isolation_foreign_route",
+        ]
+        self.assertEqual([source.count(f'DOCKERLENS_NATIVE_CHECK: {marker}"')
+                          for marker in markers], [1] * len(markers))
+        self.assertEqual([source.index(f'DOCKERLENS_NATIVE_CHECK: {marker}')
+                          for marker in markers],
+                         sorted(source.index(f'DOCKERLENS_NATIVE_CHECK: {marker}')
+                                for marker in markers))
+        self.assertEqual(re.findall(r'"nslookup",\s*"-type=A",\s*"([^"]+)"', source),
+                         ["edge-sentinel", "edge-sentinel", "edge-sentinel.",
+                          "backend-app", "edge-sentinel.", "edge-sentinel."])
+        edge_dns = source[source.index('let edge_dns_outcome ='):source.index('if let Err(category) = edge_dns_outcome')]
+        self.assertTrue('exec nslookup -type=A edge-sentinel 127.0.0.11' in edge_dns)
+        self.assertTrue('/etc/resolv.conf || exit 42;' in edge_dns)
+        local_dns = source[source.index('network_isolation_local_dns"'):source.index('network_isolation_local_http"')]
+        self.assertIsNotNone(re.search(
+            r'"exec",\s*&backend_only,\s*"cat",\s*"/etc/resolv\.conf"', local_dns,
+        ))
+        self.assertIsNotNone(re.search(
+            r'"backend-app",\s*EMBEDDED_DNS_SERVER,', local_dns,
+        ))
+        self.assertTrue('resolver_category(&backend_resolver.stdout)' in local_dns)
+        collision_dns = source[source.index('network_isolation_collision_dns"'):source.index('network_isolation_collision_http"')]
+        self.assertEqual(len(re.findall(r'"edge-sentinel\.",\s*EMBEDDED_DNS_SERVER,', collision_dns)), 2)
+        self.assertTrue('nslookup_has_only_exact_named_a(&edge_collision.stdout, "edge-sentinel", edge_ip)' in collision_dns)
+        self.assertTrue('nslookup_has_only_exact_named_a(' in collision_dns)
+        self.assertTrue('backend_canary_ip,' in collision_dns)
+        self.assertTrue('DOCKERLENS_NATIVE_COLLISION_DNS_DIAG: peer=edge' in collision_dns)
+        self.assertTrue('DOCKERLENS_NATIVE_COLLISION_DNS_DIAG: peer=backend' in collision_dns)
+        self.assertIsNotNone(re.search(r'assert!\(\s*edge_exact', collision_dns))
+        self.assertIsNotNone(re.search(r'assert!\(\s*backend_exact', collision_dns))
+        edge_http = source[source.index('network_isolation_edge_http"'):source.index('network_isolation_local_dns"')]
+        local_http = source[source.index('network_isolation_local_http"'):source.index('network_isolation_collision_dns"')]
+        collision_http = source[source.index('network_isolation_collision_http"'):source.index('network_isolation_foreign_route"')]
+        self.assertTrue('"http://edge-sentinel:8080/"' in edge_http)
+        self.assertTrue('"http://backend-app:8080/"' in local_http)
+        self.assertEqual(collision_http.count('"http://edge-sentinel:8080/"'), 2)
+        self.assertTrue('b"edge-canary"' in collision_http)
+        self.assertTrue('b"backend-canary"' in collision_http)
+        self.assertTrue('canonical_inspected_container_id(&edge_only_body)' in source)
+        self.assertTrue('canonical_inspected_container_id(&isolated)' in source)
+        self.assertIsNotNone(re.search(r'assert!\(\s*edge_id != backend_id', source))
+        self.assertIsNotNone(re.search(r'assert!\(\s*edge_ip != backend_canary_ip', source))
+        self.assertTrue('network_isolation_cleanup_unverified' in source)
+        self.assertTrue('let backend_cleaned = backend_fixture.cleanup();' in source)
+        self.assertTrue('let edge_cleaned = edge_fixture.cleanup();' in source)
+        self.assertTrue('fn nslookup_exact_named_a_rejects_extra_foreign_and_malformed_answers()' in source)
+        self.assertIn('let edge_dns_outcome = wait_for_exact_dns_answer(', source)
+        self.assertIn('if category != "cli_lookup"', source)
+        self.assertIn('edge_dns_outcome.is_ok()', source)
+        self.assertIn('let edge_alias_present =', source)
+        self.assertIn('aliases.iter().any(|alias| alias == "edge-sentinel")', source)
+        self.assertTrue('nslookup_has_ipv4_answer(&backend_answer.stdout, "backend-app", backend_ip)' in local_dns)
+        self.assertIn("fn nslookup_ipv4_answer_requires_exact_named_address_not_prefix_or_resolver()", source)
+        self.assertIn('edge_only_body["State"]["Running"] != true', source)
+        self.assertIn("fn edge_dns_failure_categories_are_closed_and_value_free()", source)
+        self.assertIn("fn exact_dns_readiness_retries_only_transient_lookup_with_finite_budget()", source)
+        self.assertIn("const LIMIT: usize = 8192;", source)
+        self.assertIn("let stdout_reader = std::thread::spawn", source)
+        self.assertIn("let stderr_reader = std::thread::spawn", source)
+        self.assertIn('private_docker_command("8")', source)
+        self.assertIn('api_with_timeout("GET", path, None, "3")', source)
+        self.assertLess(source.index("match named_dns_answer_category"),
+                        source.index('if message.contains("can\'t resolve")'))
+        self.assertIn("mixed wrong answer must not be retried", source)
+        failure = source.index('if let Err(category) = edge_dns_outcome')
+        self.assertLess(failure, source.index('diagnose_edge_dns(&run_id', failure))
+        self.assertLess(source.index('diagnose_edge_dns(&run_id', failure),
+                        source.index('edge_dns_outcome.is_ok()', failure))
+        self.assertIsNotNone(re.search(
+            r'"--name",\s*&peer,\s*"--network",\s*edge,\s*image,\s*"sleep",\s*"120"',
+            source,
+        ))
+        self.assertIsNotNone(re.search(
+            r'api_with_timeout_and_cap\("GET",\s*&path,\s*None,\s*"3",\s*Some\(1024 \* 1024\)\)',
+            source,
+        ))
+        self.assertTrue('NATIVE_NETWORK_TEST_DEADLINE_EPOCH' in source)
+        self.assertTrue('DNS_CLI_HARD_LIMIT_SECS' in source)
+        self.assertTrue('command.args(["--kill-after=1", seconds])' in source)
+        self.assertIn('networks.len() == 1 && networks.contains_key(edge)', source)
+        self.assertIn('summary.cleanup = if guard.cleanup()', source)
+
+    def test_dns_diagnostic_summary_is_closed_and_surfaced_separately(self) -> None:
+        valid = ("DOCKERLENS_NATIVE_DNS_DIAG: peer=ready resolver=embedded_search "
+                 "default_a=fail explicit_a=pass dotted_a=pass name_http=pass "
+                 "ip_http=pass edge_app=pass cleanup=pass")
+        invalid = ("DOCKERLENS_NATIVE_DNS_DIAG: peer=ready resolver=protected-secret "
+                   "default_a=pass explicit_a=pass dotted_a=pass name_http=pass "
+                   "ip_http=pass edge_app=pass cleanup=pass")
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_network_tests::live_network_render_matches_engine: test'
+else
+  [[ ${NATIVE_NETWORK_TEST_DEADLINE_EPOCH:-} =~ ^[0-9]+$ ]] || exit 24
+  remaining=$((NATIVE_NETWORK_TEST_DEADLINE_EPOCH - $(date +%s)))
+  (( remaining >= 170 && remaining <= 180 )) || exit 24
+  echo 'protected native response' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: network_isolation_edge_dns_readiness_exhausted' >&2
+  printf '%s\n' "$TEST_DIAG" >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            for supplied, accepted in ((valid, True), (invalid, False),
+                                       (valid + " raw=protected-secret", False)):
+                with self.subTest(accepted=accepted, supplied=supplied):
+                    env["TEST_DIAG"] = supplied
+                    result = subprocess.run(
+                        [str(ROOT / "scripts/run-exact-native-test.sh"), "native_network",
+                         "live_network_render_matches_engine"],
+                        env=env, capture_output=True, text=True, timeout=15, check=False,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(valid in result.stderr, accepted)
+                    self.assertIn("network_isolation_edge_dns_readiness_exhausted", result.stderr)
+                    self.assertNotIn("protected-secret", result.stdout + result.stderr)
+                    self.assertNotIn("protected native response", result.stdout + result.stderr)
+
+    def test_collision_dns_diagnostic_is_closed_and_keeps_failure(self) -> None:
+        valid = ("DOCKERLENS_NATIVE_COLLISION_DNS_DIAG: peer=backend category=cli_unclassified "
+                 "exit=other response=no_error_no_a")
+        invalid = ("DOCKERLENS_NATIVE_COLLISION_DNS_DIAG: peer=protected-secret category=cli_unclassified "
+                   "exit=other response=no_error_no_a")
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_network_tests::live_network_render_matches_engine: test'
+else
+  echo 'protected native response' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: network_isolation_collision_dns' >&2
+  printf '%s\n' "$TEST_DIAG" >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            for supplied, accepted in ((valid, True), (invalid, False),
+                                       (valid + " raw=protected-secret", False)):
+                with self.subTest(accepted=accepted, supplied=supplied):
+                    env["TEST_DIAG"] = supplied
+                    result = subprocess.run(
+                        [str(ROOT / "scripts/run-exact-native-test.sh"), "native_network",
+                         "live_network_render_matches_engine"],
+                        env=env, capture_output=True, text=True, timeout=15, check=False,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(valid in result.stderr, accepted)
+                    self.assertIn("network_isolation_collision_dns", result.stderr)
+                    self.assertNotIn("protected-secret", result.stdout + result.stderr)
+                    self.assertNotIn("protected native response", result.stdout + result.stderr)
+
+    def test_network_probe_is_exact_and_precedes_manifest_emission(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
+        selected = '"$(dirname "$0")/run-exact-native-test.sh" native_network live_network_render_matches_engine'
+        target = '"$(dirname "$0")/run-exact-native-test.sh" native_target live_target_render_matches_engine'
+        manifest = 'python3 "$script_dir/native-evidence.py"'
+        self.assertEqual(source.count(selected), 1)
+        self.assertLess(source.index(target), source.index(selected))
+        self.assertLess(source.index(selected), source.index(manifest))
+        self.assertIn('"$NATIVE_NETWORK_PROBES_PATH"', source)
+
+    def test_network_failure_marker_is_closed_and_private(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_network_tests::live_network_render_matches_engine: test'
+else
+  echo 'protected native response' >&2
+  echo "DOCKERLENS_NATIVE_CHECK: network_isolation_$TEST_MARKER" >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: network_private' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            for marker in (
+                "edge_fixture_exited", "edge_alias_missing", "edge_dns",
+                "edge_dns_fixture_exited", "edge_dns_readiness_exhausted",
+                "edge_dns_output_limit",
+                "edge_dns_cli_timeout", "edge_dns_cli_resolver", "edge_dns_cli_lookup",
+                "edge_dns_cli_docker", "edge_dns_cli_exec",
+                "edge_dns_cli_answer_present", "edge_dns_cli_unclassified",
+                "edge_dns_answer_missing", "edge_dns_answer_wrong_ip",
+                "edge_dns_answer_malformed", "edge_dns_answer_inconsistent",
+                "edge_dns_alias_missing", "edge_http", "backend_alias_missing",
+                "local_dns", "local_http", "collision_dns", "collision_http",
+                "foreign_route", "cleanup_unverified",
+            ):
+                with self.subTest(marker=marker):
+                    env["TEST_MARKER"] = marker
+                    result = subprocess.run(
+                        [str(ROOT / "scripts/run-exact-native-test.sh"), "native_network",
+                         "live_network_render_matches_engine"],
+                        env=env, capture_output=True, text=True, timeout=15, check=False,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(f"DOCKERLENS_NATIVE_CHECK: network_isolation_{marker}",
+                                  result.stderr)
+                    self.assertNotIn("private", result.stdout + result.stderr)
+
     def test_source_probe_is_exact_and_precedes_manifest_emission(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
         selected = '"$(dirname "$0")/run-exact-native-test.sh" native_selection live_native_selection_and_source_observations'

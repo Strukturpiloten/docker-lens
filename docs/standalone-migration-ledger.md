@@ -12,7 +12,8 @@ DockerLens #29 now has typed bridge creation, application-default identity,
 external-reference prerequisites, independent per-container aliases and
 addresses, and ordered secondary connect requests. These are inert target
 contracts only. The historical four-profile catalog still admits no new
-network shape; #31's independent native evidence and BoxFerry's six-scenario
+network shape; #31's native network harness extension still requires genuine
+passing exact-lane evidence and independent review, and BoxFerry's six-scenario
 consumer checks remain required before a full migration claim.
 
 The following authored topology anchors are read from BoxFerry's

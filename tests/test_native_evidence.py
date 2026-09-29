@@ -32,6 +32,14 @@ SOURCE_PROBES = [
     "MultipleHostIpBindingsOracle", "MountEnvironmentOracle",
     "HealthRestartOracle", "SelectedFieldOrigins",
 ]
+NETWORK_PROBES = [
+    "ExternalNetworkReference", "InternalBridgeNetworkCreate", "Ipv6BridgeNetworkCreate",
+    "NetworkIpamV4", "NetworkIpamV6", "NetworkIpamGateway", "NetworkIpamRange",
+    "NetworkIpamAuxiliary", "NetworkIpamDefaultDriver", "NetworkBridgeMtu",
+    "NetworkBridgeIcc", "NetworkBridgeMasquerade", "NetworkBridgeHostBindingIp",
+    "NetworkCreateLabels", "NetworkPrimaryAliases", "NetworkSecondaryAliases",
+    "NetworkStaticIpv4", "NetworkStaticIpv6", "NetworkSecondaryConnect",
+]
 VOLUME_PROBES = [
     "ExistingVolumePrerequisite", "ExistingVolumeTargetIdentity",
     "ExistingVolumeReadOnlyData", "ExistingVolumeReadWriteData",
@@ -58,6 +66,7 @@ class NativeEvidenceTests(unittest.TestCase):
                  lane: str = "upstream-rootful", mode: str = "rootful",
                  package: str = "", shapes: dict | None = None,
                  source_probes: list[str] | None = None,
+                 network_probes: list[str] | None = None,
                  volume_probes: object = None) -> tuple[subprocess.CompletedProcess[str], Path]:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -65,14 +74,17 @@ class NativeEvidenceTests(unittest.TestCase):
         version_path = root / "version.json"
         shapes_path = root / "shapes.json"
         source_path = root / "source.json"
+        network_path = root / "network.json"
         volume_path = root / "volume.json"
         destination = root / "out" / f"{lane}.json"
         version_path.write_text(json.dumps(version), encoding="utf-8")
         shapes_path.write_text(json.dumps(SHAPES if shapes is None else shapes), encoding="utf-8")
         source_path.write_text(json.dumps(SOURCE_PROBES if source_probes is None else source_probes), encoding="utf-8")
+        network_path.write_text(json.dumps(NETWORK_PROBES if network_probes is None else network_probes), encoding="utf-8")
         volume_path.write_text(json.dumps(VOLUME_PROBES if volume_probes is None else volume_probes), encoding="utf-8")
         result = subprocess.run(
-            ["python3", str(SCRIPT), str(version_path), str(shapes_path), str(source_path), str(volume_path), str(destination),
+            ["python3", str(SCRIPT), str(version_path), str(shapes_path), str(source_path),
+             str(network_path), str(volume_path), str(destination),
              lane, image, mode, package, sha],
             capture_output=True, text=True, check=False,
         )
@@ -96,6 +108,9 @@ class NativeEvidenceTests(unittest.TestCase):
         self.assertEqual(set(evidence["capability_outcome"].values()), {"available"})
         self.assertEqual(evidence["admitted_shapes"], SHAPES)
         self.assertEqual(evidence["source_probes"], SOURCE_PROBES)
+        self.assertEqual(evidence["network_probes"], NETWORK_PROBES)
+        self.assertTrue(set(NETWORK_PROBES).isdisjoint(
+            shape for values in evidence["admitted_shapes"].values() for shape in values))
         self.assertEqual(evidence["volume_probes"], VOLUME_PROBES)
         self.assertNotIn("protected-secret", path.read_text(encoding="utf-8"))
 
@@ -165,6 +180,16 @@ class NativeEvidenceTests(unittest.TestCase):
                 self.assertFalse(path.exists())
                 self.assertNotIn("private-canary", result.stdout + result.stderr)
 
+    def test_network_probes_are_exact_closed_non_admission_evidence(self) -> None:
+        version = {"Version": "29.8.1", "ApiVersion": "1.56", "MinAPIVersion": "1.44"}
+        for probes in (NETWORK_PROBES[:-1], NETWORK_PROBES + ["private-canary"],
+                       NETWORK_PROBES[:-1] + [NETWORK_PROBES[0]]):
+            with self.subTest(probes=probes):
+                result, path = self.run_emit(version, network_probes=probes)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(path.exists())
+                self.assertNotIn("private-canary", result.stdout + result.stderr)
+
     def test_volume_probes_are_exact_closed_non_admission_evidence(self) -> None:
         version = {"Version": "29.8.1", "ApiVersion": "1.56", "MinAPIVersion": "1.44"}
         for probes in (VOLUME_PROBES[:-1], VOLUME_PROBES + ["private-canary"],
@@ -183,8 +208,11 @@ class NativeEvidenceTests(unittest.TestCase):
         root = destination.parent.parent
         probe_path = root / "volume.json"
         command = ["python3", str(SCRIPT), str(root / "version.json"), str(root / "shapes.json"),
-                   str(root / "source.json"), str(probe_path), str(destination),
+                   str(root / "source.json"), str(root / "network.json"),
+                   str(probe_path), str(destination),
                    "upstream-rootful", IMAGE, "rootful", "", SHA]
+        valid = subprocess.run(command, capture_output=True, text=True, check=False)
+        self.assertEqual(valid.returncode, 0, valid.stderr)
         destination.unlink()
         probe_path.write_bytes(b"[" + b"x" * 4096 + b"]")
         oversized = subprocess.run(command, capture_output=True, text=True, check=False)

@@ -13,17 +13,54 @@ the existing container and graph tests. These offline checks preserve the
 The typed-network offline cases exercise create/external separation, multiple
 attachment request order, alias and IPAM encoding, redacted prerequisites,
 invalid topology, missing capabilities and the API floor. The native #31
-negative cases must include overlapping IPAM pools, subnet-base and broadcast
+negative cases include overlapping IPAM pools, subnet-base and broadcast
 gateway/auxiliary/static addresses, and static-address collisions. IPv4 `/31`
-and `/32` bridge parent subnets remain an explicit planning rejection until #31 tests
-their precise Engine behavior on each claimed API and daemon mode.
-The native #31
-extension must independently create and inspect both networks, connect the
-second endpoint, probe alias DNS and traffic, prove internal isolation and
-non-membership, and verify that the external network was never created by the
-target artifact on every exact rootful/rootless lane. The existing native
-request allowlist needs an explicit `networks/{id}/connect` branch before
-those requests can be exercised; no new shape is admitted by offline checks.
+and `/32` bridge parent subnets remain an explicit planning rejection; this
+extension does not establish their Engine behavior on any API or daemon mode.
+On a failed edge-side DNS positive, the network test may create one exact
+run-owned diagnostic peer. Its closed summary distinguishes resolver setup,
+default/explicit/dotted A lookups, named/direct-IP HTTP and cleanup without
+exposing daemon output. Optional probes respect the exact runner's 180-second
+deadline, reserve cleanup/reporting time and cannot turn the failed positive
+into a pass. A timeout before the failure branch may prevent any summary;
+SIGKILL or host failure can prevent cleanup. No retry or diagnostic result
+establishes compatibility without the original assertion passing.
+
+The native #31 network test uses an independent Docker CLI bridge oracle,
+direct Engine GETs, an externally seeded bridge, and test-only application of
+the inert renderer requests. It checks two rendered network creates, ordered
+secondary connects, per-network alias DNS and traffic, static IPv6 peer traffic,
+bridge-interface MTU, and the unchanged external network identity. Isolation
+uses separate backend-only and edge-only CLI peers: each positive local DNS
+control explicitly queries the IPv4 A record and checks an exact parsed answer
+for the inspected endpoint IPv4, excluding the resolver's address and partial
+matches, before local HTTP succeeds. Each DNS oracle verifies the peer's embedded
+resolver configuration and queries `127.0.0.11` explicitly. The isolation
+fixtures are distinct, running, single-network peers with canonical inspected
+IDs and distinct IPv4 addresses. Both carry the literal `edge-sentinel` alias;
+from each peer, an absolute A query to the embedded resolver must contain the
+complete named answer set of exactly that peer's inspected IP, with no extra,
+foreign, malformed, or truncated answer. Named HTTP to the shared alias must
+return distinct local canary bodies, and backend-to-edge direct-IP HTTP must
+still fail. Ordinary unqualified named HTTP for rendered app aliases remains
+a separate positive traffic check. This proves collision-scoped local alias
+selection and route isolation, not unshadowed `NXDOMAIN` or all DNS-forwarding
+behavior. Run `36504139504` observed Debian rootful `cli_resolver/other/other`
+for an unshadowed foreign-name query on the internal backend. That closed
+result did not prove either forwarding or an alias leak, and no timeout is
+accepted as isolation success. Collision failures expose only fixed-category
+diagnostics from bounded CLI output. A dual-homed app's edge IP is not an
+isolation oracle. Closed DNS and HTTP markers distinguish each stage. The
+executor allows only the run-owned network and
+container names, including exact `networks/{id}/connect` paths. The separate closed
+`network_probes` manifest field contains the nineteen checked network renderer
+shapes only after the exact ignored test passes; it does not extend
+`admitted_shapes`, catalog capabilities, or a compatibility claim. IPAM fields,
+labels, and bridge ICC, masquerade and host-binding options have request/inspect
+checks, not independent kernel-behavior proof. ICC is tested only as `true` and
+masquerade only as `false`; later positive admission of either boolean type
+requires both values on each claimed lane. IPv4 `/31` and `/32` bridge parents
+remain rejected by planning, independent of any Engine acceptance behavior.
 The typed-container offline regressions cover exact grouped `PortBindings`
 and `ExposedPorts` bodies, host-IP privacy, wildcard conflicts, ephemeral
 allocation requests, command/entrypoint inheritance and clearing, shell and

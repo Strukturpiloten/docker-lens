@@ -54,6 +54,8 @@ mod reviewed_catalog;
 // Only the crate's own test build can construct observed positive capabilities.
 // The ignored live test runs by exact name in the isolated native harness.
 #[cfg(test)]
+mod native_network_tests;
+#[cfg(test)]
 mod native_target_tests;
 #[cfg(test)]
 mod native_volume_tests;
