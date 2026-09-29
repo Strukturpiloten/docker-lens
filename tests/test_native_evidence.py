@@ -74,6 +74,10 @@ DEBIAN_CONTAINER = {
                  if shape not in {item["shape"] for item in INTERVAL_NEGATIVES}],
     "expected_negative": INTERVAL_NEGATIVES,
 }
+VOLUME_LABEL_PROBES = [
+    "VolumeCreateLabels", "VolumeLabelInspect",
+    "VolumeLabelPersistence", "VolumeLabelOwnershipCleanup",
+]
 
 
 class NativeEvidenceTests(unittest.TestCase):
@@ -105,6 +109,7 @@ class NativeEvidenceTests(unittest.TestCase):
                  source_probes: list[str] | None = None,
                  network_probes: list[str] | None = None,
                  volume_probes: object = None,
+                 volume_label_probes: object = None,
                  container_probes: object | None = None,
                  write_container: bool = True) -> tuple[subprocess.CompletedProcess[str], Path]:
         temporary = tempfile.TemporaryDirectory()
@@ -116,6 +121,7 @@ class NativeEvidenceTests(unittest.TestCase):
         network_path = root / "network.json"
         volume_path = root / "volume.json"
         container_path = root / "container.json"
+        volume_label_path = root / "volume-label.json"
         destination = root / "out" / f"{lane}.json"
         version_path.write_text(json.dumps(version), encoding="utf-8")
         shapes_path.write_text(json.dumps(SHAPES if shapes is None else shapes), encoding="utf-8")
@@ -128,9 +134,10 @@ class NativeEvidenceTests(unittest.TestCase):
         if write_container:
             container_path.write_text(container_probes if isinstance(container_probes, str)
                                       else json.dumps(container_probes), encoding="utf-8")
+        volume_label_path.write_text(json.dumps(VOLUME_LABEL_PROBES if volume_label_probes is None else volume_label_probes), encoding="utf-8")
         result = subprocess.run(
             ["python3", str(SCRIPT), str(version_path), str(shapes_path), str(source_path),
-             str(network_path), str(volume_path), str(container_path), str(destination),
+             str(network_path), str(volume_path), str(container_path), str(volume_label_path), str(destination),
              lane, image, mode, package, sha],
             capture_output=True, text=True, check=False,
         )
@@ -159,6 +166,7 @@ class NativeEvidenceTests(unittest.TestCase):
         self.assertTrue(set(NETWORK_PROBES).isdisjoint(
             shape for values in evidence["admitted_shapes"].values() for shape in values))
         self.assertEqual(evidence["volume_probes"], VOLUME_PROBES)
+        self.assertEqual(evidence["volume_label_probes"], VOLUME_LABEL_PROBES)
         self.assertNotIn("protected-secret", path.read_text(encoding="utf-8"))
 
     def test_rejects_unreviewed_identity_and_unacquirable_api(self) -> None:
@@ -324,7 +332,7 @@ class NativeEvidenceTests(unittest.TestCase):
         probe_path = root / "volume.json"
         command = ["python3", str(SCRIPT), str(root / "version.json"), str(root / "shapes.json"),
                    str(root / "source.json"), str(root / "network.json"),
-                   str(probe_path), str(root / "container.json"), str(destination),
+                   str(probe_path), str(root / "container.json"), str(root / "volume-label.json"), str(destination),
                    "upstream-rootful", IMAGE, "rootful", "", SHA]
         valid = subprocess.run(command, capture_output=True, text=True, check=False)
         self.assertEqual(valid.returncode, 0, valid.stderr)
@@ -350,7 +358,7 @@ class NativeEvidenceTests(unittest.TestCase):
         probe_path = root / "container.json"
         command = ["python3", str(SCRIPT), str(root / "version.json"), str(root / "shapes.json"),
                    str(root / "source.json"), str(root / "network.json"),
-                   str(root / "volume.json"), str(probe_path), str(destination),
+                   str(root / "volume.json"), str(probe_path), str(root / "volume-label.json"), str(destination),
                    "upstream-rootful", IMAGE, "rootful", "", SHA]
         valid = subprocess.run(command, capture_output=True, text=True, check=False)
         self.assertEqual(valid.returncode, 0, valid.stderr)
@@ -372,6 +380,41 @@ class NativeEvidenceTests(unittest.TestCase):
         self.assertNotEqual(directory.returncode, 0)
         self.assertFalse(destination.exists())
         self.assertNotIn("private", oversized.stdout + oversized.stderr + symlink.stdout + symlink.stderr + directory.stdout + directory.stderr)
+
+    def test_volume_label_probes_are_exact_closed_non_admission_evidence(self) -> None:
+        version = {"Version": "29.8.1", "ApiVersion": "1.56", "MinAPIVersion": "1.44"}
+        for probes in (VOLUME_LABEL_PROBES[:-1], VOLUME_LABEL_PROBES + ["private-canary"],
+                       VOLUME_LABEL_PROBES[:-1] + [VOLUME_LABEL_PROBES[0]],
+                       {"private-canary": VOLUME_LABEL_PROBES}):
+            with self.subTest(probes=probes):
+                result, path = self.run_emit(version, volume_label_probes=probes)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(path.exists())
+                self.assertNotIn("private-canary", result.stdout + result.stderr)
+
+    def test_volume_label_probe_input_must_be_bounded_regular_json(self) -> None:
+        version = {"Version": "29.8.1", "ApiVersion": "1.56", "MinAPIVersion": "1.44"}
+        result, destination = self.run_emit(version)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        root = destination.parent.parent
+        probe_path = root / "volume-label.json"
+        command = ["python3", str(SCRIPT), str(root / "version.json"), str(root / "shapes.json"),
+                   str(root / "source.json"), str(root / "network.json"),
+                   str(root / "volume.json"), str(root / "container.json"), str(probe_path), str(destination),
+                   "upstream-rootful", IMAGE, "rootful", "", SHA]
+        valid = subprocess.run(command, capture_output=True, text=True, check=False)
+        self.assertEqual(valid.returncode, 0, valid.stderr)
+        destination.unlink()
+        probe_path.write_bytes(b"[" + b"x" * 4096 + b"]")
+        oversized = subprocess.run(command, capture_output=True, text=True, check=False)
+        self.assertNotEqual(oversized.returncode, 0)
+        self.assertFalse(destination.exists())
+        probe_path.unlink()
+        probe_path.symlink_to(root / "volume.json")
+        symlink = subprocess.run(command, capture_output=True, text=True, check=False)
+        self.assertNotEqual(symlink.returncode, 0)
+        self.assertFalse(destination.exists())
+        self.assertNotIn("private", oversized.stdout + oversized.stderr + symlink.stdout + symlink.stderr)
 
 
 if __name__ == "__main__":

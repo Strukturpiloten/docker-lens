@@ -82,6 +82,12 @@ or ephemeral allocation request. Values remain protected in Debug and
 diagnostics. The renderer still produces only inert request data.
 These modules define independent ownership boundaries for later native work.
 
+Created named volumes retain bounded protected authored labels and render a
+`Labels` object only when nonempty. The separate `VolumeLabels` capability
+gates that request branch; historical unlabelled volume evidence does not
+admit it. External-volume prerequisites have no label field and never emit a
+volume-create or relabel request. Neither branch applies requests or moves data.
+
 ## Decoder evidence boundary
 
 `decode_capture` accepts only the closed acquisition request set. It checks

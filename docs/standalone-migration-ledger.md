@@ -58,6 +58,13 @@ persistence evidence before admission; BoxFerry #343 must make an explicit
 promotion or loss decision and verify the destination prerequisite. The target
 checkpoint does not transfer data or close the migration issue.
 
+DockerLens #49 adds bounded protected labels to created named-volume intent,
+with a separate `VolumeLabels` capability and exact `Labels` create body.
+Unlabelled requests remain byte-identical and external-volume prerequisites
+cannot carry or mutate labels. All six BoxFerry fixtures author volume labels;
+their typed mapping, four-lane native proof and consumer rehearsal remain
+required before this shape can be admitted or handed off for one planned release.
+
 | #30 target branch | Typed request contract | Remaining proof / owner |
 | --- | --- | --- |
 | Publication | `PortPublication` has exposed-only or ordered `HostBinding` values; each binding distinguishes omitted/explicit IPv4 or IPv6 `HostIp` and fixed/ephemeral `HostPort`. Duplicate or wildcard-overlapping fixed bindings fail before planning. | #31 must inspect resulting fixed/repeated/dynamic bindings, loopback isolation and IPv6 behavior per exact lane; #343 must retain authored address versus observed assigned port. |

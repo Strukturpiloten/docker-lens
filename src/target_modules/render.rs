@@ -246,9 +246,23 @@ impl Renderer for DockerApiRenderer {
                         None
                     }
                 },
-                TargetResource::Volume { identity, .. } => {
+                TargetResource::Volume {
+                    identity, labels, ..
+                } => {
                     let mut body = String::from("{\"Name\":");
                     json_string(&mut body, identity.bytes());
+                    if !labels.is_empty() {
+                        body.push_str(",\"Labels\":{");
+                        for (index, label) in labels.iter().enumerate() {
+                            if index != 0 {
+                                body.push(',');
+                            }
+                            json_string(&mut body, label.key());
+                            body.push(':');
+                            json_string(&mut body, label.value());
+                        }
+                        body.push('}');
+                    }
                     body.push('}');
                     Some((format!("{prefix}volumes/create"), body))
                 }

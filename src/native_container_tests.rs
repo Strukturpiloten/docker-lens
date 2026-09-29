@@ -10,6 +10,76 @@ use std::process::{Command, Stdio};
 
 const NATIVE_CLI_STREAM_LIMIT: usize = 8192;
 
+fn cli_failure_exit(status: std::process::ExitStatus) -> &'static str {
+    match status.code() {
+        Some(124) => "timeout",
+        Some(137) | None => "signal",
+        _ => "other",
+    }
+}
+
+fn cli_failure_stderr(stderr: &[u8]) -> &'static str {
+    let message = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+    if message.contains("connection refused") {
+        "connection_refused"
+    } else if message.contains("address family not supported") {
+        "address_family"
+    } else if message.contains("cannot assign requested address")
+        || message.contains("invalid address")
+        || message.contains("bad address")
+    {
+        "invalid_address"
+    } else if message.contains("no route to host") || message.contains("network is unreachable") {
+        "no_route"
+    } else if message.contains("permission denied") || message.contains("operation not permitted") {
+        "permission"
+    } else {
+        "unknown"
+    }
+}
+
+fn api_status_category(status: u16) -> &'static str {
+    match status {
+        400 | 422 => "invalid_request",
+        404 => "not_found",
+        409 => "conflict",
+        500..=599 => "server",
+        _ => "other",
+    }
+}
+
+fn assert_native_api_status(actual: u16, expected: u16) {
+    if actual != expected {
+        eprintln!(
+            "DOCKERLENS_NATIVE_API_DIAG: status={}",
+            api_status_category(actual)
+        );
+    }
+    assert!(actual == expected, "closed native API status mismatch");
+}
+
+#[test]
+fn native_failure_categories_remain_closed_and_private() {
+    for (private, expected) in [
+        ("connection refused protected-secret", "connection_refused"),
+        (
+            "address family not supported protected-secret",
+            "address_family",
+        ),
+        (
+            "cannot assign requested address protected-secret",
+            "invalid_address",
+        ),
+        ("no route to host protected-secret", "no_route"),
+        ("permission denied protected-secret", "permission"),
+        ("protected-secret", "unknown"),
+    ] {
+        assert_eq!(cli_failure_stderr(private.as_bytes()), expected);
+    }
+    assert_eq!(api_status_category(409), "conflict");
+    assert_eq!(api_status_category(500), "server");
+}
+
 fn bounded_native_cli_stream<R: Read>(mut reader: R) -> (Vec<u8>, bool) {
     let mut bytes = Vec::new();
     let mut exceeded = false;
@@ -416,6 +486,14 @@ impl NativeRun {
         let output = child
             .wait_with_output()
             .expect("bounded Engine API request");
+        if !output.status.success() {
+            let category = if output.status.code() == Some(28) {
+                "timeout"
+            } else {
+                "other"
+            };
+            eprintln!("DOCKERLENS_NATIVE_API_DIAG: transport={category}");
+        }
         assert!(
             output.status.success(),
             "bounded Engine API transport failed"
@@ -449,6 +527,13 @@ impl NativeRun {
         ]);
         command.args(args);
         let output = bounded_native_cli_output(&mut command, None);
+        if !output.status.success() {
+            eprintln!(
+                "DOCKERLENS_NATIVE_CLI_DIAG: exit={} stderr={}",
+                cli_failure_exit(output.status),
+                cli_failure_stderr(&output.stderr)
+            );
+        }
         assert!(output.status.success(), "independent CLI oracle failed");
         String::from_utf8(output.stdout).expect("CLI output UTF-8")
     }
@@ -472,6 +557,13 @@ impl NativeRun {
         ]);
         command.args(args);
         let output = bounded_native_cli_output(&mut command, Some(input));
+        if !output.status.success() {
+            eprintln!(
+                "DOCKERLENS_NATIVE_CLI_DIAG: exit={} stderr={}",
+                cli_failure_exit(output.status),
+                cli_failure_stderr(&output.stderr)
+            );
+        }
         assert!(
             output.status.success(),
             "independent derived image build failed"
@@ -506,6 +598,7 @@ impl NativeRun {
         let id = self.cli(&args).trim().to_owned();
         assert_eq!(id.len(), 64, "CLI-created container ID");
         self.created.push((name, id.clone()));
+        mark_port_stage(suffix, "cli_inspect");
         self.inspect(&id)
     }
 
@@ -515,7 +608,7 @@ impl NativeRun {
             &format!("/v{}/containers/{id}/json", self.api_version),
             None,
         );
-        assert_eq!(status, 200, "task-owned native container inspect");
+        assert_native_api_status(status, 200);
         serde_json::from_slice(&response).expect("private Engine inspect JSON")
     }
 
@@ -527,23 +620,24 @@ impl NativeRun {
         expected_body: Value,
     ) -> (String, Value, Value) {
         let name = self.name(suffix);
+        mark_port_stage(suffix, "render");
         let body = self.render_only(suffix, container, required_capabilities);
+        mark_port_stage(suffix, "render_body");
         assert_eq!(
             body, expected_body,
             "closed independently authored create body"
         );
         let expected_path = format!("/v{}/containers/create?name={name}", self.api_version);
+        mark_port_stage(suffix, "api_create");
         let (status, response) = self.api("POST", &expected_path, Some(&body));
-        assert_eq!(
-            status, 201,
-            "Engine accepts independently checked inert request"
-        );
+        assert_native_api_status(status, 201);
         let created: Value = serde_json::from_slice(&response).expect("private create response");
         let id = created["Id"]
             .as_str()
             .expect("created container ID")
             .to_owned();
         self.created.push((name, id.clone()));
+        mark_port_stage(suffix, "api_inspect");
         let inspected = self.inspect(&id);
         (id, body, inspected)
     }
@@ -803,9 +897,52 @@ fn assert_port_binding(inspected: &Value, key: &str, host_ip: &str, host_port: &
     );
 }
 
+// Only fixed, test-authored stage names cross the native output boundary.
+fn mark_port_stage(suffix: &str, phase: &'static str) {
+    let group = match suffix {
+        "port-oracle" => "fixed_ipv4_oracle",
+        "port-rendered" => "fixed_ipv4_rendered",
+        "ipv6-oracle" => "fixed_ipv6_oracle",
+        "ipv6-rendered" => "fixed_ipv6_rendered",
+        "ipv6-dynamic-oracle" => "dynamic_ipv6_oracle",
+        "ipv6-dynamic-rendered" => "dynamic_ipv6_rendered",
+        "multi-dynamic-oracle" => "repeated_dynamic_ipv4_oracle",
+        "multi-dynamic-rendered" => "repeated_dynamic_ipv4_rendered",
+        _ => return,
+    };
+    assert!(matches!(
+        phase,
+        "cli_create"
+            | "cli_inspect"
+            | "oracle_bindings"
+            | "oracle_cleanup"
+            | "oracle_start"
+            | "cli_http"
+            | "cli_http_secondary"
+            | "http_assert"
+            | "http_assert_secondary"
+            | "render"
+            | "render_body"
+            | "api_create"
+            | "api_inspect"
+            | "rendered_bindings"
+            | "api_start"
+            | "dynamic_binding"
+            | "dynamic_binding_secondary"
+            | "isolated_http"
+            | "isolated_assert"
+            | "udp_assignment"
+            | "udp_send"
+            | "udp_receive"
+            | "udp_assert"
+    ));
+    eprintln!("DOCKERLENS_NATIVE_CHECK: container_port_{group}_{phase}");
+}
+
 fn probe_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
     eprintln!("DOCKERLENS_NATIVE_CHECK: container_ports");
     let script = "printf native-tcp-canary >/tmp/index.html; httpd -f -p 8080 -h /tmp & nc -u -l -p 8081 > /tmp/udp-received & wait";
+    mark_port_stage("port-oracle", "cli_create");
     let oracle = run.cli_create(
         "port-oracle",
         &[
@@ -816,6 +953,7 @@ fn probe_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
         ],
         &["sh", "-c", script],
     );
+    mark_port_stage("port-oracle", "oracle_bindings");
     assert_port_binding(&oracle, "8080/tcp", "127.0.0.1", "18110");
     assert_port_binding(&oracle, "8080/tcp", "127.0.0.2", "18111");
     assert_eq!(oracle["Config"]["ExposedPorts"]["8082/tcp"], json!({}));
@@ -825,6 +963,7 @@ fn probe_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
             .is_none()
     );
     let oracle_id = oracle["Id"].as_str().unwrap().to_owned();
+    mark_port_stage("port-oracle", "oracle_cleanup");
     run.delete(&oracle_id);
 
     let mut container = bare_container(&run.image);
@@ -881,6 +1020,7 @@ fn probe_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
         ],
         expected_body,
     );
+    mark_port_stage("port-rendered", "rendered_bindings");
     assert_eq!(body["ExposedPorts"]["8082/tcp"], json!({}));
     assert_eq!(
         body["HostConfig"]["PortBindings"]["8080/tcp"],
@@ -903,12 +1043,14 @@ fn probe_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
             .get("8082/tcp")
             .is_none()
     );
+    mark_port_stage("port-rendered", "api_start");
     let (status, _) = run.api(
         "POST",
         &format!("/v{}/containers/{id}/start", run.api_version),
         None,
     );
-    assert_eq!(status, 204, "start port probe");
+    assert_native_api_status(status, 204);
+    mark_port_stage("port-rendered", "cli_http");
     let output = run.cli(&[
         "run".into(),
         "--rm".into(),
@@ -919,7 +1061,9 @@ fn probe_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
         "-qO-".into(),
         "http://127.0.0.1:18110/index.html".into(),
     ]);
+    mark_port_stage("port-rendered", "http_assert");
     assert_eq!(output, "native-tcp-canary");
+    mark_port_stage("port-rendered", "cli_http_secondary");
     let second = run.cli(&[
         "run".into(),
         "--rm".into(),
@@ -930,22 +1074,27 @@ fn probe_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
         "-qO-".into(),
         "http://127.0.0.2:18111/index.html".into(),
     ]);
+    mark_port_stage("port-rendered", "http_assert_secondary");
     assert_eq!(second, "native-tcp-canary");
+    mark_port_stage("port-rendered", "isolated_http");
     let isolated = run.cli(&[
         "run".into(), "--rm".into(), "--network".into(), "host".into(),
         run.image.clone(), "sh".into(), "-c".into(),
         "if wget -qO- -T 3 http://127.0.0.2:18110/index.html >/dev/null 2>&1; then printf reachable; else printf blocked; fi".into(),
     ]);
+    mark_port_stage("port-rendered", "isolated_assert");
     assert_eq!(
         isolated, "blocked",
         "127.0.0.1 publication must not widen to 127.0.0.2"
     );
+    mark_port_stage("port-rendered", "udp_assignment");
     let assigned = run.inspect(&id)["NetworkSettings"]["Ports"]["8081/udp"][0]["HostPort"]
         .as_str()
         .expect("runtime-assigned ephemeral UDP port")
         .to_owned();
     let assigned: u16 = assigned.parse().expect("numeric dynamic UDP port");
     assert!(assigned > 0);
+    mark_port_stage("port-rendered", "udp_send");
     run.cli(&[
         "run".into(),
         "--rm".into(),
@@ -956,6 +1105,7 @@ fn probe_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
         "-c".into(),
         format!("printf native-udp-canary | nc -u -w 1 127.0.0.1 {assigned}"),
     ]);
+    mark_port_stage("port-rendered", "udp_receive");
     let mut received = String::new();
     for _ in 0..10 {
         received = run.cli(&[
@@ -970,6 +1120,7 @@ fn probe_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
         }
         std::thread::sleep(std::time::Duration::from_secs(1));
     }
+    mark_port_stage("port-rendered", "udp_assert");
     assert_eq!(received, "native-udp-canary");
     record_many(
         evidence,
@@ -984,15 +1135,19 @@ fn probe_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
 
     eprintln!("DOCKERLENS_NATIVE_CHECK: container_ports_ipv6");
     let ipv6_script = "printf native-ipv6-canary >/tmp/index.html; httpd -f -p 8083 -h /tmp";
+    mark_port_stage("ipv6-oracle", "cli_create");
     let oracle = run.cli_create(
         "ipv6-oracle",
         &["--publish=[::1]:18112:8083/tcp".to_owned()],
         &["sh", "-c", ipv6_script],
     );
+    mark_port_stage("ipv6-oracle", "oracle_bindings");
     assert_port_binding(&oracle, "8083/tcp", "::1", "18112");
     let oracle_id = oracle["Id"].as_str().unwrap().to_owned();
+    mark_port_stage("ipv6-oracle", "oracle_start");
     start_container(run, &oracle_id);
-    assert_ipv6_traffic(run);
+    assert_ipv6_traffic(run, "ipv6-oracle");
+    mark_port_stage("ipv6-oracle", "oracle_cleanup");
     run.delete(&oracle_id);
     let mut container = bare_container(&run.image);
     container.command =
@@ -1026,6 +1181,7 @@ fn probe_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
         ],
         expected_body,
     );
+    mark_port_stage("ipv6-rendered", "rendered_bindings");
     assert_eq!(
         body["HostConfig"]["PortBindings"]["8083/tcp"],
         json!([
@@ -1033,17 +1189,19 @@ fn probe_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
         ])
     );
     assert_port_binding(&inspected, "8083/tcp", "::1", "18112");
+    mark_port_stage("ipv6-rendered", "api_start");
     let (status, _) = run.api(
         "POST",
         &format!("/v{}/containers/{id}/start", run.api_version),
         None,
     );
-    assert_eq!(status, 204, "start IPv6 publication probe");
-    assert_ipv6_traffic(run);
+    assert_native_api_status(status, 204);
+    assert_ipv6_traffic(run, "ipv6-rendered");
     evidence.positive("FixedIpv6HostPort");
 }
 
-fn assert_ipv6_traffic(run: &NativeRun) {
+fn assert_ipv6_traffic(run: &NativeRun, suffix: &str) {
+    mark_port_stage(suffix, "cli_http");
     let output = run.cli(&[
         "run".into(),
         "--rm".into(),
@@ -1054,10 +1212,20 @@ fn assert_ipv6_traffic(run: &NativeRun) {
         "-qO-".into(),
         "http://[::1]:18112/index.html".into(),
     ]);
+    mark_port_stage(suffix, "http_assert");
     assert_eq!(output, "native-ipv6-canary");
 }
 
-fn assert_dynamic_http(run: &NativeRun, id: &str, key: &str, host_ip: &str) {
+fn assert_dynamic_http(run: &NativeRun, id: &str, key: &str, host_ip: &str, suffix: &str) {
+    let secondary = host_ip == "127.0.0.2";
+    mark_port_stage(
+        suffix,
+        if secondary {
+            "dynamic_binding_secondary"
+        } else {
+            "dynamic_binding"
+        },
+    );
     let inspected = run.inspect(id);
     let binding = inspected["NetworkSettings"]["Ports"][key]
         .as_array()
@@ -1072,6 +1240,14 @@ fn assert_dynamic_http(run: &NativeRun, id: &str, key: &str, host_ip: &str) {
     } else {
         host_ip.to_owned()
     };
+    mark_port_stage(
+        suffix,
+        if secondary {
+            "cli_http_secondary"
+        } else {
+            "cli_http"
+        },
+    );
     let output = run.cli(&[
         "run".into(),
         "--rm".into(),
@@ -1082,21 +1258,38 @@ fn assert_dynamic_http(run: &NativeRun, id: &str, key: &str, host_ip: &str) {
         "-qO-".into(),
         format!("http://{address}:{port}/index.html"),
     ]);
+    mark_port_stage(
+        suffix,
+        if secondary {
+            "http_assert_secondary"
+        } else {
+            "http_assert"
+        },
+    );
     assert_eq!(output, "native-dynamic-canary");
 }
 
 fn probe_complementary_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
     eprintln!("DOCKERLENS_NATIVE_CHECK: container_ports_ipv6");
     let ipv6_script = "printf native-dynamic-canary >/tmp/index.html; httpd -f -p 8084 -h /tmp";
+    mark_port_stage("ipv6-dynamic-oracle", "cli_create");
     let ipv6_oracle = run.cli_create(
         "ipv6-dynamic-oracle",
         &["--publish=[::1]::8084/tcp".into()],
         &["sh", "-c", ipv6_script],
     );
+    mark_port_stage("ipv6-dynamic-oracle", "oracle_bindings");
     assert_port_binding(&ipv6_oracle, "8084/tcp", "::1", "");
     let ipv6_oracle_id = ipv6_oracle["Id"].as_str().unwrap().to_owned();
+    mark_port_stage("ipv6-dynamic-oracle", "oracle_start");
     start_container(run, &ipv6_oracle_id);
-    assert_dynamic_http(run, &ipv6_oracle_id, "8084/tcp", "::1");
+    assert_dynamic_http(
+        run,
+        &ipv6_oracle_id,
+        "8084/tcp",
+        "::1",
+        "ipv6-dynamic-oracle",
+    );
     let mut container = bare_container(&run.image);
     container.command =
         ImageCommand::Exec(vec![argument("sh"), argument("-c"), argument(ipv6_script)]);
@@ -1128,6 +1321,7 @@ fn probe_complementary_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) 
         ],
         expected,
     );
+    mark_port_stage("ipv6-dynamic-rendered", "rendered_bindings");
     assert_eq!(
         body["HostConfig"]["PortBindings"],
         ipv6_oracle["HostConfig"]["PortBindings"]
@@ -1136,12 +1330,14 @@ fn probe_complementary_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) 
         inspected["HostConfig"]["PortBindings"],
         ipv6_oracle["HostConfig"]["PortBindings"]
     );
+    mark_port_stage("ipv6-dynamic-rendered", "api_start");
     start_container(run, &id);
-    assert_dynamic_http(run, &id, "8084/tcp", "::1");
+    assert_dynamic_http(run, &id, "8084/tcp", "::1", "ipv6-dynamic-rendered");
     evidence.positive("EphemeralIpv6HostPort");
 
     eprintln!("DOCKERLENS_NATIVE_CHECK: container_ports");
     let multiple_script = "printf native-dynamic-canary >/tmp/index.html; httpd -f -p 8085 -h /tmp";
+    mark_port_stage("multi-dynamic-oracle", "cli_create");
     let multiple_oracle = run.cli_create(
         "multi-dynamic-oracle",
         &[
@@ -1150,13 +1346,21 @@ fn probe_complementary_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) 
         ],
         &["sh", "-c", multiple_script],
     );
+    mark_port_stage("multi-dynamic-oracle", "oracle_bindings");
     for ip in ["127.0.0.1", "127.0.0.2"] {
         assert_port_binding(&multiple_oracle, "8085/tcp", ip, "");
     }
     let multiple_oracle_id = multiple_oracle["Id"].as_str().unwrap().to_owned();
+    mark_port_stage("multi-dynamic-oracle", "oracle_start");
     start_container(run, &multiple_oracle_id);
     for ip in ["127.0.0.1", "127.0.0.2"] {
-        assert_dynamic_http(run, &multiple_oracle_id, "8085/tcp", ip);
+        assert_dynamic_http(
+            run,
+            &multiple_oracle_id,
+            "8085/tcp",
+            ip,
+            "multi-dynamic-oracle",
+        );
     }
     let mut container = bare_container(&run.image);
     container.command = ImageCommand::Exec(vec![
@@ -1199,6 +1403,7 @@ fn probe_complementary_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) 
         ],
         expected,
     );
+    mark_port_stage("multi-dynamic-rendered", "rendered_bindings");
     assert_eq!(
         body["HostConfig"]["PortBindings"],
         multiple_oracle["HostConfig"]["PortBindings"]
@@ -1207,9 +1412,10 @@ fn probe_complementary_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) 
         inspected["HostConfig"]["PortBindings"],
         multiple_oracle["HostConfig"]["PortBindings"]
     );
+    mark_port_stage("multi-dynamic-rendered", "api_start");
     start_container(run, &id);
     for ip in ["127.0.0.1", "127.0.0.2"] {
-        assert_dynamic_http(run, &id, "8085/tcp", ip);
+        assert_dynamic_http(run, &id, "8085/tcp", ip, "multi-dynamic-rendered");
     }
     evidence.positive("MultipleEphemeralPortBindings");
 }
@@ -1863,7 +2069,7 @@ fn start_container(run: &NativeRun, id: &str) {
         &format!("/v{}/containers/{id}/start", run.api_version),
         None,
     );
-    assert_eq!(status, 204, "task-owned probe container starts");
+    assert_native_api_status(status, 204);
 }
 
 fn start_and_wait(run: &NativeRun, id: &str) -> u32 {

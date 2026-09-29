@@ -7,7 +7,7 @@ if [[ $# != 2 || ! $1 =~ ^[a-z_]+$ || ! $2 =~ ^[a-z_]+$ ]]; then
 fi
 target=$1
 test_name=$2
-if [[ $target == native_target || $target == native_volume || $target == native_network || $target == native_container ]]; then
+if [[ $target == native_target || $target == native_volume || $target == native_network || $target == native_container || $target == native_volume_label ]]; then
   # Native target tests need crate-private, test-only capability claims.
   # It is a library unit test; no public constructor is exposed for the harness.
   cargo_target=(--lib)
@@ -64,15 +64,21 @@ volume_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: volume_(missing_precheck|see
 if [[ -n $volume_marker ]]; then marker=$volume_marker; fi
 dns_diag=$(grep -Eo '^DOCKERLENS_NATIVE_DNS_DIAG: peer=(ready|invalid|unavailable) resolver=(unrun|unavailable|embedded_(search|plain)|other_(search|plain)) default_a=(pass|fail|unrun) explicit_a=(pass|fail|unrun) dotted_a=(pass|fail|unrun) name_http=(pass|fail|unrun) ip_http=(pass|fail|unrun) edge_app=(pass|fail|unrun) cleanup=(pass|fail)$' "$capture_path" | tail -n 1 || true)
 collision_dns_diag=$(grep -Eo '^DOCKERLENS_NATIVE_COLLISION_DNS_DIAG: peer=(backend|edge) category=(output_limit|cli_(timeout|resolver|lookup|docker|exec|answer_present|unclassified)|answer_(missing|wrong_ip|malformed|inconsistent)|alias_missing) exit=(success|lookup|timeout|other) response=(nxdomain|servfail|refused|no_error_no_a|has_expected_a|other)$' "$capture_path" | tail -n 1 || true)
-container_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: container_(ports|ports_ipv6|identity_health|health_disabled|clear|start_interval|storage_lifecycle|resources_security|resolver_logging)$' "$capture_path" | tail -n 1 || true)
+container_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: container_((ports|ports_ipv6|identity_health|health_disabled|clear|start_interval|storage_lifecycle|resources_security|resolver_logging)|port_(fixed_ipv4|fixed_ipv6|dynamic_ipv6|repeated_dynamic_ipv4)_(oracle|rendered)_(cli_create|cli_inspect|oracle_bindings|oracle_cleanup|oracle_start|cli_http(_secondary)?|http_assert(_secondary)?|render|render_body|api_create|api_inspect|rendered_bindings|api_start|dynamic_binding(_secondary)?|isolated_http|isolated_assert|udp_assignment|udp_send|udp_receive|udp_assert))$' "$capture_path" | tail -n 1 || true)
 if [[ -n $container_marker ]]; then marker=$container_marker; fi
+cli_diag=$(grep -Eo '^DOCKERLENS_NATIVE_CLI_DIAG: exit=(timeout|signal|other) stderr=(connection_refused|address_family|invalid_address|no_route|permission|unknown)$' "$capture_path" | tail -n 1 || true)
+api_diag=$(grep -Eo '^DOCKERLENS_NATIVE_API_DIAG: (transport=(timeout|other)|status=(invalid_request|not_found|conflict|server|other))$' "$capture_path" | tail -n 1 || true)
 reason_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: target_start_reason_(operation_not_permitted|permission_denied|invalid_argument|read_only_filesystem|not_found|timeout|unclassified)$' "$capture_path" | tail -n 1 || true)
 error_category=$(grep -Eo '^DOCKERLENS_NATIVE_ERROR: (endpoint|cancelled|deadline|io|protocol|status|version|shape|budget)$' "$capture_path" | tail -n 1 || true)
 selection_error=$(grep -Eo '^DOCKERLENS_NATIVE_ERROR: selection$' "$capture_path" | tail -n 1 || true)
+volume_label_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: volume_labels_(create|persistence|ownership|cleanup_unverified)$' "$capture_path" | tail -n 1 || true)
+if [[ -n $volume_label_marker ]]; then marker=$volume_label_marker; fi
 if [[ -n $selection_error ]]; then error_category=$selection_error; fi
 if (( run_status != 0 )); then
   echo "required native test $target::$test_name failed (exit $run_status)" >&2
   if [[ -n $marker ]]; then echo "$marker" >&2; fi
+  if [[ -n $cli_diag ]]; then echo "$cli_diag" >&2; fi
+  if [[ -n $api_diag ]]; then echo "$api_diag" >&2; fi
   if [[ -n $dns_diag ]]; then echo "$dns_diag" >&2; fi
   if [[ -n $collision_dns_diag ]]; then echo "$collision_dns_diag" >&2; fi
   if [[ -n $reason_marker ]]; then echo "$reason_marker" >&2; fi

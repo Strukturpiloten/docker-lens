@@ -116,7 +116,15 @@ private. Native CLI stdout and stderr are each capped at 8 KiB before capture;
 the exact-test wrapper caps its private Cargo/libtest output file at 256 KiB
 before parsing closed diagnostics. Exceeding either cap fails the lane without
 printing raw output. The shared exact runner and manifest emitter own admission of this
-closed output. The runner selects the ignored library test by exact name after
+closed output. On a failed port probe, the wrapper reports only its last closed
+subphase: fixed or repeated IPv4 versus fixed or dynamic IPv6, independent CLI
+oracle versus rendered request, and create, inspect, binding, start, HTTP, or
+UDP checks. A failing CLI command adds only a closed exit and recognized stderr
+category; an Engine API transport or unexpected status adds only a closed
+category. These diagnostics do not print native output, change the assertion,
+skip a probe, or permit a failed lane to produce evidence.
+
+The runner selects the ignored library test by exact name after
 the other native probes. Only then does the emitter accept a bounded schema-1
 `container_probes` object with 57 unique, disjoint closed outcomes, the
 exact lane-specific start-interval boundary, and no additional fields or raw
@@ -177,6 +185,17 @@ ignored test passes; it contains no native values and does not add target
 capability admissions. Existing reviewed manifests and the reviewed catalog
 remain historical evidence for their original shapes. The new assertions need
 genuine runs in all four exact lanes before a source compatibility claim.
+
+The created-volume label probe is a separate exact ignored library test,
+`native_volume_label_tests::live_created_volume_labels_match_engine`. Each lane
+runs it before manifest emission and reads its private, bounded
+`NATIVE_VOLUME_LABEL_PROBES_PATH` file. The manifest records only the closed
+`volume_label_probes` names: `VolumeCreateLabels`, `VolumeLabelInspect`,
+`VolumeLabelPersistence`, and `VolumeLabelOwnershipCleanup`. These are
+non-admission evidence; they do not add `VolumeLabels` or
+`VolumeCreateLabels` to the reviewed capability catalog or admitted shapes.
+Native compatibility still requires genuine passing lanes and independent
+review of the exact candidate evidence.
 
 Each lane reads live Engine API version, info, container, network, and volume
 responses. The harness creates only synthetic test resources and stores live
@@ -362,6 +381,18 @@ historical reviewed catalog or its schema, establish that an arbitrary
 destination volume exists or is populated, or authorize copying or applying
 data. Fresh, independently reviewed rootful and rootless runs on every claimed
 Engine profile remain necessary before an existing-volume compatibility claim.
+
+DockerLens #49 adds a separate ignored `live_created_volume_labels_match_engine`
+test for created-volume labels. Offline tests enforce protected key/value,
+count, aggregate-byte, duplicate and exact-wire boundaries, including unchanged
+unlabelled requests and label-free external prerequisites. The native probe
+compares an independent CLI-created volume with the inert labelled request,
+including empty and non-ASCII/escaped values, then checks direct Engine inspect
+labels, data persistence across task-owned containers, ownership labels and
+exact cleanup. Its closed results are not catalogue admission: all four exact
+lanes must pass and be independently
+reviewed before an exact capability claim. Historical unlabelled `NamedVolume`
+evidence cannot prove `VolumeLabels`.
 
 ## Reviewed target-profile records
 

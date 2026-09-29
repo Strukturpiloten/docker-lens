@@ -36,7 +36,11 @@ The example describes fields, not an admitted profile or an executable
 request. The `requests` array contains the exact JSON request objects emitted
 by the native renderer, in the same order as `bytes()`; no request is inferred
 from a prerequisite. `prerequisites` retains the renderer's dependency order,
-including when there are no requests. A `reference` is the exact unsigned
+including when there are no requests. A created-volume request includes its
+authored `Labels` object only when nonempty; an external-volume prerequisite
+never contains or applies labels. The labelled create branch remains
+capability-unadmitted pending exact native evidence.
+A `reference` is the exact unsigned
 decimal string of a caller-local `u64` target graph index, never a Docker
 resource ID. It is a string so even indices above 2^53, through
 `18446744073709551615`, survive JSON consumers without numeric precision loss;

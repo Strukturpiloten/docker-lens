@@ -7,8 +7,8 @@ use docker_lens::target::{
     TargetResource,
 };
 use docker_lens::version::{
-    ApiVersion, CapabilityError, CapabilityEvidenceKey, DaemonMode, DebianPackageRevision,
-    EngineBuild, EngineRelease, NativeEvidenceLane, NativeEvidenceReference,
+    ApiVersion, Capability, CapabilityError, CapabilityEvidenceKey, DaemonMode,
+    DebianPackageRevision, EngineBuild, EngineRelease, NativeEvidenceLane, NativeEvidenceReference,
     TargetCapabilityCatalog, TargetProfile, TargetProfileIdentity,
 };
 use std::num::NonZeroU16;
@@ -23,6 +23,7 @@ fn public_catalog_resolves_four_exact_profiles_and_renders_inert_requests() {
     assert_eq!(catalog.profiles().len(), 4);
     for profile in catalog.profiles() {
         let admitted = catalog.resolve(profile).unwrap();
+        assert!(!admitted.supports(Capability::VolumeLabels));
         assert_eq!(admitted.profile(), profile);
         assert_eq!(admitted.evidence_key(), profile.evidence_key());
         let opposite_mode = if profile.mode() == DaemonMode::Rootful {
@@ -49,6 +50,7 @@ fn public_catalog_resolves_four_exact_profiles_and_renders_inert_requests() {
         let intent = TargetIntent::new(vec![TargetResource::Volume {
             reference: ResourceRef::new(1),
             identity: TargetIdentity::new(b"consumer-volume".to_vec()).unwrap(),
+            labels: vec![],
         }])
         .unwrap();
         let graph = DockerPlanner.plan(&intent, &admitted).unwrap();
