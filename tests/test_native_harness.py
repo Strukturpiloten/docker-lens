@@ -17,7 +17,8 @@ class NativeHarnessTests(unittest.TestCase):
         markers = [
             "network_isolation_edge_dns", "network_isolation_edge_http",
             "network_isolation_local_dns", "network_isolation_local_http",
-            "network_isolation_foreign_dns", "network_isolation_foreign_route",
+            "network_isolation_collision_dns", "network_isolation_collision_http",
+            "network_isolation_foreign_route",
         ]
         self.assertEqual([source.count(f'DOCKERLENS_NATIVE_CHECK: {marker}"')
                           for marker in markers], [1] * len(markers))
@@ -27,7 +28,7 @@ class NativeHarnessTests(unittest.TestCase):
                                 for marker in markers))
         self.assertEqual(re.findall(r'"nslookup",\s*"-type=A",\s*"([^"]+)"', source),
                          ["edge-sentinel", "edge-sentinel", "edge-sentinel.",
-                          "backend-app", "edge-sentinel."])
+                          "backend-app", "edge-sentinel.", "edge-sentinel."])
         edge_dns = source[source.index('let edge_dns_outcome ='):source.index('if let Err(category) = edge_dns_outcome')]
         self.assertTrue('exec nslookup -type=A edge-sentinel 127.0.0.11' in edge_dns)
         self.assertTrue('/etc/resolv.conf || exit 42;' in edge_dns)
@@ -39,18 +40,31 @@ class NativeHarnessTests(unittest.TestCase):
             r'"backend-app",\s*EMBEDDED_DNS_SERVER,', local_dns,
         ))
         self.assertTrue('resolver_category(&backend_resolver.stdout)' in local_dns)
-        foreign_dns = source[source.index('network_isolation_foreign_dns"'):source.index('network_isolation_foreign_route"')]
-        self.assertIsNotNone(re.search(
-            r'"edge-sentinel\.",\s*EMBEDDED_DNS_SERVER,', foreign_dns,
-        ))
-        self.assertTrue('dns_failure_category(&foreign_answer, "edge-sentinel", edge_ip)' in foreign_dns)
-        self.assertTrue('foreign_category == "cli_lookup"' in foreign_dns)
-        self.assertLess(foreign_dns.index('DOCKERLENS_NATIVE_FOREIGN_DNS_DIAG:'),
-                        foreign_dns.index('foreign_category == "cli_lookup"'))
+        collision_dns = source[source.index('network_isolation_collision_dns"'):source.index('network_isolation_collision_http"')]
+        self.assertEqual(len(re.findall(r'"edge-sentinel\.",\s*EMBEDDED_DNS_SERVER,', collision_dns)), 2)
+        self.assertTrue('nslookup_has_only_exact_named_a(&edge_collision.stdout, "edge-sentinel", edge_ip)' in collision_dns)
+        self.assertTrue('nslookup_has_only_exact_named_a(' in collision_dns)
+        self.assertTrue('backend_canary_ip,' in collision_dns)
+        self.assertTrue('DOCKERLENS_NATIVE_COLLISION_DNS_DIAG: peer=edge' in collision_dns)
+        self.assertTrue('DOCKERLENS_NATIVE_COLLISION_DNS_DIAG: peer=backend' in collision_dns)
+        self.assertIsNotNone(re.search(r'assert!\(\s*edge_exact', collision_dns))
+        self.assertIsNotNone(re.search(r'assert!\(\s*backend_exact', collision_dns))
         edge_http = source[source.index('network_isolation_edge_http"'):source.index('network_isolation_local_dns"')]
-        local_http = source[source.index('network_isolation_local_http"'):source.index('network_isolation_foreign_dns"')]
+        local_http = source[source.index('network_isolation_local_http"'):source.index('network_isolation_collision_dns"')]
+        collision_http = source[source.index('network_isolation_collision_http"'):source.index('network_isolation_foreign_route"')]
         self.assertTrue('"http://edge-sentinel:8080/"' in edge_http)
         self.assertTrue('"http://backend-app:8080/"' in local_http)
+        self.assertEqual(collision_http.count('"http://edge-sentinel:8080/"'), 2)
+        self.assertTrue('b"edge-canary"' in collision_http)
+        self.assertTrue('b"backend-canary"' in collision_http)
+        self.assertTrue('canonical_inspected_container_id(&edge_only_body)' in source)
+        self.assertTrue('canonical_inspected_container_id(&isolated)' in source)
+        self.assertIsNotNone(re.search(r'assert!\(\s*edge_id != backend_id', source))
+        self.assertIsNotNone(re.search(r'assert!\(\s*edge_ip != backend_canary_ip', source))
+        self.assertTrue('network_isolation_cleanup_unverified' in source)
+        self.assertTrue('let backend_cleaned = backend_fixture.cleanup();' in source)
+        self.assertTrue('let edge_cleaned = edge_fixture.cleanup();' in source)
+        self.assertTrue('fn nslookup_exact_named_a_rejects_extra_foreign_and_malformed_answers()' in source)
         self.assertIn('let edge_dns_outcome = wait_for_exact_dns_answer(', source)
         self.assertIn('if category != "cli_lookup"', source)
         self.assertIn('edge_dns_outcome.is_ok()', source)
@@ -128,10 +142,10 @@ fi
                     self.assertNotIn("protected-secret", result.stdout + result.stderr)
                     self.assertNotIn("protected native response", result.stdout + result.stderr)
 
-    def test_foreign_dns_diagnostic_is_closed_and_keeps_failure(self) -> None:
-        valid = ("DOCKERLENS_NATIVE_FOREIGN_DNS_DIAG: category=cli_unclassified "
+    def test_collision_dns_diagnostic_is_closed_and_keeps_failure(self) -> None:
+        valid = ("DOCKERLENS_NATIVE_COLLISION_DNS_DIAG: peer=backend category=cli_unclassified "
                  "exit=other response=no_error_no_a")
-        invalid = ("DOCKERLENS_NATIVE_FOREIGN_DNS_DIAG: category=protected-secret "
+        invalid = ("DOCKERLENS_NATIVE_COLLISION_DNS_DIAG: peer=protected-secret category=cli_unclassified "
                    "exit=other response=no_error_no_a")
         with tempfile.TemporaryDirectory() as directory:
             bin_dir = Path(directory)
@@ -141,7 +155,7 @@ if [[ $* == *--list* ]]; then
   echo 'native_network_tests::live_network_render_matches_engine: test'
 else
   echo 'protected native response' >&2
-  echo 'DOCKERLENS_NATIVE_CHECK: network_isolation_foreign_dns' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: network_isolation_collision_dns' >&2
   printf '%s\n' "$TEST_DIAG" >&2
   echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
   exit 23
@@ -160,7 +174,7 @@ fi
                     )
                     self.assertNotEqual(result.returncode, 0)
                     self.assertEqual(valid in result.stderr, accepted)
-                    self.assertIn("network_isolation_foreign_dns", result.stderr)
+                    self.assertIn("network_isolation_collision_dns", result.stderr)
                     self.assertNotIn("protected-secret", result.stdout + result.stderr)
                     self.assertNotIn("protected native response", result.stdout + result.stderr)
 
@@ -200,8 +214,9 @@ fi
                 "edge_dns_cli_answer_present", "edge_dns_cli_unclassified",
                 "edge_dns_answer_missing", "edge_dns_answer_wrong_ip",
                 "edge_dns_answer_malformed", "edge_dns_answer_inconsistent",
-                "edge_dns_alias_missing", "edge_http", "local_dns", "local_http",
-                "foreign_dns", "foreign_route",
+                "edge_dns_alias_missing", "edge_http", "backend_alias_missing",
+                "local_dns", "local_http", "collision_dns", "collision_http",
+                "foreign_route", "cleanup_unverified",
             ):
                 with self.subTest(marker=marker):
                     env["TEST_MARKER"] = marker

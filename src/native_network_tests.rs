@@ -72,6 +72,27 @@ fn validated_run_id(outer: &str) -> Option<&str> {
     .then_some(id)
 }
 
+fn canonical_inspected_container_id(value: &Value) -> Option<&str> {
+    let id = value["Id"].as_str()?;
+    (id.len() == 64
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+    .then_some(id)
+}
+
+#[test]
+fn isolation_fixture_ids_require_distinct_canonical_docker_values() {
+    let canonical = "a".repeat(64);
+    assert_eq!(
+        canonical_inspected_container_id(&json!({"Id": canonical.as_str()})),
+        Some(canonical.as_str())
+    );
+    assert!(canonical_inspected_container_id(&json!({"Id": "a".repeat(63)})).is_none());
+    assert!(canonical_inspected_container_id(&json!({"Id": "A".repeat(64)})).is_none());
+    assert!(canonical_inspected_container_id(&json!({"Id": "z".repeat(64)})).is_none());
+}
+
 fn addr(text: &str) -> NetworkAddress {
     NetworkAddress::new(text).expect("fixed test address")
 }
@@ -337,6 +358,106 @@ fn nslookup_has_ipv4_answer(output: &[u8], alias: &str, expected: Ipv4Addr) -> b
     false
 }
 
+fn nslookup_has_only_exact_named_a(output: &[u8], alias: &str, expected: Ipv4Addr) -> bool {
+    let Ok(output) = std::str::from_utf8(output) else {
+        return false;
+    };
+    let mut named = false;
+    let mut resolver_address_seen = false;
+    let mut answers = Vec::new();
+    for line in output.lines().map(str::trim) {
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(name) = line.strip_prefix("Name:") {
+            if named || name.trim().trim_end_matches('.') != alias {
+                return false;
+            }
+            named = true;
+            continue;
+        }
+        let address = line.strip_prefix("Address:").or_else(|| {
+            line.strip_prefix("Address ")
+                .and_then(|numbered| numbered.split_once(':'))
+                .and_then(|(ordinal, value)| {
+                    ordinal
+                        .parse::<u32>()
+                        .ok()
+                        .filter(|ordinal| *ordinal > 0)
+                        .map(|_| value)
+                })
+        });
+        if let Some(address) = address {
+            if !named {
+                let server = address.split_whitespace().next();
+                if resolver_address_seen || !matches!(server, Some("127.0.0.11" | "127.0.0.11:53"))
+                {
+                    return false;
+                }
+                resolver_address_seen = true;
+                continue;
+            }
+            let mut fields = address.split_whitespace();
+            let Some(Ok(ip)) = fields.next().map(str::parse::<Ipv4Addr>) else {
+                return false;
+            };
+            let suffix = fields.next();
+            if fields.next().is_some()
+                || suffix.is_some_and(|name| name.trim_end_matches('.') != alias)
+            {
+                return false;
+            }
+            answers.push(ip);
+            continue;
+        }
+        if !named && (line.starts_with("Server:") || line == "Non-authoritative answer:") {
+            continue;
+        }
+        return false; // Status, malformed line, or unparsed answer.
+    }
+    named && answers.len() == 1 && answers[0] == expected
+}
+
+#[test]
+fn nslookup_exact_named_a_rejects_extra_foreign_and_malformed_answers() {
+    let local = Ipv4Addr::new(172, 29, 244, 20);
+    let header = "Server: 127.0.0.11\nAddress: 127.0.0.11:53\n\n";
+    for answer in [
+        "Name: edge-sentinel\nAddress: 172.29.244.20\n",
+        "Name: edge-sentinel.\nAddress 1: 172.29.244.20 edge-sentinel.\n",
+    ] {
+        assert!(nslookup_has_only_exact_named_a(
+            format!("{header}{answer}").as_bytes(),
+            "edge-sentinel",
+            local,
+        ));
+    }
+    for answer in [
+        "Name: edge-sentinel\nAddress: 172.29.244.20\nAddress: 172.29.245.20\n",
+        "Name: edge-sentinel\nAddress: 172.29.244.20\nAddress: 172.29.244.20\n",
+        "Name: edge-sentinel\nAddress: 172.29.244.20\nName: edge-sentinel\n",
+        "Name: edge-sentinel\nAddress: 172.29.244.20\nName: edge-sentinel\nAddress: 172.29.244.20\n",
+        "Name: edge-sentinel\nAddress: 172.29.245.20\n",
+        "Name: edge-sentinel\nAddress: not-an-ip\n",
+        "Name: edge-sentinel\nAddress invalid: 172.29.244.20\n",
+        "Name: edge-sentinel\nAddress 1: 172.29.244.20 edge-sentinel edge-sentinel\n",
+        "Name: edge-sentinel\n",
+        "Name: other-name\nAddress: 172.29.244.20\n",
+        "Name: edge-sentinel\nAddress: 172.29.244.20\nSERVFAIL\n",
+    ] {
+        assert!(!nslookup_has_only_exact_named_a(
+            format!("{header}{answer}").as_bytes(),
+            "edge-sentinel",
+            local,
+        ));
+    }
+    assert!(!nslookup_has_only_exact_named_a(
+        b"Name: edge-sentinel\nAddress: 172.29.244.20\xff",
+        "edge-sentinel",
+        local,
+    ));
+}
+
 fn foreign_dns_exit_category(result: &BoundedDnsCliOutput, category: &str) -> &'static str {
     if result.success {
         "success"
@@ -553,7 +674,7 @@ fn resolver_configuration_classification_remains_closed() {
     assert_eq!(resolver_category(b"\xff"), "unavailable");
 }
 
-fn remove_exact_dns_peer(name: &str) -> bool {
+fn remove_exact_network_container(name: &str) -> bool {
     private_docker_command("8")
         .args(["rm", "-f", name])
         .stdout(Stdio::null())
@@ -570,9 +691,9 @@ struct DnsPeerGuard<'a> {
 
 impl DnsPeerGuard<'_> {
     fn cleanup(&mut self) -> bool {
-        self.cleaned = remove_exact_dns_peer(self.name);
+        self.cleaned = remove_exact_network_container(self.name);
         if !self.cleaned && diagnostic_has_budget(self.deadline, DNS_CLI_HARD_LIMIT_SECS, 0) {
-            self.cleaned = remove_exact_dns_peer(self.name);
+            self.cleaned = remove_exact_network_container(self.name);
         }
         self.cleaned
     }
@@ -581,7 +702,27 @@ impl DnsPeerGuard<'_> {
 impl Drop for DnsPeerGuard<'_> {
     fn drop(&mut self) {
         if !self.cleaned && diagnostic_has_budget(self.deadline, DNS_CLI_HARD_LIMIT_SECS, 0) {
-            let _ = remove_exact_dns_peer(self.name);
+            let _ = remove_exact_network_container(self.name);
+        }
+    }
+}
+
+struct ExactNetworkFixture<'a> {
+    name: &'a str,
+    cleaned: bool,
+}
+
+impl ExactNetworkFixture<'_> {
+    fn cleanup(&mut self) -> bool {
+        self.cleaned = remove_exact_network_container(self.name);
+        self.cleaned
+    }
+}
+
+impl Drop for ExactNetworkFixture<'_> {
+    fn drop(&mut self) {
+        if !self.cleaned {
+            let _ = remove_exact_network_container(self.name);
         }
     }
 }
@@ -1995,6 +2136,10 @@ fn live_network_render_matches_engine() {
     // a separate, genuinely edge-only destination.
     eprintln!("DOCKERLENS_NATIVE_CHECK: network_isolation_edge_fixture");
     let edge_only = format!("dl-network-{run_id}-edge-only");
+    let mut edge_fixture = ExactNetworkFixture {
+        name: &edge_only,
+        cleaned: false,
+    };
     cli_ok(&[
         "create",
         "--name",
@@ -2010,6 +2155,8 @@ fn live_network_render_matches_engine() {
     ]);
     cli_ok(&["start", &edge_only]);
     let edge_only_body = inspect(&format!("/v{api_version}/containers/{edge_only}/json"));
+    let edge_id = canonical_inspected_container_id(&edge_only_body)
+        .expect("edge-only fixture has canonical container ID");
     assert_eq!(
         edge_only_body["NetworkSettings"]["Networks"]
             .as_object()
@@ -2096,18 +2243,28 @@ fn live_network_render_matches_engine() {
     }
     assert!(edge_http_ok, "edge-side peer must reach edge-only endpoint");
     let backend_only = format!("dl-network-{run_id}-isolated");
+    let mut backend_fixture = ExactNetworkFixture {
+        name: &backend_only,
+        cleaned: false,
+    };
     cli_ok(&[
         "create",
         "--name",
         &backend_only,
         "--network",
         &backend,
+        "--network-alias",
+        "edge-sentinel",
         &image,
-        "sleep",
-        "60",
+        "sh",
+        "-c",
+        "printf backend-canary > /tmp/index.html; httpd -f -p 8080 -h /tmp",
     ]);
     cli_ok(&["start", &backend_only]);
     let isolated = inspect(&format!("/v{api_version}/containers/{backend_only}/json"));
+    let backend_id = canonical_inspected_container_id(&isolated)
+        .expect("backend-only fixture has canonical container ID");
+    assert!(edge_id != backend_id, "isolation fixtures must be distinct");
     assert_eq!(
         isolated["NetworkSettings"]["Networks"]
             .as_object()
@@ -2119,6 +2276,27 @@ fn live_network_render_matches_engine() {
         isolated["NetworkSettings"]["Networks"]
             .get(backend.as_str())
             .is_some()
+    );
+    assert_eq!(isolated["State"]["Running"], true);
+    let backend_alias_present =
+        isolated["NetworkSettings"]["Networks"][backend.as_str()]["Aliases"]
+            .as_array()
+            .is_some_and(|aliases| aliases.iter().any(|alias| alias == "edge-sentinel"));
+    if !backend_alias_present {
+        eprintln!("DOCKERLENS_NATIVE_CHECK: network_isolation_backend_alias_missing");
+    }
+    assert!(
+        backend_alias_present,
+        "backend-only fixture must register its shared alias"
+    );
+    let backend_canary_ip = isolated["NetworkSettings"]["Networks"][backend.as_str()]["IPAddress"]
+        .as_str()
+        .expect("backend-only fixture has runtime IPv4")
+        .parse::<Ipv4Addr>()
+        .expect("bounded backend-only IPv4");
+    assert!(
+        edge_ip != backend_canary_ip,
+        "isolation fixture IPs must differ"
     );
     let backend_ip = app_body["NetworkSettings"]["Networks"][backend.as_str()]["IPAddress"]
         .as_str()
@@ -2165,8 +2343,42 @@ fn live_network_render_matches_engine() {
         b"network-canary",
         "same backend-only peer must reach the backend endpoint"
     );
-    eprintln!("DOCKERLENS_NATIVE_CHECK: network_isolation_foreign_dns");
-    let foreign_answer = cli_dns(&[
+    eprintln!("DOCKERLENS_NATIVE_CHECK: network_isolation_collision_dns");
+    let edge_resolver = cli_dns(&["exec", &edge_only, "cat", "/etc/resolv.conf"]);
+    assert!(
+        edge_resolver.success
+            && !edge_resolver.output_limit
+            && matches!(
+                resolver_category(&edge_resolver.stdout),
+                "embedded_search" | "embedded_plain"
+            ),
+        "edge-only peer must have the embedded DNS resolver"
+    );
+    let edge_collision = cli_dns(&[
+        "exec",
+        &edge_only,
+        "nslookup",
+        "-type=A",
+        "edge-sentinel.",
+        EMBEDDED_DNS_SERVER,
+    ]);
+    let edge_exact = edge_collision.success
+        && !edge_collision.output_limit
+        && nslookup_has_only_exact_named_a(&edge_collision.stdout, "edge-sentinel", edge_ip);
+    if !edge_exact {
+        let category = dns_failure_category(&edge_collision, "edge-sentinel", backend_canary_ip);
+        eprintln!(
+            "DOCKERLENS_NATIVE_COLLISION_DNS_DIAG: peer=edge category={} exit={} response={}",
+            category,
+            foreign_dns_exit_category(&edge_collision, category),
+            foreign_dns_response_indicator(&edge_collision, "edge-sentinel", backend_canary_ip),
+        );
+    }
+    assert!(
+        edge_exact,
+        "edge-only peer must receive only its own alias IPv4 A"
+    );
+    let backend_collision = cli_dns(&[
         "exec",
         &backend_only,
         "nslookup",
@@ -2174,18 +2386,56 @@ fn live_network_render_matches_engine() {
         "edge-sentinel.",
         EMBEDDED_DNS_SERVER,
     ]);
-    let foreign_category = dns_failure_category(&foreign_answer, "edge-sentinel", edge_ip);
-    if foreign_category != "cli_lookup" {
+    let backend_exact = backend_collision.success
+        && !backend_collision.output_limit
+        && nslookup_has_only_exact_named_a(
+            &backend_collision.stdout,
+            "edge-sentinel",
+            backend_canary_ip,
+        );
+    if !backend_exact {
+        let category = dns_failure_category(&backend_collision, "edge-sentinel", edge_ip);
         eprintln!(
-            "DOCKERLENS_NATIVE_FOREIGN_DNS_DIAG: category={} exit={} response={}",
-            foreign_category,
-            foreign_dns_exit_category(&foreign_answer, foreign_category),
-            foreign_dns_response_indicator(&foreign_answer, "edge-sentinel", edge_ip),
+            "DOCKERLENS_NATIVE_COLLISION_DNS_DIAG: peer=backend category={} exit={} response={}",
+            category,
+            foreign_dns_exit_category(&backend_collision, category),
+            foreign_dns_response_indicator(&backend_collision, "edge-sentinel", edge_ip),
         );
     }
     assert!(
-        foreign_category == "cli_lookup",
-        "running backend-only peer must receive an exact negative A lookup for the edge-only alias"
+        backend_exact,
+        "backend-only peer must receive only its own alias IPv4 A"
+    );
+    eprintln!("DOCKERLENS_NATIVE_CHECK: network_isolation_collision_http");
+    let edge_named_http = cli_dns(&[
+        "exec",
+        &edge_only,
+        "wget",
+        "-T",
+        "2",
+        "-qO-",
+        "http://edge-sentinel:8080/",
+    ]);
+    assert!(
+        edge_named_http.success
+            && !edge_named_http.output_limit
+            && edge_named_http.stdout.as_slice() == b"edge-canary",
+        "edge-only peer must reach only its local shared-alias canary"
+    );
+    let backend_named_http = cli_dns(&[
+        "exec",
+        &backend_only,
+        "wget",
+        "-T",
+        "2",
+        "-qO-",
+        "http://edge-sentinel:8080/",
+    ]);
+    assert!(
+        backend_named_http.success
+            && !backend_named_http.output_limit
+            && backend_named_http.stdout.as_slice() == b"backend-canary",
+        "backend-only peer must reach only its local shared-alias canary"
     );
     eprintln!("DOCKERLENS_NATIVE_CHECK: network_isolation_foreign_route");
     let edge_url = format!("http://{edge_ip}:8080/");
@@ -2202,6 +2452,15 @@ fn live_network_render_matches_engine() {
     assert_eq!(
         inspect(&format!("/v{api_version}/networks/{external}"))["Id"],
         external_id
+    );
+    let backend_cleaned = backend_fixture.cleanup();
+    let edge_cleaned = edge_fixture.cleanup();
+    if !backend_cleaned || !edge_cleaned {
+        eprintln!("DOCKERLENS_NATIVE_CHECK: network_isolation_cleanup_unverified");
+    }
+    assert!(
+        backend_cleaned && edge_cleaned,
+        "exact isolation fixture cleanup succeeds"
     );
     eprintln!("DOCKERLENS_NATIVE_CHECK: network_evidence");
     fs::write(

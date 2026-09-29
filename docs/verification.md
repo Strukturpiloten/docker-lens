@@ -35,16 +35,21 @@ uses separate backend-only and edge-only CLI peers: each positive local DNS
 control explicitly queries the IPv4 A record and checks an exact parsed answer
 for the inspected endpoint IPv4, excluding the resolver's address and partial
 matches, before local HTTP succeeds. Each DNS oracle verifies the peer's embedded
-resolver configuration and queries `127.0.0.11` explicitly; the backend peer's
-foreign-alias query uses a trailing-dot absolute name and must receive a lookup
-failure, not a timeout or other CLI failure. Ordinary unqualified named HTTP
-remains a separate positive traffic check. A failed default short-name CLI lookup
-is fixture/tool-path evidence, not by itself proof of a Docker DNS failure. The
-foreign-DNS failure path reports only closed exit and response indicators from
-bounded CLI output; these distinguish observable `NXDOMAIN`, `SERVFAIL`, `REFUSED`,
-apparent no-error/no-A and expected-A cases without printing the response or admitting a
-different failure as an isolation success.
-The backend peer must also fail direct edge-IP HTTP. A dual-homed app's edge IP is not an
+resolver configuration and queries `127.0.0.11` explicitly. The isolation
+fixtures are distinct, running, single-network peers with canonical inspected
+IDs and distinct IPv4 addresses. Both carry the literal `edge-sentinel` alias;
+from each peer, an absolute A query to the embedded resolver must contain the
+complete named answer set of exactly that peer's inspected IP, with no extra,
+foreign, malformed, or truncated answer. Named HTTP to the shared alias must
+return distinct local canary bodies, and backend-to-edge direct-IP HTTP must
+still fail. Ordinary unqualified named HTTP for rendered app aliases remains
+a separate positive traffic check. This proves collision-scoped local alias
+selection and route isolation, not unshadowed `NXDOMAIN` or all DNS-forwarding
+behavior. Run `36504139504` observed Debian rootful `cli_resolver/other/other`
+for an unshadowed foreign-name query on the internal backend. That closed
+result did not prove either forwarding or an alias leak, and no timeout is
+accepted as isolation success. Collision failures expose only fixed-category
+diagnostics from bounded CLI output. A dual-homed app's edge IP is not an
 isolation oracle. Closed DNS and HTTP markers distinguish each stage. The
 executor allows only the run-owned network and
 container names, including exact `networks/{id}/connect` paths. The separate closed
