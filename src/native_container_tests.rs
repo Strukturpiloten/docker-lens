@@ -43,6 +43,25 @@ fn cli_failure_stderr(stderr: &[u8]) -> &'static str {
     }
 }
 
+fn namespace_failure_category(stderr: &[u8]) -> Option<&'static str> {
+    let message = std::str::from_utf8(stderr).ok()?;
+    [
+        "input",
+        "inspect",
+        "identity",
+        "changed",
+        "process",
+        "missing_tool",
+        "probe",
+    ]
+    .into_iter()
+    .find(|category| {
+        message
+            .lines()
+            .any(|line| line == format!("DOCKERLENS_NATIVE_NAMESPACE_DIAG: category={category}"))
+    })
+}
+
 fn api_status_category(status: u16) -> &'static str {
     match status {
         400 | 422 => "invalid_request",
@@ -441,6 +460,7 @@ struct NativeRun {
     image: String,
     run_id: String,
     mode: DaemonMode,
+    outer_identity: Option<String>,
     created: Vec<(String, String)>,
     images: Vec<String>,
 }
@@ -470,6 +490,7 @@ impl NativeRun {
             image: required("NATIVE_FIXTURE_IMAGE"),
             run_id,
             mode,
+            outer_identity: None,
             created: Vec::new(),
             images: Vec::new(),
         }
@@ -568,23 +589,72 @@ impl NativeRun {
         String::from_utf8(output.stdout).expect("CLI output UTF-8")
     }
 
-    fn outer_exec(&self, args: &[&str], seconds: &str) -> std::process::Output {
+    fn namespace_probe(&self, mode: &str, argument: Option<&str>) -> std::process::Output {
+        assert!(matches!(
+            mode,
+            "identity" | "curl_version" | "bash_version" | "http" | "udp"
+        ));
         let mut command = Command::new("timeout");
-        command.args(["--kill-after=1", seconds]);
+        command.args(["--kill-after=1", "16"]);
         if required("NATIVE_PODMAN_USE_SUDO") == "1" {
-            command.args(["sudo", "-n", "podman"]);
-        } else {
-            command.arg("podman");
+            command.args(["sudo", "-n"]);
         }
         let outer = format!("dl-native-{}", self.run_id);
-        command.args(["exec", &outer]);
-        command.args(args);
-        bounded_native_cli_output(&mut command, None)
+        command.args([
+            "python3",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/native-net-probe.py"),
+            mode,
+            &outer,
+        ]);
+        if mode != "identity" {
+            command.arg(
+                self.outer_identity
+                    .as_deref()
+                    .expect("verified outer identity"),
+            );
+        }
+        if let Some(argument) = argument {
+            command.arg(argument);
+        }
+        let output = bounded_native_cli_output(&mut command, None);
+        if !output.status.success() {
+            if let Some(category) = namespace_failure_category(&output.stderr) {
+                eprintln!("DOCKERLENS_NATIVE_NAMESPACE_DIAG: category={category}");
+                panic!("closed outer namespace identity or probe failed");
+            }
+        }
+        output
+    }
+
+    fn require_outer_identity(&mut self) {
+        eprintln!("DOCKERLENS_NATIVE_CHECK: container_outer_identity");
+        let output = self.namespace_probe("identity", None);
+        assert!(
+            output.status.success(),
+            "outer namespace identity unavailable"
+        );
+        let identity = std::str::from_utf8(&output.stdout)
+            .expect("bounded outer identity UTF-8")
+            .trim_end_matches('\n');
+        let fields: Vec<_> = identity.split('|').collect();
+        assert!(
+            fields.len() == 4
+                && fields[0].len() == 64
+                && fields[0].bytes().all(|byte| byte.is_ascii_hexdigit())
+                && fields[1].parse::<u32>().is_ok_and(|pid| pid > 1)
+                && !fields[2].is_empty()
+                && fields[2].len() <= 128
+                && fields[2].len() % 2 == 0
+                && fields[2].bytes().all(|byte| byte.is_ascii_hexdigit())
+                && fields[3].parse::<u64>().is_ok_and(|ticks| ticks > 0),
+            "closed outer identity is malformed"
+        );
+        self.outer_identity = Some(identity.to_owned());
     }
 
     fn require_outer_curl(&self) {
-        eprintln!("DOCKERLENS_NATIVE_CHECK: container_outer_curl_preflight");
-        let output = self.outer_exec(&["curl", "--version"], "8");
+        eprintln!("DOCKERLENS_NATIVE_CHECK: container_host_curl_preflight");
+        let output = self.namespace_probe("curl_version", None);
         if !output.status.success() {
             eprintln!(
                 "DOCKERLENS_NATIVE_HTTP_DIAG: exit={} category={}",
@@ -592,12 +662,15 @@ impl NativeRun {
                 cli_failure_stderr(&output.stderr)
             );
         }
-        assert!(output.status.success(), "outer namespace curl is required");
+        assert!(
+            output.status.success(),
+            "host curl namespace probe is required"
+        );
     }
 
     fn require_outer_bash(&self) {
-        eprintln!("DOCKERLENS_NATIVE_CHECK: container_outer_bash_preflight");
-        let output = self.outer_exec(&["bash", "--version"], "8");
+        eprintln!("DOCKERLENS_NATIVE_CHECK: container_host_bash_preflight");
+        let output = self.namespace_probe("bash_version", None);
         if !output.status.success() {
             eprintln!(
                 "DOCKERLENS_NATIVE_CLI_DIAG: exit={} stderr={}",
@@ -605,31 +678,14 @@ impl NativeRun {
                 cli_failure_stderr(&output.stderr)
             );
         }
-        assert!(output.status.success(), "outer namespace bash is required");
+        assert!(
+            output.status.success(),
+            "host Bash namespace probe is required"
+        );
     }
 
     fn try_outer_http(&self, url: &str) -> Result<String, (&'static str, &'static str)> {
-        let output = self.outer_exec(
-            &[
-                "curl",
-                "--noproxy",
-                "*",
-                "--proxy",
-                "",
-                "--globoff",
-                "--fail",
-                "--silent",
-                "--show-error",
-                "--connect-timeout",
-                "2",
-                "--max-time",
-                "3",
-                "--max-filesize",
-                "8192",
-                url,
-            ],
-            "8",
-        );
+        let output = self.namespace_probe("http", Some(url));
         if !output.status.success() {
             return Err((
                 cli_failure_exit(output.status),
@@ -1103,6 +1159,7 @@ fn assert_fixed_ipv4_http(run: &NativeRun, id: &str, suffix: &str, secondary: bo
 
 fn probe_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
     eprintln!("DOCKERLENS_NATIVE_CHECK: container_ports");
+    run.require_outer_identity();
     run.require_outer_curl();
     run.require_outer_bash();
     let script = "printf native-tcp-canary >/tmp/index.html; httpd -f -p 8080 -h /tmp & nc -u -l -p 8081 > /tmp/udp-received & wait";
@@ -1236,17 +1293,7 @@ fn probe_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
     assert!(assigned > 0);
     mark_port_stage("port-rendered", "udp_send");
     let assigned = assigned.to_string();
-    let sent = run.outer_exec(
-        &[
-            "bash",
-            "-c",
-            "printf '%s' \"$1\" >\"/dev/udp/127.0.0.1/$2\"",
-            "udp-probe",
-            "native-udp-canary",
-            &assigned,
-        ],
-        "8",
-    );
+    let sent = run.namespace_probe("udp", Some(&assigned));
     if !sent.status.success() {
         eprintln!(
             "DOCKERLENS_NATIVE_CLI_DIAG: exit={} stderr={}",

@@ -125,9 +125,14 @@ category. These diagnostics do not print native output, change the assertion,
 skip a probe, or permit a failed lane to produce evidence.
 The repeated fixed-IPv4 CLI oracle must also start and serve both exact
 loopback publications before the rendered container is created. Each HTTP
-check now observes the outer Podman namespace directly, with no extra Docker
-host-network probe container. Outer `curl` and Bash availability are preflighted;
-HTTP requests disable proxies and have five bounded attempts with a two-second
+check now observes the outer Podman network namespace directly, with no extra
+Docker host-network probe container and no dependence on tools inside the
+outer image. A bounded host helper verifies the exact running, labelled Podman
+container and its PID/start identity, opens its network namespace through a
+held file descriptor, and invokes only closed host `curl` or Bash probes via
+`nsenter`; identity is checked again before and after. The host tools and
+namespace entry are preflighted. HTTP requests disable proxies and have five
+bounded attempts with a two-second
 connection and three-second total limit. A local in-container service check
 precedes each published-port assertion; for the IPv6 fixture either local
 address family may establish service readiness, and the `::1` local result is

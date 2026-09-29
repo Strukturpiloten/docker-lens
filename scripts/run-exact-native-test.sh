@@ -64,11 +64,12 @@ volume_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: volume_(missing_precheck|see
 if [[ -n $volume_marker ]]; then marker=$volume_marker; fi
 dns_diag=$(grep -Eo '^DOCKERLENS_NATIVE_DNS_DIAG: peer=(ready|invalid|unavailable) resolver=(unrun|unavailable|embedded_(search|plain)|other_(search|plain)) default_a=(pass|fail|unrun) explicit_a=(pass|fail|unrun) dotted_a=(pass|fail|unrun) name_http=(pass|fail|unrun) ip_http=(pass|fail|unrun) edge_app=(pass|fail|unrun) cleanup=(pass|fail)$' "$capture_path" | tail -n 1 || true)
 collision_dns_diag=$(grep -Eo '^DOCKERLENS_NATIVE_COLLISION_DNS_DIAG: peer=(backend|edge) category=(output_limit|cli_(timeout|resolver|lookup|docker|exec|answer_present|unclassified)|answer_(missing|wrong_ip|malformed|inconsistent)|alias_missing) exit=(success|lookup|timeout|other) response=(nxdomain|servfail|refused|no_error_no_a|has_expected_a|other)$' "$capture_path" | tail -n 1 || true)
-container_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: container_((ports|ports_ipv6|outer_(curl|bash)_preflight|identity_health|health_disabled(_(image_build|inherited_(create|start|wait)|oracle_(create|start)|rendered_(create|start|wait)))?|clear|start_interval|storage_lifecycle|resources_security|resolver_logging)|port_(fixed_ipv4|fixed_ipv6|dynamic_ipv6|repeated_dynamic_ipv4)_(oracle|rendered)_(cli_create|cli_inspect|oracle_bindings|oracle_cleanup|oracle_start|cli_http(_secondary)?|http_assert(_secondary)?|local_service|render|render_body|api_create|api_inspect|rendered_bindings|api_start|dynamic_binding(_secondary)?|isolated_http|isolated_assert|udp_assignment|udp_send|udp_receive|udp_assert))$' "$capture_path" | tail -n 1 || true)
+container_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: container_((ports|ports_ipv6|outer_identity|host_(curl|bash)_preflight|identity_health|health_disabled(_(image_build|inherited_(create|start|wait)|oracle_(create|start)|rendered_(create|start|wait)))?|clear|start_interval|storage_lifecycle|resources_security|resolver_logging)|port_(fixed_ipv4|fixed_ipv6|dynamic_ipv6|repeated_dynamic_ipv4)_(oracle|rendered)_(cli_create|cli_inspect|oracle_bindings|oracle_cleanup|oracle_start|cli_http(_secondary)?|http_assert(_secondary)?|local_service|render|render_body|api_create|api_inspect|rendered_bindings|api_start|dynamic_binding(_secondary)?|isolated_http|isolated_assert|udp_assignment|udp_send|udp_receive|udp_assert))$' "$capture_path" | tail -n 1 || true)
 if [[ -n $container_marker ]]; then marker=$container_marker; fi
 cli_diag=$(grep -Eo '^DOCKERLENS_NATIVE_CLI_DIAG: exit=(timeout|signal|other) stderr=(connection_refused|missing_tool|address_family|invalid_address|no_route|permission|unknown)$' "$capture_path" | tail -n 1 || true)
 http_diag=$(grep -Eo '^DOCKERLENS_NATIVE_HTTP_DIAG: exit=(success|timeout|signal|other) category=(body_mismatch|connection_refused|missing_tool|address_family|invalid_address|no_route|permission|unknown)$' "$capture_path" | tail -n 1 || true)
 ipv6_diag=$(grep -Eo '^DOCKERLENS_NATIVE_IPV6_DIAG: local_service=(pass|fail)$' "$capture_path" | tail -n 1 || true)
+namespace_diag=$(grep -Eo '^DOCKERLENS_NATIVE_NAMESPACE_DIAG: category=(input|inspect|identity|changed|process|missing_tool|probe)$' "$capture_path" | tail -n 1 || true)
 api_diag=$(grep -Eo '^DOCKERLENS_NATIVE_API_DIAG: (transport=(timeout|other)|status=(invalid_request|not_found|conflict|server|other))$' "$capture_path" | tail -n 1 || true)
 reason_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: target_start_reason_(operation_not_permitted|permission_denied|invalid_argument|read_only_filesystem|not_found|timeout|unclassified)$' "$capture_path" | tail -n 1 || true)
 error_category=$(grep -Eo '^DOCKERLENS_NATIVE_ERROR: (endpoint|cancelled|deadline|io|protocol|status|version|shape|budget)$' "$capture_path" | tail -n 1 || true)
@@ -90,6 +91,7 @@ if (( run_status != 0 )); then
   if [[ -n $cli_diag ]]; then echo "$cli_diag" >&2; fi
   if [[ -n $http_diag ]]; then echo "$http_diag" >&2; fi
   if [[ -n $ipv6_diag ]]; then echo "$ipv6_diag" >&2; fi
+  if [[ -n $namespace_diag ]]; then echo "$namespace_diag" >&2; fi
   if [[ -n $api_diag ]]; then echo "$api_diag" >&2; fi
   if [[ -n $dns_diag ]]; then echo "$dns_diag" >&2; fi
   if [[ -n $collision_dns_diag ]]; then echo "$collision_dns_diag" >&2; fi

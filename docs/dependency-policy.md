@@ -54,8 +54,10 @@ A green offline PR check does not create native evidence. A reviewed native
 run and independent readback are still required before any compatibility
 catalog entry can be admitted.
 
-podman, curl, python3, timeout, and core utilities are supplied by the
-Ubuntu runner; no binary download is introduced. Historical captures and
+podman, curl, python3, timeout, util-linux `nsenter`, and core utilities are
+supplied by the Ubuntu runner; no binary download or independent pin is
+introduced. The native helper preflights namespace entry before relying on
+it. Historical captures and
 fixtures remain immutable and outside automatic updates. The manual native
 dispatcher uses the existing checkout Action and runner Python standard
 library, so it needs no separate tool or manager. Shared workflow rollout

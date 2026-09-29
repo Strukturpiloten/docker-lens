@@ -334,14 +334,17 @@ fi
         port_source = source.split("fn probe_ports(", 1)[1].split("fn probe_complementary_ports(", 1)[0]
         self.assertNotIn('"--network".into(),', port_source)
         self.assertIn('run.try_outer_http("http://127.0.0.2:18110/index.html")', port_source)
+        self.assertIn('run.require_outer_identity();', port_source)
         self.assertIn('run.require_outer_curl();', port_source)
         self.assertIn('run.require_outer_bash();', port_source)
-        self.assertRegex(port_source, r'"bash",\s*"-c",\s*"printf')
-        self.assertRegex(port_source, r'"udp-probe",\s*"native-udp-canary",\s*&assigned')
+        self.assertIn('run.namespace_probe("udp", Some(&assigned))', port_source)
         self.assertIn('let assigned: u16 = assigned.parse()', port_source)
         self.assertIn('assert!(assigned > 0);', port_source)
-        self.assertRegex(source, r'"--noproxy",\s*"\*",\s*"--proxy",\s*""')
-        self.assertRegex(source, r'"--connect-timeout",\s*"2",\s*"--max-time",\s*"3"')
+        helper = (ROOT / "scripts/native-net-probe.py").read_text(encoding="utf-8")
+        self.assertRegex(helper, r'"--noproxy",\s*"\*",\s*"--proxy",\s*""')
+        self.assertRegex(helper, r'"--connect-timeout",\s*"2",\s*"--max-time",\s*"3"')
+        self.assertIn('pass_fds=(net_fd,)', helper)
+        self.assertIn('f"--net=/proc/self/fd/{net_fd}"', helper)
 
     def test_container_http_and_health_diagnostics_are_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -357,6 +360,8 @@ else
   echo 'DOCKERLENS_NATIVE_HTTP_DIAG: exit=other category=private'
   echo 'DOCKERLENS_NATIVE_IPV6_DIAG: local_service=fail'
   echo 'DOCKERLENS_NATIVE_IPV6_DIAG: local_service=private'
+  echo 'DOCKERLENS_NATIVE_NAMESPACE_DIAG: category=changed'
+  echo 'DOCKERLENS_NATIVE_NAMESPACE_DIAG: category=private'
   echo 'private native response' >&2
   echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
   exit 23
@@ -373,6 +378,7 @@ fi
             self.assertIn("container_health_disabled_rendered_wait", result.stderr)
             self.assertIn("exit=other category=connection_refused", result.stderr)
             self.assertIn("local_service=fail", result.stderr)
+            self.assertIn("DOCKERLENS_NATIVE_NAMESPACE_DIAG: category=changed", result.stderr)
             self.assertNotIn("private", result.stdout + result.stderr)
 
     def test_native_test_output_limit_fails_closed(self) -> None:
