@@ -290,23 +290,51 @@ if [[ $lane == debian11-rootless ]]; then
   run_flags+=(--oom-score-adj=0 --security-opt apparmor=unconfined)
 fi
 validated_outer_ipv4() {
-  local attachment
+  local role=$1 name=$2 attachment
+  case $role in sidecar | daemon) ;; *) return 1 ;; esac
   attachment=$(timeout --signal=TERM --kill-after=2s 10s "${podman_cmd[@]}" inspect \
-    --format '{{json .NetworkSettings.Networks}}' "$1" 2>/dev/null) || return 1
-  (( ${#attachment} <= 4096 )) || return 1
+    --format '{{json .NetworkSettings.Networks}}' "$name" 2>/dev/null) || {
+    echo "DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=attachment role=$role category=inspect_failed" >&2
+    return 1
+  }
+  (( ${#attachment} <= 4096 )) || {
+    echo "DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=attachment role=$role category=output_limit" >&2
+    return 1
+  }
   printf '%s' "$attachment" | python3 -c '
 import ipaddress, json, sys
+
+def fail(category):
+    print("DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=attachment role=" + sys.argv[2] +
+          " category=" + category, file=sys.stderr)
+    raise SystemExit(1)
+
 try:
     networks = json.load(sys.stdin)
-    if not isinstance(networks, dict) or set(networks) != {sys.argv[1]}:
-        raise ValueError()
-    address = ipaddress.IPv4Address(networks[sys.argv[1]]["IPAddress"])
-    if not address.is_private or address.is_loopback or address.is_link_local:
-        raise ValueError()
-except (ValueError, TypeError, KeyError, AttributeError):
-    raise SystemExit("invalid task-owned outer bridge address") from None
+except (ValueError, UnicodeError):
+    fail("json_shape")
+if not isinstance(networks, dict):
+    fail("json_shape")
+if sys.argv[1] not in networks:
+    fail("network_missing")
+if len(networks) != 1:
+    fail("network_extra")
+endpoint = networks[sys.argv[1]]
+if not isinstance(endpoint, dict):
+    fail("json_shape")
+raw_address = endpoint.get("IPAddress")
+if raw_address is None or raw_address == "":
+    fail("ipv4_missing")
+if not isinstance(raw_address, str):
+    fail("ipv4_malformed")
+try:
+    address = ipaddress.IPv4Address(raw_address)
+except (ValueError, TypeError, AttributeError):
+    fail("ipv4_malformed")
+if not address.is_private or address.is_loopback or address.is_link_local:
+    fail("ipv4_nonprivate")
 print(address)
-' "$outer_network"
+' "$outer_network" "$role"
 }
 sidecar_setup_failed() {
   echo "DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=$1" >&2
@@ -330,12 +358,8 @@ timeout --signal=TERM --kill-after=2s 120s "${podman_cmd[@]}" run --pull=never -
   --privileged --pids-limit=512 --memory=4g --cpus=2 "${run_flags[@]}" \
   --volume "$storage_mount" --volume "$socket_dir:/dockerlens-native" \
   "$image" "${start[@]}" >/dev/null 2>&1 || sidecar_setup_failed daemon_attach
-sidecar_ip=$(validated_outer_ipv4 "$sidecar") || {
-  sidecar_setup_failed sidecar_attachment
-}
-daemon_ip=$(validated_outer_ipv4 "$container") || {
-  sidecar_setup_failed daemon_attachment
-}
+sidecar_ip=$(validated_outer_ipv4 sidecar "$sidecar") || exit 1
+daemon_ip=$(validated_outer_ipv4 daemon "$container") || exit 1
 [[ $sidecar_ip != "$daemon_ip" ]] || {
   sidecar_setup_failed address_collision
 }

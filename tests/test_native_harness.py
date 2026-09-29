@@ -1,5 +1,6 @@
 """Fault injection for exact resource cleanup and ignored native test selection."""
 
+import json
 import os
 import re
 import stat
@@ -14,6 +15,66 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class NativeHarnessTests(unittest.TestCase):
+    def test_outer_ipv4_diagnostics_are_closed_for_each_rejection(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
+        helper = source.split("validated_outer_ipv4() {", 1)[1].split(
+            "\n}\nsidecar_setup_failed()", 1
+        )[0]
+        network = "dl-native-net-fixture"
+        valid = {network: {"IPAddress": "10.89.0.2"}}
+        fixtures = (
+            ('{"private-canary":', "json_shape", "0"),
+            (json.dumps([]), "json_shape", "0"),
+            (json.dumps({}), "network_missing", "0"),
+            (json.dumps({**valid, "unexpected": {"IPAddress": "10.89.0.3"}}), "network_extra", "0"),
+            (json.dumps({network: {}}), "ipv4_missing", "0"),
+            (json.dumps({network: {"IPAddress": "private-canary"}}), "ipv4_malformed", "0"),
+            (json.dumps({network: {"IPAddress": 173604866}}), "ipv4_malformed", "0"),
+            (json.dumps({network: {"IPAddress": "8.8.8.8"}}), "ipv4_nonprivate", "0"),
+            (json.dumps(valid), "inspect_failed", "42"),
+            ("private-canary" * 300, "output_limit", "0"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            fake = Path(directory) / "podman"
+            fake.write_text(
+                '#!/usr/bin/env bash\nprintf %s "$FAKE_NETWORKS"\nexit "$FAKE_PODMAN_STATUS"\n',
+                encoding="utf-8",
+            )
+            fake.chmod(0o755)
+            script = (
+                'podman_cmd=("$FAKE_PODMAN")\n'
+                f'outer_network={network}\n'
+                f'validated_outer_ipv4() {{{helper}\n}}\n'
+                'validated_outer_ipv4 "$FAKE_ROLE" dl-native-fixture\n'
+            )
+            for role in ("sidecar", "daemon"):
+                for networks, category, status in fixtures:
+                    with self.subTest(role=role, category=category, status=status):
+                        env = os.environ.copy()
+                        env.update(FAKE_PODMAN=str(fake), FAKE_ROLE=role,
+                                   FAKE_NETWORKS=networks, FAKE_PODMAN_STATUS=status)
+                        result = subprocess.run(
+                            ["bash", "-c", script], env=env, capture_output=True,
+                            text=True, timeout=15, check=False,
+                        )
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertEqual(result.stdout, "")
+                        self.assertEqual(
+                            result.stderr.strip(),
+                            f"DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=attachment role={role} category={category}",
+                        )
+                        self.assertNotIn("private-canary", result.stderr)
+            env = os.environ.copy()
+            env.update(FAKE_PODMAN=str(fake), FAKE_ROLE="sidecar",
+                       FAKE_NETWORKS=json.dumps(valid), FAKE_PODMAN_STATUS="0")
+            result = subprocess.run(
+                ["bash", "-c", script], env=env, capture_output=True,
+                text=True, timeout=15, check=False,
+            )
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(result.stdout, "10.89.0.2\n")
+            self.assertEqual(result.stderr, "")
+
     def test_network_oracle_diagnostics_are_closed_and_do_not_hide_failure(self) -> None:
         source = (ROOT / "src/native_network_tests.rs").read_text(encoding="utf-8")
         negative_cli = source.split("fn cli(args:", 1)[1].split("fn network_cli_failure_category", 1)[0]
