@@ -18,6 +18,10 @@ static addresses, and static-address collisions are offline library-policy
 rejections before any Engine request. IPv4 `/31` and `/32` bridge parent subnets
 remain an explicit planning rejection; this extension does not establish their
 Engine behavior on any API or daemon mode.
+For native assertion failures, the exact-test wrapper may expose the selected
+native test's fixed source basename and bounded numeric line/column. It does not
+print the assertion message, compared values, thread name, or absolute build
+path. The location is diagnostic only and never changes a failed outcome.
 On a failed edge-side DNS positive, the network test may create one exact
 run-owned diagnostic peer. Its closed summary distinguishes resolver setup,
 default/explicit/dotted A lookups, named/direct-IP HTTP and cleanup without

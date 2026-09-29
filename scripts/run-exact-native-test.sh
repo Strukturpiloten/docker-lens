@@ -54,6 +54,14 @@ reason_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: target_start_reason_(operati
 error_category=$(grep -Eo '^DOCKERLENS_NATIVE_ERROR: (endpoint|cancelled|deadline|io|protocol|status|version|shape|budget)$' <<<"$result" | tail -n 1 || true)
 selection_error=$(grep -Eo '^DOCKERLENS_NATIVE_ERROR: selection$' <<<"$result" | tail -n 1 || true)
 if [[ -n $selection_error ]]; then error_category=$selection_error; fi
+# A panic's selected test source and numeric location identify an assertion
+# without disclosing its message, compared values, or an absolute build path.
+panic_site=
+case $target in
+  native_target | native_volume | native_network | native_volume_label | native_container)
+    panic_site=$(sed -nE "s/^thread '.*' panicked at src\/(${target}_tests)\.rs:([0-9]{1,6}):([0-9]{1,4}):$/DOCKERLENS_NATIVE_PANIC: source=\1 line=\2 column=\3/p" <<<"$result" | tail -n 1)
+    ;;
+esac
 if (( run_status != 0 )); then
   echo "required native test $target::$test_name failed (exit $run_status)" >&2
   if [[ -n $marker ]]; then echo "$marker" >&2; fi
@@ -61,6 +69,7 @@ if (( run_status != 0 )); then
   if [[ -n $collision_dns_diag ]]; then echo "$collision_dns_diag" >&2; fi
   if [[ -n $reason_marker ]]; then echo "$reason_marker" >&2; fi
   if [[ -n $error_category ]]; then echo "$error_category" >&2; fi
+  if [[ -n $panic_site ]]; then echo "$panic_site" >&2; fi
   if [[ -n $summary ]]; then
     echo "$summary" >&2
   fi
