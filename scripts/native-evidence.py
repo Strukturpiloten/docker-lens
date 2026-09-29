@@ -50,6 +50,10 @@ VOLUME_PROBES = (
     "ExistingVolumeReadOnlyData", "ExistingVolumeReadWriteData",
     "ExistingVolumePersistence", "MissingVolumePrecheck",
 )
+VOLUME_LABEL_PROBES = (
+    "VolumeCreateLabels", "VolumeLabelInspect",
+    "VolumeLabelPersistence", "VolumeLabelOwnershipCleanup",
+)
 
 
 def read_volume_probes(path: Path) -> list[str]:
@@ -71,7 +75,26 @@ def read_volume_probes(path: Path) -> list[str]:
     return list(VOLUME_PROBES)
 
 
-def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path: Path, volume_path: Path, destination: Path, lane: str, image: str,
+def read_volume_label_probes(path: Path) -> list[str]:
+    # The ignored native test owns this private file. Bound and validate it
+    # before allowing any of its contents into the sanitized manifest.
+    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    with os.fdopen(descriptor, "rb") as source:
+        metadata = os.fstat(source.fileno())
+        if not stat.S_ISREG(metadata.st_mode) or not 0 < metadata.st_size <= 4096:
+            raise ValueError("invalid native volume label probe file")
+        payload = source.read(4097)
+    if len(payload) != metadata.st_size:
+        raise ValueError("native volume label probe file changed")
+    probes = json.loads(payload)
+    if (not isinstance(probes, list) or len(probes) != len(VOLUME_LABEL_PROBES)
+            or any(not isinstance(probe, str) for probe in probes)
+            or set(probes) != set(VOLUME_LABEL_PROBES)):
+        raise ValueError("native volume label probe set is incomplete")
+    return list(VOLUME_LABEL_PROBES)
+
+
+def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path: Path, volume_path: Path, volume_label_path: Path, destination: Path, lane: str, image: str,
          mode: str, package: str, candidate_sha: str) -> None:
     if lane not in LANES or mode != lane.rsplit("-", 1)[1]:
         raise ValueError("invalid native lane or mode")
@@ -139,6 +162,7 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
             or set(source_probes) != set(SOURCE_PROBES)):
         raise ValueError("native source probe set is incomplete")
     volume_probes = read_volume_probes(volume_path)
+    volume_label_probes = read_volume_label_probes(volume_label_path)
 
     if network_path.stat().st_size > 4096:
         raise ValueError("native network evidence exceeds closed limit")
@@ -167,16 +191,17 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         "source_probes": list(SOURCE_PROBES),
         "network_probes": list(NETWORK_PROBES),
         "volume_probes": volume_probes,
+        "volume_label_probes": volume_label_probes,
     }
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(record, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 12:
-        raise SystemExit("usage: native-evidence.py VERSION_JSON SHAPES_JSON SOURCE_JSON NETWORK_JSON VOLUME_JSON DESTINATION LANE IMAGE MODE PACKAGE SHA")
+    if len(sys.argv) != 13:
+        raise SystemExit("usage: native-evidence.py VERSION_JSON SHAPES_JSON SOURCE_JSON NETWORK_JSON VOLUME_JSON VOLUME_LABEL_JSON DESTINATION LANE IMAGE MODE PACKAGE SHA")
     try:
         emit(Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]), Path(sys.argv[4]),
-             Path(sys.argv[5]), Path(sys.argv[6]), *sys.argv[7:])
+             Path(sys.argv[5]), Path(sys.argv[6]), Path(sys.argv[7]), *sys.argv[8:])
     except (ValueError, OSError, json.JSONDecodeError):
         raise SystemExit("native evidence rejected") from None

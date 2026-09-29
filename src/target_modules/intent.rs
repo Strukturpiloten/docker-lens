@@ -1,7 +1,8 @@
+use super::volume::{MAX_VOLUME_LABEL_COUNT, MAX_VOLUME_LABEL_TOTAL_BYTES};
 use super::{
     BridgeOption, ContainerIntent, ContainerSettings, ImageCommand, LogDriver, MemoryLimit,
     NetworkDriver, NetworkIntent, NetworkRole, NetworkSource, PidsLimit, PortHostIp, PortHostPort,
-    RestartPolicy, TargetKind, UlimitValue,
+    RestartPolicy, TargetKind, UlimitValue, VolumeLabel,
 };
 use crate::evidence::ProtectedValue;
 use crate::observation::ResourceRef;
@@ -43,6 +44,7 @@ pub enum TargetResource {
     Volume {
         reference: ResourceRef,
         identity: TargetIdentity,
+        labels: Vec<VolumeLabel>,
     },
     /// Exact caller-supplied destination name; existence and data are not inferred.
     ExternalVolume {
@@ -108,6 +110,8 @@ pub enum IntentError {
     DuplicateNetworkAttachment,
     DuplicateDefaultNetwork,
     InvalidNetworkAttachment,
+    InvalidVolumeLabel,
+    DuplicateVolumeLabel,
 }
 
 #[derive(Debug)]
@@ -147,6 +151,21 @@ impl TargetIntent {
         let mut default_network = false;
         let mut fixed_host_ports = Vec::new();
         for resource in &resources {
+            if let TargetResource::Volume { labels, .. } = resource {
+                if labels.len() > MAX_VOLUME_LABEL_COUNT
+                    || labels
+                        .iter()
+                        .map(|label| label.key().len() + label.value().len())
+                        .sum::<usize>()
+                        > MAX_VOLUME_LABEL_TOTAL_BYTES
+                {
+                    return Err(IntentError::InvalidVolumeLabel);
+                }
+                let mut keys = HashSet::new();
+                if !labels.iter().all(|label| keys.insert(label.key())) {
+                    return Err(IntentError::DuplicateVolumeLabel);
+                }
+            }
             if let TargetResource::Network(network) = resource {
                 if network.role == NetworkRole::ApplicationDefault {
                     if default_network {

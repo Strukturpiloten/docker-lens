@@ -58,4 +58,6 @@ mod native_network_tests;
 #[cfg(test)]
 mod native_target_tests;
 #[cfg(test)]
+mod native_volume_label_tests;
+#[cfg(test)]
 mod native_volume_tests;
