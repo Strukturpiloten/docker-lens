@@ -1,6 +1,7 @@
 //! Test-only, isolated Engine probes for the typed container target contract.
 //! The product renderer remains inert; this module alone applies synthetic requests.
 
+use std::cell::Cell;
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::{Read, Write};
@@ -229,7 +230,7 @@ fn start_failure_body_diagnostic(body: &[u8]) -> String {
         // These are lexical mentions only; protected paths can contain the same words.
         let lower = message.to_ascii_lowercase();
         return format!(
-            "DOCKERLENS_NATIVE_START_BODY_DIAG: shape={shape} cgroup_mention={} device_mention={} sysctl_mention={} ulimit_mention={} apparmor_mention={} permission_phrase={}",
+            "DOCKERLENS_NATIVE_START_BODY_DIAG: shape={shape} cgroup_mention={} device_mention={} sysctl_mention={} ulimit_mention={} apparmor_mention={} permission_phrase={} errno_mention={} controller_mention={} bpf_mention={}",
             category(lower.contains("cgroup")),
             category(lower.contains("device")),
             category(lower.contains("sysctl")),
@@ -240,20 +241,23 @@ fn start_failure_body_diagnostic(body: &[u8]) -> String {
                     || lower.contains("operation not permitted")
                     || lower.contains("access denied")
             ),
+            category(lower.contains("errno")),
+            category(lower.contains("controller")),
+            category(lower.contains("bpf")),
         );
     }
     format!(
-        "DOCKERLENS_NATIVE_START_BODY_DIAG: shape={shape} cgroup_mention=unknown device_mention=unknown sysctl_mention=unknown ulimit_mention=unknown apparmor_mention=unknown permission_phrase=unknown"
+        "DOCKERLENS_NATIVE_START_BODY_DIAG: shape={shape} cgroup_mention=unknown device_mention=unknown sysctl_mention=unknown ulimit_mention=unknown apparmor_mention=unknown permission_phrase=unknown errno_mention=unknown controller_mention=unknown bpf_mention=unknown"
     )
 }
 
 #[test]
 fn start_failure_body_diagnostic_is_structured_closed_and_private() {
-    let body = br#"{"message":"cgroup device sysctl ulimit AppArmor operation not permitted protected-secret"}"#;
+    let body = br#"{"message":"cgroup device sysctl ulimit AppArmor operation not permitted errno controller bpf protected-secret"}"#;
     let diagnostic = start_failure_body_diagnostic(body);
     assert_eq!(
         diagnostic,
-        "DOCKERLENS_NATIVE_START_BODY_DIAG: shape=message cgroup_mention=present device_mention=present sysctl_mention=present ulimit_mention=present apparmor_mention=present permission_phrase=present"
+        "DOCKERLENS_NATIVE_START_BODY_DIAG: shape=message cgroup_mention=present device_mention=present sysctl_mention=present ulimit_mention=present apparmor_mention=present permission_phrase=present errno_mention=present controller_mention=present bpf_mention=present"
     );
     assert!(!diagnostic.contains("protected-secret"));
     for (word, field) in [
@@ -263,6 +267,9 @@ fn start_failure_body_diagnostic_is_structured_closed_and_private() {
         ("rlimit", "ulimit_mention=present"),
         ("apparmor", "apparmor_mention=present"),
         ("permission denied", "permission_phrase=present"),
+        ("errno", "errno_mention=present"),
+        ("controller", "controller_mention=present"),
+        ("bpf", "bpf_mention=present"),
     ] {
         let body = json!({"message":word}).to_string();
         assert!(start_failure_body_diagnostic(body.as_bytes()).contains(field));
@@ -521,6 +528,15 @@ impl ProbeEvidence {
         );
     }
 
+    fn merge(&mut self, group: ProbeEvidence) {
+        for shape in group.positive {
+            self.positive(shape);
+        }
+        for (shape, reason) in group.expected_negative {
+            self.expected_negative(shape, reason);
+        }
+    }
+
     fn complete(&self) -> Value {
         let observed: BTreeSet<_> = self
             .positive
@@ -550,6 +566,7 @@ impl ProbeEvidence {
 
 #[test]
 fn closed_container_probe_evidence_rejects_gaps_and_overlap() {
+    assert_eq!(EXPECTED_SHAPES.len(), 57, "original closed shape count");
     let mut evidence = ProbeEvidence::default();
     evidence.positive("ExposedOnlyPort");
     assert!(std::panic::catch_unwind(|| evidence.complete()).is_err());
@@ -730,6 +747,113 @@ struct NativeRun {
     outer_identity: Option<String>,
     created: Vec<(String, String)>,
     images: Vec<String>,
+    uncertain_mutation: Cell<bool>,
+}
+
+#[derive(Default)]
+struct OwnedInventory {
+    containers: Vec<(String, String)>,
+    images: Vec<(String, String)>,
+}
+
+impl OwnedInventory {
+    fn is_empty(&self) -> bool {
+        self.containers.is_empty() && self.images.is_empty()
+    }
+}
+
+fn canonical_container_id(id: &str) -> bool {
+    id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn canonical_image_id(id: &str) -> bool {
+    id.strip_prefix("sha256:")
+        .is_some_and(canonical_container_id)
+}
+
+fn checked_labelled_image_row<'a>(
+    line: &'a str,
+    references: &BTreeSet<String>,
+) -> (&'a str, &'a str) {
+    let (id, found) = line.split_once(' ').expect("closed labelled image row");
+    assert!(canonical_image_id(id), "canonical labelled image ID");
+    assert!(
+        references.contains(found),
+        "exact task-owned labelled image tag"
+    );
+    (id, found)
+}
+
+fn cli_is_read_only(args: &[String]) -> bool {
+    matches!(args, [first, second, ..] if first == "container" && matches!(second.as_str(), "ls" | "wait" | "inspect"))
+        || matches!(args, [first, second, ..] if first == "image" && matches!(second.as_str(), "ls" | "inspect"))
+        || matches!(args.first().map(String::as_str), Some("logs"))
+}
+
+#[test]
+fn failed_native_cli_mutations_are_conservative() {
+    for args in [
+        vec!["container", "create"],
+        vec!["container", "stop"],
+        vec!["commit", "source", "target"],
+        vec!["image", "rm"],
+        vec!["exec", "container", "sh"],
+        vec!["unknown", "operation"],
+    ] {
+        assert!(!cli_is_read_only(
+            &args.into_iter().map(str::to_owned).collect::<Vec<_>>()
+        ));
+    }
+    for args in [
+        vec!["container", "ls"],
+        vec!["container", "wait"],
+        vec!["image", "ls"],
+        vec!["image", "inspect"],
+        vec!["logs", "container"],
+    ] {
+        assert!(cli_is_read_only(
+            &args.into_iter().map(str::to_owned).collect::<Vec<_>>()
+        ));
+    }
+}
+
+#[test]
+fn owned_inventory_ids_are_exact_and_closed() {
+    assert!(canonical_container_id(&"a".repeat(64)));
+    assert!(canonical_image_id(&format!("sha256:{}", "b".repeat(64))));
+    for invalid in [
+        "",
+        "a",
+        &"z".repeat(64),
+        &format!("{} extra", "a".repeat(64)),
+    ] {
+        assert!(!canonical_container_id(invalid));
+    }
+    assert!(!canonical_image_id(&"a".repeat(64)));
+}
+
+#[test]
+fn unexpected_run_labelled_image_prevents_verified_cleanup() {
+    let expected = "localhost/dl-container-test-health-default:latest".to_owned();
+    let references = BTreeSet::from([expected.clone()]);
+    let id = format!("sha256:{}", "a".repeat(64));
+    assert_eq!(
+        checked_labelled_image_row(&format!("{id} {expected}"), &references),
+        (id.as_str(), expected.as_str())
+    );
+    for found in ["<none>:<none>", "localhost/unexpected:latest"] {
+        let result = std::panic::catch_unwind(|| {
+            checked_labelled_image_row(&format!("{id} {found}"), &references);
+        });
+        assert!(
+            result.is_err(),
+            "unexpected labelled image must fail inventory"
+        );
+        assert_eq!(
+            group_decision(true, result.is_ok(), false),
+            GroupDecision::StopCleanup
+        );
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -890,6 +1014,7 @@ impl NativeRun {
             outer_identity: None,
             created: Vec::new(),
             images: Vec::new(),
+            uncertain_mutation: Cell::new(false),
         }
     }
 
@@ -910,6 +1035,10 @@ impl NativeRun {
     fn api(&self, method: &str, path: &str, body: Option<&Value>) -> (u16, Vec<u8>) {
         assert!(matches!(method, "GET" | "POST" | "DELETE"));
         assert!(path.starts_with(&format!("/v{}/containers/", self.api_version)));
+        let previous_uncertainty = self.uncertain_mutation.get();
+        if method != "GET" {
+            self.uncertain_mutation.set(true);
+        }
         let mut command = Command::new("curl");
         command.args([
             "-sS",
@@ -944,6 +1073,9 @@ impl NativeRun {
             .wait_with_output()
             .expect("bounded Engine API request");
         if !output.status.success() {
+            if method != "GET" {
+                self.uncertain_mutation.set(true);
+            }
             let category = if output.status.code() == Some(28) {
                 "timeout"
             } else {
@@ -959,15 +1091,33 @@ impl NativeRun {
             .stdout
             .iter()
             .rposition(|byte| *byte == b'\n')
-            .expect("HTTP status");
+            .unwrap_or_else(|| {
+                if method != "GET" {
+                    self.uncertain_mutation.set(true);
+                }
+                panic!("HTTP status")
+            });
         let status = std::str::from_utf8(&output.stdout[split + 1..])
-            .unwrap()
-            .parse()
-            .expect("numeric HTTP status");
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or_else(|| {
+                if method != "GET" {
+                    self.uncertain_mutation.set(true);
+                }
+                panic!("numeric HTTP status")
+            });
+        if (100..=599).contains(&status) {
+            self.uncertain_mutation.set(previous_uncertainty);
+        }
         (status, output.stdout[..split].to_vec())
     }
 
     fn cli(&self, args: &[String]) -> String {
+        let mutating = !cli_is_read_only(args);
+        let previous_uncertainty = self.uncertain_mutation.get();
+        if mutating {
+            self.uncertain_mutation.set(true);
+        }
         let mut command = Command::new("timeout");
         command.args(["--kill-after=1", "45"]);
         if required("NATIVE_PODMAN_USE_SUDO") == "1" {
@@ -992,6 +1142,7 @@ impl NativeRun {
             );
         }
         assert!(output.status.success(), "independent CLI oracle failed");
+        self.uncertain_mutation.set(previous_uncertainty);
         String::from_utf8(output.stdout).expect("CLI output UTF-8")
     }
 
@@ -1396,7 +1547,21 @@ impl NativeRun {
     }
 
     fn delete(&mut self, id: &str) {
+        let name = self
+            .created
+            .iter()
+            .find(|(_, created_id)| created_id == id)
+            .map(|(name, _)| name.clone())
+            .expect("tracked task-owned container ID");
+        self.delete_owned(&name, id);
+    }
+
+    fn delete_owned(&mut self, name: &str, id: &str) {
+        assert!(canonical_container_id(id), "canonical owned container ID");
+        assert!(name.starts_with(&format!("dl-container-{}-", self.run_id)));
         let inspected = self.inspect(id);
+        assert_eq!(inspected["Id"], id);
+        assert_eq!(inspected["Name"], format!("/{name}"));
         assert_eq!(
             inspected["Config"]["Labels"]["io.dockerlens.native-run"],
             self.run_id
@@ -1410,19 +1575,156 @@ impl NativeRun {
         self.created.retain(|(_, created_id)| created_id != id);
     }
 
-    fn cleanup(mut self) {
+    fn cleanup_tracked_containers(&mut self) {
         while let Some((_, id)) = self.created.last().cloned() {
             self.delete(&id);
         }
-        while let Some(image) = self.images.pop() {
-            let inspected = self.cli(&["image".into(), "inspect".into(), image.clone()]);
-            let inspected: Value = serde_json::from_str(&inspected).unwrap();
+    }
+
+    fn owned_inventory(&self) -> OwnedInventory {
+        let prefix = format!("dl-container-{}-", self.run_id);
+        let mut rows = BTreeSet::new();
+        for (filter, require_prefix) in [
+            (format!("name=^/{prefix}"), true),
+            (
+                format!("label=io.dockerlens.native-run={}", self.run_id),
+                false,
+            ),
+        ] {
+            let listed = self.cli(&[
+                "container".into(),
+                "ls".into(),
+                "--all".into(),
+                "--no-trunc".into(),
+                "--filter".into(),
+                filter,
+                "--format".into(),
+                "{{.ID}} {{.Names}}".into(),
+            ]);
+            for line in listed.lines() {
+                let (id, name) = line
+                    .split_once(' ')
+                    .expect("closed container inventory row");
+                if require_prefix {
+                    assert!(name.starts_with(&prefix), "exact container-test namespace");
+                }
+                if name.starts_with(&prefix) {
+                    rows.insert((id.to_owned(), name.to_owned()));
+                }
+            }
+        }
+        let mut inventory = OwnedInventory::default();
+        for (id, name) in rows {
+            assert!(canonical_container_id(&id), "canonical inventory ID");
+            assert!(name.starts_with(&prefix), "exact container-test namespace");
+            assert!(valid_container_suffix(&name[prefix.len()..]));
+            let inspected = self.inspect(&id);
+            assert_eq!(inspected["Id"], id);
+            assert_eq!(inspected["Name"], format!("/{name}"));
+            assert_eq!(
+                inspected["Config"]["Labels"]["io.dockerlens.native-run"],
+                self.run_id
+            );
+            inventory.containers.push((name, id));
+        }
+        let references: BTreeSet<_> = ["health-default", "command-default", "entrypoint-default"]
+            .into_iter()
+            .map(|role| self.image_name(role))
+            .collect();
+        let mut image_rows = BTreeSet::new();
+        let labelled = self.cli(&[
+            "image".into(),
+            "ls".into(),
+            "--all".into(),
+            "--no-trunc".into(),
+            "--filter".into(),
+            format!("label=io.dockerlens.native-run={}", self.run_id),
+            "--format".into(),
+            "{{.ID}} {{.Repository}}:{{.Tag}}".into(),
+        ]);
+        for line in labelled.lines() {
+            let (id, found) = checked_labelled_image_row(line, &references);
+            image_rows.insert((id.to_owned(), found.to_owned()));
+        }
+        for reference in &references {
+            let filter = format!("reference={reference}");
+            let listed = self.cli(&[
+                "image".into(),
+                "ls".into(),
+                "--no-trunc".into(),
+                "--filter".into(),
+                filter,
+                "--format".into(),
+                "{{.ID}} {{.Repository}}:{{.Tag}}".into(),
+            ]);
+            for line in listed.lines() {
+                let (id, found) = line.split_once(' ').expect("closed image inventory row");
+                assert_eq!(found, reference);
+                image_rows.insert((id.to_owned(), found.to_owned()));
+            }
+        }
+        for (id, found) in image_rows {
+            assert!(canonical_image_id(&id), "canonical image inventory ID");
+            let inspected = self.cli(&["image".into(), "inspect".into(), found.clone()]);
+            let inspected: Value = serde_json::from_str(&inspected).expect("private image inspect");
+            assert_eq!(inspected[0]["Id"], id);
             assert_eq!(
                 inspected[0]["Config"]["Labels"]["io.dockerlens.native-run"],
                 self.run_id
             );
-            self.cli(&["image".into(), "rm".into(), image]);
+            assert!(
+                inspected[0]["RepoTags"]
+                    .as_array()
+                    .is_some_and(|tags| tags.iter().any(|tag| tag == &found)),
+                "exact task-owned image tag"
+            );
+            inventory.images.push((found, id));
         }
+        inventory
+    }
+
+    fn cleanup_verified(&mut self) -> bool {
+        let tracked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.cleanup_tracked_containers()
+        }))
+        .is_ok();
+        let inventoried = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let inventory = self.owned_inventory();
+            for expected in &self.images {
+                assert!(
+                    inventory
+                        .images
+                        .iter()
+                        .any(|(reference, _)| reference == expected),
+                    "tracked owned image present before cleanup"
+                );
+            }
+            for (name, id) in inventory.containers {
+                self.delete_owned(&name, &id);
+            }
+            for (reference, id) in inventory.images {
+                self.cli(&["image".into(), "rm".into(), reference]);
+                let remaining = self.cli(&[
+                    "image".into(),
+                    "ls".into(),
+                    "--all".into(),
+                    "--no-trunc".into(),
+                    "--filter".into(),
+                    format!("label=io.dockerlens.native-run={}", self.run_id),
+                    "--format".into(),
+                    "{{.ID}}".into(),
+                ]);
+                assert!(
+                    !remaining.lines().any(|line| line == id),
+                    "owned image ID removed"
+                );
+            }
+            assert!(self.owned_inventory().is_empty(), "owned resources absent");
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            assert!(self.owned_inventory().is_empty(), "owned absence stable");
+        }))
+        .is_ok();
+        tracked && inventoried
     }
 
     fn image_with_defaults(
@@ -4453,27 +4755,133 @@ fn probe_alternative_logging(run: &mut NativeRun, evidence: &mut ProbeEvidence) 
 #[test]
 #[ignore = "requires the isolated exact-version native Engine harness"]
 fn live_container_settings_match_engine() {
-    let mut run = NativeRun::new();
-    let mut evidence = ProbeEvidence::default();
-    assert_exact_mode_boundary(&run);
-    probe_ports(&mut run, &mut evidence);
-    probe_complementary_ports(&mut run, &mut evidence);
-    probe_identity_and_health(&mut run, &mut evidence);
-    probe_health_start_period_zero(&mut run, &mut evidence);
-    probe_clear_and_start_interval(&mut run, &mut evidence);
-    probe_storage_and_lifecycle(&mut run, &mut evidence);
-    probe_false_storage_and_zero_stop(&mut run, &mut evidence);
-    probe_resources_and_security(&mut run, &mut evidence);
-    probe_unlimited_resources_and_cap_add(&mut run, &mut evidence);
-    probe_resolver_and_logging(&mut run, &mut evidence);
-    probe_ipv6_resolver(&mut run, &mut evidence);
-    probe_alternative_logging(&mut run, &mut evidence);
-    let closed = evidence.complete();
-    run.cleanup();
     let path = PathBuf::from(required("NATIVE_CONTAINER_PROBES_PATH"));
     assert_eq!(
         path.parent(),
         Some(PathBuf::from(required("NATIVE_CAPTURE_DIR")).as_path())
     );
+    assert!(!path.exists(), "fresh private probe artifact path");
+    let mut evidence = ProbeEvidence::default();
+    let mut failed = false;
+    for (name, probe) in GROUPS {
+        let mut run = NativeRun::new();
+        let initial = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run.owned_inventory().is_empty()
+        }));
+        if !matches!(initial, Ok(true)) {
+            eprintln!("DOCKERLENS_NATIVE_GROUP_FAILURE: group={name} reason=preflight");
+            failed = true;
+            break;
+        }
+        let mut group_evidence = ProbeEvidence::default();
+        let probe_ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            probe(&mut run, &mut group_evidence);
+        }))
+        .is_ok();
+        let cleaned = run.cleanup_verified();
+        let uncertain = run.uncertain_mutation.get();
+        match group_decision(probe_ok, cleaned, uncertain) {
+            GroupDecision::Merge => evidence.merge(group_evidence),
+            GroupDecision::ContinueFailed => {
+                eprintln!("DOCKERLENS_NATIVE_GROUP_FAILURE: group={name} reason=probe");
+                failed = true;
+            }
+            GroupDecision::StopCleanup => {
+                eprintln!(
+                    "DOCKERLENS_NATIVE_GROUP_FAILURE: group={name} reason=cleanup_unverified"
+                );
+                failed = true;
+                break;
+            }
+            GroupDecision::StopUncertain => {
+                eprintln!(
+                    "DOCKERLENS_NATIVE_GROUP_FAILURE: group={name} reason=mutation_uncertain"
+                );
+                failed = true;
+                break;
+            }
+        }
+    }
+    assert!(!failed, "closed native group failure");
+    let closed = evidence.complete();
     fs::write(path, serde_json::to_vec(&closed).unwrap()).expect("private closed probe output");
+}
+
+type GroupProbe = fn(&mut NativeRun, &mut ProbeEvidence);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GroupDecision {
+    Merge,
+    ContinueFailed,
+    StopCleanup,
+    StopUncertain,
+}
+
+fn group_decision(probe_ok: bool, cleaned: bool, uncertain: bool) -> GroupDecision {
+    if !cleaned {
+        GroupDecision::StopCleanup
+    } else if uncertain {
+        GroupDecision::StopUncertain
+    } else if probe_ok {
+        GroupDecision::Merge
+    } else {
+        GroupDecision::ContinueFailed
+    }
+}
+
+#[test]
+fn group_failure_never_merges_or_continues_without_proven_cleanup() {
+    assert_eq!(group_decision(true, true, false), GroupDecision::Merge);
+    assert_eq!(
+        group_decision(false, true, false),
+        GroupDecision::ContinueFailed
+    );
+    for probe_ok in [true, false] {
+        for uncertain in [true, false] {
+            assert_eq!(
+                group_decision(probe_ok, false, uncertain),
+                GroupDecision::StopCleanup
+            );
+        }
+        assert_eq!(
+            group_decision(probe_ok, true, true),
+            GroupDecision::StopUncertain
+        );
+    }
+}
+
+const GROUPS: [(&str, GroupProbe); 5] = [
+    ("ports", probe_port_group),
+    ("identity_health_clear", probe_identity_health_clear_group),
+    ("storage_lifecycle", probe_storage_lifecycle_group),
+    ("resources_security", probe_resources_security_group),
+    ("resolver_logging", probe_resolver_logging_group),
+];
+
+fn probe_port_group(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
+    assert_exact_mode_boundary(run);
+    probe_ports(run, evidence);
+    probe_complementary_ports(run, evidence);
+}
+
+fn probe_identity_health_clear_group(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
+    probe_identity_and_health(run, evidence);
+    probe_health_start_period_zero(run, evidence);
+    probe_clear_and_start_interval(run, evidence);
+}
+
+fn probe_storage_lifecycle_group(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
+    probe_storage_and_lifecycle(run, evidence);
+    probe_false_storage_and_zero_stop(run, evidence);
+}
+
+fn probe_resources_security_group(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
+    probe_resources_and_security(run, evidence);
+    probe_unlimited_resources_and_cap_add(run, evidence);
+}
+
+fn probe_resolver_logging_group(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
+    probe_resolver_and_logging(run, evidence);
+    probe_ipv6_resolver(run, evidence);
+    probe_alternative_logging(run, evidence);
 }

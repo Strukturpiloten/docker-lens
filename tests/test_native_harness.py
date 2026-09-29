@@ -441,9 +441,9 @@ if [[ $* == *--list* ]]; then
   echo 'native_container_tests::live_container_settings_match_engine: test'
 else
   echo 'DOCKERLENS_NATIVE_CHECK: container_resources_security_oracle_start' >&2
-  echo 'DOCKERLENS_NATIVE_START_BODY_DIAG: shape=message cgroup_mention=present device_mention=absent sysctl_mention=absent ulimit_mention=absent apparmor_mention=absent permission_phrase=present' >&2
-  echo 'DOCKERLENS_NATIVE_START_BODY_DIAG: shape=message cgroup_mention=protected-secret device_mention=absent sysctl_mention=absent ulimit_mention=absent apparmor_mention=absent permission_phrase=present' >&2
-  echo 'DOCKERLENS_NATIVE_START_BODY_DIAG: shape=message cgroup_mention=present device_mention=absent sysctl_mention=absent ulimit_mention=absent apparmor_mention=absent permission_phrase=present raw=protected-secret' >&2
+  echo 'DOCKERLENS_NATIVE_START_BODY_DIAG: shape=message cgroup_mention=present device_mention=absent sysctl_mention=absent ulimit_mention=absent apparmor_mention=absent permission_phrase=present errno_mention=absent controller_mention=absent bpf_mention=absent' >&2
+  echo 'DOCKERLENS_NATIVE_START_BODY_DIAG: shape=message cgroup_mention=protected-secret device_mention=absent sysctl_mention=absent ulimit_mention=absent apparmor_mention=absent permission_phrase=present errno_mention=absent controller_mention=absent bpf_mention=absent' >&2
+  echo 'DOCKERLENS_NATIVE_START_BODY_DIAG: shape=message cgroup_mention=present device_mention=absent sysctl_mention=absent ulimit_mention=absent apparmor_mention=absent permission_phrase=present errno_mention=absent controller_mention=absent bpf_mention=absent raw=protected-secret' >&2
   echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
   exit 23
 fi
@@ -456,8 +456,37 @@ fi
                 env=env, capture_output=True, text=True, timeout=15, check=False,
             )
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("DOCKERLENS_NATIVE_START_BODY_DIAG: shape=message cgroup_mention=present device_mention=absent sysctl_mention=absent ulimit_mention=absent apparmor_mention=absent permission_phrase=present", result.stderr)
+            self.assertIn("DOCKERLENS_NATIVE_START_BODY_DIAG: shape=message cgroup_mention=present device_mention=absent sysctl_mention=absent ulimit_mention=absent apparmor_mention=absent permission_phrase=present errno_mention=absent controller_mention=absent bpf_mention=absent", result.stderr)
             self.assertNotIn("protected-secret", result.stdout + result.stderr)
+
+    def test_group_failures_are_closed_bounded_and_do_not_print_panic_text(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_container_tests::live_container_settings_match_engine: test'
+else
+  for _ in 1 2 3 4 5 6; do
+    echo 'DOCKERLENS_NATIVE_GROUP_FAILURE: group=ports reason=probe' >&2
+  done
+  echo 'DOCKERLENS_NATIVE_GROUP_FAILURE: group=protected-secret reason=probe' >&2
+  echo 'thread protected-secret panicked at secret path and value' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            result = subprocess.run(
+                [str(ROOT / "scripts/run-exact-native-test.sh"), "native_container",
+                 "live_container_settings_match_engine"],
+                env=env, capture_output=True, text=True, timeout=15, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(result.stderr.count("DOCKERLENS_NATIVE_GROUP_FAILURE:"), 5)
+            self.assertNotIn("protected-secret", result.stdout + result.stderr)
+            self.assertNotIn("secret path", result.stdout + result.stderr)
 
     def test_ipv6_probe_name_and_repeated_ipv4_oracle_are_live_and_bounded(self) -> None:
         source = (ROOT / "src/native_container_tests.rs").read_text(encoding="utf-8")

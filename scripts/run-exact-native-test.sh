@@ -76,7 +76,8 @@ cap_drop_diag=$(grep -Eo '^DOCKERLENS_NATIVE_CAP_DROP_DIAG: phase=(oracle|render
 isolation_diag=$(grep -Eo '^DOCKERLENS_NATIVE_ISOLATION_DIAG: result=(refused|connected|timeout|other)$' "$capture_path" | tail -n 1 || true)
 namespace_diag=$(grep -Eo '^DOCKERLENS_NATIVE_NAMESPACE_DIAG: category=(input|inspect|identity|changed|process|missing_tool|probe)$' "$capture_path" | tail -n 1 || true)
 api_diag=$(grep -Eo '^DOCKERLENS_NATIVE_API_DIAG: (transport=(timeout|other)|status=(invalid_request|not_found|conflict|server|other))$' "$capture_path" | tail -n 1 || true)
-start_body_diag=$(grep -Eo '^DOCKERLENS_NATIVE_START_BODY_DIAG: shape=(message|missing|malformed|oversize) cgroup_mention=(present|absent|unknown) device_mention=(present|absent|unknown) sysctl_mention=(present|absent|unknown) ulimit_mention=(present|absent|unknown) apparmor_mention=(present|absent|unknown) permission_phrase=(present|absent|unknown)$' "$capture_path" | tail -n 1 || true)
+start_body_diag=$(grep -Eo '^DOCKERLENS_NATIVE_START_BODY_DIAG: shape=(message|missing|malformed|oversize) cgroup_mention=(present|absent|unknown) device_mention=(present|absent|unknown) sysctl_mention=(present|absent|unknown) ulimit_mention=(present|absent|unknown) apparmor_mention=(present|absent|unknown) permission_phrase=(present|absent|unknown) errno_mention=(present|absent|unknown) controller_mention=(present|absent|unknown) bpf_mention=(present|absent|unknown)$' "$capture_path" | tail -n 1 || true)
+group_failures=$(grep -E '^DOCKERLENS_NATIVE_GROUP_FAILURE: group=(ports|identity_health_clear|storage_lifecycle|resources_security|resolver_logging) reason=(preflight|probe|cleanup_unverified|mutation_uncertain)$' "$capture_path" | head -n 5 || true)
 reason_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: target_start_reason_(operation_not_permitted|permission_denied|invalid_argument|read_only_filesystem|not_found|timeout|unclassified)$' "$capture_path" | tail -n 1 || true)
 error_category=$(grep -Eo '^DOCKERLENS_NATIVE_ERROR: (endpoint|cancelled|deadline|io|protocol|status|version|shape|budget)$' "$capture_path" | tail -n 1 || true)
 selection_error=$(grep -Eo '^DOCKERLENS_NATIVE_ERROR: selection$' "$capture_path" | tail -n 1 || true)
@@ -106,6 +107,7 @@ if (( run_status != 0 )); then
   if [[ -n $namespace_diag ]]; then echo "$namespace_diag" >&2; fi
   if [[ -n $api_diag ]]; then echo "$api_diag" >&2; fi
   if [[ -n $start_body_diag ]]; then echo "$start_body_diag" >&2; fi
+  if [[ -n $group_failures ]]; then printf '%s\n' "$group_failures" >&2; fi
   if [[ -n $dns_diag ]]; then echo "$dns_diag" >&2; fi
   if [[ -n $collision_dns_diag ]]; then echo "$collision_dns_diag" >&2; fi
   if [[ -n $reason_marker ]]; then echo "$reason_marker" >&2; fi
