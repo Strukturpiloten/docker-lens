@@ -25,71 +25,71 @@ class NativeHarnessTests(unittest.TestCase):
             (
                 "permission denied private-canary", 0,
                 "bind: address already in use private-canary", 0, "permission", "logs_query",
-                "private-canary", "private-canary",
+                "private-canary", "private-canary", "bind_error",
             ),
             (
                 "private-canary", 0,
                 "bind: address already in use private-canary", 0,
                 "permission", "logs_query",
-                "permission denied private-canary", "private-canary",
+                "permission denied private-canary", "private-canary", "bind_error",
             ),
             (
                 "private-canary", 0,
                 "bind: address already in use private-canary", 0, "bind_error", "state_error",
-                "private-canary", "private-canary",
+                "private-canary", "private-canary", "bind_error",
             ),
             (
                 "permission denied private-canary", 42,
                 "bind: address already in use private-canary", 0, "bind_error", "state_error",
-                "private-canary", "private-canary",
+                "private-canary", "private-canary", "bind_error",
             ),
             (
                 "private-canary", 0,
                 "permission denied private-canary", 0, "permission", "state_error",
-                "private-canary", "private-canary",
+                "private-canary", "private-canary", "permission",
             ),
             (
                 "private-canary", 0, "private-canary", 0, "permission", "logs_query",
-                "permission denied private-canary", "private-canary",
+                "permission denied private-canary", "private-canary", "unknown",
             ),
             (
                 "private-canary", 0, "private-canary", 0, "unknown", "none",
-                "private-canary", "permission denied private-canary",
+                "private-canary", "permission denied private-canary", "unknown",
             ),
             (
                 "permission denied private-canary", 42,
                 "private-canary", 0, "unknown", "none",
-                "permission denied private-canary", "private-canary",
+                "permission denied private-canary", "private-canary", "unknown",
             ),
             (
                 "permission denied private-canary", 42,
                 "bind: address already in use private-canary", 42, "unknown", "none",
-                "permission denied private-canary", "permission denied private-canary",
+                "permission denied private-canary", "permission denied private-canary", "unavailable",
             ),
             (
                 "DOCKERLENS_SIDECAR_STAGE: write_ok", 0,
                 "private-canary", 0, "unknown", "none",
-                "private-canary", "private-canary",
+                "private-canary", "private-canary", "unknown",
             ),
             (
                 "private-canary", 0,
                 "private-canary", 0, "unknown", "none",
-                "DOCKERLENS_SIDECAR_STAGE: write_ok\nprivate-canary", "private-canary",
+                "DOCKERLENS_SIDECAR_STAGE: write_ok\nprivate-canary", "private-canary", "unknown",
             ),
             (
                 "DOCKERLENS_SIDECAR_STAGE: write_failed", 0,
                 "private-canary", 0, "unknown", "none",
-                "private-canary", "private-canary",
+                "private-canary", "private-canary", "unknown",
             ),
             (
                 "DOCKERLENS_SIDECAR_STAGE: write_ok\nhttpd: permission denied private-canary", 0,
                 "private-canary", 0, "permission", "logs_query",
-                "private-canary", "private-canary",
+                "private-canary", "private-canary", "unknown",
             ),
             (
                 "DOCKERLENS_SIDECAR_STAGE: write_ok", 42,
                 "private-canary", 0, "unknown", "none",
-                "permission denied private-canary", "private-canary",
+                "permission denied private-canary", "private-canary", "unknown",
             ),
         )
         with tempfile.TemporaryDirectory() as directory:
@@ -115,7 +115,7 @@ class NativeHarnessTests(unittest.TestCase):
             )
             for (
                 logs, logs_status, state, state_status,
-                category, origin, logs_stderr, state_stderr,
+                category, origin, logs_stderr, state_stderr, expected_state_error,
             ) in cases:
                 with self.subTest(
                     category=category, source=origin,
@@ -150,7 +150,7 @@ class NativeHarnessTests(unittest.TestCase):
                         result.stderr.strip(),
                         "DOCKERLENS_NATIVE_SIDECAR_SETUP: "
                         f"phase=sidecar_failure category={category} source={origin} "
-                        f"write_stage={expected_stage}",
+                        f"write_stage={expected_stage} state_error={expected_state_error}",
                     )
                     self.assertNotIn("private-canary", result.stderr)
 
@@ -1187,7 +1187,8 @@ logs)
     echo 'sh: httpd: not found private-canary' >&2
   elif [[ $FAKE_NATIVE_FAULT == sidecar_write_failed ]]; then
     echo 'DOCKERLENS_SIDECAR_STAGE: write_failed' >&2
-  elif [[ $FAKE_NATIVE_FAULT == sidecar_httpd_failed ]]; then
+  elif [[ $FAKE_NATIVE_FAULT == sidecar_httpd_failed ||
+    $FAKE_NATIVE_FAULT == sidecar_conflicting_state_error ]]; then
     echo 'DOCKERLENS_SIDECAR_STAGE: write_ok' >&2
     echo 'httpd: permission denied private-canary' >&2
   elif [[ $FAKE_NATIVE_FAULT == sidecar_logs_query_error ]]; then
@@ -1219,13 +1220,16 @@ logs)
       $FAKE_NATIVE_FAULT == sidecar_state_error_field ||
       $FAKE_NATIVE_FAULT == sidecar_write_failed ||
       $FAKE_NATIVE_FAULT == sidecar_httpd_failed ||
+      $FAKE_NATIVE_FAULT == sidecar_conflicting_state_error ||
       $FAKE_NATIVE_FAULT == sidecar_logs_query_error ]]; then
    echo 'false|exited|127'
  else
    echo 'true|running|0'
  fi
  elif [[ $* == *State.Error* ]]; then
- if [[ $FAKE_NATIVE_FAULT == sidecar_state_error_field ]]; then
+ if [[ $FAKE_NATIVE_FAULT == sidecar_state_error_field ||
+   $FAKE_NATIVE_FAULT == sidecar_conflicting_state_error ]]; then
+   touch "$state/state_error_inspected"
    echo 'bind: address already in use private-canary'
  fi
  elif [[ $* == *HostConfig.Privileged* ]]; then echo true
@@ -1263,6 +1267,7 @@ esac
             ("debian11-rootful", "sidecar_exited_empty_ip"),
             ("debian11-rootful", "sidecar_write_failed"),
             ("debian11-rootful", "sidecar_httpd_failed"),
+            ("debian11-rootful", "sidecar_conflicting_state_error"),
             ("debian11-rootful", "sidecar_logs_query_error"),
             ("debian11-rootful", "sidecar_state_error_field"),
             ("debian11-rootful", "sidecar_running_empty_ip"),
@@ -1388,16 +1393,25 @@ esac
                     )
                 if fault == "sidecar_httpd_failed":
                     self.assertIn(
-                        "phase=sidecar_failure category=permission source=logs_query write_stage=write_ok",
+                        "phase=sidecar_failure category=permission source=logs_query write_stage=write_ok state_error=unknown",
                         result.stderr,
                     )
+                if fault == "sidecar_conflicting_state_error":
+                    self.assertIn(
+                        "phase=sidecar_failure category=permission source=logs_query write_stage=write_ok state_error=bind_error",
+                        result.stderr,
+                    )
+                    self.assertTrue((state / "state_error_inspected").exists())
                 if fault == "sidecar_logs_query_error":
                     self.assertIn(
                         "phase=sidecar_failure category=unknown source=none write_stage=unknown",
                         result.stderr,
                     )
                 if fault == "sidecar_state_error_field":
-                    self.assertIn("phase=sidecar_failure category=bind_error source=state_error", result.stderr)
+                    self.assertIn(
+                        "phase=sidecar_failure category=bind_error source=state_error write_stage=unknown state_error=bind_error",
+                        result.stderr,
+                    )
                     self.assertFalse((state / "health-attempted").exists())
                 if fault == "sidecar_start":
                     self.assertIn("phase=sidecar_failure category=shell_error", result.stderr)
