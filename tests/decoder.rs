@@ -76,6 +76,194 @@ fn container(body: &str) -> docker_lens::evidence::Capture {
     )])
 }
 
+fn network(body: &str) -> docker_lens::evidence::Capture {
+    capture(vec![(
+        ReadRequest::InspectNetwork(NativeId::new("private-network-id".into()).unwrap()),
+        Some(ResourceRef::new(2)),
+        Some(api(41)),
+        200,
+        body,
+    )])
+}
+
+#[test]
+fn network_active_membership_top_level_availability_is_distinct() {
+    for (body, expected) in [
+        (r#"{}"#, Availability::Missing),
+        (r#"{"Containers":null}"#, Availability::Null),
+        (r#"{"Containers":{}}"#, Availability::Empty),
+        (
+            r#"{"Containers":{"__docker_lens_redacted__":true}}"#,
+            Availability::Redacted,
+        ),
+    ] {
+        let decoded = decode_capture(&network(body)).unwrap();
+        let members = &decoded.networks[0].active_endpoints;
+        assert_eq!(members.availability, expected);
+        assert_eq!(members.origin, Origin::RuntimeAssigned);
+        assert_eq!(members.value().is_some(), expected == Availability::Empty);
+    }
+}
+
+#[test]
+fn network_active_membership_entry_and_name_availability_are_independent() {
+    let id = "a".repeat(64);
+    for (entry, endpoint_state, name_state) in [
+        ("null", Availability::Null, None),
+        (
+            r#"{"__docker_lens_redacted__":true}"#,
+            Availability::Redacted,
+            None,
+        ),
+        ("{}", Availability::Empty, Some(Availability::Missing)),
+        (
+            r#"{"Name":null}"#,
+            Availability::Present,
+            Some(Availability::Null),
+        ),
+        (
+            r#"{"Name":""}"#,
+            Availability::Present,
+            Some(Availability::Empty),
+        ),
+        (
+            r#"{"Name":{"__docker_lens_redacted__":true}}"#,
+            Availability::Present,
+            Some(Availability::Redacted),
+        ),
+        (
+            r#"{"Name":"private-endpoint-name"}"#,
+            Availability::Present,
+            Some(Availability::Present),
+        ),
+    ] {
+        let body = format!(r#"{{"Containers":{{"{id}":{entry}}}}}"#);
+        let decoded = decode_capture(&network(&body)).unwrap();
+        let members = decoded.networks[0].active_endpoints.value().unwrap();
+        assert_eq!(members.len(), 1);
+        let member = &members[0];
+        assert_eq!(member.container_id.origin, Origin::RuntimeAssigned);
+        assert_eq!(member.container_id.availability, Availability::Present);
+        assert_eq!(
+            member.container_id.value().unwrap().as_bytes(),
+            id.as_bytes()
+        );
+        assert_eq!(member.endpoint.origin, Origin::RuntimeAssigned);
+        assert_eq!(member.endpoint.availability, endpoint_state);
+        match name_state {
+            Some(expected) => {
+                let name = &member.endpoint.value().unwrap().name;
+                assert_eq!(name.origin, Origin::Effective);
+                assert_eq!(name.availability, expected);
+                if expected == Availability::Present {
+                    assert_eq!(name.value().unwrap().as_bytes(), b"private-endpoint-name");
+                }
+                assert!(!format!("{name:?}").contains("private-endpoint-name"));
+            }
+            None => assert!(member.endpoint.value().is_none()),
+        }
+        assert!(!format!("{:?}", member.container_id).contains(&id));
+        assert!(!format!("{decoded:?}").contains("private-endpoint-name"));
+    }
+}
+
+#[test]
+fn network_active_membership_invalid_shapes_and_ids_fail_without_values() {
+    let id = "a".repeat(64);
+    for (body, expected) in [
+        (
+            r#"{"Containers":[]}"#.to_owned(),
+            DecodeError::InvalidShape(FieldPath::Network { index: 0 }),
+        ),
+        (
+            r#"{"Containers":42}"#.to_owned(),
+            DecodeError::InvalidShape(FieldPath::Network { index: 0 }),
+        ),
+        (
+            r#"{"Containers":{"private-id":{}}}"#.to_owned(),
+            DecodeError::InvalidValue(FieldPath::Network { index: 0 }),
+        ),
+        (
+            format!(r#"{{"Containers":{{"{}":{{}}}}}}"#, "z".repeat(64)),
+            DecodeError::InvalidValue(FieldPath::Network { index: 0 }),
+        ),
+        (
+            format!(r#"{{"Containers":{{"{id}":[]}}}}"#),
+            DecodeError::InvalidShape(FieldPath::Network { index: 0 }),
+        ),
+        (
+            format!(r#"{{"Containers":{{"{id}":{{"Name":42}}}}}}"#),
+            DecodeError::InvalidShape(FieldPath::Network { index: 0 }),
+        ),
+    ] {
+        let error = decode_capture(&network(&body)).err().unwrap();
+        assert_eq!(error, expected);
+        assert!(!format!("{error:?}").contains("private-id"));
+    }
+}
+
+#[test]
+fn network_active_membership_is_bounded_and_does_not_expand_selection() {
+    let selected = "a".repeat(64);
+    let unselected = "b".repeat(64);
+    let body = format!(
+        r#"{{"Containers":{{"{selected}":{{"Name":"selected"}},"{unselected}":{{"Name":"unselected"}}}}}}"#
+    );
+    let decoded = decode_capture(&capture(vec![
+        (
+            ReadRequest::InspectContainer(NativeId::new(selected.clone()).unwrap()),
+            Some(ResourceRef::new(1)),
+            Some(api(41)),
+            200,
+            &format!(r#"{{"Id":"{selected}"}}"#),
+        ),
+        (
+            ReadRequest::InspectNetwork(NativeId::new("private-network-id".into()).unwrap()),
+            Some(ResourceRef::new(2)),
+            Some(api(41)),
+            200,
+            &body,
+        ),
+    ]))
+    .unwrap();
+    assert_eq!(decoded.containers.len(), 1);
+    assert_eq!(
+        decoded.networks[0].active_endpoints.value().unwrap().len(),
+        2
+    );
+    assert!(
+        decoded.networks[0]
+            .active_endpoints
+            .value()
+            .unwrap()
+            .iter()
+            .any(|member| member.container_id.value().unwrap().as_bytes() == unselected.as_bytes())
+    );
+
+    let mut entries = serde_json::Map::new();
+    for index in 0..4096 {
+        entries.insert(format!("{index:064x}"), serde_json::json!({}));
+    }
+    let body = serde_json::json!({"Containers": entries}).to_string();
+    assert_eq!(
+        decode_capture(&network(&body)).unwrap().networks[0]
+            .active_endpoints
+            .value()
+            .unwrap()
+            .len(),
+        4096
+    );
+    let mut value: serde_json::Value = serde_json::from_str(&body).unwrap();
+    value["Containers"]
+        .as_object_mut()
+        .unwrap()
+        .insert(format!("{:064x}", 4096), serde_json::json!({}));
+    assert_eq!(
+        decode_capture(&network(&value.to_string())).err(),
+        Some(DecodeError::CollectionTooLarge)
+    );
+}
+
 #[test]
 fn inspect_identity_must_match_closed_request() {
     for body in [

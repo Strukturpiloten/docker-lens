@@ -579,6 +579,7 @@ if [[ $EUID == 0 ]]; then export NATIVE_PODMAN_USE_SUDO=0; else export NATIVE_PO
 "$(dirname "$0")/run-exact-native-test.sh" native_capture live_engine_capture_decodes
 "$(dirname "$0")/run-exact-native-test.sh" acquisition live_read_only_acquisition_matches_oracle
 "$(dirname "$0")/run-exact-native-test.sh" native_selection live_native_selection_and_source_observations
+"$(dirname "$0")/run-exact-native-test.sh" native_selection live_network_membership_matches_engine
 "$(dirname "$0")/run-exact-native-test.sh" native_target live_target_render_matches_engine
 "$(dirname "$0")/run-exact-native-test.sh" native_network live_network_render_matches_engine
 "$(dirname "$0")/run-exact-native-test.sh" native_volume live_existing_volume_prerequisite_matches_engine
