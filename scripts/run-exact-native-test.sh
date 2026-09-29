@@ -59,7 +59,7 @@ if [[ -n $selection_error ]]; then error_category=$selection_error; fi
 panic_site=
 case $target in
   native_target | native_volume | native_network | native_volume_label | native_container)
-    panic_site=$(sed -nE "s/^thread '.*' panicked at src\/(${target}_tests)\.rs:([0-9]{1,6}):([0-9]{1,4}):$/DOCKERLENS_NATIVE_PANIC: source=\1 line=\2 column=\3/p" <<<"$result" | tail -n 1)
+    panic_site=$(sed -nE "s/^thread '.*'( \([0-9]{1,10}\))? panicked at src\/(${target}_tests)\.rs:([0-9]{1,6}):([0-9]{1,4}):$/DOCKERLENS_NATIVE_PANIC: source=\2 line=\3 column=\4/p" <<<"$result" | tail -n 1)
     ;;
 esac
 if (( run_status != 0 )); then

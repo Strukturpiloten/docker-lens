@@ -28,15 +28,21 @@ fi
 """)
             env = os.environ.copy()
             env["PATH"] = f"{bin_dir}:{env['PATH']}"
-            for location, expected in (
-                ("src/native_network_tests.rs:1931:5", True),
-                ("/private/source/native_network_tests.rs:1931:5", False),
-                ("src/native_target_tests.rs:1931:5", False),
-                ("src/native_network_tests.rs:private:5", False),
-                ("src/native_network_tests.rs:1931:50000", False),
+            # Current libtest includes a numeric thread ID; older Rust omits it.
+            # Observed independently in an actual local Rust panic, not inferred
+            # from the extractor's synthetic fixture. Never disclose that ID.
+            for location, thread_suffix, expected in (
+                ("src/native_network_tests.rs:1931:5", "", True),
+                ("src/native_network_tests.rs:1931:5", " (342)", True),
+                ("src/native_network_tests.rs:1931:5", " (private)", False),
+                ("src/native_network_tests.rs:1931:5", " (12345678901)", False),
+                ("/private/source/native_network_tests.rs:1931:5", " (342)", False),
+                ("src/native_target_tests.rs:1931:5", " (342)", False),
+                ("src/native_network_tests.rs:private:5", "", False),
+                ("src/native_network_tests.rs:1931:50000", "", False),
             ):
-                with self.subTest(location=location):
-                    env["TEST_PANIC"] = f"thread 'protected-name-canary' panicked at {location}:"
+                with self.subTest(location=location, thread_suffix=thread_suffix):
+                    env["TEST_PANIC"] = f"thread 'protected-name-canary'{thread_suffix} panicked at {location}:"
                     result = subprocess.run(
                         [str(ROOT / "scripts/run-exact-native-test.sh"), "native_network",
                          "live_network_render_matches_engine"],
@@ -46,7 +52,7 @@ fi
                     self.assertEqual("DOCKERLENS_NATIVE_PANIC:" in result.stderr, expected)
                     if expected:
                         self.assertIn("source=native_network_tests line=1931 column=5", result.stderr)
-                    for private in ("protected-native-canary", "protected-name-canary", "/private/source"):
+                    for private in ("protected-native-canary", "protected-name-canary", "/private/source", "(342)"):
                         self.assertNotIn(private, result.stdout + result.stderr)
 
     def test_isolation_positive_controls_query_ipv4_before_negative_controls(self) -> None:
