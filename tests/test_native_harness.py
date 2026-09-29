@@ -495,10 +495,16 @@ fi
         self.assertLess(source.index("resource_start_control_matrix(run);"),
                         source.index("assert_native_api_status(oracle_start_status, 204);"))
         self.assertIn('resource_control_may_continue(uncertain, resource_control_seconds_remaining())', source)
-        self.assertIn('"resource" => &["--memory=67108864", "--pids-limit=32"]', source)
-        self.assertIn('"device" => &["--device=/dev/null:/dev/native-null:r"]', source)
+        self.assertIn('const RESOURCE_START_CONTROLS: [&str; 4] = ["baseline", "memory", "pids", "device"]', source)
+        self.assertIn('"memory" => Some(&["--memory=67108864"])', source)
+        self.assertIn('"pids" => Some(&["--pids-limit=32"])', source)
+        self.assertIn('"device" => Some(&["--device=/dev/null:/dev/native-null:r"])', source)
+        self.assertNotIn('"--memory=67108864", "--pids-limit=32"', source)
         self.assertIn('self.cli_with_timeout(&args, "10")', source)
         self.assertIn('mark_container_flow("cleanup_readback",', source)
+        runner = (ROOT / "scripts/run-exact-native-test.sh").read_text(encoding="utf-8")
+        self.assertIn('control=(baseline|memory|pids|device)', runner)
+        self.assertIn('"$capture_path" | tail -n 24', runner)
         with tempfile.TemporaryDirectory() as directory:
             bin_dir = Path(directory)
             self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
@@ -509,8 +515,10 @@ else
   echo 'DOCKERLENS_NATIVE_CHECK: container_resolver_logging_ipv6_rendered_hosts' >&2
   echo 'DOCKERLENS_NATIVE_CHECK: container_resolver_logging_ipv6_rendered_private' >&2
   echo 'DOCKERLENS_NATIVE_RESOURCE_CONTROL: control=baseline phase=start outcome=started' >&2
-  echo 'DOCKERLENS_NATIVE_RESOURCE_CONTROL: control=resource phase=start outcome=uncertain' >&2
+  echo 'DOCKERLENS_NATIVE_RESOURCE_CONTROL: control=memory phase=start outcome=started' >&2
+  echo 'DOCKERLENS_NATIVE_RESOURCE_CONTROL: control=pids phase=start outcome=uncertain' >&2
   echo 'DOCKERLENS_NATIVE_RESOURCE_CONTROL: control=device phase=start outcome=timeout' >&2
+  echo 'DOCKERLENS_NATIVE_RESOURCE_CONTROL: control=resource phase=start outcome=started' >&2
   echo 'DOCKERLENS_NATIVE_RESOURCE_CONTROL: control=private phase=start outcome=started' >&2
   echo 'DOCKERLENS_NATIVE_RESOURCE_CONTROL: control=device phase=start outcome=started raw=protected-secret' >&2
   echo 'DOCKERLENS_NATIVE_CONTAINER_FLOW: phase=mutation outcome=timeout' >&2
@@ -543,8 +551,10 @@ fi
                     )
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn("container_resolver_logging_ipv6_rendered_hosts", result.stderr)
-                    self.assertIn("control=resource phase=start outcome=uncertain", result.stderr)
+                    self.assertIn("control=memory phase=start outcome=started", result.stderr)
+                    self.assertIn("control=pids phase=start outcome=uncertain", result.stderr)
                     self.assertIn("control=device phase=start outcome=timeout", result.stderr)
+                    self.assertNotIn("control=resource phase=start", result.stderr)
                     self.assertIn("phase=mutation outcome=timeout", result.stderr)
                     self.assertIn("phase=cleanup_readback outcome=pass", result.stderr)
                     self.assertIn(f"phase=decision outcome={decision}", result.stderr)

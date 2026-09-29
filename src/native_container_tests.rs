@@ -237,8 +237,20 @@ fn resource_control_start_outcome(status: Option<i32>) -> (&'static str, bool) {
     }
 }
 
+const RESOURCE_START_CONTROLS: [&str; 4] = ["baseline", "memory", "pids", "device"];
+
+fn resource_control_options(control: &str) -> Option<&'static [&'static str]> {
+    match control {
+        "baseline" => Some(&[]),
+        "memory" => Some(&["--memory=67108864"]),
+        "pids" => Some(&["--pids-limit=32"]),
+        "device" => Some(&["--device=/dev/null:/dev/native-null:r"]),
+        _ => None,
+    }
+}
+
 fn resource_control_may_continue(uncertain: bool, seconds_remaining: u64) -> bool {
-    !uncertain && seconds_remaining >= 75
+    !uncertain && seconds_remaining >= 90
 }
 
 fn start_failure_body_diagnostic(body: &[u8]) -> String {
@@ -1201,12 +1213,7 @@ impl NativeRun {
     }
 
     fn resource_control_create(&mut self, control: &'static str) -> Value {
-        let options: &[&str] = match control {
-            "baseline" => &[],
-            "resource" => &["--memory=67108864", "--pids-limit=32"],
-            "device" => &["--device=/dev/null:/dev/native-null:r"],
-            _ => panic!("closed resource control"),
-        };
+        let options = resource_control_options(control).expect("closed resource control");
         let name = self.name(&format!("resource-control-{control}"));
         let mut args = vec![
             "container".to_owned(),
@@ -4174,7 +4181,7 @@ fn mark_resource_stage(side: &'static str, phase: &'static str) {
 }
 
 fn mark_resource_control(control: &'static str, phase: &'static str, outcome: &'static str) {
-    assert!(matches!(control, "baseline" | "resource" | "device"));
+    assert!(RESOURCE_START_CONTROLS.contains(&control));
     assert!(matches!(phase, "create" | "inspect" | "start"));
     assert!(matches!(
         outcome,
@@ -4192,12 +4199,13 @@ fn resource_control_seconds_remaining() -> u64 {
     let Ok(now) = SystemTime::now().duration_since(UNIX_EPOCH) else {
         return 0;
     };
-    // Keep time for the three exact probes and verified task-owned cleanup.
+    // Each next probe needs room for bounded create, inspect, start and
+    // verified task-owned cleanup before the 180-second wrapper expires.
     deadline.saturating_sub(now.as_secs())
 }
 
 fn resource_start_control_matrix(run: &mut NativeRun) {
-    for control in ["baseline", "resource", "device"] {
+    for control in RESOURCE_START_CONTROLS {
         let uncertain = run.uncertain_mutation.get();
         if !resource_control_may_continue(uncertain, resource_control_seconds_remaining()) {
             if !uncertain {
@@ -4239,7 +4247,10 @@ fn resource_start_control_matrix(run: &mut NativeRun) {
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             run.resource_control_start(id)
         }))
-        .unwrap_or("uncertain");
+        .unwrap_or_else(|_| {
+            run.uncertain_mutation.set(true);
+            "uncertain"
+        });
         mark_resource_control(control, "start", outcome);
         if run.uncertain_mutation.get() {
             break;
@@ -5107,6 +5118,24 @@ fn group_decision_outcome(decision: GroupDecision) -> &'static str {
 
 #[test]
 fn failed_control_start_and_failed_probe_cannot_become_continuation_or_pass() {
+    assert_eq!(
+        RESOURCE_START_CONTROLS,
+        ["baseline", "memory", "pids", "device"]
+    );
+    assert_eq!(resource_control_options("baseline"), Some(&[][..]));
+    assert_eq!(
+        resource_control_options("memory"),
+        Some(&["--memory=67108864"][..])
+    );
+    assert_eq!(
+        resource_control_options("pids"),
+        Some(&["--pids-limit=32"][..])
+    );
+    assert_eq!(
+        resource_control_options("device"),
+        Some(&["--device=/dev/null:/dev/native-null:r"][..])
+    );
+    assert!(resource_control_options("resource").is_none());
     for status in [Some(1), Some(125), Some(124), Some(137), None] {
         let (outcome, uncertain) = resource_control_start_outcome(status);
         assert!(matches!(outcome, "timeout" | "uncertain"));
@@ -5119,8 +5148,8 @@ fn failed_control_start_and_failed_probe_cannot_become_continuation_or_pass() {
     let (outcome, uncertain) = resource_control_start_outcome(Some(0));
     assert_eq!(outcome, "started");
     assert!(!uncertain);
-    assert!(resource_control_may_continue(uncertain, 75));
-    assert!(!resource_control_may_continue(uncertain, 74));
+    assert!(resource_control_may_continue(uncertain, 90));
+    assert!(!resource_control_may_continue(uncertain, 89));
     assert_eq!(
         group_decision_outcome(group_decision(false, true, false)),
         "probe_failed"

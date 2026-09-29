@@ -306,14 +306,16 @@ closed group-failure markers are exposed. No failure becomes a skip, expected
 negative, or production capability.
 
 On a known non-204 resource/security oracle START response, the failed native
-test may run at most three independent, task-owned CLI controls with the same
-image and command: no resource/security flags, memory plus PID limit only, and
-device mapping only. The controls run only while the wrapper deadline leaves
-time for cleanup; each START is capped at ten seconds. Closed create/inspect/
-start outcomes distinguish whether the baseline, cgroup settings, or device
-mapping also fails. A timed-out or otherwise uncertain mutation stops further
-controls and the next group even when inventory reads empty. Any nonzero CLI
-START is uncertain because it cannot prove whether Engine applied the start.
+test may run at most four independent, task-owned CLI controls with the same
+image and command: no resource/security flags, memory limit only, PID limit
+only, and device mapping only, in that order. Each control starts only while
+the wrapper deadline leaves at least 90 seconds for its bounded create, inspect,
+START and exact cleanup; create and START are each capped at ten seconds.
+Closed create/inspect/start outcomes distinguish whether the baseline, memory,
+PID, or device mapping also fails. A timed-out or otherwise uncertain mutation
+stops further controls and the next group even when inventory reads empty. Any
+nonzero CLI START is uncertain because it cannot prove whether Engine applied
+the start.
 The closed group-decision marker reports `probe_failed` after a failed positive
 with verified cleanup; only a passing probe can report `merge`. The original
 oracle START must still return 204; control outcomes and lexical response-body
