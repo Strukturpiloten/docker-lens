@@ -268,12 +268,42 @@ fi
     def test_network_probe_is_exact_and_precedes_manifest_emission(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
         selected = '"$(dirname "$0")/run-exact-native-test.sh" native_network live_network_render_matches_engine'
+        internal = '"$(dirname "$0")/run-exact-native-test.sh" native_network live_internal_network_blocks_external_egress'
         target = '"$(dirname "$0")/run-exact-native-test.sh" native_target live_target_render_matches_engine'
         manifest = 'python3 "$script_dir/native-evidence.py"'
         self.assertEqual(source.count(selected), 1)
+        self.assertEqual(source.count(internal), 1)
         self.assertLess(source.index(target), source.index(selected))
-        self.assertLess(source.index(selected), source.index(manifest))
+        self.assertLess(source.index(selected), source.index(internal))
+        self.assertLess(source.index(internal), source.index(manifest))
         self.assertIn('"$NATIVE_NETWORK_PROBES_PATH"', source)
+
+    def test_internal_network_failure_marker_is_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_network_tests::live_internal_network_blocks_external_egress: test'
+else
+  echo 'protected native response' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: network_internal_blocked' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: network_internal_private-canary' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            result = subprocess.run(
+                [str(ROOT / "scripts/run-exact-native-test.sh"), "native_network",
+                 "live_internal_network_blocks_external_egress"],
+                env=env, capture_output=True, text=True, timeout=15, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("network_internal_blocked", result.stderr)
+            self.assertNotIn("private-canary", result.stdout + result.stderr)
+            self.assertNotIn("protected native response", result.stdout + result.stderr)
 
     def test_network_option_value_and_label_controls_are_closed(self) -> None:
         source = (ROOT / "src/native_network_tests.rs").read_text(encoding="utf-8")

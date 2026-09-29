@@ -93,7 +93,33 @@ masquerade values are accepted and inspectable, but this does not prove their
 routing or NAT effect. Representative empty and non-ASCII/escaped network-label
 values are checked through independent CLI and inert-rendered creates and Engine
 inspects; this does not prove every key or length boundary.
-These additional names are non-admission evidence, and the historical nineteen
+The separate ignored internal-network proof gets its own 180-second bound after
+the general network test. It compares independently CLI-created bridges with
+matched inert requests sent to Engine, then checks direct Engine inspect values.
+The rendered internal and ordinary bridges both enable ICC and masquerade; their
+single-homed peers must each have healthy same-bridge HTTP. The ordinary peer
+must also fetch a direct IPv4 HTTP canary from a task-owned host-network
+container bound in the isolated outer Podman namespace, while the internal peer
+must fail against the same endpoint. The endpoint uses its own eth0 address,
+not a Docker bridge gateway; no public Internet or DNS result is involved.
+This host-network fixture can fail to provide a positive control in an inner
+rootless lane. Such a lane fails closed rather than counting as isolation.
+The negative HTTP probe requires a successful Docker exec carrying a fixed
+`blocked` result from the running peer, with the control fetching the exact
+canary again afterward. Outer command timeouts and Docker exec failures cannot
+count as blocked traffic. Every proof operation reserves time for bounded
+label-verified cleanup within the 180-second runner deadline. Failed removals
+stay in the cleanup ledger for a retry, and only an exact direct Engine 404
+clears an uncertain resource. Only after the live assertions and verified
+cleanup does the test
+replace the private network probe file with a closed positive shape result.
+The manifest emitter rejects a missing, negative, malformed, oversized, or
+symlinked result; a valid result adds `NetworkInternal` and its sole
+`InternalBridgeNetworkCreate` shape to raw lane evidence. The compiled catalog
+and historical evidence remain unchanged until a separate review binds fresh
+four-lane artifacts. This test adds no dependency, image, action, or tool pin,
+so Renovate extraction and ownership need no change.
+The three option/label additions remain non-admission evidence, and the historical nineteen
 names and manifests are unchanged. IPv4 `/31` and `/32` bridge parents remain
 rejected by planning, independent of any Engine acceptance behavior.
 The typed-container offline regressions cover exact grouped `PortBindings`

@@ -797,6 +797,289 @@ impl Drop for ExactNetworkFixture<'_> {
     }
 }
 
+struct InternalProofResources {
+    run_id: String,
+    containers: Vec<String>,
+    networks: Vec<String>,
+}
+
+impl InternalProofResources {
+    fn new(run_id: &str) -> Self {
+        Self {
+            run_id: run_id.to_owned(),
+            containers: Vec::new(),
+            networks: Vec::new(),
+        }
+    }
+
+    fn engine_absent(run_id: &str, kind: &str, name: &str) -> bool {
+        let api_version = required("NATIVE_API_VERSION");
+        let path = if kind == "container" {
+            format!("/v{api_version}/containers/{name}/json")
+        } else {
+            format!("/v{api_version}/networks/{name}")
+        };
+        if !allowed_request(
+            "GET",
+            &path,
+            &api_version,
+            run_id,
+            &required("NATIVE_FIXTURE_IMAGE"),
+            None,
+        ) {
+            return false;
+        }
+        let result = Command::new("timeout")
+            .args([
+                "--kill-after=1",
+                "3",
+                "curl",
+                "-sS",
+                "--max-time",
+                "2",
+                "--unix-socket",
+                &required("NATIVE_ENGINE_SOCKET"),
+                "-o",
+                "/dev/null",
+                "-w",
+                "%{http_code}",
+                &format!("http://localhost{path}"),
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output();
+        result.is_ok_and(|result| exact_http_absence(result.status.success(), &result.stdout))
+    }
+
+    fn remove_owned(run_id: &str, kind: &str, name: &str) -> bool {
+        let format = if kind == "container" {
+            "{{index .Config.Labels \"io.dockerlens.native-run\"}}"
+        } else {
+            "{{index .Labels \"io.dockerlens.native-run\"}}"
+        };
+        let inspected = bounded_cli(&[kind, "inspect", "--format", format, name], "2");
+        if !inspected.success || inspected.output_limit {
+            // A previous removal may have succeeded despite an inconclusive
+            // readback. Only Engine's exact 404 can clear that retained name.
+            return Self::engine_absent(run_id, kind, name);
+        }
+        if inspected.stdout != format!("{run_id}\n").as_bytes() {
+            return false;
+        }
+        let removed = if kind == "container" {
+            bounded_cli(&[kind, "rm", "-f", name], "2")
+        } else {
+            bounded_cli(&[kind, "rm", name], "2")
+        };
+        // CLI removal can report failure after the daemon completed it; the
+        // independent exact Engine readback determines the final outcome.
+        let _ = removed;
+        Self::engine_absent(run_id, kind, name)
+    }
+
+    fn cleanup(&mut self) -> bool {
+        let run_id = self.run_id.clone();
+        let mut remove = |kind: &str, name: &str| Self::remove_owned(&run_id, kind, name);
+        let containers = retain_unremoved(&mut self.containers, "container", &mut remove);
+        let networks = retain_unremoved(&mut self.networks, "network", &mut remove);
+        containers && networks
+    }
+
+    fn require_budget(&self, next_operation_secs: u64) {
+        let deadline: u64 = required("NATIVE_NETWORK_TEST_DEADLINE_EPOCH")
+            .parse()
+            .expect("bounded native deadline epoch");
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("current native clock")
+            .as_secs();
+        let outstanding = self.containers.len() + self.networks.len();
+        assert!(
+            proof_budget_sufficient(
+                deadline.saturating_sub(now),
+                outstanding,
+                next_operation_secs,
+            ),
+            "native proof reserves exact cleanup before its 180-second deadline"
+        );
+    }
+}
+
+fn exact_http_absence(command_succeeded: bool, status: &[u8]) -> bool {
+    command_succeeded && status == b"404"
+}
+
+fn proof_required_remaining(outstanding: usize, next_operation_secs: u64) -> u64 {
+    // At most two three-second CLI calls and one four-second status-only GET
+    // per registered resource, with ten seconds for process teardown.
+    outstanding as u64 * 10 + 10 + next_operation_secs
+}
+
+fn proof_budget_sufficient(remaining_secs: u64, outstanding: usize, next_secs: u64) -> bool {
+    remaining_secs >= proof_required_remaining(outstanding, next_secs)
+}
+
+fn retain_unremoved<F>(names: &mut Vec<String>, kind: &str, remove: &mut F) -> bool
+where
+    F: FnMut(&str, &str) -> bool,
+{
+    let mut failed = Vec::new();
+    for name in std::mem::take(names).into_iter().rev() {
+        if !remove(kind, &name) {
+            failed.push(name);
+        }
+    }
+    *names = failed;
+    names.is_empty()
+}
+
+fn proof_cli(resources: &InternalProofResources, args: &[&str]) -> BoundedDnsCliOutput {
+    resources.require_budget(8);
+    bounded_cli(args, "6")
+}
+
+fn proof_cli_ok(resources: &InternalProofResources, args: &[&str]) -> Vec<u8> {
+    let result = proof_cli(resources, args);
+    assert!(!result.output_limit, "bounded proof CLI output");
+    if !result.success {
+        eprintln!(
+            "DOCKERLENS_NATIVE_NETWORK_CLI_DIAG: exit={} category={}",
+            if matches!(result.code, Some(124 | 137)) {
+                "timeout"
+            } else {
+                "other"
+            },
+            network_cli_failure_category(&result.stderr)
+        );
+    }
+    assert!(result.success, "isolated proof CLI succeeds");
+    result.stdout
+}
+
+fn proof_api(
+    resources: &InternalProofResources,
+    method: &str,
+    path: &str,
+    body: Option<&Value>,
+) -> (u16, Vec<u8>) {
+    resources.require_budget(8);
+    api_with_timeout_and_cap(method, path, body, "6", Some(1024 * 1024))
+}
+
+fn proof_inspect(resources: &InternalProofResources, path: &str) -> Value {
+    let (status, response) = proof_api(resources, "GET", path, None);
+    assert_eq!(status, 200, "exact proof resource inspect succeeds");
+    serde_json::from_slice(&response).expect("private proof inspect JSON")
+}
+
+fn proof_external_blocked(result: &BoundedDnsCliOutput) -> bool {
+    result.success
+        && result.code == Some(0)
+        && !result.output_limit
+        && result.stdout == b"blocked"
+        && result.stderr.is_empty()
+}
+
+#[test]
+fn internal_proof_cleanup_retains_failed_resources_and_requires_exact_404() {
+    assert!(exact_http_absence(true, b"404"));
+    for (success, status) in [
+        (false, &b"404"[..]),
+        (true, &b"500"[..]),
+        (true, &b"000"[..]),
+        (true, &b"404\n"[..]),
+        (true, &b"protected-private"[..]),
+    ] {
+        assert!(!exact_http_absence(success, status));
+    }
+    let mut names = vec!["owned-one".to_owned(), "owned-two".to_owned()];
+    let mut first = |kind: &str, name: &str| kind == "container" && name == "owned-one";
+    assert!(!retain_unremoved(&mut names, "container", &mut first));
+    assert_eq!(names, ["owned-two"]);
+    let mut retry = |kind: &str, name: &str| kind == "container" && name == "owned-two";
+    assert!(retain_unremoved(&mut names, "container", &mut retry));
+    assert!(names.is_empty());
+    assert_eq!(proof_required_remaining(9, 8), 108);
+    assert!(!proof_budget_sufficient(107, 9, 8));
+    assert!(proof_budget_sufficient(108, 9, 8));
+}
+
+#[test]
+fn internal_proof_rejects_outer_timeout_or_failed_docker_exec() {
+    let mut result = BoundedDnsCliOutput {
+        success: true,
+        code: Some(0),
+        stdout: b"blocked".to_vec(),
+        stderr: Vec::new(),
+        output_limit: false,
+    };
+    assert!(proof_external_blocked(&result));
+    for code in [Some(124), Some(137), Some(125), Some(126), Some(127), None] {
+        result.success = false;
+        result.code = code;
+        assert!(!proof_external_blocked(&result));
+    }
+    result.success = true;
+    result.code = Some(0);
+    result.stdout = b"reachable".to_vec();
+    assert!(!proof_external_blocked(&result));
+    result.stdout = b"blocked".to_vec();
+    result.output_limit = true;
+    assert!(!proof_external_blocked(&result));
+    result.output_limit = false;
+    result.stderr = b"private Docker failure".to_vec();
+    assert!(!proof_external_blocked(&result));
+}
+
+impl Drop for InternalProofResources {
+    fn drop(&mut self) {
+        if !self.containers.is_empty() || !self.networks.is_empty() {
+            let _ = self.cleanup();
+        }
+    }
+}
+
+fn task_host_eth0_ip(output: &[u8]) -> Option<Ipv4Addr> {
+    let output = std::str::from_utf8(output).ok()?;
+    let mut selected = None;
+    for line in output.lines() {
+        let mut words = line.split_whitespace();
+        while let Some(word) = words.next() {
+            if word != "inet" {
+                continue;
+            }
+            let (address, _) = words.next()?.split_once('/')?;
+            let address = address.parse::<Ipv4Addr>().ok()?;
+            if address.is_loopback() || address.is_link_local() || address.is_unspecified() {
+                return None;
+            }
+            if selected.replace(address).is_some() {
+                return None;
+            }
+        }
+    }
+    selected
+}
+
+#[test]
+fn task_host_endpoint_address_requires_one_non_loopback_ipv4() {
+    assert_eq!(
+        task_host_eth0_ip(
+            b"2: eth0: UP\n    inet 10.88.0.4/16 brd 10.88.255.255 scope global eth0\n"
+        ),
+        Some(Ipv4Addr::new(10, 88, 0, 4))
+    );
+    for output in [
+        &b"inet 127.0.0.1/8\n"[..],
+        &b"inet 169.254.1.1/16\n"[..],
+        &b"inet 10.0.0.2/24\ninet 10.0.0.3/24\n"[..],
+        &b"private-canary\n"[..],
+        &b"\xff\n"[..],
+    ] {
+        assert_eq!(task_host_eth0_ip(output), None);
+    }
+}
+
 fn diagnostic_remaining(deadline_epoch: u64, now: Duration) -> Option<Duration> {
     // The shell's 180-second timeout includes Cargo startup. Stop optional
     // work twenty seconds early for process teardown and fixed-marker output.
@@ -1287,6 +1570,22 @@ fn expected_option_control_body(name: &str, icc: bool) -> Value {
     })
 }
 
+fn internal_proof_body(name: &str, run_id: &str, internal: bool) -> Value {
+    let mut body = json!({
+        "Name": name,
+        "Driver": "bridge",
+        "Options": {
+            "com.docker.network.bridge.enable_icc": "true",
+            "com.docker.network.bridge.enable_ip_masquerade": "true",
+        },
+        "Labels": {"io.dockerlens.native-run": run_id},
+    });
+    if internal {
+        body["Internal"] = json!(true);
+    }
+    body
+}
+
 fn allowed_request(
     method: &str,
     path: &str,
@@ -1313,6 +1612,15 @@ fn allowed_request(
     let control_client = format!("dl-network-{run_id}-control-client");
     let enabled_server = format!("dl-network-{run_id}-enabled-server");
     let enabled_client = format!("dl-network-{run_id}-enabled-client");
+    let proof_internal = format!("dl-network-{run_id}-proof-internal");
+    let proof_control = format!("dl-network-{run_id}-proof-control");
+    let proof_cli_internal = format!("dl-network-{run_id}-proof-cli-internal");
+    let proof_cli_control = format!("dl-network-{run_id}-proof-cli-control");
+    let proof_endpoint = format!("dl-network-{run_id}-proof-endpoint");
+    let proof_internal_server = format!("dl-network-{run_id}-proof-internal-server");
+    let proof_internal_client = format!("dl-network-{run_id}-proof-internal-client");
+    let proof_control_server = format!("dl-network-{run_id}-proof-control-server");
+    let proof_control_client = format!("dl-network-{run_id}-proof-control-client");
     let path_allowed = match method {
         "GET" => {
             [
@@ -1323,6 +1631,10 @@ fn allowed_request(
                 oracle_control.as_str(),
                 control.as_str(),
                 control_enabled.as_str(),
+                proof_internal.as_str(),
+                proof_control.as_str(),
+                proof_cli_internal.as_str(),
+                proof_cli_control.as_str(),
             ]
             .iter()
             .any(|name| suffix == format!("networks/{name}"))
@@ -1335,6 +1647,11 @@ fn allowed_request(
                     control_client.as_str(),
                     enabled_server.as_str(),
                     enabled_client.as_str(),
+                    proof_endpoint.as_str(),
+                    proof_internal_server.as_str(),
+                    proof_internal_client.as_str(),
+                    proof_control_server.as_str(),
+                    proof_control_client.as_str(),
                 ]
                 .iter()
                 .any(|name| suffix == format!("containers/{name}/json"))
@@ -1360,6 +1677,8 @@ fn allowed_request(
                 || body == Some(&expected[1])
                 || body == Some(&expected_option_control_body(&control, false))
                 || body == Some(&expected_option_control_body(&control_enabled, true))
+                || body == Some(&internal_proof_body(&proof_internal, run_id, true))
+                || body == Some(&internal_proof_body(&proof_control, run_id, false))
         }
         _ if suffix == format!("containers/create?name={app}") => body == Some(&expected[2]),
         _ if suffix == format!("networks/{edge}/connect") => body == Some(&expected[3]),
@@ -1813,6 +2132,66 @@ fn network_executor_allowlist_is_closed() {
             Some(&expected[3])
         ));
     }
+}
+
+#[test]
+fn internal_proof_requests_are_exact_and_differ_only_by_internal_flag() {
+    let run_id = "test";
+    let internal = "dl-network-test-proof-internal";
+    let control = "dl-network-test-proof-control";
+    let internal_body = internal_proof_body(internal, run_id, true);
+    let control_body = internal_proof_body(control, run_id, false);
+    let mut matched = internal_body.clone();
+    matched["Name"] = json!(control);
+    matched.as_object_mut().unwrap().remove("Internal");
+    assert_eq!(matched, control_body);
+    for (name, body) in [(internal, &internal_body), (control, &control_body)] {
+        assert!(allowed_request(
+            "POST",
+            "/v1.41/networks/create",
+            "1.41",
+            run_id,
+            "fixture-image",
+            Some(body)
+        ));
+        assert!(allowed_request(
+            "GET",
+            &format!("/v1.41/networks/{name}"),
+            "1.41",
+            run_id,
+            "fixture-image",
+            None
+        ));
+    }
+    for altered in [
+        json!({"Internal": false}),
+        json!({"Options": {"com.docker.network.bridge.enable_icc": "false",
+                            "com.docker.network.bridge.enable_ip_masquerade": "true"}}),
+        json!({"Labels": {"io.dockerlens.native-run": "other"}}),
+        json!({"Name": "unowned"}),
+    ] {
+        let mut candidate = internal_body.clone();
+        candidate
+            .as_object_mut()
+            .unwrap()
+            .extend(altered.as_object().unwrap().clone());
+        assert!(!allowed_request(
+            "POST",
+            "/v1.41/networks/create",
+            "1.41",
+            run_id,
+            "fixture-image",
+            Some(&candidate)
+        ));
+    }
+    assert!(!allowed_request(
+        "GET",
+        "/v1.41/networks/dl-network-other-proof-internal",
+        "1.41",
+        run_id,
+        "fixture-image",
+        None
+    ));
 }
 
 fn assert_invalid_topologies() {
@@ -3019,4 +3398,386 @@ fn live_network_render_matches_engine() {
         serde_json::to_vec(&PROBES).unwrap(),
     )
     .expect("private closed network evidence");
+}
+
+fn internal_proof_create(name: &str, run_id: &str, internal: bool) -> NetworkIntent {
+    let mut create = NetworkCreate::bridge();
+    create.internal = internal;
+    create.options = vec![
+        BridgeOption::InterContainerCommunication(true),
+        BridgeOption::IpMasquerade(true),
+    ];
+    create.labels = vec![
+        NetworkLabel::new(
+            b"io.dockerlens.native-run".to_vec(),
+            run_id.as_bytes().to_vec(),
+        )
+        .expect("task-owned proof label"),
+    ];
+    NetworkIntent {
+        reference: ResourceRef::new(if internal { 1 } else { 2 }),
+        identity: identity(name),
+        role: NetworkRole::Declared,
+        source: NetworkSource::Create(create),
+    }
+}
+
+fn assert_single_homed_running(
+    resources: &InternalProofResources,
+    name: &str,
+    network: &str,
+    api_version: &str,
+) {
+    let body = proof_inspect(
+        resources,
+        &format!("/v{api_version}/containers/{name}/json"),
+    );
+    assert_eq!(body["State"]["Running"], true);
+    assert_eq!(
+        body["Config"]["Labels"]["io.dockerlens.native-run"],
+        run_id()
+    );
+    let networks = body["NetworkSettings"]["Networks"]
+        .as_object()
+        .expect("proof peer network map");
+    assert!(networks.len() == 1 && networks.contains_key(network));
+    assert!(canonical_inspected_container_id(&body).is_some());
+}
+
+#[test]
+#[ignore = "requires isolated rootful/rootless inner Engine and task-owned external endpoint"]
+fn live_internal_network_blocks_external_egress() {
+    let run_id = run_id();
+    let api_version = required("NATIVE_API_VERSION");
+    let image = required("NATIVE_FIXTURE_IMAGE");
+    let proof_path = required("NATIVE_NETWORK_PROBES_PATH");
+    let prior: Value = serde_json::from_slice(&fs::read(&proof_path).expect("prior network proof"))
+        .expect("closed prior network proof");
+    assert_eq!(prior, json!(PROBES), "base network suite must pass first");
+    let mut resources = InternalProofResources::new(&run_id);
+    let internal = format!("dl-network-{run_id}-proof-internal");
+    let control = format!("dl-network-{run_id}-proof-control");
+    let cli_internal = format!("dl-network-{run_id}-proof-cli-internal");
+    let cli_control = format!("dl-network-{run_id}-proof-cli-control");
+    let endpoint = format!("dl-network-{run_id}-proof-endpoint");
+    let internal_server = format!("dl-network-{run_id}-proof-internal-server");
+    let internal_client = format!("dl-network-{run_id}-proof-internal-client");
+    let control_server = format!("dl-network-{run_id}-proof-control-server");
+    let control_client = format!("dl-network-{run_id}-proof-control-client");
+
+    // Independent CLI creates show the daemon's native interpretation of the
+    // exact two matched settings before the inert bodies are sent to Engine.
+    eprintln!("DOCKERLENS_NATIVE_CHECK: network_internal_oracle");
+    for (name, is_internal) in [(&cli_control, false), (&cli_internal, true)] {
+        let owner = format!("io.dockerlens.native-run={run_id}");
+        let mut args = vec!["network", "create", "--driver", "bridge"];
+        if is_internal {
+            args.push("--internal");
+        }
+        args.extend([
+            "--opt",
+            "com.docker.network.bridge.enable_icc=true",
+            "--opt",
+            "com.docker.network.bridge.enable_ip_masquerade=true",
+            "--label",
+            &owner,
+            name,
+        ]);
+        resources.networks.push(name.clone());
+        proof_cli_ok(&resources, &args);
+    }
+    let cli_internal_body = proof_inspect(
+        &resources,
+        &format!("/v{api_version}/networks/{cli_internal}"),
+    );
+    let cli_control_body = proof_inspect(
+        &resources,
+        &format!("/v{api_version}/networks/{cli_control}"),
+    );
+    assert_eq!(cli_internal_body["Internal"], true);
+    assert_eq!(cli_control_body["Internal"], false);
+    for body in [&cli_internal_body, &cli_control_body] {
+        assert_eq!(body["Labels"]["io.dockerlens.native-run"], run_id);
+    }
+
+    let source_id = required("NATIVE_CONTAINER_ID");
+    resources.require_budget(32);
+    let capture = acquire(
+        &Endpoint::unix_socket(PathBuf::from(required("NATIVE_ENGINE_SOCKET"))),
+        Selector::ContainerIds(vec![NativeId::new(source_id).unwrap()]),
+        Limits {
+            max_requests: 16,
+            max_selected_resources: 2,
+            max_expansions: 6,
+            max_response_bytes: 8 * 1024 * 1024,
+            max_total_bytes: 16 * 1024 * 1024,
+            max_elapsed: Duration::from_secs(30),
+        },
+        &AtomicBool::new(false),
+    )
+    .expect("bounded proof identity acquisition");
+    let mut facts = decode_capture(&capture)
+        .expect("proof identity decode")
+        .version
+        .daemon;
+    assert_eq!(
+        facts.release.as_ref().unwrap().as_str(),
+        required("NATIVE_ENGINE_VERSION")
+    );
+    assert_eq!(
+        format!(
+            "{}.{}",
+            facts.api_version.unwrap().major,
+            facts.api_version.unwrap().minor
+        ),
+        api_version
+    );
+    match required("NATIVE_DAEMON_MODE").as_str() {
+        "rootless" => assert_eq!(facts.mode, DaemonMode::Rootless),
+        "rootful" => {
+            assert_ne!(facts.mode, DaemonMode::Rootless);
+            facts.mode = DaemonMode::Rootful;
+        }
+        _ => panic!("invalid native lane mode"),
+    }
+    let intent = TargetIntent::new(vec![
+        TargetResource::Network(internal_proof_create(&internal, &run_id, true)),
+        TargetResource::Network(internal_proof_create(&control, &run_id, false)),
+    ])
+    .expect("matched proof networks");
+    let absent = ValidatedCapabilities::new(&facts).expect("observed proof identity");
+    assert!(matches!(
+        DockerPlanner.plan(&intent, &absent),
+        Err(PlanningError::MissingCapability { .. })
+    ));
+    let scope = CapabilityScope {
+        observation_id: capture.observation_id(),
+        release: facts.release.clone().unwrap(),
+        api_version: facts.api_version.unwrap(),
+        mode: facts.mode,
+    };
+    facts.capabilities = [
+        Capability::BridgeNetwork,
+        Capability::NetworkInternal,
+        Capability::NetworkOptions,
+        Capability::NetworkLabels,
+    ]
+    .into_iter()
+    .map(|capability| CapabilityFact {
+        capability,
+        state: CapabilityState::Available,
+        provenance: FactProvenance::NativeConformance,
+        scope: Some(scope.clone()),
+    })
+    .collect();
+    let supported = ValidatedCapabilities::new(&facts).expect("test-local scoped proof facts");
+    eprintln!("DOCKERLENS_NATIVE_CHECK: network_internal_render");
+    let graph = DockerPlanner
+        .plan(&intent, &supported)
+        .expect("inert proof plan");
+    let artifact = DockerApiRenderer
+        .render(&graph)
+        .expect("inert proof requests");
+    let requests: Vec<Value> = artifact
+        .bytes()
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(|line| serde_json::from_slice(line).expect("proof request JSON"))
+        .collect();
+    assert_eq!(requests.len(), 2);
+    for (request, name, is_internal) in [
+        (&requests[0], &internal, true),
+        (&requests[1], &control, false),
+    ] {
+        assert_eq!(request["method"], "POST");
+        assert_eq!(request["path"], format!("/v{api_version}/networks/create"));
+        assert_eq!(
+            request["body"],
+            internal_proof_body(name, &run_id, is_internal)
+        );
+        resources.networks.push(name.clone());
+        let (status, _) = proof_api(
+            &resources,
+            "POST",
+            &format!("/v{api_version}/networks/create"),
+            Some(&request["body"]),
+        );
+        assert_eq!(status, 201, "Engine accepts exact inert proof request");
+    }
+    for (name, is_internal, cli_body) in [
+        (&internal, true, &cli_internal_body),
+        (&control, false, &cli_control_body),
+    ] {
+        let body = proof_inspect(&resources, &format!("/v{api_version}/networks/{name}"));
+        assert_eq!(body["Internal"], is_internal);
+        assert_eq!(body["Driver"], "bridge");
+        assert_eq!(body["Labels"]["io.dockerlens.native-run"], run_id);
+        for option in [
+            "com.docker.network.bridge.enable_icc",
+            "com.docker.network.bridge.enable_ip_masquerade",
+        ] {
+            assert_eq!(body["Options"][option], "true");
+            assert_eq!(body["Options"][option], cli_body["Options"][option]);
+        }
+    }
+
+    // Host mode is local to the isolated outer Podman container. Its eth0
+    // address is the endpoint's own address, never a Docker bridge gateway.
+    eprintln!("DOCKERLENS_NATIVE_CHECK: network_internal_endpoint");
+    let owner = format!("io.dockerlens.native-run={run_id}");
+    resources.containers.push(endpoint.clone());
+    proof_cli_ok(
+        &resources,
+        &[
+            "create",
+            "--name",
+            &endpoint,
+            "--label",
+            &owner,
+            "--network",
+            "host",
+            &image,
+            "sh",
+            "-c",
+            "printf proof-egress > /tmp/index.html; httpd -f -p 18084 -h /tmp",
+        ],
+    );
+    proof_cli_ok(&resources, &["start", &endpoint]);
+    let endpoint_body = proof_inspect(
+        &resources,
+        &format!("/v{api_version}/containers/{endpoint}/json"),
+    );
+    assert_eq!(endpoint_body["State"]["Running"], true);
+    assert_eq!(endpoint_body["HostConfig"]["NetworkMode"], "host");
+    assert_eq!(
+        endpoint_body["Config"]["Labels"]["io.dockerlens.native-run"],
+        run_id
+    );
+    let address_output = proof_cli_ok(
+        &resources,
+        &["exec", &endpoint, "ip", "-4", "addr", "show", "dev", "eth0"],
+    );
+    let endpoint_ip = task_host_eth0_ip(&address_output).expect("one task host eth0 IPv4");
+    let local_health = proof_cli_ok(
+        &resources,
+        &[
+            "exec",
+            &endpoint,
+            "wget",
+            "-T",
+            "2",
+            "-qO-",
+            "http://127.0.0.1:18084/",
+        ],
+    );
+    assert_eq!(local_health, b"proof-egress");
+
+    eprintln!("DOCKERLENS_NATIVE_CHECK: network_internal_peers");
+    for (name, network, is_server) in [
+        (&control_server, &control, true),
+        (&control_client, &control, false),
+        (&internal_server, &internal, true),
+        (&internal_client, &internal, false),
+    ] {
+        let command = if is_server {
+            "printf proof-peer > /tmp/index.html; httpd -f -p 8080 -h /tmp"
+        } else {
+            "sleep 180"
+        };
+        resources.containers.push(name.clone());
+        proof_cli_ok(
+            &resources,
+            &[
+                "create",
+                "--name",
+                name,
+                "--label",
+                &owner,
+                "--network",
+                network,
+                &image,
+                "sh",
+                "-c",
+                command,
+            ],
+        );
+        proof_cli_ok(&resources, &["start", name]);
+        assert_single_homed_running(&resources, name, network, &api_version);
+    }
+    for (client, server, network) in [
+        (&control_client, &control_server, &control),
+        (&internal_client, &internal_server, &internal),
+    ] {
+        let url = format!("http://{server}:8080/");
+        let response = proof_cli_ok(
+            &resources,
+            &["exec", client, "wget", "-T", "2", "-qO-", &url],
+        );
+        assert_eq!(response, b"proof-peer", "healthy same-bridge HTTP");
+        assert_single_homed_running(&resources, client, network, &api_version);
+    }
+    let external_url = format!("http://{endpoint_ip}:18084/");
+    eprintln!("DOCKERLENS_NATIVE_CHECK: network_internal_control");
+    let control_response = proof_cli_ok(
+        &resources,
+        &[
+            "exec",
+            &control_client,
+            "wget",
+            "-T",
+            "2",
+            "-qO-",
+            &external_url,
+        ],
+    );
+    assert_eq!(
+        control_response, b"proof-egress",
+        "ordinary bridge reaches task endpoint"
+    );
+    eprintln!("DOCKERLENS_NATIVE_CHECK: network_internal_blocked");
+    let blocked_command = format!(
+        "if wget -T 2 -qO- {external_url} >/dev/null 2>&1; then printf reachable; else printf blocked; fi"
+    );
+    let blocked = proof_cli(
+        &resources,
+        &["exec", &internal_client, "sh", "-c", &blocked_command],
+    );
+    assert!(
+        proof_external_blocked(&blocked),
+        "internal peer must fail direct-IP external HTTP"
+    );
+    assert_single_homed_running(&resources, &internal_client, &internal, &api_version);
+    let endpoint_after = proof_inspect(
+        &resources,
+        &format!("/v{api_version}/containers/{endpoint}/json"),
+    );
+    assert_eq!(endpoint_after["State"]["Running"], true);
+    assert_eq!(endpoint_after["HostConfig"]["NetworkMode"], "host");
+    assert!(
+        proof_cli_ok(
+            &resources,
+            &[
+                "exec",
+                &control_client,
+                "wget",
+                "-T",
+                "2",
+                "-qO-",
+                &external_url
+            ]
+        ) == b"proof-egress",
+        "endpoint remains reachable after negative probe"
+    );
+    eprintln!("DOCKERLENS_NATIVE_CHECK: network_internal_cleanup");
+    assert!(resources.cleanup(), "exact owned proof resource cleanup");
+    fs::write(
+        proof_path,
+        serde_json::to_vec(&json!({
+            "probes": PROBES,
+            "internal_shape": {"InternalBridgeNetworkCreate": "passed"},
+        }))
+        .unwrap(),
+    )
+    .expect("private closed internal network evidence");
+    eprintln!("DOCKERLENS_NATIVE_CHECK: network_evidence");
 }

@@ -619,6 +619,7 @@ if [[ $EUID == 0 ]]; then export NATIVE_PODMAN_USE_SUDO=0; else export NATIVE_PO
 "$(dirname "$0")/run-exact-native-test.sh" native_selection live_network_membership_matches_engine
 "$(dirname "$0")/run-exact-native-test.sh" native_target live_target_render_matches_engine
 "$(dirname "$0")/run-exact-native-test.sh" native_network live_network_render_matches_engine
+"$(dirname "$0")/run-exact-native-test.sh" native_network live_internal_network_blocks_external_egress
 "$(dirname "$0")/run-exact-native-test.sh" native_volume live_existing_volume_prerequisite_matches_engine
 "$(dirname "$0")/run-exact-native-test.sh" native_volume_label live_created_volume_labels_match_engine
 
