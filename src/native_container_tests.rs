@@ -8,6 +8,7 @@ use std::io::{Read, Write};
 use std::num::{NonZeroU16, NonZeroU32, NonZeroU64};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const NATIVE_CLI_STREAM_LIMIT: usize = 8192;
 const NAMESPACE_PROBE_MODES: &[&str] = &[
@@ -210,6 +211,34 @@ fn api_status_category(status: u16) -> &'static str {
         500..=599 => "server",
         _ => "other",
     }
+}
+
+fn mark_container_flow(phase: &'static str, outcome: &'static str) {
+    assert!(matches!(
+        phase,
+        "mutation" | "cleanup_tracked" | "cleanup_inventory" | "cleanup_readback" | "decision"
+    ));
+    assert!(match phase {
+        "mutation" => matches!(outcome, "timeout" | "uncertain"),
+        "decision" => matches!(
+            outcome,
+            "merge" | "probe_failed" | "cleanup_unverified" | "mutation_uncertain"
+        ),
+        _ => matches!(outcome, "begin" | "pass" | "fail"),
+    });
+    eprintln!("DOCKERLENS_NATIVE_CONTAINER_FLOW: phase={phase} outcome={outcome}");
+}
+
+fn resource_control_start_outcome(status: Option<i32>) -> (&'static str, bool) {
+    match status {
+        Some(0) => ("started", false),
+        Some(124 | 137) | None => ("timeout", true),
+        Some(_) => ("uncertain", true),
+    }
+}
+
+fn resource_control_may_continue(uncertain: bool, seconds_remaining: u64) -> bool {
+    !uncertain && seconds_remaining >= 75
 }
 
 fn start_failure_body_diagnostic(body: &[u8]) -> String {
@@ -1082,6 +1111,16 @@ impl NativeRun {
                 "other"
             };
             eprintln!("DOCKERLENS_NATIVE_API_DIAG: transport={category}");
+            if method != "GET" {
+                mark_container_flow(
+                    "mutation",
+                    if category == "timeout" {
+                        "timeout"
+                    } else {
+                        "uncertain"
+                    },
+                );
+            }
         }
         assert!(
             output.status.success(),
@@ -1113,13 +1152,18 @@ impl NativeRun {
     }
 
     fn cli(&self, args: &[String]) -> String {
+        self.cli_with_timeout(args, "45")
+    }
+
+    fn cli_with_timeout(&self, args: &[String], limit: &'static str) -> String {
+        assert!(matches!(limit, "10" | "45"));
         let mutating = !cli_is_read_only(args);
         let previous_uncertainty = self.uncertain_mutation.get();
         if mutating {
             self.uncertain_mutation.set(true);
         }
         let mut command = Command::new("timeout");
-        command.args(["--kill-after=1", "45"]);
+        command.args(["--kill-after=1", limit]);
         if required("NATIVE_PODMAN_USE_SUDO") == "1" {
             command.args(["sudo", "-n", "podman"]);
         } else {
@@ -1140,10 +1184,80 @@ impl NativeRun {
                 cli_failure_exit(output.status),
                 cli_failure_stderr(&output.stderr)
             );
+            if mutating {
+                mark_container_flow(
+                    "mutation",
+                    if output.status.code() == Some(124) {
+                        "timeout"
+                    } else {
+                        "uncertain"
+                    },
+                );
+            }
         }
         assert!(output.status.success(), "independent CLI oracle failed");
         self.uncertain_mutation.set(previous_uncertainty);
         String::from_utf8(output.stdout).expect("CLI output UTF-8")
+    }
+
+    fn resource_control_create(&mut self, control: &'static str) -> Value {
+        let options: &[&str] = match control {
+            "baseline" => &[],
+            "resource" => &["--memory=67108864", "--pids-limit=32"],
+            "device" => &["--device=/dev/null:/dev/native-null:r"],
+            _ => panic!("closed resource control"),
+        };
+        let name = self.name(&format!("resource-control-{control}"));
+        let mut args = vec![
+            "container".to_owned(),
+            "create".to_owned(),
+            "--name".to_owned(),
+            name.clone(),
+            "--label".to_owned(),
+            format!("io.dockerlens.native-run={}", self.run_id),
+        ];
+        args.extend(options.iter().map(|option| (*option).to_owned()));
+        args.extend([
+            self.image.clone(),
+            "sh".into(),
+            "-c".into(),
+            "sleep 120".into(),
+        ]);
+        let id = self.cli_with_timeout(&args, "10").trim().to_owned();
+        assert!(canonical_container_id(&id), "CLI-created control ID");
+        self.created.push((name, id.clone()));
+        mark_resource_control(control, "create", "ready");
+        mark_resource_control(control, "inspect", "begin");
+        self.inspect(&id)
+    }
+
+    fn resource_control_start(&self, id: &str) -> &'static str {
+        assert!(canonical_container_id(id));
+        assert!(self.created.iter().any(|(_, created_id)| created_id == id));
+        let mut command = Command::new("timeout");
+        command.args(["--kill-after=1", "10"]);
+        if required("NATIVE_PODMAN_USE_SUDO") == "1" {
+            command.args(["sudo", "-n", "podman"]);
+        } else {
+            command.arg("podman");
+        }
+        command.args([
+            "exec",
+            &required("NATIVE_OUTER_CONTAINER"),
+            "docker",
+            "-H",
+            "unix:///dockerlens-native/docker.sock",
+            "container",
+            "start",
+            id,
+        ]);
+        let previous_uncertainty = self.uncertain_mutation.replace(true);
+        let output = bounded_native_cli_output(&mut command);
+        let (outcome, uncertain) = resource_control_start_outcome(output.status.code());
+        if !uncertain {
+            self.uncertain_mutation.set(previous_uncertainty);
+        }
+        outcome
     }
 
     fn namespace_probe(&self, mode: &str, argument: Option<&str>) -> std::process::Output {
@@ -1401,6 +1515,7 @@ impl NativeRun {
         assert_eq!(id.len(), 64, "CLI-created container ID");
         self.created.push((name, id.clone()));
         mark_port_stage(suffix, "cli_inspect");
+        mark_resolver_suffix_stage(suffix, "inspect");
         if suffix == "health-default-source" {
             eprintln!("DOCKERLENS_NATIVE_CHECK: container_health_disabled_source_inspect");
         }
@@ -1428,12 +1543,14 @@ impl NativeRun {
         mark_port_stage(suffix, "render");
         let body = self.render_only(suffix, container, required_capabilities);
         mark_port_stage(suffix, "render_body");
+        mark_resolver_suffix_stage(suffix, "body");
         assert_eq!(
             body, expected_body,
             "closed independently authored create body"
         );
         let expected_path = format!("/v{}/containers/create?name={name}", self.api_version);
         mark_port_stage(suffix, "api_create");
+        mark_resolver_suffix_stage(suffix, "create");
         let (status, response) = self.api("POST", &expected_path, Some(&body));
         assert_native_api_status(status, 201);
         let created: Value = serde_json::from_slice(&response).expect("private create response");
@@ -1443,6 +1560,7 @@ impl NativeRun {
             .to_owned();
         self.created.push((name, id.clone()));
         mark_port_stage(suffix, "api_inspect");
+        mark_resolver_suffix_stage(suffix, "inspect");
         let inspected = self.inspect(&id);
         (id, body, inspected)
     }
@@ -1684,10 +1802,13 @@ impl NativeRun {
     }
 
     fn cleanup_verified(&mut self) -> bool {
+        mark_container_flow("cleanup_tracked", "begin");
         let tracked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.cleanup_tracked_containers()
         }))
         .is_ok();
+        mark_container_flow("cleanup_tracked", if tracked { "pass" } else { "fail" });
+        mark_container_flow("cleanup_inventory", "begin");
         let inventoried = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let inventory = self.owned_inventory();
             for expected in &self.images {
@@ -1719,12 +1840,21 @@ impl NativeRun {
                     "owned image ID removed"
                 );
             }
+        }))
+        .is_ok();
+        mark_container_flow(
+            "cleanup_inventory",
+            if inventoried { "pass" } else { "fail" },
+        );
+        mark_container_flow("cleanup_readback", "begin");
+        let readback = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             assert!(self.owned_inventory().is_empty(), "owned resources absent");
             std::thread::sleep(std::time::Duration::from_millis(200));
             assert!(self.owned_inventory().is_empty(), "owned absence stable");
         }))
         .is_ok();
-        tracked && inventoried
+        mark_container_flow("cleanup_readback", if readback { "pass" } else { "fail" });
+        tracked && inventoried && readback
     }
 
     fn image_with_defaults(
@@ -4043,6 +4173,80 @@ fn mark_resource_stage(side: &'static str, phase: &'static str) {
     eprintln!("DOCKERLENS_NATIVE_CHECK: container_resources_security_{side}_{phase}");
 }
 
+fn mark_resource_control(control: &'static str, phase: &'static str, outcome: &'static str) {
+    assert!(matches!(control, "baseline" | "resource" | "device"));
+    assert!(matches!(phase, "create" | "inspect" | "start"));
+    assert!(matches!(
+        outcome,
+        "begin" | "ready" | "started" | "timeout" | "uncertain" | "invalid" | "budget"
+    ));
+    eprintln!(
+        "DOCKERLENS_NATIVE_RESOURCE_CONTROL: control={control} phase={phase} outcome={outcome}"
+    );
+}
+
+fn resource_control_seconds_remaining() -> u64 {
+    let Ok(deadline) = required("NATIVE_NETWORK_TEST_DEADLINE_EPOCH").parse::<u64>() else {
+        return 0;
+    };
+    let Ok(now) = SystemTime::now().duration_since(UNIX_EPOCH) else {
+        return 0;
+    };
+    // Keep time for the three exact probes and verified task-owned cleanup.
+    deadline.saturating_sub(now.as_secs())
+}
+
+fn resource_start_control_matrix(run: &mut NativeRun) {
+    for control in ["baseline", "resource", "device"] {
+        let uncertain = run.uncertain_mutation.get();
+        if !resource_control_may_continue(uncertain, resource_control_seconds_remaining()) {
+            if !uncertain {
+                mark_resource_control(control, "create", "budget");
+            }
+            break;
+        }
+        mark_resource_control(control, "create", "begin");
+        let created = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run.resource_control_create(control)
+        }));
+        let Ok(inspected) = created else {
+            let phase = if run
+                .created
+                .iter()
+                .any(|(name, _)| name == &run.name(&format!("resource-control-{control}")))
+            {
+                "inspect"
+            } else {
+                "create"
+            };
+            mark_resource_control(
+                control,
+                phase,
+                if run.uncertain_mutation.get() {
+                    "uncertain"
+                } else {
+                    "invalid"
+                },
+            );
+            break;
+        };
+        mark_resource_control(control, "inspect", "ready");
+        let Some(id) = inspected["Id"].as_str() else {
+            mark_resource_control(control, "inspect", "invalid");
+            break;
+        };
+        mark_resource_control(control, "start", "begin");
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run.resource_control_start(id)
+        }))
+        .unwrap_or("uncertain");
+        mark_resource_control(control, "start", outcome);
+        if run.uncertain_mutation.get() {
+            break;
+        }
+    }
+}
+
 fn assert_resource_effects(run: &NativeRun, id: &str, side: &'static str) {
     mark_resource_stage(side, "ulimit");
     let limits = run.cli(&[
@@ -4206,7 +4410,16 @@ fn probe_resources_and_security(run: &mut NativeRun, evidence: &mut ProbeEvidenc
     );
     let oracle_id = oracle["Id"].as_str().unwrap().to_owned();
     mark_resource_stage("oracle", "start");
-    start_container(run, &oracle_id);
+    let (oracle_start_status, oracle_start_body) = run.api(
+        "POST",
+        &format!("/v{}/containers/{oracle_id}/start", run.api_version),
+        None,
+    );
+    if oracle_start_status != 204 {
+        eprintln!("{}", start_failure_body_diagnostic(&oracle_start_body));
+        resource_start_control_matrix(run);
+    }
+    assert_native_api_status(oracle_start_status, 204);
     assert_resource_effects(run, &oracle_id, "oracle");
 
     let mut container = bare_container(&run.image);
@@ -4484,7 +4697,33 @@ fn probe_unlimited_resources_and_cap_add(run: &mut NativeRun, evidence: &mut Pro
     );
 }
 
-fn assert_resolver_and_logging(run: &NativeRun, id: &str) {
+fn mark_resolver_stage(lane: &'static str, side: &'static str, phase: &'static str) {
+    assert!(matches!(lane, "ipv4" | "ipv6" | "local" | "none"));
+    assert!(matches!(side, "oracle" | "rendered"));
+    assert!(matches!(
+        phase,
+        "create" | "inspect" | "body" | "start" | "resolver" | "hosts" | "logs"
+    ));
+    eprintln!("DOCKERLENS_NATIVE_CHECK: container_resolver_logging_{lane}_{side}_{phase}");
+}
+
+fn mark_resolver_suffix_stage(suffix: &str, phase: &'static str) {
+    let (lane, side) = match suffix {
+        "resolver-oracle" => ("ipv4", "oracle"),
+        "resolver-rendered" => ("ipv4", "rendered"),
+        "resolver-ipv6-oracle" => ("ipv6", "oracle"),
+        "resolver-ipv6-rendered" => ("ipv6", "rendered"),
+        "log-local-oracle" => ("local", "oracle"),
+        "log-local-rendered" => ("local", "rendered"),
+        "log-none-oracle" => ("none", "oracle"),
+        "log-none-rendered" => ("none", "rendered"),
+        _ => return,
+    };
+    mark_resolver_stage(lane, side, phase);
+}
+
+fn assert_resolver_and_logging(run: &NativeRun, id: &str, side: &'static str) {
+    mark_resolver_stage("ipv4", side, "resolver");
     let resolver = run.cli(&[
         "exec".into(),
         id.into(),
@@ -4496,10 +4735,12 @@ fn assert_resolver_and_logging(run: &NativeRun, id: &str) {
             .lines()
             .any(|line| line.trim() == "nameserver 1.1.1.1")
     );
+    mark_resolver_stage("ipv4", side, "hosts");
     let hosts = run.cli(&["exec".into(), id.into(), "cat".into(), "/etc/hosts".into()]);
     assert!(hosts.lines().any(|line| {
         line.split_whitespace().collect::<Vec<_>>() == ["10.0.0.2", "fixture.local"]
     }));
+    mark_resolver_stage("ipv4", side, "logs");
     let logs = run.cli(&["logs".into(), id.into()]);
     assert!(logs.contains("native-log-canary"));
 }
@@ -4507,6 +4748,7 @@ fn assert_resolver_and_logging(run: &NativeRun, id: &str) {
 fn probe_resolver_and_logging(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
     eprintln!("DOCKERLENS_NATIVE_CHECK: container_resolver_logging");
     let command = "printf native-log-canary; sleep 120";
+    mark_resolver_stage("ipv4", "oracle", "create");
     let oracle = run.cli_create(
         "resolver-oracle",
         &[
@@ -4517,6 +4759,7 @@ fn probe_resolver_and_logging(run: &mut NativeRun, evidence: &mut ProbeEvidence)
         ],
         &["sh", "-c", command],
     );
+    mark_resolver_stage("ipv4", "oracle", "inspect");
     assert_eq!(oracle["HostConfig"]["Dns"], json!(["1.1.1.1"]));
     assert_eq!(
         oracle["HostConfig"]["ExtraHosts"],
@@ -4528,8 +4771,9 @@ fn probe_resolver_and_logging(run: &mut NativeRun, evidence: &mut ProbeEvidence)
         "10m"
     );
     let oracle_id = oracle["Id"].as_str().unwrap().to_owned();
+    mark_resolver_stage("ipv4", "oracle", "start");
     start_container(run, &oracle_id);
-    assert_resolver_and_logging(run, &oracle_id);
+    assert_resolver_and_logging(run, &oracle_id, "oracle");
 
     let mut container = bare_container(&run.image);
     container.command = ImageCommand::Exec(vec![argument("sh"), argument("-c"), argument(command)]);
@@ -4550,6 +4794,7 @@ fn probe_resolver_and_logging(run: &mut NativeRun, evidence: &mut ProbeEvidence)
             "LogConfig":{"Type":"json-file","Config":{"max-size":"10m"}}
         }
     });
+    mark_resolver_stage("ipv4", "rendered", "create");
     let (id, body, inspected) = run.rendered_create(
         "resolver-rendered",
         container,
@@ -4562,6 +4807,7 @@ fn probe_resolver_and_logging(run: &mut NativeRun, evidence: &mut ProbeEvidence)
         ],
         expected_body,
     );
+    mark_resolver_stage("ipv4", "rendered", "body");
     assert_eq!(body["HostConfig"]["Dns"], json!(["1.1.1.1"]));
     assert_eq!(
         body["HostConfig"]["ExtraHosts"],
@@ -4573,11 +4819,13 @@ fn probe_resolver_and_logging(run: &mut NativeRun, evidence: &mut ProbeEvidence)
             "Type":"json-file","Config":{"max-size":"10m"}
         })
     );
+    mark_resolver_stage("ipv4", "rendered", "inspect");
     for key in ["Dns", "ExtraHosts", "LogConfig"] {
         assert_eq!(inspected["HostConfig"][key], oracle["HostConfig"][key]);
     }
+    mark_resolver_stage("ipv4", "rendered", "start");
     start_container(run, &id);
-    assert_resolver_and_logging(run, &id);
+    assert_resolver_and_logging(run, &id, "rendered");
     record_many(
         evidence,
         &[
@@ -4590,8 +4838,10 @@ fn probe_resolver_and_logging(run: &mut NativeRun, evidence: &mut ProbeEvidence)
     );
 }
 
-fn assert_ipv6_resolver_effects(run: &NativeRun, id: &str) {
+fn assert_ipv6_resolver_effects(run: &NativeRun, id: &str, side: &'static str) {
+    mark_resolver_stage("ipv6", side, "start");
     start_container(run, id);
+    mark_resolver_stage("ipv6", side, "resolver");
     let resolver = run.cli(&[
         "exec".into(),
         id.into(),
@@ -4603,6 +4853,7 @@ fn assert_ipv6_resolver_effects(run: &NativeRun, id: &str) {
             .lines()
             .any(|line| line.trim() == "nameserver 2001:4860:4860::8888")
     );
+    mark_resolver_stage("ipv6", side, "hosts");
     let hosts = run.cli(&["exec".into(), id.into(), "cat".into(), "/etc/hosts".into()]);
     assert!(hosts.lines().any(|line| {
         line.split_whitespace().collect::<Vec<_>>() == ["2001:db8::10", "fixture-v6.local"]
@@ -4611,6 +4862,7 @@ fn assert_ipv6_resolver_effects(run: &NativeRun, id: &str) {
 
 fn probe_ipv6_resolver(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
     eprintln!("DOCKERLENS_NATIVE_CHECK: container_resolver_logging");
+    mark_resolver_stage("ipv6", "oracle", "create");
     let oracle = run.cli_create(
         "resolver-ipv6-oracle",
         &[
@@ -4619,13 +4871,14 @@ fn probe_ipv6_resolver(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
         ],
         &["sh", "-c", "sleep 120"],
     );
+    mark_resolver_stage("ipv6", "oracle", "inspect");
     let oracle_id = oracle["Id"].as_str().unwrap().to_owned();
     assert_eq!(oracle["HostConfig"]["Dns"], json!(["2001:4860:4860::8888"]));
     assert_eq!(
         oracle["HostConfig"]["ExtraHosts"],
         json!(["fixture-v6.local:2001:db8::10"])
     );
-    assert_ipv6_resolver_effects(run, &oracle_id);
+    assert_ipv6_resolver_effects(run, &oracle_id, "oracle");
 
     let mut container = bare_container(&run.image);
     container.settings.dns = vec!["2001:4860:4860::8888".parse().unwrap()];
@@ -4641,17 +4894,20 @@ fn probe_ipv6_resolver(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
             "ExtraHosts":["fixture-v6.local:2001:db8::10"]
         }
     });
+    mark_resolver_stage("ipv6", "rendered", "create");
     let (id, body, inspected) = run.rendered_create(
         "resolver-ipv6-rendered",
         container,
         &[Capability::DnsServers, Capability::ExtraHosts],
         expected,
     );
+    mark_resolver_stage("ipv6", "rendered", "body");
+    mark_resolver_stage("ipv6", "rendered", "inspect");
     for key in ["Dns", "ExtraHosts"] {
         assert_eq!(body["HostConfig"][key], oracle["HostConfig"][key]);
         assert_eq!(inspected["HostConfig"][key], oracle["HostConfig"][key]);
     }
-    assert_ipv6_resolver_effects(run, &id);
+    assert_ipv6_resolver_effects(run, &id, "rendered");
     record_many(evidence, &["DnsIpv6", "ExtraHostsIpv6"]);
 }
 
@@ -4695,17 +4951,21 @@ fn probe_alternative_logging(run: &mut NativeRun, evidence: &mut ProbeEvidence) 
         ("local", LogDriver::Local, "local"),
         ("none", LogDriver::None, "none"),
     ] {
+        mark_resolver_stage(suffix, "oracle", "create");
         let oracle = run.cli_create(
             &format!("log-{suffix}-oracle"),
             &[format!("--log-driver={name}")],
             &["sh", "-c", command],
         );
+        mark_resolver_stage(suffix, "oracle", "inspect");
         let oracle_id = oracle["Id"].as_str().unwrap().to_owned();
         assert_eq!(
             oracle["HostConfig"]["LogConfig"],
             json!({"Type":name,"Config":{}})
         );
+        mark_resolver_stage(suffix, "oracle", "start");
         start_container(run, &oracle_id);
+        mark_resolver_stage(suffix, "oracle", "logs");
         if suffix == "none" {
             assert_no_log_output(run, &oracle_id);
         } else {
@@ -4727,21 +4987,26 @@ fn probe_alternative_logging(run: &mut NativeRun, evidence: &mut ProbeEvidence) 
             "Labels":{"io.dockerlens.native-run":run.run_id},
             "HostConfig":{"LogConfig":{"Type":name,"Config":{}}}
         });
+        mark_resolver_stage(suffix, "rendered", "create");
         let (id, body, inspected) = run.rendered_create(
             &format!("log-{suffix}-rendered"),
             container,
             &[Capability::Command, Capability::LogConfig],
             expected,
         );
+        mark_resolver_stage(suffix, "rendered", "body");
         assert_eq!(
             body["HostConfig"]["LogConfig"],
             oracle["HostConfig"]["LogConfig"]
         );
+        mark_resolver_stage(suffix, "rendered", "inspect");
         assert_eq!(
             inspected["HostConfig"]["LogConfig"],
             oracle["HostConfig"]["LogConfig"]
         );
+        mark_resolver_stage(suffix, "rendered", "start");
         start_container(run, &id);
+        mark_resolver_stage(suffix, "rendered", "logs");
         if suffix == "none" {
             assert_no_log_output(run, &id);
             evidence.positive("LogNone");
@@ -4780,7 +5045,9 @@ fn live_container_settings_match_engine() {
         .is_ok();
         let cleaned = run.cleanup_verified();
         let uncertain = run.uncertain_mutation.get();
-        match group_decision(probe_ok, cleaned, uncertain) {
+        let decision = group_decision(probe_ok, cleaned, uncertain);
+        mark_container_flow("decision", group_decision_outcome(decision));
+        match decision {
             GroupDecision::Merge => evidence.merge(group_evidence),
             GroupDecision::ContinueFailed => {
                 eprintln!("DOCKERLENS_NATIVE_GROUP_FAILURE: group={name} reason=probe");
@@ -4827,6 +5094,41 @@ fn group_decision(probe_ok: bool, cleaned: bool, uncertain: bool) -> GroupDecisi
     } else {
         GroupDecision::ContinueFailed
     }
+}
+
+fn group_decision_outcome(decision: GroupDecision) -> &'static str {
+    match decision {
+        GroupDecision::Merge => "merge",
+        GroupDecision::ContinueFailed => "probe_failed",
+        GroupDecision::StopCleanup => "cleanup_unverified",
+        GroupDecision::StopUncertain => "mutation_uncertain",
+    }
+}
+
+#[test]
+fn failed_control_start_and_failed_probe_cannot_become_continuation_or_pass() {
+    for status in [Some(1), Some(125), Some(124), Some(137), None] {
+        let (outcome, uncertain) = resource_control_start_outcome(status);
+        assert!(matches!(outcome, "timeout" | "uncertain"));
+        assert!(uncertain);
+        assert!(!resource_control_may_continue(uncertain, 180));
+        let decision = group_decision(false, true, uncertain);
+        assert_eq!(decision, GroupDecision::StopUncertain);
+        assert_eq!(group_decision_outcome(decision), "mutation_uncertain");
+    }
+    let (outcome, uncertain) = resource_control_start_outcome(Some(0));
+    assert_eq!(outcome, "started");
+    assert!(!uncertain);
+    assert!(resource_control_may_continue(uncertain, 75));
+    assert!(!resource_control_may_continue(uncertain, 74));
+    assert_eq!(
+        group_decision_outcome(group_decision(false, true, false)),
+        "probe_failed"
+    );
+    assert_eq!(
+        group_decision_outcome(group_decision(true, true, false)),
+        "merge"
+    );
 }
 
 #[test]

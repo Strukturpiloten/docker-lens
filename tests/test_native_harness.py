@@ -488,6 +488,72 @@ fi
             self.assertNotIn("protected-secret", result.stdout + result.stderr)
             self.assertNotIn("secret path", result.stdout + result.stderr)
 
+    def test_resource_controls_resolver_subphases_and_cleanup_flow_are_closed(self) -> None:
+        source = (ROOT / "src/native_container_tests.rs").read_text(encoding="utf-8")
+        self.assertIn("if oracle_start_status != 204 {", source)
+        self.assertIn("resource_start_control_matrix(run);", source)
+        self.assertLess(source.index("resource_start_control_matrix(run);"),
+                        source.index("assert_native_api_status(oracle_start_status, 204);"))
+        self.assertIn('resource_control_may_continue(uncertain, resource_control_seconds_remaining())', source)
+        self.assertIn('"resource" => &["--memory=67108864", "--pids-limit=32"]', source)
+        self.assertIn('"device" => &["--device=/dev/null:/dev/native-null:r"]', source)
+        self.assertIn('self.cli_with_timeout(&args, "10")', source)
+        self.assertIn('mark_container_flow("cleanup_readback",', source)
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_container_tests::live_container_settings_match_engine: test'
+else
+  echo 'DOCKERLENS_NATIVE_CHECK: container_resolver_logging_ipv6_rendered_hosts' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: container_resolver_logging_ipv6_rendered_private' >&2
+  echo 'DOCKERLENS_NATIVE_RESOURCE_CONTROL: control=baseline phase=start outcome=started' >&2
+  echo 'DOCKERLENS_NATIVE_RESOURCE_CONTROL: control=resource phase=start outcome=uncertain' >&2
+  echo 'DOCKERLENS_NATIVE_RESOURCE_CONTROL: control=device phase=start outcome=timeout' >&2
+  echo 'DOCKERLENS_NATIVE_RESOURCE_CONTROL: control=private phase=start outcome=started' >&2
+  echo 'DOCKERLENS_NATIVE_RESOURCE_CONTROL: control=device phase=start outcome=started raw=protected-secret' >&2
+  echo 'DOCKERLENS_NATIVE_CONTAINER_FLOW: phase=mutation outcome=timeout' >&2
+  echo 'DOCKERLENS_NATIVE_CONTAINER_FLOW: phase=cleanup_tracked outcome=begin' >&2
+  echo 'DOCKERLENS_NATIVE_CONTAINER_FLOW: phase=cleanup_tracked outcome=pass' >&2
+  echo 'DOCKERLENS_NATIVE_CONTAINER_FLOW: phase=cleanup_inventory outcome=begin' >&2
+  echo 'DOCKERLENS_NATIVE_CONTAINER_FLOW: phase=cleanup_inventory outcome=pass' >&2
+  echo 'DOCKERLENS_NATIVE_CONTAINER_FLOW: phase=cleanup_readback outcome=begin' >&2
+  echo 'DOCKERLENS_NATIVE_CONTAINER_FLOW: phase=cleanup_readback outcome=pass' >&2
+  echo "DOCKERLENS_NATIVE_CONTAINER_FLOW: phase=decision outcome=$TEST_FLOW_DECISION" >&2
+  echo 'DOCKERLENS_NATIVE_CONTAINER_FLOW: phase=decision outcome=pass' >&2
+  echo 'DOCKERLENS_NATIVE_CONTAINER_FLOW: phase=cleanup_private outcome=pass' >&2
+  echo "DOCKERLENS_NATIVE_GROUP_FAILURE: group=ports reason=$TEST_GROUP_REASON" >&2
+  echo 'protected-secret raw native output' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 101
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            for decision, reason in (("mutation_uncertain", "mutation_uncertain"),
+                                     ("probe_failed", "probe")):
+                with self.subTest(decision=decision):
+                    env["TEST_FLOW_DECISION"] = decision
+                    env["TEST_GROUP_REASON"] = reason
+                    result = subprocess.run(
+                        [str(ROOT / "scripts/run-exact-native-test.sh"), "native_container",
+                         "live_container_settings_match_engine"],
+                        env=env, capture_output=True, text=True, timeout=15, check=False,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("container_resolver_logging_ipv6_rendered_hosts", result.stderr)
+                    self.assertIn("control=resource phase=start outcome=uncertain", result.stderr)
+                    self.assertIn("control=device phase=start outcome=timeout", result.stderr)
+                    self.assertIn("phase=mutation outcome=timeout", result.stderr)
+                    self.assertIn("phase=cleanup_readback outcome=pass", result.stderr)
+                    self.assertIn(f"phase=decision outcome={decision}", result.stderr)
+                    self.assertNotIn("phase=decision outcome=pass", result.stderr)
+                    self.assertIn(f"group=ports reason={reason}", result.stderr)
+                    self.assertEqual(result.stderr.count("DOCKERLENS_NATIVE_CONTAINER_FLOW:"), 8)
+                    self.assertNotIn("private", result.stdout + result.stderr)
+                    self.assertNotIn("protected-secret", result.stdout + result.stderr)
+
     def test_ipv6_probe_name_and_repeated_ipv4_oracle_are_live_and_bounded(self) -> None:
         source = (ROOT / "src/native_container_tests.rs").read_text(encoding="utf-8")
         self.assertIn("byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'", source)

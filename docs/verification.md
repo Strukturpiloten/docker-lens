@@ -305,6 +305,26 @@ cleanup; any group failure prevents the 57-shape manifest. The existing
 closed group-failure markers are exposed. No failure becomes a skip, expected
 negative, or production capability.
 
+On a known non-204 resource/security oracle START response, the failed native
+test may run at most three independent, task-owned CLI controls with the same
+image and command: no resource/security flags, memory plus PID limit only, and
+device mapping only. The controls run only while the wrapper deadline leaves
+time for cleanup; each START is capped at ten seconds. Closed create/inspect/
+start outcomes distinguish whether the baseline, cgroup settings, or device
+mapping also fails. A timed-out or otherwise uncertain mutation stops further
+controls and the next group even when inventory reads empty. Any nonzero CLI
+START is uncertain because it cannot prove whether Engine applied the start.
+The closed group-decision marker reports `probe_failed` after a failed positive
+with verified cleanup; only a passing probe can report `merge`. The original
+oracle START must still return 204; control outcomes and lexical response-body
+mentions cannot establish a native capability or reclassify the failure.
+Resolver/logging now reports closed IPv4, IPv6, local-driver, and none-driver
+oracle/rendered substages for create, inspect, START, and relevant resolver,
+hosts, log, and body assertions. The ports failure path reports closed mutation,
+tracked cleanup, inventory cleanup, stable-absence readback, and decision
+phases. These markers expose neither native output nor resource names and do
+not retry an uncertain START or widen the exact task-owned cleanup scope.
+
 The manifest emitter requires both Debian API 1.41 start-interval negatives,
 accepts each of the two IPv6 fixture outcomes independently only on the
 Debian lanes, and preserves the observed positive or exact narrow negative in
