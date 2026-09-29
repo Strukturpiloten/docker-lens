@@ -123,6 +123,11 @@ UDP checks. A failing CLI command adds only a closed exit and recognized stderr
 category; an Engine API transport or unexpected status adds only a closed
 category. These diagnostics do not print native output, change the assertion,
 skip a probe, or permit a failed lane to produce evidence.
+The repeated fixed-IPv4 CLI oracle must also start and serve both exact
+loopback publications before the rendered container is created. Each HTTP
+check has five attempts with a two-second per-request limit inside the
+existing 45-second CLI bound; exhaustion still fails the lane and cannot be
+classified as unsupported from the diagnostic alone.
 
 The runner selects the ignored library test by exact name after
 the other native probes. Only then does the emitter accept a bounded schema-1

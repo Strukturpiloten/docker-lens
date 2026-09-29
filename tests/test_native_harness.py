@@ -269,6 +269,23 @@ fi
                     self.assertIn("DOCKERLENS_NATIVE_API_DIAG: status=conflict", result.stderr)
                     self.assertNotIn("protected-secret", result.stdout + result.stderr)
 
+    def test_ipv6_probe_name_and_repeated_ipv4_oracle_are_live_and_bounded(self) -> None:
+        source = (ROOT / "src/native_container_tests.rs").read_text(encoding="utf-8")
+        self.assertIn("byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'", source)
+        self.assertIn('assert!(valid_container_suffix("ipv6-oracle"));', source)
+        oracle_start = source.index('mark_port_stage("port-oracle", "oracle_start");')
+        oracle_primary = source.index('assert_fixed_ipv4_http(run, "port-oracle", false);')
+        oracle_secondary = source.index('assert_fixed_ipv4_http(run, "port-oracle", true);')
+        oracle_cleanup = source.index('mark_port_stage("port-oracle", "oracle_cleanup");')
+        rendered_start = source.index('mark_port_stage("port-rendered", "api_start");')
+        self.assertLess(oracle_start, oracle_primary)
+        self.assertLess(oracle_primary, oracle_secondary)
+        self.assertLess(oracle_secondary, oracle_cleanup)
+        self.assertLess(oracle_cleanup, rendered_start)
+        self.assertIn('for attempt in 1 2 3 4 5;', source)
+        self.assertIn('wget -qO- -T 2', source)
+        self.assertIn('assert_fixed_ipv4_http(run, "port-rendered", true);', source)
+
     def test_native_test_output_limit_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             bin_dir = Path(directory)

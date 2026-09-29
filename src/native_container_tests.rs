@@ -387,6 +387,30 @@ fn validated_run_id(outer: &str) -> Option<&str> {
     .then_some(id)
 }
 
+fn valid_container_suffix(suffix: &str) -> bool {
+    !suffix.is_empty()
+        && suffix.len() <= 64
+        && suffix
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+#[test]
+fn native_container_suffix_accepts_ipv6_probe_without_widening_names() {
+    assert!(valid_container_suffix("ipv6-oracle"));
+    assert!(valid_container_suffix("ipv6-dynamic-rendered"));
+    for invalid in [
+        "",
+        "Ipv6-oracle",
+        "ipv6_oracle",
+        "ipv6/oracle",
+        "ipv6.oracle",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    ] {
+        assert!(!valid_container_suffix(invalid));
+    }
+}
+
 #[test]
 fn native_container_run_id_requires_exact_prefix_and_bounded_safe_suffix() {
     assert_eq!(validated_run_id("dl-native-AbC9-z"), Some("AbC9-z"));
@@ -442,11 +466,7 @@ impl NativeRun {
     }
 
     fn name(&self, suffix: &str) -> String {
-        assert!(
-            suffix
-                .bytes()
-                .all(|byte| byte.is_ascii_lowercase() || byte == b'-')
-        );
+        assert!(valid_container_suffix(suffix));
         format!("dl-container-{}-{suffix}", self.run_id)
     }
 
@@ -939,6 +959,39 @@ fn mark_port_stage(suffix: &str, phase: &'static str) {
     eprintln!("DOCKERLENS_NATIVE_CHECK: container_port_{group}_{phase}");
 }
 
+fn assert_fixed_ipv4_http(run: &NativeRun, suffix: &str, secondary: bool) {
+    let (url, request_stage, assertion_stage) = if secondary {
+        (
+            "http://127.0.0.2:18111/index.html",
+            "cli_http_secondary",
+            "http_assert_secondary",
+        )
+    } else {
+        (
+            "http://127.0.0.1:18110/index.html",
+            "cli_http",
+            "http_assert",
+        )
+    };
+    // The primary success establishes service readiness. Each request still
+    // gets a short, closed retry window for asynchronous port-forward setup.
+    mark_port_stage(suffix, request_stage);
+    let output = run.cli(&[
+        "run".into(),
+        "--rm".into(),
+        "--network".into(),
+        "host".into(),
+        run.image.clone(),
+        "sh".into(),
+        "-c".into(),
+        "for attempt in 1 2 3 4 5; do if body=$(wget -qO- -T 2 \"$1\"); then printf '%s' \"$body\"; exit 0; fi; [ \"$attempt\" = 5 ] || sleep 1; done; exit 1".into(),
+        "port-probe".into(),
+        url.into(),
+    ]);
+    mark_port_stage(suffix, assertion_stage);
+    assert_eq!(output, "native-tcp-canary");
+}
+
 fn probe_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
     eprintln!("DOCKERLENS_NATIVE_CHECK: container_ports");
     let script = "printf native-tcp-canary >/tmp/index.html; httpd -f -p 8080 -h /tmp & nc -u -l -p 8081 > /tmp/udp-received & wait";
@@ -963,6 +1016,10 @@ fn probe_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
             .is_none()
     );
     let oracle_id = oracle["Id"].as_str().unwrap().to_owned();
+    mark_port_stage("port-oracle", "oracle_start");
+    start_container(run, &oracle_id);
+    assert_fixed_ipv4_http(run, "port-oracle", false);
+    assert_fixed_ipv4_http(run, "port-oracle", true);
     mark_port_stage("port-oracle", "oracle_cleanup");
     run.delete(&oracle_id);
 
@@ -1050,32 +1107,8 @@ fn probe_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
         None,
     );
     assert_native_api_status(status, 204);
-    mark_port_stage("port-rendered", "cli_http");
-    let output = run.cli(&[
-        "run".into(),
-        "--rm".into(),
-        "--network".into(),
-        "host".into(),
-        run.image.clone(),
-        "wget".into(),
-        "-qO-".into(),
-        "http://127.0.0.1:18110/index.html".into(),
-    ]);
-    mark_port_stage("port-rendered", "http_assert");
-    assert_eq!(output, "native-tcp-canary");
-    mark_port_stage("port-rendered", "cli_http_secondary");
-    let second = run.cli(&[
-        "run".into(),
-        "--rm".into(),
-        "--network".into(),
-        "host".into(),
-        run.image.clone(),
-        "wget".into(),
-        "-qO-".into(),
-        "http://127.0.0.2:18111/index.html".into(),
-    ]);
-    mark_port_stage("port-rendered", "http_assert_secondary");
-    assert_eq!(second, "native-tcp-canary");
+    assert_fixed_ipv4_http(run, "port-rendered", false);
+    assert_fixed_ipv4_http(run, "port-rendered", true);
     mark_port_stage("port-rendered", "isolated_http");
     let isolated = run.cli(&[
         "run".into(), "--rm".into(), "--network".into(), "host".into(),
