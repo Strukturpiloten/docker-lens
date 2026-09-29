@@ -358,13 +358,27 @@ timeout --signal=TERM --kill-after=2s 120s "${podman_cmd[@]}" run --pull=never -
   --privileged --pids-limit=512 --memory=4g --cpus=2 "${run_flags[@]}" \
   --volume "$storage_mount" --volume "$socket_dir:/dockerlens-native" \
   "$image" "${start[@]}" >/dev/null 2>&1 || sidecar_setup_failed daemon_attach
-sidecar_ip=$(validated_outer_ipv4 sidecar "$sidecar") || exit 1
-daemon_ip=$(validated_outer_ipv4 daemon "$container") || exit 1
-[[ $sidecar_ip != "$daemon_ip" ]] || {
-  sidecar_setup_failed address_collision
+sidecar_state=$(timeout --signal=TERM --kill-after=2s 10s "${podman_cmd[@]}" inspect \
+  --format '{{.State.Running}}|{{.State.Status}}|{{.State.ExitCode}}' "$sidecar" 2>/dev/null) || {
+  echo 'DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=sidecar_state category=inspect_failed exit=unavailable' >&2
+  exit 1
 }
-sidecar_running=$(timeout --signal=TERM --kill-after=2s 10s "${podman_cmd[@]}" inspect --format '{{.State.Running}}' "$sidecar" 2>/dev/null) || sidecar_running=unavailable
-[[ $sidecar_running == true ]] || sidecar_setup_failed sidecar_state
+if [[ ! $sidecar_state =~ ^(true|false)\|(running|exited|created|configured|paused|stopped|stopping|removing|unknown)\|([0-9]{1,3})$ ]] ||
+  (( 10#${BASH_REMATCH[3]:-999} > 255 )); then
+  echo 'DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=sidecar_state category=malformed exit=unavailable' >&2
+  exit 1
+fi
+sidecar_running=${BASH_REMATCH[1]}
+sidecar_status=${BASH_REMATCH[2]}
+sidecar_exit=${BASH_REMATCH[3]}
+if [[ $sidecar_running != true || $sidecar_status != running ]]; then
+  if [[ $sidecar_running == true || $sidecar_status == running ]]; then
+    sidecar_status=inconsistent
+  fi
+  if (( 10#$sidecar_exit == 0 )); then exit_class=zero; else exit_class=nonzero; fi
+  echo "DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=sidecar_state category=$sidecar_status exit=$exit_class" >&2
+  exit 1
+fi
 sidecar_health=
 for attempt in 1 2 3 4 5; do
   sidecar_health=$(timeout --signal=TERM --kill-after=2s 3s "${podman_cmd[@]}" exec "$sidecar" wget -Y off -T 1 -qO- \
@@ -373,6 +387,11 @@ for attempt in 1 2 3 4 5; do
   if (( attempt < 5 )); then sleep 0.2; fi
 done
 [[ $sidecar_health == proof-egress ]] || sidecar_setup_failed sidecar_health
+sidecar_ip=$(validated_outer_ipv4 sidecar "$sidecar") || exit 1
+daemon_ip=$(validated_outer_ipv4 daemon "$container") || exit 1
+[[ $sidecar_ip != "$daemon_ip" ]] || {
+  sidecar_setup_failed address_collision
+}
 privileged=$("${podman_cmd[@]}" inspect --format '{{.HostConfig.Privileged}}' "$container")
 [[ $privileged == true ]] || { echo 'outer container does not have reviewed nesting privilege' >&2; exit 1; }
 volume_mounts=$("${podman_cmd[@]}" inspect --format '{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}}:{{.Destination}}{{"\n"}}{{end}}{{end}}' "$container")

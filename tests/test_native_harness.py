@@ -950,12 +950,21 @@ case "$command" in
  for name; do :; done
  read -r network_name < "$state/expected-network"
  if [[ $name == dl-native-egress-* ]]; then ip=10.88.0.2; else ip=10.88.0.3; fi
+ if [[ $name == dl-native-egress-* && $FAKE_NATIVE_FAULT == sidecar_running_empty_ip ]]; then ip=; fi
+ if [[ $name == dl-native-egress-* && $FAKE_NATIVE_FAULT == sidecar_exited_empty_ip ]]; then ip=; fi
  printf '{"%s":{"IPAddress":"%s"}}\n' "$network_name" "$ip"
- elif [[ $* == *State.Running* ]]; then echo true
+ elif [[ $* == *State.Running* ]]; then
+ if [[ $FAKE_NATIVE_FAULT == sidecar_state_unavailable ]]; then exit 42; fi
+ if [[ $FAKE_NATIVE_FAULT == sidecar_exited_empty_ip ]]; then
+   echo 'false|exited|127'
+ else
+   echo 'true|running|0'
+ fi
  elif [[ $* == *HostConfig.Privileged* ]]; then echo true
     elif [[ $* == *'.Mounts'* ]]; then echo unexpected:/var/lib/docker
  else exit 4; fi ;;
  exec)
+ touch "$state/health-attempted"
  if [[ $FAKE_NATIVE_FAULT == sidecar_health_dead ]]; then exit 42; fi
  if [[ $FAKE_NATIVE_FAULT == sidecar_health_race && ! -e $state/health-first ]]; then
    touch "$state/health-first"; exit 42
@@ -982,6 +991,9 @@ esac
             ("debian11-rootful", "sidecar_start"),
             ("debian11-rootful", "sidecar_health_dead"),
             ("debian11-rootful", "sidecar_health_race"),
+            ("debian11-rootful", "sidecar_exited_empty_ip"),
+            ("debian11-rootful", "sidecar_running_empty_ip"),
+            ("debian11-rootful", "sidecar_state_unavailable"),
             ("debian11-rootful", "cancel_after_sidecar"),
             ("debian11-rootful", "run"),
             ("debian11-rootless", "unexpected_mount"),
@@ -1085,6 +1097,25 @@ esac
                 if fault == "sidecar_health_race":
                     self.assertTrue((state / "health-first").exists())
                     self.assertNotIn("phase=sidecar_health", result.stderr)
+                if fault == "sidecar_exited_empty_ip":
+                    self.assertIn(
+                        "DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=sidecar_state category=exited exit=nonzero",
+                        result.stderr,
+                    )
+                    self.assertNotIn("phase=attachment", result.stderr)
+                    self.assertFalse((state / "health-attempted").exists())
+                if fault == "sidecar_running_empty_ip":
+                    self.assertTrue((state / "health-attempted").exists())
+                    self.assertIn(
+                        "phase=attachment role=sidecar category=ipv4_missing",
+                        result.stderr,
+                    )
+                if fault == "sidecar_state_unavailable":
+                    self.assertIn(
+                        "phase=sidecar_state category=inspect_failed exit=unavailable",
+                        result.stderr,
+                    )
+                    self.assertFalse((state / "health-attempted").exists())
                 if (state / "sidecar-run-args").exists():
                     sidecar_args = (state / "sidecar-run-args").read_text()
                     self.assertIn("--network dl-native-net-", sidecar_args)
