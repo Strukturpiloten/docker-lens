@@ -99,8 +99,11 @@ rejected by planning, independent of any Engine acceptance behavior.
 The typed-container offline regressions cover exact grouped `PortBindings`
 and `ExposedPorts` bodies, host-IP privacy, wildcard conflicts, ephemeral
 allocation requests, command/entrypoint inheritance and clearing, shell and
-disabled health, timing, metadata, tmpfs, and runtime settings. These are
-local contract tests only. #31's independent native assertions must check
+disabled health, timing, metadata, tmpfs, and runtime settings. Command clear
+with an inherited or cleared entrypoint fails intent validation; only an
+explicit exec entrypoint plus clear command reaches capability-gated inert
+rendering. This candidate is not a native clear claim. These are local contract
+tests only. #31's independent native assertions must check
 resulting loopback and IPv6 exposure, repeated/dynamic assignments, mount
 access, process identity, health behavior, and resource/security outcomes in
 each claimed mode and API. `StartInterval` needs exact native support and a
