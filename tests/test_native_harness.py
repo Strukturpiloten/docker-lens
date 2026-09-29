@@ -26,7 +26,8 @@ class NativeHarnessTests(unittest.TestCase):
                          sorted(source.index(f'DOCKERLENS_NATIVE_CHECK: {marker}')
                                 for marker in markers))
         self.assertEqual(re.findall(r'"nslookup",\s*"-type=A",\s*"([^"]+)"', source),
-                         ["edge-sentinel", "backend-app"])
+                         ["edge-sentinel", "edge-sentinel", "edge-sentinel.",
+                          "edge-sentinel", "backend-app"])
         self.assertIn("if nslookup -type=A edge-sentinel", source)
         self.assertIn('let edge_dns_outcome = wait_for_exact_dns_answer(', source)
         self.assertIn('if category != "cli_lookup"', source)
@@ -42,11 +43,69 @@ class NativeHarnessTests(unittest.TestCase):
         self.assertIn("const LIMIT: usize = 8192;", source)
         self.assertIn("let stdout_reader = std::thread::spawn", source)
         self.assertIn("let stderr_reader = std::thread::spawn", source)
-        self.assertIn('command.arg("8")', source)
+        self.assertIn('private_docker_command("8")', source)
         self.assertIn('api_with_timeout("GET", path, None, "3")', source)
         self.assertLess(source.index("match named_dns_answer_category"),
                         source.index('if message.contains("can\'t resolve")'))
         self.assertIn("mixed wrong answer must not be retried", source)
+        failure = source.index('if let Err(category) = edge_dns_outcome')
+        self.assertLess(failure, source.index('diagnose_edge_dns(&run_id', failure))
+        self.assertLess(source.index('diagnose_edge_dns(&run_id', failure),
+                        source.index('edge_dns_outcome.is_ok()', failure))
+        self.assertIsNotNone(re.search(
+            r'"--name",\s*&peer,\s*"--network",\s*edge,\s*image,\s*"sleep",\s*"120"',
+            source,
+        ))
+        self.assertIsNotNone(re.search(
+            r'api_with_timeout_and_cap\("GET",\s*&path,\s*None,\s*"3",\s*Some\(1024 \* 1024\)\)',
+            source,
+        ))
+        self.assertTrue('NATIVE_NETWORK_TEST_DEADLINE_EPOCH' in source)
+        self.assertTrue('DNS_CLI_HARD_LIMIT_SECS' in source)
+        self.assertTrue('command.args(["--kill-after=1", seconds])' in source)
+        self.assertIn('networks.len() == 1 && networks.contains_key(edge)', source)
+        self.assertIn('summary.cleanup = if guard.cleanup()', source)
+
+    def test_dns_diagnostic_summary_is_closed_and_surfaced_separately(self) -> None:
+        valid = ("DOCKERLENS_NATIVE_DNS_DIAG: peer=ready resolver=embedded_search "
+                 "default_a=fail explicit_a=pass dotted_a=pass name_http=pass "
+                 "ip_http=pass edge_app=pass cleanup=pass")
+        invalid = ("DOCKERLENS_NATIVE_DNS_DIAG: peer=ready resolver=protected-secret "
+                   "default_a=pass explicit_a=pass dotted_a=pass name_http=pass "
+                   "ip_http=pass edge_app=pass cleanup=pass")
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_network_tests::live_network_render_matches_engine: test'
+else
+  [[ ${NATIVE_NETWORK_TEST_DEADLINE_EPOCH:-} =~ ^[0-9]+$ ]] || exit 24
+  remaining=$((NATIVE_NETWORK_TEST_DEADLINE_EPOCH - $(date +%s)))
+  (( remaining >= 170 && remaining <= 180 )) || exit 24
+  echo 'protected native response' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: network_isolation_edge_dns_readiness_exhausted' >&2
+  printf '%s\n' "$TEST_DIAG" >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            for supplied, accepted in ((valid, True), (invalid, False),
+                                       (valid + " raw=protected-secret", False)):
+                with self.subTest(accepted=accepted, supplied=supplied):
+                    env["TEST_DIAG"] = supplied
+                    result = subprocess.run(
+                        [str(ROOT / "scripts/run-exact-native-test.sh"), "native_network",
+                         "live_network_render_matches_engine"],
+                        env=env, capture_output=True, text=True, timeout=15, check=False,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(valid in result.stderr, accepted)
+                    self.assertIn("network_isolation_edge_dns_readiness_exhausted", result.stderr)
+                    self.assertNotIn("protected-secret", result.stdout + result.stderr)
+                    self.assertNotIn("protected native response", result.stdout + result.stderr)
 
     def test_network_probe_is_exact_and_precedes_manifest_emission(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
@@ -107,6 +166,43 @@ fi
         self.assertLess(source.index(selected), source.index(manifest))
         self.assertIn('"$NATIVE_SOURCE_PROBES_PATH"', source)
         self.assertIn('io.dockerlens.fixture=decoy', source)
+
+    def test_existing_volume_probe_is_exact_and_precedes_manifest_emission(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
+        selected = ('"$(dirname "$0")/run-exact-native-test.sh" native_volume '
+                    'live_existing_volume_prerequisite_matches_engine')
+        manifest = 'python3 "$script_dir/native-evidence.py"'
+        self.assertEqual(source.count(selected), 1)
+        self.assertLess(source.index(selected), source.index(manifest))
+        self.assertIn('export NATIVE_VOLUME_PROBES_PATH="$run_dir/volume-probes.json"', source)
+        self.assertIn('"$NATIVE_VOLUME_PROBES_PATH"', source)
+
+    def test_volume_failure_markers_remain_closed_and_private(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_volume_tests::live_existing_volume_prerequisite_matches_engine: test'
+else
+  echo 'private native volume response' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: volume_missing_precheck' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: volume_private' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: volume_cleanup_unverified' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            result = subprocess.run(
+                [str(ROOT / "scripts/run-exact-native-test.sh"), "native_volume",
+                 "live_existing_volume_prerequisite_matches_engine"],
+                env=env, capture_output=True, text=True, timeout=15, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("DOCKERLENS_NATIVE_CHECK: volume_cleanup_unverified", result.stderr)
+            self.assertNotIn("private", result.stdout + result.stderr)
 
     def test_source_failure_markers_remain_closed_and_private(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -706,6 +802,50 @@ fi
         invalid = subprocess.run(
             [str(ROOT / "scripts/run-exact-native-test.sh"),
              "native-target", "live_target_render_matches_engine"],
+            capture_output=True, text=True, timeout=15, check=False,
+        )
+        self.assertEqual(invalid.returncode, 2)
+
+    def test_native_volume_uses_private_library_test_by_exact_name(self) -> None:
+        selected = "native_volume_tests::live_existing_volume_prerequisite_matches_engine"
+        for listed, expected_success in ((0, False), (1, True), (2, False)):
+            with self.subTest(listed=listed), tempfile.TemporaryDirectory() as directory:
+                bin_dir = Path(directory)
+                self._tool(
+                    bin_dir,
+                    "cargo",
+                    """#!/usr/bin/env bash
+set -eu
+printf '%s\n' "$*" >> "$FAKE_NATIVE_INVOCATIONS"
+if [[ $* == *--list* ]]; then
+  for ((i=0; i<FAKE_NATIVE_LISTED; i++)); do
+    echo 'native_volume_tests::live_existing_volume_prerequisite_matches_engine: test'
+  done
+else
+  echo 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;'
+fi
+""",
+                )
+                invocation = bin_dir / "invocations"
+                env = os.environ.copy()
+                env.update(PATH=f"{bin_dir}:{env['PATH']}",
+                           FAKE_NATIVE_INVOCATIONS=str(invocation),
+                           FAKE_NATIVE_LISTED=str(listed))
+                result = subprocess.run(
+                    [str(ROOT / "scripts/run-exact-native-test.sh"), "native_volume",
+                     "live_existing_volume_prerequisite_matches_engine"],
+                    env=env, capture_output=True, text=True, timeout=15, check=False,
+                )
+                self.assertEqual(result.returncode == 0, expected_success)
+                calls = invocation.read_text().splitlines()
+                self.assertEqual(len(calls), 2 if expected_success else 1)
+                self.assertTrue(all("--lib" in call and "--test" not in call for call in calls))
+                if expected_success:
+                    self.assertIn(f"--ignored --exact {selected}", calls[1])
+
+        invalid = subprocess.run(
+            [str(ROOT / "scripts/run-exact-native-test.sh"), "native-volume",
+             "live_existing_volume_prerequisite_matches_engine"],
             capture_output=True, text=True, timeout=15, check=False,
         )
         self.assertEqual(invalid.returncode, 2)

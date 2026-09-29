@@ -11,6 +11,15 @@ negative cases include overlapping IPAM pools, subnet-base and broadcast
 gateway/auxiliary/static addresses, and static-address collisions. IPv4 `/31`
 and `/32` bridge parent subnets remain an explicit planning rejection; this
 extension does not establish their Engine behavior on any API or daemon mode.
+On a failed edge-side DNS positive, the network test may create one exact
+run-owned diagnostic peer. Its closed summary distinguishes resolver setup,
+default/explicit/dotted A lookups, named/direct-IP HTTP and cleanup without
+exposing daemon output. Optional probes respect the exact runner's 180-second
+deadline, reserve cleanup/reporting time and cannot turn the failed positive
+into a pass. A timeout before the failure branch may prevent any summary;
+SIGKILL or host failure can prevent cleanup. No retry or diagnostic result
+establishes compatibility without the original assertion passing.
+
 The native #31 network test uses an independent Docker CLI bridge oracle,
 direct Engine GETs, an externally seeded bridge, and test-only application of
 the inert renderer requests. It checks two rendered network creates, ordered
@@ -162,7 +171,7 @@ API-created container uses the independent CLI start probe to report both a
 closed component category and a separate closed errno/reason token for a
 failed start before checking the live read-only mount behavior.
 
-After all required native Rust tests, including the network extension, pass, a workflow lane writes one
+After every required native Rust test passes, a workflow lane writes one
 sanitized JSON manifest containing the exact candidate SHA, image
 tag and digest, observed Engine release and advertised API bounds, the
 selected acquisition API, rendering API, reported containerd and runc
@@ -253,6 +262,23 @@ isolated native Engine harness. It reads that harness's explicit socket and
 private direct-API oracle files to compare selected container, network, volume,
 version, and mode semantics. A fake-socket pass is not rootful or rootless
 Engine compatibility evidence.
+
+The ignored `live_existing_volume_prerequisite_matches_engine` library test
+adds a separate, exact native lane check for ADR 0008's existing named-volume
+target. It seeds a task-owned, labeled volume, checks the rendered external
+prerequisite and exact read-only/read-write mount requests, and verifies seeded
+data access, write rejection on the read-only mount, and persistence after a
+consumer container is removed and recreated. A missing volume must fail the
+harness's direct Engine GET preflight before any rendered POST; Engine container
+creation can otherwise create a missing named volume implicitly. The test
+uses only synthetic resources and label-verified cleanup. Each passing lane
+records six closed `volume_probes` in its sanitized manifest, sourced from a
+bounded private test file; raw volume names, data, and API responses remain
+private. These probes are non-admission evidence: they do not modify the
+historical reviewed catalog or its schema, establish that an arbitrary
+destination volume exists or is populated, or authorize copying or applying
+data. Fresh, independently reviewed rootful and rootless runs on every claimed
+Engine profile remain necessary before an existing-volume compatibility claim.
 
 ## Reviewed target-profile records
 

@@ -7,7 +7,7 @@ use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::AtomicBool;
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
@@ -47,6 +47,8 @@ const PROBES: [&str; 19] = [
     "NetworkStaticIpv6",
     "NetworkSecondaryConnect",
 ];
+
+const DNS_CLI_HARD_LIMIT_SECS: u64 = 9;
 
 fn required(name: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| panic!("native harness must supply {name}"))
@@ -131,12 +133,11 @@ fn bounded_dns_stream<R: Read>(reader: R) -> (Vec<u8>, bool) {
     (bytes, exceeded)
 }
 
-fn cli_dns(args: &[&str]) -> BoundedDnsCliOutput {
+fn private_docker_command(seconds: &str) -> Command {
     let mut command = Command::new("timeout");
-    // Four DNS commands and four three-second state reads plus conditional
-    // pauses sum to under 45 seconds of configured timeout within the exact
-    // native test's 180-second budget.
-    command.arg("8");
+    // One second after TERM, force a stubborn CLI process to exit so the
+    // diagnostic can still run its exact-peer cleanup before the outer gate.
+    command.args(["--kill-after=1", seconds]);
     if required("NATIVE_PODMAN_USE_SUDO") == "1" {
         command.args(["sudo", "-n", "podman"]);
     } else {
@@ -149,6 +150,13 @@ fn cli_dns(args: &[&str]) -> BoundedDnsCliOutput {
         "-H",
         "unix:///dockerlens-native/docker.sock",
     ]);
+    command
+}
+
+fn cli_dns(args: &[&str]) -> BoundedDnsCliOutput {
+    // The DNS readiness loop has four at-most-nine-second CLI calls and four
+    // three-second state reads, plus three 250-ms waits in the retry case.
+    let mut command = private_docker_command("8");
     command
         .args(args)
         .stdout(Stdio::piped())
@@ -179,7 +187,7 @@ fn dns_failure_category(
         return "output_limit";
     }
     if !result.success {
-        if result.code == Some(124) {
+        if matches!(result.code, Some(124 | 137)) {
             return "cli_timeout";
         }
         if result.code == Some(125) {
@@ -325,6 +333,327 @@ fn nslookup_has_ipv4_answer(output: &[u8], alias: &str, expected: Ipv4Addr) -> b
     false
 }
 
+struct DnsDiagnostic {
+    peer: &'static str,
+    resolver: &'static str,
+    default_a: &'static str,
+    explicit_a: &'static str,
+    dotted_a: &'static str,
+    name_http: &'static str,
+    ip_http: &'static str,
+    edge_app: &'static str,
+    cleanup: &'static str,
+}
+
+impl DnsDiagnostic {
+    fn new() -> Self {
+        Self {
+            peer: "unavailable",
+            resolver: "unrun",
+            default_a: "unrun",
+            explicit_a: "unrun",
+            dotted_a: "unrun",
+            name_http: "unrun",
+            ip_http: "unrun",
+            edge_app: "unrun",
+            cleanup: "fail",
+        }
+    }
+
+    fn emit(&self) {
+        // Every interpolated value is selected from the fixed categories below.
+        eprintln!(
+            "DOCKERLENS_NATIVE_DNS_DIAG: peer={} resolver={} default_a={} explicit_a={} dotted_a={} name_http={} ip_http={} edge_app={} cleanup={}",
+            self.peer,
+            self.resolver,
+            self.default_a,
+            self.explicit_a,
+            self.dotted_a,
+            self.name_http,
+            self.ip_http,
+            self.edge_app,
+            self.cleanup,
+        );
+    }
+}
+
+fn resolver_category(bytes: &[u8]) -> &'static str {
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return "unavailable";
+    };
+    let mut embedded = false;
+    let mut search = false;
+    for line in text.lines() {
+        let mut words = line.split_whitespace();
+        match words.next() {
+            Some("nameserver") => embedded |= words.next() == Some("127.0.0.11"),
+            Some("search") => search |= words.next().is_some(),
+            _ => {}
+        }
+    }
+    match (embedded, search) {
+        (true, true) => "embedded_search",
+        (true, false) => "embedded_plain",
+        (false, true) => "other_search",
+        (false, false) => "other_plain",
+    }
+}
+
+#[test]
+fn resolver_configuration_classification_remains_closed() {
+    assert_eq!(
+        resolver_category(b"nameserver 127.0.0.11\nsearch private.example\n"),
+        "embedded_search"
+    );
+    assert_eq!(
+        resolver_category(b"nameserver 127.0.0.11\n"),
+        "embedded_plain"
+    );
+    assert_eq!(
+        resolver_category(b"nameserver 192.0.2.1\nsearch private.example\n"),
+        "other_search"
+    );
+    assert_eq!(resolver_category(b"\xff"), "unavailable");
+}
+
+fn remove_exact_dns_peer(name: &str) -> bool {
+    private_docker_command("8")
+        .args(["rm", "-f", name])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+struct DnsPeerGuard<'a> {
+    name: &'a str,
+    cleaned: bool,
+    deadline: Instant,
+}
+
+impl DnsPeerGuard<'_> {
+    fn cleanup(&mut self) -> bool {
+        self.cleaned = remove_exact_dns_peer(self.name);
+        if !self.cleaned && diagnostic_has_budget(self.deadline, DNS_CLI_HARD_LIMIT_SECS, 0) {
+            self.cleaned = remove_exact_dns_peer(self.name);
+        }
+        self.cleaned
+    }
+}
+
+impl Drop for DnsPeerGuard<'_> {
+    fn drop(&mut self) {
+        if !self.cleaned && diagnostic_has_budget(self.deadline, DNS_CLI_HARD_LIMIT_SECS, 0) {
+            let _ = remove_exact_dns_peer(self.name);
+        }
+    }
+}
+
+fn diagnostic_remaining(deadline_epoch: u64, now: Duration) -> Option<Duration> {
+    // The shell's 180-second timeout includes Cargo startup. Stop optional
+    // work twenty seconds early for process teardown and fixed-marker output.
+    Duration::from_secs(deadline_epoch)
+        .checked_sub(now)?
+        .checked_sub(Duration::from_secs(20))
+}
+
+fn diagnostic_has_budget(deadline: Instant, operation_secs: u64, cleanup_secs: u64) -> bool {
+    deadline
+        .checked_duration_since(Instant::now())
+        .is_some_and(|remaining| {
+            remaining >= Duration::from_secs(operation_secs + cleanup_secs + 2)
+        })
+}
+
+#[test]
+fn dns_diagnostic_deadline_fails_closed_and_reserves_cleanup() {
+    assert_eq!(diagnostic_remaining(180, Duration::from_secs(161)), None);
+    assert_eq!(
+        diagnostic_remaining(180, Duration::from_secs(159)),
+        Some(Duration::from_secs(1))
+    );
+    let deadline = Instant::now() + Duration::from_secs(17);
+    assert!(!diagnostic_has_budget(
+        deadline,
+        DNS_CLI_HARD_LIMIT_SECS,
+        DNS_CLI_HARD_LIMIT_SECS,
+    ));
+    let deadline = Instant::now() + Duration::from_secs(25);
+    assert!(diagnostic_has_budget(
+        deadline,
+        DNS_CLI_HARD_LIMIT_SECS,
+        DNS_CLI_HARD_LIMIT_SECS,
+    ));
+}
+
+fn exact_a_probe(args: &[&str], alias: &str, expected: Ipv4Addr) -> &'static str {
+    let result = cli_dns(args);
+    if result.success
+        && !result.output_limit
+        && nslookup_has_ipv4_answer(&result.stdout, alias, expected)
+    {
+        "pass"
+    } else {
+        "fail"
+    }
+}
+
+fn exact_http_probe(args: &[&str], expected: &[u8]) -> &'static str {
+    let result = cli_dns(args);
+    if result.success && !result.output_limit && result.stdout.as_slice() == expected {
+        "pass"
+    } else {
+        "fail"
+    }
+}
+
+fn diagnose_edge_dns(run_id: &str, api_version: &str, edge: &str, image: &str, edge_ip: Ipv4Addr) {
+    // The runner supplies the absolute deadline for its 180-second cargo
+    // invocation. Missing, invalid, or nearly expired deadlines skip optional
+    // commands; the mandatory failed DNS assertion still fails below.
+    let mut summary = DnsDiagnostic::new();
+    let remaining = std::env::var("NATIVE_NETWORK_TEST_DEADLINE_EPOCH")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .zip(SystemTime::now().duration_since(UNIX_EPOCH).ok())
+        .and_then(|(deadline, now)| diagnostic_remaining(deadline, now));
+    let Some(remaining) = remaining else {
+        summary.cleanup = "pass"; // No diagnostic peer was created.
+        summary.emit();
+        return;
+    };
+    let deadline = Instant::now() + remaining.min(Duration::from_secs(75));
+    if !diagnostic_has_budget(deadline, DNS_CLI_HARD_LIMIT_SECS, DNS_CLI_HARD_LIMIT_SECS) {
+        summary.cleanup = "pass"; // No diagnostic peer was created.
+        summary.emit();
+        return;
+    }
+    let peer = format!("dl-network-{run_id}-dns-peer");
+    let mut guard = DnsPeerGuard {
+        name: &peer,
+        cleaned: false,
+        deadline,
+    };
+    let created = cli_dns(&[
+        "run",
+        "--detach",
+        "--rm",
+        "--name",
+        &peer,
+        "--network",
+        edge,
+        image,
+        "sleep",
+        "120",
+    ]);
+    if created.success
+        && !created.output_limit
+        && diagnostic_has_budget(deadline, 3, DNS_CLI_HARD_LIMIT_SECS)
+    {
+        let path = format!("/v{api_version}/containers/{peer}/json");
+        let inspected = std::panic::catch_unwind(|| {
+            api_with_timeout_and_cap("GET", &path, None, "3", Some(1024 * 1024))
+        });
+        if let Ok((200, response)) = inspected {
+            if let Ok(inspected) = serde_json::from_slice::<Value>(&response) {
+                let networks = inspected["NetworkSettings"]["Networks"].as_object();
+                if inspected["State"]["Running"] == true
+                    && networks
+                        .is_some_and(|networks| networks.len() == 1 && networks.contains_key(edge))
+                {
+                    summary.peer = "ready";
+                } else {
+                    summary.peer = "invalid";
+                }
+            } else {
+                summary.peer = "invalid";
+            }
+        }
+    }
+    if summary.peer == "ready" {
+        if diagnostic_has_budget(deadline, DNS_CLI_HARD_LIMIT_SECS, DNS_CLI_HARD_LIMIT_SECS) {
+            let resolv = cli_dns(&["exec", &peer, "cat", "/etc/resolv.conf"]);
+            if resolv.success && !resolv.output_limit {
+                summary.resolver = resolver_category(&resolv.stdout);
+            } else {
+                summary.resolver = "unavailable";
+            }
+        }
+        if diagnostic_has_budget(deadline, DNS_CLI_HARD_LIMIT_SECS, DNS_CLI_HARD_LIMIT_SECS) {
+            summary.default_a = exact_a_probe(
+                &["exec", &peer, "nslookup", "-type=A", "edge-sentinel"],
+                "edge-sentinel",
+                edge_ip,
+            );
+        }
+        if diagnostic_has_budget(deadline, DNS_CLI_HARD_LIMIT_SECS, DNS_CLI_HARD_LIMIT_SECS) {
+            summary.explicit_a = exact_a_probe(
+                &[
+                    "exec",
+                    &peer,
+                    "nslookup",
+                    "-type=A",
+                    "edge-sentinel",
+                    "127.0.0.11",
+                ],
+                "edge-sentinel",
+                edge_ip,
+            );
+        }
+        if diagnostic_has_budget(deadline, DNS_CLI_HARD_LIMIT_SECS, DNS_CLI_HARD_LIMIT_SECS) {
+            summary.dotted_a = exact_a_probe(
+                &[
+                    "exec",
+                    &peer,
+                    "nslookup",
+                    "-type=A",
+                    "edge-sentinel.",
+                    "127.0.0.11",
+                ],
+                "edge-sentinel",
+                edge_ip,
+            );
+        }
+        if diagnostic_has_budget(deadline, DNS_CLI_HARD_LIMIT_SECS, DNS_CLI_HARD_LIMIT_SECS) {
+            summary.name_http = exact_http_probe(
+                &[
+                    "exec",
+                    &peer,
+                    "wget",
+                    "-T",
+                    "2",
+                    "-qO-",
+                    "http://edge-sentinel:8080/",
+                ],
+                b"edge-canary",
+            );
+        }
+        let ip_url = format!("http://{edge_ip}:8080/");
+        if diagnostic_has_budget(deadline, DNS_CLI_HARD_LIMIT_SECS, DNS_CLI_HARD_LIMIT_SECS) {
+            summary.ip_http = exact_http_probe(
+                &["exec", &peer, "wget", "-T", "2", "-qO-", &ip_url],
+                b"edge-canary",
+            );
+        }
+        if diagnostic_has_budget(deadline, DNS_CLI_HARD_LIMIT_SECS, DNS_CLI_HARD_LIMIT_SECS) {
+            summary.edge_app = exact_http_probe(
+                &[
+                    "exec",
+                    &peer,
+                    "wget",
+                    "-T",
+                    "2",
+                    "-qO-",
+                    "http://edge-app:8080/",
+                ],
+                b"network-canary",
+            );
+        }
+    }
+    summary.cleanup = if guard.cleanup() { "pass" } else { "fail" };
+    summary.emit();
+}
+
 #[test]
 fn nslookup_ipv4_answer_requires_exact_named_address_not_prefix_or_resolver() {
     let answer = b"Server: 127.0.0.11\nAddress: 127.0.0.11:53\n\nName: edge-sentinel\nAddress: 172.29.244.20\n";
@@ -390,6 +719,11 @@ fn edge_dns_failure_categories_are_closed_and_value_free() {
         "cli_exec"
     );
     result.code = Some(124);
+    assert_eq!(
+        dns_failure_category(&result, "edge-sentinel", expected),
+        "cli_timeout"
+    );
+    result.code = Some(137);
     assert_eq!(
         dns_failure_category(&result, "edge-sentinel", expected),
         "cli_timeout"
@@ -598,6 +932,7 @@ fn allowed_request(
     let app = format!("dl-network-{run_id}-app");
     let isolated = format!("dl-network-{run_id}-isolated");
     let edge_only = format!("dl-network-{run_id}-edge-only");
+    let dns_peer = format!("dl-network-{run_id}-dns-peer");
     let path_allowed = match method {
         "GET" => {
             [
@@ -608,9 +943,14 @@ fn allowed_request(
             ]
             .iter()
             .any(|name| suffix == format!("networks/{name}"))
-                || [app.as_str(), isolated.as_str(), edge_only.as_str()]
-                    .iter()
-                    .any(|name| suffix == format!("containers/{name}/json"))
+                || [
+                    app.as_str(),
+                    isolated.as_str(),
+                    edge_only.as_str(),
+                    dns_peer.as_str(),
+                ]
+                .iter()
+                .any(|name| suffix == format!("containers/{name}/json"))
         }
         "POST" => {
             suffix == "networks/create"
@@ -645,6 +985,16 @@ fn api_with_timeout(
     path: &str,
     body: Option<&Value>,
     max_time: &str,
+) -> (u16, Vec<u8>) {
+    api_with_timeout_and_cap(method, path, body, max_time, None)
+}
+
+fn api_with_timeout_and_cap(
+    method: &str,
+    path: &str,
+    body: Option<&Value>,
+    max_time: &str,
+    response_cap: Option<usize>,
 ) -> (u16, Vec<u8>) {
     let run_id = run_id();
     assert!(
@@ -686,18 +1036,31 @@ fn api_with_timeout(
             .write_all(&serde_json::to_vec(body).unwrap())
             .unwrap();
     }
-    let output = child.wait_with_output().expect("bounded Engine response");
-    assert!(output.status.success(), "isolated Engine request failed");
-    let split = output
-        .stdout
-        .iter()
-        .rposition(|byte| *byte == b'\n')
-        .unwrap();
-    let status = std::str::from_utf8(&output.stdout[split + 1..])
+    let (success, output) = if let Some(cap) = response_cap {
+        let stdout = child.stdout.take().expect("private Engine stdout");
+        let reader = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            stdout
+                .take((cap + 1) as u64)
+                .read_to_end(&mut bytes)
+                .expect("bounded private Engine response");
+            (bytes.len() > cap, bytes)
+        });
+        let status = child.wait().expect("bounded Engine request");
+        let (exceeded, bytes) = reader.join().expect("private Engine reader");
+        assert!(!exceeded, "private Engine response exceeded diagnostic cap");
+        (status.success(), bytes)
+    } else {
+        let output = child.wait_with_output().expect("bounded Engine response");
+        (output.status.success(), output.stdout)
+    };
+    assert!(success, "isolated Engine request failed");
+    let split = output.iter().rposition(|byte| *byte == b'\n').unwrap();
+    let status = std::str::from_utf8(&output[split + 1..])
         .unwrap()
         .parse()
         .unwrap();
-    (status, output.stdout[..split].to_vec())
+    (status, output[..split].to_vec())
 }
 
 fn inspect(path: &str) -> Value {
@@ -1562,6 +1925,7 @@ fn live_network_render_matches_engine() {
     );
     if let Err(category) = edge_dns_outcome {
         eprintln!("DOCKERLENS_NATIVE_CHECK: network_isolation_edge_dns_{category}");
+        diagnose_edge_dns(&run_id, &api_version, &edge, &image, edge_ip);
     }
     assert!(
         edge_dns_outcome.is_ok(),
