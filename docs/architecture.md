@@ -121,6 +121,13 @@ protected effective values with missing, null, empty, and redacted states.
 An inspected network's validated native `Id` is separately exposed as a protected,
 runtime-assigned typed observation. A name-fallback request does not turn its
 selector or an empty endpoint `NetworkID` into that identity.
+Network inspect `Containers` is decoded as a bounded, protected snapshot of
+active endpoint membership. Its canonical container-ID map keys retain
+runtime-assigned origin; an entry and its optional effective `Name` preserve
+separate availability states. A key for an unselected container remains
+evidence in the network observation, not permission to inspect that container
+or proof of authored ownership. The snapshot is neither an atomic network
+graph nor a complete account of stopped containers or resource sharing.
 A single-field redaction envelope
 `{"__docker_lens_redacted__":true}` denotes unavailable data and never yields a
 value. Native JSON with that exact shape is also conservatively unavailable.
