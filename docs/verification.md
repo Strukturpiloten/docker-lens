@@ -27,6 +27,9 @@ and, on a failed command, a closed exit and stderr category. Native stdout and
 stderr are bounded independently to 8 KiB; raw bytes remain private. A category
 such as a disabled firewall identifies a failure to investigate, not permission
 to skip the assertion or admit an unsupported result as positive evidence.
+The harness also reports only closed, read-only host bridge-filter module and
+sysctl availability hints. These do not establish the inner daemon's network
+configuration. It never loads host modules or changes sysctls to collect them.
 On a failed edge-side DNS positive, the network test may create one exact
 run-owned diagnostic peer. Its closed summary distinguishes resolver setup,
 default/explicit/dotted A lookups, named/direct-IP HTTP and cleanup without

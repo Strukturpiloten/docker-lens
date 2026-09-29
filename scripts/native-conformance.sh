@@ -46,6 +46,19 @@ fi
   exit 1
 }
 
+# Read-only host hints, not proof of the nested daemon's network configuration.
+# Do not load a module or alter host sysctls as a diagnostic side effect.
+host_bridge_filter=absent
+[[ -d /sys/module/br_netfilter ]] && host_bridge_filter=present
+host_bridge_filter_sysctl=unavailable
+if [[ -r /proc/sys/net/bridge/bridge-nf-call-iptables ]]; then
+  case $(</proc/sys/net/bridge/bridge-nf-call-iptables) in
+    0) host_bridge_filter_sysctl=disabled ;;
+    1) host_bridge_filter_sysctl=enabled ;;
+  esac
+fi
+echo "DOCKERLENS_NATIVE_HOST_NETWORK: bridge_filter_module=$host_bridge_filter bridge_filter_sysctl=$host_bridge_filter_sysctl"
+
 # A random directory, container, and volume belong to exactly this lane.
 run_dir=$(mktemp -d "${TMPDIR:-/tmp}/dockerlens-native.XXXXXXXX")
 run_id=${run_dir##*.}

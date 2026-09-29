@@ -27,7 +27,7 @@ if [[ $* == *--list* ]]; then
 else
   echo 'DOCKERLENS_NATIVE_CHECK: network_oracle_alternate_create' >&2
   echo 'DOCKERLENS_NATIVE_CHECK: network_oracle_private' >&2
-  echo 'DOCKERLENS_NATIVE_NETWORK_CLI_DIAG: exit=other category=firewall_disabled' >&2
+  echo 'DOCKERLENS_NATIVE_NETWORK_CLI_DIAG: exit=other category=bridge_filter' >&2
   echo 'DOCKERLENS_NATIVE_NETWORK_CLI_DIAG: exit=other category=private-canary' >&2
   echo 'private-canary raw native output' >&2
   echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
@@ -43,9 +43,18 @@ fi
             )
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("network_oracle_alternate_create", result.stderr)
-            self.assertIn("exit=other category=firewall_disabled", result.stderr)
+            self.assertIn("exit=other category=bridge_filter", result.stderr)
             self.assertNotIn("private-canary", result.stdout + result.stderr)
             self.assertNotIn("network_oracle_private", result.stdout + result.stderr)
+
+    def test_host_network_hints_are_read_only_and_closed(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
+        hints = source.split("host_bridge_filter=absent", 1)[1].split("# A random directory", 1)[0]
+        self.assertIn("/sys/module/br_netfilter", hints)
+        self.assertIn("/proc/sys/net/bridge/bridge-nf-call-iptables", hints)
+        self.assertNotIn("modprobe", hints)
+        self.assertNotIn("sysctl -w", source)
+        self.assertIn("bridge_filter_sysctl=$host_bridge_filter_sysctl", hints)
 
     def test_failure_exposes_only_selected_native_panic_location(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

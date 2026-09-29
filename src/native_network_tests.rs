@@ -123,7 +123,15 @@ fn cli(args: &[&str]) -> (bool, Vec<u8>) {
 
 fn network_cli_failure_category(stderr: &[u8]) -> &'static str {
     let message = String::from_utf8_lossy(stderr).to_ascii_lowercase();
-    if message.contains("iptables is disabled") || message.contains("ip6tables is disabled") {
+    if message.contains("br_netfilter") || message.contains("bridge-nf-call") {
+        "bridge_filter"
+    } else if message.contains("inter-container communication")
+        || message.contains("inter container communication")
+        || message.contains("enable_icc")
+    {
+        "icc_configuration"
+    } else if message.contains("iptables is disabled") || message.contains("ip6tables is disabled")
+    {
         "firewall_disabled"
     } else if message.contains("iptables") || message.contains("ip6tables") {
         "firewall"
@@ -146,6 +154,15 @@ fn network_cli_failure_categories_never_disclose_native_values() {
         (
             "Cannot restrict communication if iptables is disabled: private-canary",
             "firewall_disabled",
+        ),
+        (
+            "iptables cannot load br_netfilter private-canary",
+            "bridge_filter",
+        ),
+        ("bridge-nf-call-iptables private-canary", "bridge_filter"),
+        (
+            "cannot disable inter-container communication private-canary",
+            "icc_configuration",
         ),
         ("ip6tables private-canary failed", "firewall"),
         ("operation not permitted private-canary", "permission"),
