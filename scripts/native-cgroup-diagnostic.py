@@ -356,7 +356,7 @@ def diagnose(container, run_id, mode, podman, runner=None):
             raise Unavailable()
         guest_seconds = min(3.0, remaining)
         payload = runner([
-            *podman, "exec", before[0], "timeout", "--kill-after=0.2",
+            *podman, "exec", before[0], "timeout", "-k", "0.2",
             f"{guest_seconds:.3f}", "sh", "-c", GUEST_SCRIPT, "diagnostic", mode,
         ], deadline)
         after = inspect_identity(runner(inspection, deadline), container, run_id)

@@ -109,7 +109,7 @@ class NativeHarnessTests(unittest.TestCase):
             self.assertEqual(len({deadline for _, deadline in commands}), 1)
             self.assertIn("{{json .State.StartedAt}}", commands[0][0][3])
             self.assertEqual(commands[1][0][2], "a" * 64)
-            self.assertIn("--kill-after=0.2", commands[1][0])
+            self.assertEqual(commands[1][0][4:6], ["-k", "0.2"])
             self.assertIn("timeout", commands[1][0])
         commands = []
 
@@ -130,6 +130,58 @@ class NativeHarnessTests(unittest.TestCase):
         replies = iter((identity, payload, identity))
         self.assertEqual(helper.diagnose("dl-native-Ab12Cd34", "Ab12Cd34", "rootless", ["podman"],
                                         lambda *_args: next(replies)), helper.classify(payload))
+
+    def test_cgroup_guest_timer_uses_short_options_and_propagates_failure(self) -> None:
+        helper = self._cgroup_helper()
+        identity = ("a" * 64 + '|dl-native-Ab12Cd34|true|Ab12Cd34|123|"2031-04-05T06:07:08Z"\n').encode()
+        payload = b"outer\nmemory pids\nmemory\n1234\nmax\ndaemon\nunknown\nunknown\nunknown\nunknown\n"
+        # Independently authored short-option-only contract fake. It executes
+        # only a synthetic shell reply, never the guest script or runtime tools.
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            self._tool(fixture, "timeout", f"#!{sys.executable}\n" + '''import subprocess
+import sys
+args = sys.argv[1:]
+if (len(args) != 8 or args[:2] != ["-k", "0.2"]
+        or args[3:5] != ["sh", "-c"] or args[6] != "diagnostic"
+        or args[7] not in ("rootful", "rootless")):
+    sys.exit(64)
+try:
+    if not 0.2 < float(args[2]) <= 3.0:
+        sys.exit(65)
+except ValueError:
+    sys.exit(65)
+sys.exit(subprocess.run(args[3:], check=False).returncode)
+''')
+            timer = fixture / "timeout"
+            former = subprocess.run([str(timer), "--kill-after=0.2", "3.000", "sh", "-c",
+                                     "exit 0", "diagnostic", "rootful"],
+                                    capture_output=True, timeout=2, check=False)
+            self.assertEqual(former.returncode, 64)
+            self.assertEqual(former.stdout, b"")
+            for mode in ("rootful", "rootless"):
+                for status in (0, 71):
+                    with self.subTest(mode=mode, status=status):
+                        commands = []
+
+                        def runner(command, deadline):
+                            commands.append((command, deadline))
+                            if command[1] == "inspect":
+                                return identity
+                            self.assertEqual(command[:6], ["podman", "exec", "a" * 64,
+                                                           "timeout", "-k", "0.2"])
+                            self.assertEqual(command[7:], ["sh", "-c", helper.GUEST_SCRIPT,
+                                                           "diagnostic", mode])
+                            synthetic = "printf '%s' " + shlex.quote(payload.decode()) + f"; exit {status}"
+                            result = helper.bounded_command(
+                                [str(timer), *command[4:9], synthetic, *command[10:]], deadline)
+                            return result
+
+                        records = helper.diagnose("dl-native-Ab12Cd34", "Ab12Cd34", mode, ["podman"], runner)
+                        expected = helper.classify(payload) if status == 0 else [helper.unknown("outer"), helper.unknown("daemon")]
+                        self.assertEqual(records, expected)
+                        self.assertEqual(len(commands), 3 if status == 0 else 2)
+                        self.assertEqual(len({deadline for _, deadline in commands}), 1)
 
     def test_cgroup_read_errors_and_expired_deadline_remain_unavailable(self) -> None:
         helper = self._cgroup_helper()

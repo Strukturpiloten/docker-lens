@@ -393,6 +393,23 @@ have their own bounded timeout; cancellation,
 overflow, read errors, or identity changes produce closed unavailable states.
 No captured bytes, paths, PIDs, limits, or subprocess errors are printed.
 
+The guest timer uses `timeout -k 0.2 <seconds>` rather than GNU-only
+`--kill-after=0.2`; the root-owned host GNU wrappers remain unchanged. The
+read-only portability oracle was
+[`mirror/busybox@371fe9f71d445d18be28c82a2a6d82115c8af19d/coreutils/timeout.c`](https://github.com/mirror/busybox/blob/371fe9f71d445d18be28c82a2a6d82115c8af19d/coreutils/timeout.c#L89),
+whose option parser admits the short `-s` and `-k` options, and workspace GNU
+coreutils 9.12 `timeout --version` / `timeout --help`, which identifies `-k`
+as the kill-after option. The exact BusyBox commit's
+[`LICENSE`](https://github.com/mirror/busybox/blob/371fe9f71d445d18be28c82a2a6d82115c8af19d/LICENSE)
+and timeout-file license notice were read and verified as GPL-2.0-only; GNU's
+version output identifies GPL-3.0-or-later. These are interface references,
+not proof of the exact guest build or native compatibility. No oracle source
+or binaries are copied or redistributed. An independently authored
+short-option-only fake rejects the former invocation and checks the exact
+new argument shape and nonzero-exit failure propagation using synthetic
+replies, without any runtime resources. This correction neither relaxes the
+native assertions nor resolves missing rootless systemd prerequisites.
+
 The outer start identity explicitly requests `{{json .State.StartedAt}}` and
 decodes a bounded JSON string before strict RFC3339 and calendar validation;
 the complete decoded value, including nanoseconds, participates in the
