@@ -464,6 +464,42 @@ fn start_failure_body_diagnostic(body: &[u8]) -> String {
     )
 }
 
+fn resource_start_body_diagnostic(control: &str, body: &[u8]) -> String {
+    assert!(RESOURCE_START_CONTROLS.contains(&control));
+    let diagnostic = start_failure_body_diagnostic(body);
+    format!(
+        "DOCKERLENS_NATIVE_RESOURCE_START_BODY_DIAG: control={control} {}",
+        diagnostic
+            .strip_prefix("DOCKERLENS_NATIVE_START_BODY_DIAG: ")
+            .expect("closed START body diagnostic")
+    )
+}
+
+#[test]
+fn resource_start_body_diagnostics_keep_control_identity_and_privacy() {
+    for control in RESOURCE_START_CONTROLS {
+        let diagnostic = resource_start_body_diagnostic(
+            control,
+            br#"{"message":"cgroup controller /private/protected-secret"}"#,
+        );
+        assert!(diagnostic.starts_with(&format!(
+            "DOCKERLENS_NATIVE_RESOURCE_START_BODY_DIAG: control={control} shape=message "
+        )));
+        assert!(diagnostic.contains("cgroup_mention=present"));
+        assert!(diagnostic.contains("controller_mention=present"));
+        assert!(!diagnostic.contains("protected-secret"));
+        assert!(!diagnostic.contains("/private/"));
+        assert!(
+            resource_start_body_diagnostic(control, b"private-invalid-json")
+                .contains("shape=malformed cgroup_mention=unknown")
+        );
+    }
+    assert!(
+        std::panic::catch_unwind(|| { resource_start_body_diagnostic("protected-secret", b"{}") })
+            .is_err()
+    );
+}
+
 #[test]
 fn start_failure_body_diagnostic_is_structured_closed_and_private() {
     let body = br#"{"message":"cgroup device sysctl ulimit AppArmor operation not permitted errno controller bpf protected-secret"}"#;
@@ -1548,6 +1584,7 @@ impl NativeRun {
         eprintln!("DOCKERLENS_NATIVE_RESOURCE_START_HTTP: control={control} status={status}");
         if status != 204 {
             eprintln!("{}", start_failure_body_diagnostic(&body));
+            eprintln!("{}", resource_start_body_diagnostic(control, &body));
         }
         let inspected = self.inspect(id);
         let (outcome, uncertain) = if inspected["Id"] == id {
@@ -5310,6 +5347,89 @@ fn assert_ipv6_resolver_effects(run: &NativeRun, id: &str, side: &'static str) {
     }));
 }
 
+// Keep the native fixture and its offline planning regression on the same
+// explicit intent/capability pair. The inherited fixture command needs its own
+// fact independently of DNS and host-entry support.
+fn ipv6_resolver_fixture(image: &str) -> (ContainerIntent, &'static [Capability]) {
+    let mut container = bare_container(image);
+    container.settings.dns = vec!["2001:4860:4860::8888".parse().unwrap()];
+    container.settings.extra_hosts = vec![ExtraHost {
+        name: ContainerHostname::new(b"fixture-v6.local".to_vec()).unwrap(),
+        address: "2001:db8::10".parse().unwrap(),
+    }];
+    (
+        container,
+        &[
+            Capability::Command,
+            Capability::DnsServers,
+            Capability::ExtraHosts,
+        ],
+    )
+}
+
+#[test]
+fn ipv6_resolver_fixture_has_every_required_planning_capability() {
+    for (minor, release) in [(41, "20.10.5+dfsg1"), (56, "29.8.1")] {
+        for mode in [DaemonMode::Rootful, DaemonMode::Rootless] {
+            let (container, required_capabilities) = ipv6_resolver_fixture("busybox:fixture");
+            let intent =
+                TargetIntent::new(vec![TargetResource::Container(Box::new(container))]).unwrap();
+            let observation_id = ObservationId::fresh().unwrap();
+            let release = EngineRelease::new(release.to_owned()).unwrap();
+            let api_version = ApiVersion::new(NonZeroU16::new(1).unwrap(), minor);
+            let scope = CapabilityScope {
+                observation_id,
+                release: release.clone(),
+                api_version,
+                mode,
+            };
+            let facts = DaemonFacts {
+                observation_id,
+                release: Some(release),
+                api_version: Some(api_version),
+                minimum_api_version: None,
+                mode,
+                capabilities: std::iter::once(Capability::StandaloneContainer)
+                    .chain(required_capabilities.iter().copied())
+                    .map(|capability| CapabilityFact {
+                        capability,
+                        state: CapabilityState::Available,
+                        provenance: FactProvenance::NativeConformance,
+                        scope: Some(scope.clone()),
+                    })
+                    .collect(),
+            };
+            // Synthetic scoped facts exercise only inert planning and rendering;
+            // this regression never contacts or claims a native Engine.
+            let validated = ValidatedCapabilities::new(&facts).unwrap();
+            let graph = DockerPlanner.plan(&intent, &validated).unwrap();
+            let artifact = DockerApiRenderer.render(&graph).unwrap();
+            let request: Value = serde_json::from_slice(artifact.bytes()).unwrap();
+            assert_eq!(
+                request["body"],
+                json!({
+                    "Image":"busybox:fixture", "Cmd":["sh","-c","sleep 120"],
+                    "HostConfig":{
+                        "Dns":["2001:4860:4860::8888"],
+                        "ExtraHosts":["fixture-v6.local:2001:db8::10"]
+                    }
+                })
+            );
+            for missing in required_capabilities {
+                let mut incomplete = facts.clone();
+                incomplete
+                    .capabilities
+                    .retain(|fact| fact.capability != *missing);
+                let validated = ValidatedCapabilities::new(&incomplete).unwrap();
+                assert!(matches!(
+                    DockerPlanner.plan(&intent, &validated),
+                    Err(PlanningError::MissingCapability { capability, .. }) if capability == *missing
+                ));
+            }
+        }
+    }
+}
+
 fn probe_ipv6_resolver(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
     eprintln!("DOCKERLENS_NATIVE_CHECK: container_resolver_logging");
     mark_resolver_stage("ipv6", "oracle", "create");
@@ -5330,12 +5450,7 @@ fn probe_ipv6_resolver(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
     );
     assert_ipv6_resolver_effects(run, &oracle_id, "oracle");
 
-    let mut container = bare_container(&run.image);
-    container.settings.dns = vec!["2001:4860:4860::8888".parse().unwrap()];
-    container.settings.extra_hosts = vec![ExtraHost {
-        name: ContainerHostname::new(b"fixture-v6.local".to_vec()).unwrap(),
-        address: "2001:db8::10".parse().unwrap(),
-    }];
+    let (container, required_capabilities) = ipv6_resolver_fixture(&run.image);
     let expected = json!({
         "Image":run.image,"Cmd":["sh","-c","sleep 120"],
         "Labels":{"io.dockerlens.native-run":run.run_id},
@@ -5348,7 +5463,7 @@ fn probe_ipv6_resolver(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
     let (id, body, inspected) = run.rendered_create(
         "resolver-ipv6-rendered",
         container,
-        &[Capability::DnsServers, Capability::ExtraHosts],
+        required_capabilities,
         expected,
     );
     mark_resolver_stage("ipv6", "rendered", "body");

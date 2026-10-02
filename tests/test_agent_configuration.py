@@ -13,15 +13,15 @@ class AgentConfigurationTests(unittest.TestCase):
         self.assertEqual(config["model"], "gpt-6-sol")
         self.assertEqual(config["model_reasoning_effort"], "xhigh")
         self.assertTrue(config["agents"]["enabled"])
-        self.assertEqual(config["agents"]["max_concurrent_threads_per_session"], 9)
-        self.assertEqual(config["agents"]["default_subagent_model"], "gpt-6-sol")
+        self.assertEqual(config["agents"]["max_concurrent_threads_per_session"], 8)
+        self.assertEqual(config["agents"]["default_subagent_model"], "gpt-6.1-sol")
         self.assertEqual(config["agents"]["default_subagent_reasoning_effort"], "medium")
 
     def test_explicit_roles_and_permissions(self) -> None:
         for role, model, effort, sandbox in (
-            ("implementation-worker", "gpt-6-sol", "high", "workspace-write"),
-            ("specification-researcher", "gpt-6-sol", "high", "read-only"),
-            ("reviewer", "gpt-6-sol", "high", "read-only"),
+            ("implementation-worker", "gpt-6.1-sol", "high", "workspace-write"),
+            ("specification-researcher", "gpt-6.1-sol", "high", "read-only"),
+            ("reviewer", "gpt-6.1-sol", "high", "read-only"),
             ("verifier", "gpt-6-luna", "high", "workspace-write"),
         ):
             with self.subTest(role=role):
@@ -66,10 +66,22 @@ class AgentConfigurationTests(unittest.TestCase):
         flattened = " ".join(instructions.split())
         for required in (
             "The primary manager always uses `gpt-6-sol` with `xhigh` reasoning",
+            "Default subagents use `gpt-6.1-sol` with `medium` reasoning",
+            "Implementation, specification research, and independent review use "
+            "`gpt-6.1-sol` with `high` reasoning",
+            "check-only verification uses `gpt-6-luna` with `high` reasoning",
+            "Task-specific subagents may use `gpt-6.1-sol` or `gpt-6-luna` with "
+            "`medium`, `high`, or `xhigh` reasoning",
+            "Use `gpt-6-astra` only with `xhigh` reasoning for particularly "
+            "difficult architectural questions",
             "reserve Astra at `xhigh` for particularly difficult architectural questions",
-            "up to nine concurrent subagents plus the primary manager",
+            "Use up to eight concurrent subagents plus the primary manager "
+            "(nine agents in total)",
             "subject to the session's actual runtime limit",
-            "Nine is a ceiling, not a target or nine distinct roles",
+            "Eight is a ceiling, not a target or eight distinct roles",
+            "several subagents may use the same role for independent tasks",
+            "`agents.max_concurrent_threads_per_session = 8` key counts subagents "
+            "and excludes the primary manager",
             "Do not create nested agents to evade the limit",
             "Never run two writers in one checkout",
             "at most one complete gate or heavy runtime suite at a time across this workspace",
@@ -91,6 +103,8 @@ class AgentConfigurationTests(unittest.TestCase):
             self.assertIn(required, flattened)
         for obsolete in (
             "Use at most three subagents",
+            "up to nine concurrent subagents",
+            "Nine is a ceiling",
             "does not authorize a merge",
             "Merge only when the user explicitly authorizes",
         ):

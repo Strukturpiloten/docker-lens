@@ -74,17 +74,23 @@ checkout and must not perform those writes.
 
 Model defaults belong in [`.codex/config.toml`](.codex/config.toml); task-specific models and
 reasoning belong in [`.codex/agents/`](.codex/agents/). The primary manager always uses
-`gpt-6-sol` with `xhigh` reasoning. Implementation, specification research, and independent review
-use `gpt-6-sol` with `high` reasoning; check-only verification uses `gpt-6-luna` with `high`
+`gpt-6-sol` with `xhigh` reasoning. Default subagents use `gpt-6.1-sol` with `medium` reasoning.
+Implementation, specification research, and independent review use `gpt-6.1-sol` with `high`
+reasoning; check-only verification uses `gpt-6-luna` with `high`
 reasoning. Use Luna for bounded read-only exploration and Sol for difficult failure diagnosis;
 reserve Astra at `xhigh` for particularly difficult architectural questions.
+Task-specific subagents may use `gpt-6.1-sol` or `gpt-6-luna` with `medium`, `high`, or `xhigh`
+reasoning. Use `gpt-6-astra` only with `xhigh` reasoning for particularly difficult architectural
+questions.
 These model settings do not expand the workspace scope or grant additional permissions.
 
 - Delegate bounded tasks when independent work can usefully proceed in parallel. Define the shared
   contract and explicit repository, checkout, and file ownership before delegation.
-- Use up to nine concurrent subagents plus the primary manager, subject to the session's actual
-  runtime limit. Nine is a ceiling, not a target or nine distinct roles: several subagents may use
-  the same role for independent tasks. Do not create nested agents to evade the limit.
+- Use up to eight concurrent subagents plus the primary manager (nine agents in total), subject to
+  the session's actual runtime limit. Eight is a ceiling, not a target or eight distinct roles:
+  several subagents may use the same role for independent tasks. The
+  `agents.max_concurrent_threads_per_session = 8` key counts subagents and excludes the primary
+  manager. Do not create nested agents to evade the limit.
 - Never run two writers in one checkout. Use separate assigned repositories or worktrees for
   concurrent implementation. Research and review remain read-only.
 - The reviewer checks the original requirements and independent expected results, not just agreement

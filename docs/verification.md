@@ -325,6 +325,58 @@ empty. The closed group-decision marker reports `probe_failed` after a failed
 positive and verified cleanup; only a passing probe can report `merge`. The
 original oracle START must still return 204; control outcomes cannot
 reclassify its failure.
+Each rejected control additionally retains its own closed
+`DOCKERLENS_NATIVE_RESOURCE_START_BODY_DIAG` record, correlated with its
+baseline, memory, PID-limit, or device role. The exact runner exposes at most
+four complete, allowlisted records alongside the original last global body
+diagnostic. These remain lexical mentions, not an Engine cause or capability.
+
+The startup-only `native-cgroup-diagnostic.py` helper reads cgroup context
+within the exact run-owned outer container. One five-second monotonic deadline
+and one cumulative 8 KiB bound cover private stdout and stderr combined across
+all operations. The time counts inside the unchanged 30-minute outer deadline;
+the helper runs before the unchanged 180-second exact-test deadline and
+90-second control/cleanup reservation. It validates the running outer
+container's immutable ID, exact name, ownership label, PID, and start identity
+before and after. Every elevated Podman operation, including both inspections,
+runs under a root-owned TERM/KILL timeout with teardown time reserved inside
+the original deadline. Cancellation or overflow waits for that bound rather
+than treating an unprivileged signal or an exited sudo monitor as proof that
+root descendants stopped. Local unprivileged groups are killed and reaped;
+both private pipes close even if signaling or waiting fails. Guest reads also
+have their own bounded timeout; cancellation,
+overflow, read errors, or identity changes produce closed unavailable states.
+No captured bytes, paths, PIDs, limits, or subprocess errors are printed.
+
+The helper reads `cgroup.controllers`, `cgroup.subtree_control`, `memory.max`,
+and `memory.swap.max` at the visible cgroup2 root. A daemon-directory read
+also requires exactly one mode-correct `dockerd`, stable process identity,
+effective UID and cgroup membership, matching mount/cgroup namespaces, one
+total mountpoint entry with a rooted cgroup2 mount, and a traversal- and
+symlink-free directory mapping. Rootful requires effective UID zero; rootless
+requires the exact nonzero UID from one validated local `docker` account
+entry, without assuming UID 1000. The account and effective UID are rechecked
+after reads. Missing or ambiguous account evidence and stacked mounts stay
+unavailable. Different
+RootlessKit namespaces or ambiguous mappings leave that scope unavailable;
+the helper never guesses their host correspondence or enters another namespace.
+The two `DOCKERLENS_NATIVE_CGROUP_DIAG` records expose only scope, read outcome,
+memory/PID controller presence, subtree flags, and finite/max/missing/unknown
+memory and swap states. Fields called `memory_delegated` and `pids_delegated`
+report only enabled subtree flags: they do not establish writable delegation,
+permission, effective limits, enforcement, or a reason to weaken a failed
+native assertion. The helper makes no writes or policy/privilege changes and
+does not affect native success, manifests, or production capability admission.
+
+`native-conformance.sh` remains the canonical caller for local lanes,
+`check.yml` main push, `native-validation.yml` reviewed dispatch, and
+`release-validation.yml` exact-main validation; all inherit this diagnostic.
+The other workspace products retain their independent harnesses. This uses
+runner Python's standard library and core utilities already provided by the
+digest-pinned Engine images, with no download or new software pin. Renovate's
+existing native-image manager still uniquely extracts the same five tag/digest
+pairs from the same script; managers, paths, grouping, and review ownership
+therefore remain unchanged.
 Resolver/logging now reports closed IPv4, IPv6, local-driver, and none-driver
 oracle/rendered substages for create, inspect, START, and relevant resolver,
 hosts, log, and body assertions. The ports failure path reports closed mutation,

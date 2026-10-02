@@ -81,6 +81,7 @@ resolver_log_canary_diag=$(grep -E '^DOCKERLENS_NATIVE_RESOLVER_LOG_CANARY: side
 start_body_diag=$(grep -Eo '^DOCKERLENS_NATIVE_START_BODY_DIAG: shape=(message|missing|malformed|oversize) cgroup_mention=(present|absent|unknown) device_mention=(present|absent|unknown) sysctl_mention=(present|absent|unknown) ulimit_mention=(present|absent|unknown) apparmor_mention=(present|absent|unknown) permission_phrase=(present|absent|unknown) errno_mention=(present|absent|unknown) controller_mention=(present|absent|unknown) bpf_mention=(present|absent|unknown)$' "$capture_path" | tail -n 1 || true)
 resource_control_diag=$(grep -E '^DOCKERLENS_NATIVE_RESOURCE_CONTROL: control=(baseline|memory|pids|device) phase=(create|inspect|start) outcome=(begin|ready|started|rejected|timeout|uncertain|invalid|budget)$' "$capture_path" | tail -n 24 || true)
 resource_start_http_diag=$(grep -E '^DOCKERLENS_NATIVE_RESOURCE_START_HTTP: control=(baseline|memory|pids|device) status=[1-5][0-9][0-9]$' "$capture_path" | tail -n 4 || true)
+resource_start_body_diag=$(grep -E '^DOCKERLENS_NATIVE_RESOURCE_START_BODY_DIAG: control=(baseline|memory|pids|device) shape=(message|missing|malformed|oversize) cgroup_mention=(present|absent|unknown) device_mention=(present|absent|unknown) sysctl_mention=(present|absent|unknown) ulimit_mention=(present|absent|unknown) apparmor_mention=(present|absent|unknown) permission_phrase=(present|absent|unknown) errno_mention=(present|absent|unknown) controller_mention=(present|absent|unknown) bpf_mention=(present|absent|unknown)$' "$capture_path" | tail -n 4 || true)
 resource_start_state_diag=$(grep -E '^DOCKERLENS_NATIVE_RESOURCE_START_STATE: control=(baseline|memory|pids|device) state=(created|running|other)$' "$capture_path" | tail -n 4 || true)
 oracle_start_state_diag=$(grep -E '^DOCKERLENS_NATIVE_ORACLE_START_STATE: state=(created|running|exited|missing|mismatch|unavailable)$' "$capture_path" | tail -n 1 || true)
 start_timeout_diag=$(grep -E '^DOCKERLENS_NATIVE_START_TIMEOUT_DIAG: (state=(created|running|exited|other) reason=none|state=missing reason=status|state=identity_mismatch reason=identity_mismatch|state=unavailable reason=(input|transport|status|invalid_payload))$' "$capture_path" | tail -n 1 || true)
@@ -122,6 +123,7 @@ if (( run_status != 0 )); then
   if [[ -n $start_body_diag ]]; then echo "$start_body_diag" >&2; fi
   if [[ -n $resource_control_diag ]]; then printf '%s\n' "$resource_control_diag" >&2; fi
   if [[ -n $resource_start_http_diag ]]; then printf '%s\n' "$resource_start_http_diag" >&2; fi
+  if [[ -n $resource_start_body_diag ]]; then printf '%s\n' "$resource_start_body_diag" >&2; fi
   if [[ -n $resource_start_state_diag ]]; then printf '%s\n' "$resource_start_state_diag" >&2; fi
   if [[ -n $oracle_start_state_diag ]]; then echo "$oracle_start_state_diag" >&2; fi
   if [[ -n $start_timeout_diag ]]; then echo "$start_timeout_diag" >&2; fi

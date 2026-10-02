@@ -1,18 +1,412 @@
 """Fault injection for exact resource cleanup and ignored native test selection."""
 
+import importlib.util
 import os
 import re
+import signal
+import shutil
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class NativeHarnessTests(unittest.TestCase):
+    @staticmethod
+    def _cgroup_helper():
+        spec = importlib.util.spec_from_file_location(
+            "native_cgroup_diagnostic", ROOT / "scripts/native-cgroup-diagnostic.py"
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_cgroup_classification_is_closed_private_and_fail_closed(self) -> None:
+        helper = self._cgroup_helper()
+        payload = b"outer\ncpu memory pids\npids\n4294967296\nmax\ndaemon\nmemory\n\nmissing\nprotected-secret\n"
+        records = helper.classify(payload)
+        self.assertEqual(records[0], {
+            "scope": "outer", "outcome": "observed",
+            "memory_controller": "present", "pids_controller": "present",
+            "memory_delegated": "absent", "pids_delegated": "present",
+            "memory_max": "finite", "swap_max": "max",
+        })
+        self.assertEqual(records[1]["memory_max"], "missing")
+        self.assertEqual(records[1]["swap_max"], "unknown")
+        self.assertNotIn("protected-secret", str(records))
+        self.assertNotIn("4294967296", str(records))
+        unknown = b"outer\nunknown\nunknown\nunknown\nunknown\ndaemon\nunknown\nunknown\nunknown\nunknown\n"
+        self.assertEqual(helper.classify(unknown), [helper.unknown("outer"), helper.unknown("daemon")])
+        for malformed in (payload + b"raw=protected-secret\n", b"\xff", b"x" * 8193):
+            with self.assertRaises(helper.Unavailable):
+                helper.classify(malformed)
+        for invalid in ("memory-private", "memory\nprivate", "protected-secret", "memory protectedsecret", "memory memory"):
+            self.assertEqual(helper.controller_state(invalid, "memory"), "unknown")
+
+    def test_cgroup_read_requires_same_owned_identity_and_shared_deadline(self) -> None:
+        helper = self._cgroup_helper()
+        identity = ("a" * 64 + "|dl-native-Ab12Cd34|true|Ab12Cd34|123|2026-10-02T12:00:00Z\n").encode()
+        payload = b"outer\nmemory pids\nmemory\n1234\nmax\ndaemon\nunknown\nunknown\nunknown\nunknown\n"
+        for changed in (identity.replace(b"123|", b"124|"), identity.replace(b"|true|", b"|false|")):
+            commands = []
+
+            def runner(command, deadline):
+                commands.append((command, deadline))
+                return (identity, payload, changed)[len(commands) - 1]
+
+            records = helper.diagnose("dl-native-Ab12Cd34", "Ab12Cd34", "rootful", ["podman"], runner)
+            self.assertEqual(records, [helper.unknown("outer"), helper.unknown("daemon")])
+            self.assertEqual(len({deadline for _, deadline in commands}), 1)
+            self.assertEqual(commands[1][0][2], "a" * 64)
+            self.assertIn("--kill-after=0.2", commands[1][0])
+            self.assertIn("timeout", commands[1][0])
+        commands = []
+
+        def wrong_owner(command, deadline):
+            commands.append(command)
+            return identity.replace(b"|Ab12Cd34|", b"|wrong-owner|")
+
+        self.assertEqual(helper.diagnose("dl-native-Ab12Cd34", "Ab12Cd34", "rootful", ["podman"], wrong_owner),
+                         [helper.unknown("outer"), helper.unknown("daemon")])
+        self.assertEqual(len(commands), 1)
+        # Names or Podman commands outside the closed run scope never execute.
+        def forbidden(*_args):
+            self.fail("unscoped command executed")
+        self.assertEqual(helper.diagnose("ambient", "Ab12Cd34", "rootful", ["podman"], forbidden),
+                         [helper.unknown("outer"), helper.unknown("daemon")])
+        self.assertEqual(helper.diagnose("dl-native-Ab12Cd34", "Ab12Cd34", "rootful", ["podman", "--remote"], forbidden),
+                         [helper.unknown("outer"), helper.unknown("daemon")])
+        replies = iter((identity, payload, identity))
+        self.assertEqual(helper.diagnose("dl-native-Ab12Cd34", "Ab12Cd34", "rootless", ["podman"],
+                                        lambda *_args: next(replies)), helper.classify(payload))
+
+    def test_cgroup_read_errors_and_expired_deadline_remain_unavailable(self) -> None:
+        helper = self._cgroup_helper()
+        identity = ("a" * 64 + "|dl-native-Ab12Cd34|true|Ab12Cd34|123|2026-10-02T12:00:00Z\n").encode()
+        expected = [helper.unknown("outer"), helper.unknown("daemon")]
+        for failure in (helper.Unavailable(), OSError("protected-secret"),
+                        subprocess.TimeoutExpired("protected-secret", 5)):
+            def runner(*_args):
+                raise failure
+            self.assertEqual(helper.diagnose("dl-native-Ab12Cd34", "Ab12Cd34", "rootless", ["podman"], runner), expected)
+        with patch.object(helper.time, "monotonic", side_effect=[0, 5]):
+            self.assertEqual(helper.diagnose("dl-native-Ab12Cd34", "Ab12Cd34", "rootless", ["podman"],
+                                            lambda *_args: identity), expected)
+
+    def test_cgroup_guest_requires_namespace_mapping_and_closed_reads(self) -> None:
+        helper = self._cgroup_helper()
+        # Only synthetic files are read. No daemon, host cgroup, or runtime
+        # namespace is contacted by this guest-script regression.
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            proc = fixture / "proc"
+            root = fixture / "sys/fs/cgroup"
+            daemon = root / "slice/daemon"
+            daemon.mkdir(parents=True)
+            for path in (proc / "self/ns", proc / "123/ns"):
+                path.mkdir(parents=True)
+                (path / "cgroup").symlink_to("cgroup:[100]")
+                (path / "mnt").symlink_to("mnt:[200]")
+            (proc / "self/mountinfo").write_text(f"1 0 0:1 / {root} rw - cgroup2 cgroup rw\n")
+            (proc / "123/comm").write_text("dockerd\n")
+            (proc / "123/status").write_text("Name:\tdockerd\nUid:\t0\t0\t0\t0\n")
+            passwd = fixture / "passwd"
+            passwd.write_text("docker:x:1732:1732:fixture:/home/docker:/bin/sh\n")
+            # Field 22 is the stable process start identity.
+            (proc / "123/stat").write_text("123 (dockerd) S " + " ".join(["0"] * 18 + ["1234"]) + "\n")
+            (proc / "123/cgroup").write_text("0::/slice/daemon\n")
+            for path in (root, daemon):
+                (path / "cgroup.controllers").write_text("cpu memory pids\n")
+                (path / "cgroup.subtree_control").write_text("memory\n")
+                (path / "memory.max").write_text("1234\n")
+                (path / "memory.swap.max").write_text("max\n")
+            script = helper.GUEST_SCRIPT.replace("/proc/", str(proc) + "/").replace("/sys/fs/cgroup", str(root)).replace("/etc/passwd", str(passwd))
+
+            def read_guest(mode="rootful", env=None):
+                return subprocess.run(["sh", "-c", script, "diagnostic", mode],
+                                      capture_output=True, timeout=2, check=False, env=env)
+
+            observed = read_guest()
+            self.assertEqual(observed.returncode, 0, observed.stderr)
+            self.assertEqual([record["outcome"] for record in helper.classify(observed.stdout)], ["observed", "observed"])
+            (proc / "123/ns/mnt").unlink()
+            (proc / "123/ns/mnt").symlink_to("mnt:[201]")
+            mismatched = read_guest()
+            self.assertEqual(mismatched.returncode, 0)
+            self.assertEqual(helper.classify(mismatched.stdout)[1], helper.unknown("daemon"))
+            (proc / "123/ns/mnt").unlink()
+            (proc / "123/ns/mnt").symlink_to("mnt:[200]")
+            for member in ("0::/../private", "0::/slice/./daemon", "0::/slice//daemon", "1:memory:/private"):
+                (proc / "123/cgroup").write_text(member + "\n")
+                self.assertNotEqual(read_guest().returncode, 0)
+            (proc / "123/cgroup").write_text("0::/slice/daemon\n")
+            secret = fixture / "protected-secret"
+            secret.write_text("protected-secret\n")
+            (daemon / "memory.max").unlink()
+            (daemon / "memory.max").symlink_to(secret)
+            protected = read_guest()
+            self.assertEqual(protected.returncode, 0)
+            self.assertNotIn(b"protected-secret", protected.stdout + protected.stderr)
+            self.assertEqual(helper.classify(protected.stdout)[1]["memory_max"], "unknown")
+            (proc / "123/status").write_text("Uid:\t1000\t1000\t1000\t1000\n")
+            self.assertNotEqual(read_guest("rootful").returncode, 0)
+            self.assertNotEqual(read_guest("rootless").returncode, 0)
+            (proc / "123/status").write_text("Uid:\t1732\t1732\t1732\t1732\n")
+            self.assertEqual(read_guest("rootless").returncode, 0)
+            for accounts in ("", "docker:x:0:0:fixture:/home/docker:/bin/sh\n",
+                             "docker:x:1732:1732:fixture:/home/docker:/bin/sh\n" * 2,
+                             "docker:x:1732:1732:fixture:/home/docker:/bin/sh:extra\n"):
+                passwd.write_text(accounts)
+                self.assertNotEqual(read_guest("rootless").returncode, 0)
+            passwd.write_text("docker:x:1732:1732:fixture:/home/docker:/bin/sh\n")
+            bin_dir = fixture / "bin"
+            bin_dir.mkdir()
+            self._tool(bin_dir, "head", """#!/usr/bin/env python3
+import os, sys
+from pathlib import Path
+if sys.argv[-1] == os.environ['TEST_CGROUP_UID_FILE']:
+    counter = Path(os.environ['TEST_CGROUP_UID_COUNTER'])
+    reads = int(counter.read_text()) + 1 if counter.exists() else 1
+    counter.write_text(str(reads))
+    if reads == 2:
+        if os.environ['TEST_CGROUP_UID_ROLE'] == 'status':
+            print('Uid:\\t1733\\t1733\\t1733\\t1733')
+        else:
+            print('docker:x:1733:1733:fixture:/home/docker:/bin/sh')
+        raise SystemExit(0)
+os.execv(os.environ['TEST_CGROUP_REAL_HEAD'], ['head', *sys.argv[1:]])
+""")
+            for role, target in (("status", proc / "123/status"), ("account", passwd)):
+                env = os.environ.copy()
+                env.update(PATH=f"{bin_dir}:{env['PATH']}", TEST_CGROUP_UID_ROLE=role,
+                           TEST_CGROUP_UID_FILE=str(target), TEST_CGROUP_UID_COUNTER=str(fixture / role),
+                           TEST_CGROUP_REAL_HEAD=shutil.which("head"))
+                self.assertNotEqual(read_guest("rootless", env).returncode, 0)
+            valid_mount = f"1 0 0:1 / {root} rw - cgroup2 cgroup rw\n"
+            for stacked in (valid_mount, f"2 0 0:2 / {root} rw - tmpfs tmpfs rw\n"):
+                (proc / "self/mountinfo").write_text(valid_mount + stacked)
+                self.assertNotEqual(read_guest("rootless").returncode, 0)
+            # The first 8193 bytes end in a newline; command substitution must
+            # not strip it and admit a prefix hiding a later stacked mount.
+            padding = "2 0 0:2 / /padding rw - tmpfs "
+            prefix = valid_mount + padding + "x" * (8192 - len(valid_mount.encode()) - len(padding)) + "\n"
+            self.assertEqual(len(prefix.encode()), 8193)
+            (proc / "self/mountinfo").write_text(prefix + f"3 0 0:3 / {root} rw - tmpfs tmpfs rw\n")
+            self.assertNotEqual(read_guest("rootless").returncode, 0)
+            utf8_env = dict(os.environ, LC_ALL="C.UTF-8")
+            ascii_control = valid_mount + padding + "x" * (8191 - len(valid_mount.encode()) - len(padding)) + "\n"
+            self.assertEqual(len(ascii_control.encode()), 8192)
+            (proc / "self/mountinfo").write_text(ascii_control)
+            ascii_result = subprocess.run(["bash", "-c", script, "diagnostic", "rootless"],
+                                          env=utf8_env, capture_output=True, timeout=2, check=False)
+            self.assertEqual(ascii_result.returncode, 0, ascii_result.stderr)
+            self.assertEqual(helper.classify(ascii_result.stdout)[0]["outcome"], "observed")
+            unicode_bytes = 8192 - len(valid_mount.encode()) - len(padding)
+            unicode_prefix = valid_mount + padding + "é" * (unicode_bytes // 2) + "x" * (unicode_bytes % 2) + "\n"
+            self.assertEqual(len(unicode_prefix.encode()), 8193)
+            self.assertLessEqual(len(unicode_prefix), 8192)
+            (proc / "self/mountinfo").write_text(unicode_prefix + f"3 0 0:3 / {root} rw - tmpfs tmpfs rw\n")
+            unprotected = script.replace("LC_ALL=C\nexport LC_ALL\n", "", 1)
+            without_c = subprocess.run(["bash", "-c", unprotected, "diagnostic", "rootless"],
+                                       env=utf8_env, capture_output=True, timeout=2, check=False)
+            self.assertEqual(without_c.returncode, 0, without_c.stderr)
+            self.assertEqual(helper.classify(without_c.stdout)[0]["outcome"], "observed")
+            with_c = subprocess.run(["bash", "-c", script, "diagnostic", "rootless"],
+                                    env=utf8_env, capture_output=True, timeout=2, check=False)
+            self.assertNotEqual(with_c.returncode, 0)
+            (proc / "self/mountinfo").write_text(f"1 0 0:1 /private {root} rw - cgroup2 cgroup rw\n")
+            self.assertNotEqual(read_guest("rootless").returncode, 0)
+
+    @staticmethod
+    def _assert_process_not_live(pid):
+        status = Path(f"/proc/{pid}/stat")
+        if status.exists():
+            # A killed orphan can briefly await PID 1's reaper; it cannot run.
+            assert status.read_text().rsplit(")", 1)[1].split()[0] == "Z"
+
+    def test_cgroup_capture_bounds_both_streams_and_reaps_children(self) -> None:
+        helper = self._cgroup_helper()
+        with tempfile.TemporaryDirectory() as directory:
+            for cause in ("stdout", "stderr", "timeout"):
+                pid_path = Path(directory) / cause
+                program = """import os, subprocess, sys, time
+from pathlib import Path
+child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+Path(sys.argv[1]).write_text(str(child.pid))
+if sys.argv[2] != 'timeout':
+    os.write(1 if sys.argv[2] == 'stdout' else 2, b'protected-secret' * 1000)
+time.sleep(60)
+"""
+                with self.assertRaises(helper.Unavailable):
+                    helper.bounded_command([sys.executable, "-c", program, str(pid_path), cause], time.monotonic() + 0.6)
+                self.assertTrue(pid_path.exists())
+                self._assert_process_not_live(int(pid_path.read_text()))
+            budget = {"total": 8190}
+            with self.assertRaises(helper.Unavailable):
+                helper.bounded_command([sys.executable, "-c", "print('secret')"], time.monotonic() + 1, budget)
+            self.assertLessEqual(budget["total"], helper.CAPTURE_LIMIT)
+
+    def test_cgroup_capture_combines_alternating_streams_across_commands(self) -> None:
+        helper = self._cgroup_helper()
+        deadline = time.monotonic() + 2
+        budget = {"total": 0}
+        helper.bounded_command([sys.executable, "-c", "import os; os.write(1, b'a'*3000); os.write(2, b'b'*3000)"], deadline, budget)
+        self.assertEqual(budget["total"], 6000)
+        with self.assertRaises(helper.Unavailable):
+            helper.bounded_command([sys.executable, "-c", "import os; os.write(2, b'c'*1200); os.write(1, b'd'*1200)"], deadline, budget)
+        self.assertLessEqual(budget["total"], helper.CAPTURE_LIMIT)
+
+    def test_cgroup_elevated_commands_have_root_owned_timeout_and_teardown_margin(self) -> None:
+        helper = self._cgroup_helper()
+        for operation in ("inspect", "exec", "inspect"):
+            with patch.object(helper.time, "monotonic", return_value=10):
+                command, elevated_until = helper.command_with_timeout(["sudo", "-n", "podman", operation], 15)
+            self.assertEqual(command[:5], ["sudo", "-n", "timeout", "--signal=TERM", "--kill-after=0.2"])
+            self.assertEqual(command[6:], ["podman", operation])
+            self.assertLessEqual(10 + float(command[5]) + helper.TEARDOWN_SECONDS, elevated_until)
+            self.assertLess(elevated_until, 15)
+        with patch.object(helper.time, "monotonic", return_value=14.2):
+            command, elevated_until = helper.command_with_timeout(["sudo", "-n", "podman", "inspect"], 15)
+        self.assertLess(elevated_until, 15)
+        with patch.object(helper.time, "monotonic", return_value=14.9):
+            with self.assertRaises(helper.Unavailable):
+                helper.command_with_timeout(["sudo", "-n", "podman", "inspect"], 15)
+
+    def test_cgroup_cleanup_closes_pipes_on_signal_permission_and_wait_errors(self) -> None:
+        helper = self._cgroup_helper()
+        real_popen = subprocess.Popen
+        for wait_error in (False, True):
+            processes = []
+
+            def spawn(*args, **kwargs):
+                process = real_popen(*args, **kwargs)
+                process.wait(timeout=1)
+                if wait_error:
+                    def fail_wait(**_kwargs):
+                        raise subprocess.TimeoutExpired("protected-secret", 1)
+                    process.wait = fail_wait
+                processes.append(process)
+                return process
+
+            with patch.object(helper.subprocess, "Popen", side_effect=spawn), \
+                 patch.object(helper.os, "killpg", side_effect=PermissionError("protected-secret")):
+                with self.assertRaises((helper.Unavailable, subprocess.TimeoutExpired)):
+                    helper.bounded_command([sys.executable, "-c", "raise SystemExit(7)"], time.monotonic() + 2)
+            self.assertTrue(processes[0].stdout.closed)
+            self.assertTrue(processes[0].stderr.closed)
+
+    def test_cgroup_helper_cancellation_reaps_its_command(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            pid_path = bin_dir / "child.pid"
+            self._tool(bin_dir, "podman", """#!/usr/bin/env python3
+import os, subprocess, sys, time
+from pathlib import Path
+if sys.argv[1] == 'inspect':
+    print('a' * 64 + '|dl-native-Ab12Cd34|true|Ab12Cd34|123|2026-10-02T12:00:00Z')
+else:
+    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+    Path(os.environ['TEST_CGROUP_CHILD']).write_text(str(child.pid))
+    time.sleep(60)
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            env["TEST_CGROUP_CHILD"] = str(pid_path)
+            process = subprocess.Popen([sys.executable, str(ROOT / "scripts/native-cgroup-diagnostic.py"),
+                                        "dl-native-Ab12Cd34", "Ab12Cd34", "rootful", "0"],
+                                       env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                deadline = time.monotonic() + 3
+                while not pid_path.exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertTrue(pid_path.exists())
+                process.send_signal(signal.SIGTERM)
+                stdout, stderr = process.communicate(timeout=2)
+                self.assertEqual(process.returncode, 0)
+                self.assertEqual(stdout.count(b"outcome=unavailable"), 2)
+                self.assertEqual(stderr, b"")
+                self._assert_process_not_live(int(pid_path.read_text()))
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.communicate(timeout=2)
+
+    def test_cgroup_elevated_timer_bounds_cancellation_and_overflow(self) -> None:
+        # Fake sudo forwards into the real timer without gaining privilege.
+        # Construction proves timer ownership ordering; these processes prove
+        # cancellation never relies on the Python process killing that timer.
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "sudo", """#!/usr/bin/env bash
+set -eu
+[[ $1 == -n ]]
+shift
+printf '%s\n' "${*:1:7}" >> "$TEST_CGROUP_TIMER_TRACE"
+exec "$@"
+""")
+            self._tool(bin_dir, "podman", """#!/usr/bin/env python3
+import os, subprocess, sys, time
+from pathlib import Path
+if sys.argv[1] == 'inspect':
+    print('a' * 64 + '|dl-native-Ab12Cd34|true|Ab12Cd34|123|2026-10-02T12:00:00Z')
+elif os.environ['TEST_CGROUP_CAUSE'] == 'ready':
+    print('outer\\nmemory pids\\nmemory\\n1234\\nmax\\ndaemon\\nunknown\\nunknown\\nunknown\\nunknown')
+else:
+    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+    Path(os.environ['TEST_CGROUP_CHILD']).write_text(str(child.pid))
+    if os.environ['TEST_CGROUP_CAUSE'] == 'overflow':
+        os.write(2, b'protected-secret' * 1000)
+    time.sleep(60)
+""")
+            for cause in ("ready", "cancel", "overflow"):
+                pid_path = bin_dir / f"{cause}.pid"
+                trace = bin_dir / f"{cause}.trace"
+                env = os.environ.copy()
+                env.update(PATH=f"{bin_dir}:{env['PATH']}", TEST_CGROUP_CAUSE=cause,
+                           TEST_CGROUP_CHILD=str(pid_path), TEST_CGROUP_TIMER_TRACE=str(trace))
+                started = time.monotonic()
+                process = subprocess.Popen([sys.executable, str(ROOT / "scripts/native-cgroup-diagnostic.py"),
+                                            "dl-native-Ab12Cd34", "Ab12Cd34", "rootful", "1"],
+                                           env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                try:
+                    if cause in ("cancel", "overflow"):
+                        while not pid_path.exists() and time.monotonic() - started < 2:
+                            time.sleep(0.01)
+                        self.assertTrue(pid_path.exists())
+                        if cause == "overflow":
+                            # Overflow already entered reserved teardown; a
+                            # cancellation there must not abandon its timer.
+                            time.sleep(0.1)
+                        process.send_signal(signal.SIGTERM)
+                        time.sleep(0.05)
+                        process.send_signal(signal.SIGTERM)
+                    stdout, stderr = process.communicate(timeout=5.2)
+                    self.assertEqual(process.returncode, 0)
+                    self.assertLess(time.monotonic() - started, 5.2)
+                    self.assertEqual(stderr, b"")
+                    self.assertNotIn(b"protected-secret", stdout)
+                    commands = trace.read_text().splitlines()
+                    self.assertTrue(all(command.startswith("timeout --signal=TERM --kill-after=0.2 ") for command in commands))
+                    if cause == "ready":
+                        self.assertEqual(len(commands), 3)
+                        self.assertIn(" podman inspect ", commands[0])
+                        self.assertIn(" podman inspect ", commands[-1])
+                        self.assertIn(b"scope=outer outcome=observed", stdout)
+                    else:
+                        self.assertEqual(stdout.count(b"outcome=unavailable"), 2)
+                        self.assertTrue(pid_path.exists())
+                        self._assert_process_not_live(int(pid_path.read_text()))
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                        process.communicate(timeout=2)
+
     def test_network_oracle_diagnostics_are_closed_and_do_not_hide_failure(self) -> None:
         source = (ROOT / "src/native_network_tests.rs").read_text(encoding="utf-8")
         negative_cli = source.split("fn cli(args:", 1)[1].split("fn network_cli_failure_category", 1)[0]
@@ -498,6 +892,39 @@ fi
             )
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("DOCKERLENS_NATIVE_START_BODY_DIAG: shape=message cgroup_mention=present device_mention=absent sysctl_mention=absent ulimit_mention=absent apparmor_mention=absent permission_phrase=present errno_mention=absent controller_mention=absent bpf_mention=absent", result.stderr)
+            self.assertNotIn("protected-secret", result.stdout + result.stderr)
+
+    def test_control_start_body_diagnostics_preserve_four_closed_records(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_container_tests::live_container_settings_match_engine: test'
+else
+  body='shape=message cgroup_mention=present device_mention=absent sysctl_mention=absent ulimit_mention=absent apparmor_mention=absent permission_phrase=present errno_mention=absent controller_mention=present bpf_mention=absent'
+  for control in baseline baseline baseline baseline memory pids device; do
+    echo "DOCKERLENS_NATIVE_RESOURCE_START_BODY_DIAG: control=$control $body" >&2
+  done
+  echo "DOCKERLENS_NATIVE_START_BODY_DIAG: $body" >&2
+  echo "DOCKERLENS_NATIVE_RESOURCE_START_BODY_DIAG: control=protected-secret $body" >&2
+  echo "DOCKERLENS_NATIVE_RESOURCE_START_BODY_DIAG: control=memory $body raw=protected-secret" >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            result = subprocess.run(
+                [str(ROOT / "scripts/run-exact-native-test.sh"), "native_container",
+                 "live_container_settings_match_engine"],
+                env=env, capture_output=True, text=True, timeout=15, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(result.stderr.count("DOCKERLENS_NATIVE_RESOURCE_START_BODY_DIAG:"), 4)
+            for control in ("baseline", "memory", "pids", "device"):
+                self.assertIn(f"DOCKERLENS_NATIVE_RESOURCE_START_BODY_DIAG: control={control} shape=message", result.stderr)
+            self.assertIn("DOCKERLENS_NATIVE_START_BODY_DIAG: shape=message", result.stderr)
             self.assertNotIn("protected-secret", result.stdout + result.stderr)
 
     def test_group_failures_are_closed_bounded_and_do_not_print_panic_text(self) -> None:

@@ -402,6 +402,21 @@ native_package_version() {
   printf '%s' "$version"
 }
 echo "DOCKERLENS_NATIVE_ENV: cgroup_driver=$inner_cgroup_driver cgroup_version=$inner_cgroup runc=$(native_package_version runc) containerd=$(native_package_version containerd) libseccomp2=$(native_package_version libseccomp2)"
+# This five-second best-effort read shares the existing 30-minute outer budget;
+# it runs before the unchanged exact-test/cleanup deadlines. It cannot make a
+# native assertion pass. Ambiguous namespace mapping or read errors stay unknown.
+cgroup_use_sudo=0
+if [[ $EUID != 0 ]]; then cgroup_use_sudo=1; fi
+if (( SECONDS <= 1795 )); then
+  cgroup_diagnostic_args=("$container" "$run_id" "$expected_mode" "$cgroup_use_sudo")
+else
+  cgroup_diagnostic_args=()
+fi
+if ! python3 "$script_dir/native-cgroup-diagnostic.py" "${cgroup_diagnostic_args[@]}" 2>/dev/null; then
+  for cgroup_scope in outer daemon; do
+    echo "DOCKERLENS_NATIVE_CGROUP_DIAG: scope=$cgroup_scope outcome=unavailable memory_controller=unknown pids_controller=unknown memory_delegated=unknown pids_delegated=unknown memory_max=unknown swap_max=unknown"
+  done
+fi
 if [[ $expected_mode == rootless ]]; then
   [[ $docker_root == /home/docker/.local/share/docker ]] || { echo 'rootless daemon store is outside owned volume' >&2; exit 1; }
 else
