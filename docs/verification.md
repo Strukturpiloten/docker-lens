@@ -107,6 +107,17 @@ Internet or DNS result is involved. Sidecar setup failures expose only closed
 phases, error categories, and a fixed canary-write stage. A successful write-stage
 marker proves only that the health file was written, not that HTTP started or
 that the permission text came from the sidecar rather than the Podman logs query.
+The HTTP document root contains only the synthetic canary. Private httpd stderr
+is captured outside that root with owner-only permissions, capped at 8 KiB or
+less by a checked file-size limit in the HTTP process subshell, and removed
+on exit. Supported shells use 512-byte or 1-KiB limit units; neither can exceed
+that cap. Limit setup failure prevents HTTP startup and fails the lane.
+A unique, exact closed cause marker from a nonzero httpd return takes precedence
+over unrelated Podman logs-query errors;
+missing applets and shell errors remain distinct causes. Missing, conflicting,
+or malformed cause markers do not establish an attributed cause. These
+diagnostics preserve sidecar privileges and cannot turn a failed lane into
+positive network evidence.
 A panic-time inner cleanup attempt separately reports a closed pass/fail result.
 Neither marker prints native output or turns a failed lane into evidence.
 A positive ordinary-bridge control and a blocked internal

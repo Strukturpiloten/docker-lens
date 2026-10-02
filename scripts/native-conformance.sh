@@ -379,20 +379,25 @@ if sys.argv[1:] == ["--with-stage"]:
             httpd_stage = next(iter(returns))
         elif not returns:
             httpd_stage = "invoked"
-    print(f"{stage}|{httpd_stage}|{category}")
+    causes = re.findall(r"(?m)^DOCKERLENS_SIDECAR_HTTPD_CAUSE: ([^\r\n]*)\r?$", output)
+    allowed_causes = {"applet_missing", "shell_error", "permission", "bind_error", "config_error", "unknown"}
+    httpd_cause = causes[0] if (httpd_stage == "returned_nonzero" and len(causes) == 1
+                               and causes[0] in allowed_causes) else "absent"
+    print(f"{stage}|{httpd_stage}|{category}|{httpd_cause}")
 else:
     print(category)' "$@"
 }
 sidecar_failure_diagnostic() {
-  local category=unknown source=none write_stage=unknown httpd_stage=unknown state_error=unavailable observed logs_stage logs_httpd_stage logs_category
+  local category=unknown source=none write_stage=unknown httpd_stage=unknown state_error=unavailable observed logs_stage logs_httpd_stage logs_category logs_httpd_cause
   # A successful Podman logs query may replay container output on either CLI
   # stream. The query cannot identify which stream supplied the category.
   if observed=$(timeout --signal=TERM --kill-after=2s 5s "${podman_cmd[@]}" logs --tail 32 "$sidecar" 2>&1 |
     classify_sidecar_error --with-stage) &&
-    [[ $observed =~ ^(write_ok|write_failed|unknown)\|(invoked|returned_zero|returned_nonzero|unknown)\|(applet_missing|shell_error|config_error|bind_error|permission|storage|runtime_error|unknown)$ ]]; then
+    [[ $observed =~ ^(write_ok|write_failed|unknown)\|(invoked|returned_zero|returned_nonzero|unknown)\|(applet_missing|shell_error|config_error|bind_error|permission|storage|runtime_error|unknown)\|(applet_missing|shell_error|permission|bind_error|config_error|unknown|absent)$ ]]; then
     logs_stage=${BASH_REMATCH[1]}
     logs_httpd_stage=${BASH_REMATCH[2]}
     logs_category=${BASH_REMATCH[3]}
+    logs_httpd_cause=${BASH_REMATCH[4]}
     write_stage=$logs_stage
     httpd_stage=$logs_httpd_stage
     if [[ $logs_category != unknown ]]; then
@@ -411,6 +416,14 @@ sidecar_failure_diagnostic() {
       source=state_error
     fi
   fi
+  if [[ $httpd_stage == returned_nonzero ]]; then
+    category=unknown
+    source=none
+    if [[ $logs_httpd_cause != absent ]]; then
+      category=$logs_httpd_cause
+      source=httpd_stderr
+    fi
+  fi
   echo "DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=sidecar_failure category=$category source=$source write_stage=$write_stage httpd_stage=$httpd_stage state_error=$state_error" >&2
 }
 watchdog &
@@ -425,17 +438,35 @@ sidecar_start_category=$(timeout --signal=TERM --kill-after=2s 120s "${podman_cm
   --label "io.dockerlens.native-run=$run_id" --network "$outer_network" \
   --user=65534:65534 --cap-drop=all --security-opt no-new-privileges --pids-limit=64 --memory=128m \
   "$FIXTURE_IMAGE" sh -c \
-  'if { printf proof-egress > /tmp/index.html; } 2>/dev/null; then
+  'umask 077
+   sidecar_tmp=$(mktemp -d /tmp/dockerlens-sidecar.XXXXXX 2>/dev/null) || exit 1
+   httpd_root="$sidecar_tmp/public"
+   httpd_capture="$sidecar_tmp/httpd.stderr"
+   trap '\''rm -f "$httpd_capture" "$httpd_root/index.html" >/dev/null 2>&1; rmdir "$httpd_root" "$sidecar_tmp" >/dev/null 2>&1'\'' EXIT
+   if { mkdir "$httpd_root" && printf proof-egress > "$httpd_root/index.html"; } 2>/dev/null; then
      printf "DOCKERLENS_SIDECAR_STAGE: write_ok\n" >&2
    else
      printf "DOCKERLENS_SIDECAR_STAGE: write_failed\n" >&2
      exit 1
    fi
    printf "DOCKERLENS_SIDECAR_HTTPD: invoked\n" >&2
-   if httpd -f -p 18084 -h /tmp; then
+   # POSIX shells use 512-byte or 1-KiB blocks here: at most 8 KiB.
+   # Keep the checked file limit inside the HTTP process subshell only.
+   if (ulimit -f 8 && exec httpd -f -p 18084 -h "$httpd_root") 2>"$httpd_capture"; then
      printf "DOCKERLENS_SIDECAR_HTTPD: returned_zero\n" >&2
    else
      status=$?
+     httpd_error=$(head -c 8192 "$httpd_capture" 2>/dev/null | tr "[:upper:]" "[:lower:]")
+     case $httpd_error in
+       *applet\ not\ found* | *httpd:\ not\ found*) httpd_cause=applet_missing ;;
+       *syntax\ error* | *unexpected\ token* | *unexpected\ end\ of\ file*) httpd_cause=shell_error ;;
+       *permission\ denied* | *operation\ not\ permitted*) httpd_cause=permission ;;
+       *address\ already\ in\ use* | *can?t\ bind* | *cannot\ bind* | *failed\ to\ bind* | *bind:*) httpd_cause=bind_error ;;
+       *invalid\ option* | *unknown\ option* | *unrecognized\ option* | *configuration\ error* | *usage:\ httpd*) httpd_cause=config_error ;;
+       *) httpd_cause=unknown ;;
+     esac
+     rm -f "$httpd_capture" >/dev/null 2>&1
+     printf "DOCKERLENS_SIDECAR_HTTPD_CAUSE: %s\n" "$httpd_cause" >&2
      printf "DOCKERLENS_SIDECAR_HTTPD: returned_nonzero\n" >&2
      exit "$status"
    fi' 2>&1 >/dev/null |

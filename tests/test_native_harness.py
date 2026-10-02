@@ -155,6 +155,70 @@ class NativeHarnessTests(unittest.TestCase):
                     )
                     self.assertNotIn("private-canary", result.stderr)
 
+    def test_sidecar_failure_prefers_attributed_httpd_cause(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
+        helpers = "classify_sidecar_error() {" + source.split(
+            "classify_sidecar_error() {", 1
+        )[1].split("\n}\nwatchdog &", 1)[0] + "\n}\n"
+        with tempfile.TemporaryDirectory() as directory:
+            fake = Path(directory) / "podman"
+            fake.write_text(
+                '#!/bin/sh\n'
+                'case "$1" in\n'
+                '  logs) printf "%s\\n" "$FAKE_LOGS"; '
+                'printf "permission denied private-canary\\n" >&2 ;;\n'
+                '  inspect) printf "bind: address already in use private-canary\\n" ;;\n'
+                '  *) exit 42 ;;\n'
+                'esac\n',
+                encoding="utf-8",
+            )
+            fake.chmod(0o755)
+            script = (
+                "set -euo pipefail\n"
+                f"podman_cmd=({fake})\n"
+                "sidecar=synthetic\n"
+                + helpers
+                + "sidecar_failure_diagnostic\n"
+            )
+            prefix = (
+                "DOCKERLENS_SIDECAR_STAGE: write_ok\n"
+                "DOCKERLENS_SIDECAR_HTTPD: invoked\n"
+            )
+            for marker, returned, expected, origin in (
+                ("applet_missing", "returned_nonzero", "applet_missing", "httpd_stderr"),
+                ("shell_error", "returned_nonzero", "shell_error", "httpd_stderr"),
+                ("permission", "returned_nonzero", "permission", "httpd_stderr"),
+                ("bind_error", "returned_nonzero", "bind_error", "httpd_stderr"),
+                ("config_error", "returned_nonzero", "config_error", "httpd_stderr"),
+                ("unknown", "returned_nonzero", "unknown", "httpd_stderr"),
+                ("permission private-canary", "returned_nonzero", "unknown", "none"),
+                ("permission\nDOCKERLENS_SIDECAR_HTTPD_CAUSE: permission",
+                 "returned_nonzero", "unknown", "none"),
+                ("permission private-canary\nDOCKERLENS_SIDECAR_HTTPD_CAUSE: permission",
+                 "returned_nonzero", "unknown", "none"),
+                ("permission", "returned_zero", "permission", "logs_query"),
+            ):
+                with self.subTest(marker=marker, returned=returned):
+                    env = os.environ.copy()
+                    env["FAKE_LOGS"] = (
+                        prefix + f"DOCKERLENS_SIDECAR_HTTPD_CAUSE: {marker}\n"
+                        + f"DOCKERLENS_SIDECAR_HTTPD: {returned}\n"
+                    )
+                    result = subprocess.run(
+                        ["bash", "-c", script], env=env, capture_output=True,
+                        text=True, timeout=10, check=False,
+                    )
+                    self.assertEqual(result.returncode, 0)
+                    self.assertEqual(result.stdout, "")
+                    self.assertEqual(
+                        result.stderr.strip(),
+                        "DOCKERLENS_NATIVE_SIDECAR_SETUP: "
+                        f"phase=sidecar_failure category={expected} source={origin} "
+                        f"write_stage=write_ok httpd_stage={returned} "
+                        "state_error=bind_error",
+                    )
+                    self.assertNotIn("private-canary", result.stderr)
+
     def test_sidecar_failure_categories_are_closed_and_hide_native_text(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
         classifier = "classify_sidecar_error() {" + source.split(
@@ -189,28 +253,62 @@ class NativeHarnessTests(unittest.TestCase):
             "classify_sidecar_error() {", 1
         )[1].split("\n}\nsidecar_failure_diagnostic()", 1)[0] + "\n}\n"
         cases = (
-            ("DOCKERLENS_SIDECAR_STAGE: write_ok\n", "write_ok|unknown|unknown"),
-            ("DOCKERLENS_SIDECAR_STAGE: write_failed\n", "write_failed|unknown|unknown"),
+            ("DOCKERLENS_SIDECAR_STAGE: write_ok\n", "write_ok|unknown|unknown|absent"),
+            ("DOCKERLENS_SIDECAR_STAGE: write_failed\n", "write_failed|unknown|unknown|absent"),
             ("DOCKERLENS_SIDECAR_STAGE: write_ok\nhttpd: permission denied private-canary\n",
-             "write_ok|unknown|permission"),
+             "write_ok|unknown|permission|absent"),
             ("DOCKERLENS_SIDECAR_STAGE: write_ok\nDOCKERLENS_SIDECAR_HTTPD: invoked\n",
-             "write_ok|invoked|unknown"),
+             "write_ok|invoked|unknown|absent"),
             ("DOCKERLENS_SIDECAR_STAGE: write_ok\nDOCKERLENS_SIDECAR_HTTPD: invoked\n"
              "DOCKERLENS_SIDECAR_HTTPD: returned_nonzero\nprivate-canary\n",
-             "write_ok|returned_nonzero|unknown"),
+             "write_ok|returned_nonzero|unknown|absent"),
             ("DOCKERLENS_SIDECAR_STAGE: write_ok\nDOCKERLENS_SIDECAR_HTTPD: invoked\n"
-             "DOCKERLENS_SIDECAR_HTTPD: returned_zero\n", "write_ok|returned_zero|unknown"),
+             "DOCKERLENS_SIDECAR_HTTPD: returned_zero\n", "write_ok|returned_zero|unknown|absent"),
             ("DOCKERLENS_SIDECAR_STAGE: write_ok\nDOCKERLENS_SIDECAR_HTTPD: returned_nonzero\n",
-             "write_ok|unknown|unknown"),
+             "write_ok|unknown|unknown|absent"),
             ("DOCKERLENS_SIDECAR_STAGE: write_failed\nDOCKERLENS_SIDECAR_HTTPD: invoked\n",
-             "write_failed|unknown|unknown"),
+             "write_failed|unknown|unknown|absent"),
             ("DOCKERLENS_SIDECAR_STAGE: write_ok\nDOCKERLENS_SIDECAR_HTTPD: invoked\n"
              "DOCKERLENS_SIDECAR_HTTPD: returned_zero\n"
-             "DOCKERLENS_SIDECAR_HTTPD: returned_nonzero\n", "write_ok|unknown|unknown"),
-            ("prefix DOCKERLENS_SIDECAR_STAGE: write_ok\n", "unknown|unknown|unknown"),
+             "DOCKERLENS_SIDECAR_HTTPD: returned_nonzero\n", "write_ok|unknown|unknown|absent"),
+            ("prefix DOCKERLENS_SIDECAR_STAGE: write_ok\n", "unknown|unknown|unknown|absent"),
             ("DOCKERLENS_SIDECAR_STAGE: write_ok\nDOCKERLENS_SIDECAR_STAGE: write_failed\n",
-             "unknown|unknown|unknown"),
-            ("DOCKERLENS_SIDECAR_STAGE: write_ok\n" + "x" * 9000, "unknown|unknown|unknown"),
+             "unknown|unknown|unknown|absent"),
+            ("DOCKERLENS_SIDECAR_STAGE: write_ok\n" + "x" * 9000,
+             "unknown|unknown|unknown|absent"),
+            ("DOCKERLENS_SIDECAR_STAGE: write_ok\nDOCKERLENS_SIDECAR_HTTPD: invoked\n"
+             "DOCKERLENS_SIDECAR_HTTPD_CAUSE: permission\n"
+             "DOCKERLENS_SIDECAR_HTTPD: returned_nonzero\n",
+             "write_ok|returned_nonzero|unknown|permission"),
+            ("DOCKERLENS_SIDECAR_STAGE: write_ok\nDOCKERLENS_SIDECAR_HTTPD: invoked\n"
+             "DOCKERLENS_SIDECAR_HTTPD_CAUSE: bind_error\n"
+             "DOCKERLENS_SIDECAR_HTTPD: returned_nonzero\n",
+             "write_ok|returned_nonzero|unknown|bind_error"),
+            ("DOCKERLENS_SIDECAR_STAGE: write_ok\nDOCKERLENS_SIDECAR_HTTPD: invoked\n"
+             "DOCKERLENS_SIDECAR_HTTPD_CAUSE: config_error\n"
+             "DOCKERLENS_SIDECAR_HTTPD: returned_nonzero\n",
+             "write_ok|returned_nonzero|unknown|config_error"),
+            ("DOCKERLENS_SIDECAR_STAGE: write_ok\nDOCKERLENS_SIDECAR_HTTPD: invoked\n"
+             "DOCKERLENS_SIDECAR_HTTPD_CAUSE: unknown\n"
+             "DOCKERLENS_SIDECAR_HTTPD: returned_nonzero\n",
+             "write_ok|returned_nonzero|unknown|unknown"),
+            ("DOCKERLENS_SIDECAR_STAGE: write_ok\nDOCKERLENS_SIDECAR_HTTPD: invoked\n"
+             "DOCKERLENS_SIDECAR_HTTPD_CAUSE: permission\n"
+             "DOCKERLENS_SIDECAR_HTTPD: returned_zero\n",
+             "write_ok|returned_zero|unknown|absent"),
+            ("DOCKERLENS_SIDECAR_STAGE: write_ok\nDOCKERLENS_SIDECAR_HTTPD: invoked\n"
+             "DOCKERLENS_SIDECAR_HTTPD_CAUSE: permission private-canary\n"
+             "DOCKERLENS_SIDECAR_HTTPD: returned_nonzero\n",
+             "write_ok|returned_nonzero|unknown|absent"),
+            ("DOCKERLENS_SIDECAR_STAGE: write_ok\nDOCKERLENS_SIDECAR_HTTPD: invoked\n"
+             "DOCKERLENS_SIDECAR_HTTPD_CAUSE: permission\n"
+             "DOCKERLENS_SIDECAR_HTTPD_CAUSE: permission\n"
+             "DOCKERLENS_SIDECAR_HTTPD: returned_nonzero\n",
+             "write_ok|returned_nonzero|unknown|absent"),
+            ("DOCKERLENS_SIDECAR_STAGE: write_ok\nDOCKERLENS_SIDECAR_HTTPD: invoked\n"
+             "DOCKERLENS_SIDECAR_HTTPD_CAUSE: permission\n" + "x" * 9000 +
+             "DOCKERLENS_SIDECAR_HTTPD: returned_nonzero\n",
+             "unknown|unknown|unknown|absent"),
         )
         for logs, expected in cases:
             with self.subTest(expected=expected, size=len(logs)):
@@ -232,49 +330,190 @@ class NativeHarnessTests(unittest.TestCase):
         self.assertEqual(len(command), 1)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            target = root / "index.html"
+            sidecar_tmp = root / "sidecar"
+            httpd_root = sidecar_tmp / "public"
+            target = httpd_root / "index.html"
             fake_httpd = root / "httpd"
+            fake_mktemp = root / "mktemp"
+            capture = sidecar_tmp / "httpd.stderr"
             invoked = root / "httpd-invoked"
             fake_httpd.write_text(
                 '#!/bin/sh\nprintf "yes" > "$FAKE_HTTPD_INVOKED"\n'
+                '[ "$(cat "$5/index.html")" = proof-egress ] || exit 43\n'
                 'if [ "$FAKE_HTTPD_FAIL" = 1 ]; then '
-                'echo "permission denied private-canary" >&2; exit 42; fi\n',
+                'printf "%s\\n" "$FAKE_HTTPD_ERROR" >&2; exit 42; fi\n',
                 encoding="utf-8",
             )
             fake_httpd.chmod(0o755)
+            fake_mktemp.write_text(
+                '#!/bin/sh\n[ "$1" = -d ] || exit 42\n'
+                'mkdir -p "$FAKE_SIDECAR_TMP"\nprintf "%s\\n" "$FAKE_SIDECAR_TMP"\n',
+                encoding="utf-8",
+            )
+            fake_mktemp.chmod(0o755)
             env = os.environ.copy()
-            env.update(PATH=f"{root}:{env['PATH']}", FAKE_HTTPD_INVOKED=str(invoked))
-            for target_is_directory, httpd_fails, expected_stage in (
-                (False, False, "write_ok"),
-                (True, False, "write_failed"),
-                (False, True, "write_ok"),
+            env.update(PATH=f"{root}:{env['PATH']}", FAKE_HTTPD_INVOKED=str(invoked),
+                       FAKE_SIDECAR_TMP=str(sidecar_tmp))
+            for target_is_directory, httpd_error, expected_cause in (
+                (False, None, None),
+                (True, None, None),
+                (False, "permission denied private-canary", "permission"),
+                (False, "can't bind to port private-canary", "bind_error"),
+                (False, "invalid option private-canary", "config_error"),
+                (False, "httpd: applet not found private-canary", "applet_missing"),
+                (False, "sh: httpd: not found private-canary", "applet_missing"),
+                (False, "sh: syntax error private-canary", "shell_error"),
+                (False, "private-canary", "unknown"),
+                (False, "DOCKERLENS_SIDECAR_HTTPD_CAUSE: permission private-canary",
+                 "unknown"),
             ):
-                with self.subTest(write_failure=target_is_directory, httpd_failure=httpd_fails):
+                with self.subTest(write_failure=target_is_directory, httpd_error=httpd_error):
                     if target.exists():
                         if target.is_dir():
                             target.rmdir()
                         else:
                             target.unlink()
                     invoked.unlink(missing_ok=True)
+                    capture.unlink(missing_ok=True)
                     if target_is_directory:
-                        target.mkdir()
-                    env["FAKE_HTTPD_FAIL"] = "1" if httpd_fails else "0"
+                        target.mkdir(parents=True)
+                    env["FAKE_HTTPD_FAIL"] = "1" if httpd_error is not None else "0"
+                    env["FAKE_HTTPD_ERROR"] = httpd_error or ""
                     result = subprocess.run(
-                        ["sh", "-c", command[0].replace("/tmp/index.html", str(target))],
+                        ["sh", "-c", command[0]],
                         env=env, capture_output=True, text=True, timeout=5, check=False,
                     )
                     self.assertEqual(result.returncode, 1 if target_is_directory else
-                                     42 if httpd_fails else 0)
+                                     42 if httpd_error is not None else 0)
+                    expected_stage = "write_failed" if target_is_directory else "write_ok"
                     self.assertIn(f"DOCKERLENS_SIDECAR_STAGE: {expected_stage}\n", result.stderr)
                     if target_is_directory:
                         self.assertNotIn("DOCKERLENS_SIDECAR_HTTPD:", result.stderr)
                     else:
                         self.assertIn("DOCKERLENS_SIDECAR_HTTPD: invoked\n", result.stderr)
-                        returned = "returned_nonzero" if httpd_fails else "returned_zero"
+                        returned = "returned_nonzero" if httpd_error is not None else "returned_zero"
                         self.assertIn(f"DOCKERLENS_SIDECAR_HTTPD: {returned}\n", result.stderr)
+                    if expected_cause is None:
+                        self.assertNotIn("DOCKERLENS_SIDECAR_HTTPD_CAUSE:", result.stderr)
+                    else:
+                        self.assertIn(
+                            f"DOCKERLENS_SIDECAR_HTTPD_CAUSE: {expected_cause}\n",
+                            result.stderr,
+                        )
                     self.assertEqual(invoked.exists(), not target_is_directory)
+                    self.assertFalse(capture.exists())
+                    self.assertNotIn("private-canary", result.stderr)
                     if not target_is_directory:
-                        self.assertEqual(target.read_text(), "proof-egress")
+                        self.assertFalse(sidecar_tmp.exists())
+                    else:
+                        target.rmdir()
+                        httpd_root.rmdir()
+                        sidecar_tmp.rmdir()
+
+    def test_sidecar_httpd_stderr_is_outside_served_root(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
+        quoted_command = source.split('  "$FIXTURE_IMAGE" sh -c \\\n  ', 1)[1].split(
+            " 2>&1 >/dev/null |", 1
+        )[0]
+        command = shlex.split(quoted_command)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fake_httpd = root / "httpd"
+            fake_mktemp = root / "mktemp"
+            sidecar_tmp = root / "sidecar"
+            record = root / "served-path"
+            fake_mktemp.write_text(
+                '#!/bin/sh\nmkdir "$FAKE_SIDECAR_TMP"\n'
+                'printf "%s\\n" "$FAKE_SIDECAR_TMP"\n', encoding="utf-8",
+            )
+            fake_httpd.write_text(
+                '#!/bin/sh\n'
+                '[ "$1" = -f ] && [ "$2" = -p ] && [ "$3" = 18084 ] && '
+                '[ "$4" = -h ] || exit 43\n'
+                'printf "%s\\n" "$5" > "$FAKE_HTTPD_RECORD"\n'
+                '[ "$(cat "$5/index.html")" = proof-egress ] || exit 44\n'
+                'printf "permission denied private-canary\\n" >&2\n'
+                '[ "$(stat -c %a "$FAKE_SIDECAR_TMP/httpd.stderr")" = 600 ] || exit 45\n'
+                '[ "$(find "$5" -type f | wc -l)" = 1 ] || exit 46\n'
+                'exit 42\n', encoding="utf-8",
+            )
+            fake_httpd.chmod(0o755)
+            fake_mktemp.chmod(0o755)
+            env = os.environ.copy()
+            env.update(PATH=f"{root}:{env['PATH']}", FAKE_SIDECAR_TMP=str(sidecar_tmp),
+                       FAKE_HTTPD_RECORD=str(record))
+            result = subprocess.run(
+                ["sh", "-c", command], env=env, capture_output=True, text=True,
+                timeout=5, check=False,
+            )
+            self.assertEqual(result.returncode, 42)
+            served = Path(record.read_text().strip()).resolve()
+            capture = (sidecar_tmp / "httpd.stderr").resolve()
+            self.assertFalse(capture.is_relative_to(served))
+            self.assertEqual(served, (sidecar_tmp / "public").resolve())
+            self.assertIn("DOCKERLENS_SIDECAR_HTTPD_CAUSE: permission\n", result.stderr)
+            self.assertNotIn("private-canary", result.stdout + result.stderr)
+            self.assertFalse(sidecar_tmp.exists())
+
+    def test_sidecar_httpd_capture_limit_is_checked_and_bounds_overflow(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
+        quoted_command = source.split('  "$FIXTURE_IMAGE" sh -c \\\n  ', 1)[1].split(
+            " 2>&1 >/dev/null |", 1
+        )[0]
+        command = shlex.split(quoted_command)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sidecar_tmp = root / "sidecar"
+            capture_size = root / "capture-size"
+            invoked = root / "httpd-invoked"
+            fake_mktemp = root / "mktemp"
+            fake_httpd = root / "httpd"
+            fake_rm = root / "rm"
+            fake_mktemp.write_text(
+                '#!/bin/sh\nmkdir "$FAKE_SIDECAR_TMP"\n'
+                'printf "%s\\n" "$FAKE_SIDECAR_TMP"\n', encoding="utf-8",
+            )
+            fake_httpd.write_text(
+                '#!/bin/sh\n'
+                'printf yes > "$FAKE_HTTPD_INVOKED"\n'
+                'head -c 16384 /dev/zero | tr "\\000" x >&2\n'
+                'exit 42\n', encoding="utf-8",
+            )
+            fake_rm.write_text(
+                '#!/bin/sh\n'
+                'if [ -f "$FAKE_SIDECAR_TMP/httpd.stderr" ]; then\n'
+                '  wc -c < "$FAKE_SIDECAR_TMP/httpd.stderr" > "$FAKE_CAPTURE_SIZE"\n'
+                'fi\nexec /usr/bin/rm "$@"\n', encoding="utf-8",
+            )
+            fake_mktemp.chmod(0o755)
+            fake_httpd.chmod(0o755)
+            fake_rm.chmod(0o755)
+            env = os.environ.copy()
+            env.update(PATH=f"{root}:{env['PATH']}", FAKE_SIDECAR_TMP=str(sidecar_tmp),
+                       FAKE_CAPTURE_SIZE=str(capture_size), FAKE_HTTPD_INVOKED=str(invoked))
+            for shell, limit_available in (
+                ("sh", True), ("sh", False), ("bash", True), ("bash", False),
+            ):
+                with self.subTest(shell=shell, limit_available=limit_available):
+                    capture_size.unlink(missing_ok=True)
+                    invoked.unlink(missing_ok=True)
+                    selected = command if limit_available else command.replace("ulimit -f 8", "false")
+                    result = subprocess.run(
+                        [shell, "-c", selected], env=env, capture_output=True, text=True,
+                        timeout=5, check=False,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(invoked.exists(), limit_available)
+                    size = int(capture_size.read_text())
+                    if limit_available:
+                        self.assertGreater(size, 0)
+                        self.assertLessEqual(size, 8192)
+                    else:
+                        self.assertEqual(size, 0)
+                    self.assertIn("DOCKERLENS_SIDECAR_HTTPD: returned_nonzero\n", result.stderr)
+                    self.assertIn("DOCKERLENS_SIDECAR_HTTPD_CAUSE: unknown\n", result.stderr)
+                    self.assertNotIn("x" * 100, result.stdout + result.stderr)
+                    self.assertFalse(sidecar_tmp.exists())
 
     def test_outer_ipv4_diagnostics_are_closed_for_each_rejection(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
@@ -1416,12 +1655,12 @@ esac
                     )
                 if fault == "sidecar_httpd_failed":
                     self.assertIn(
-                        "phase=sidecar_failure category=permission source=logs_query write_stage=write_ok httpd_stage=returned_nonzero state_error=unknown",
+                        "phase=sidecar_failure category=unknown source=none write_stage=write_ok httpd_stage=returned_nonzero state_error=unknown",
                         result.stderr,
                     )
                 if fault == "sidecar_conflicting_state_error":
                     self.assertIn(
-                        "phase=sidecar_failure category=permission source=logs_query write_stage=write_ok httpd_stage=returned_nonzero state_error=bind_error",
+                        "phase=sidecar_failure category=unknown source=none write_stage=write_ok httpd_stage=returned_nonzero state_error=bind_error",
                         result.stderr,
                     )
                     self.assertTrue((state / "state_error_inspected").exists())
