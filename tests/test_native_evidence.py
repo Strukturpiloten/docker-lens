@@ -45,6 +45,10 @@ NETWORK_PROBES = [
     "NetworkBridgeIccDisabled", "NetworkBridgeMasqueradeEnabled",
     "NetworkCreateLabelsValueDomain",
 ]
+NETWORK_PROOF = {
+    "probes": NETWORK_PROBES,
+    "internal_shape": {"InternalBridgeNetworkCreate": "passed"},
+}
 VOLUME_PROBES = [
     "ExistingVolumePrerequisite", "ExistingVolumeTargetIdentity",
     "ExistingVolumeReadOnlyData", "ExistingVolumeReadWriteData",
@@ -101,7 +105,7 @@ class NativeEvidenceTests(unittest.TestCase):
         version_path.write_text(json.dumps(version), encoding="utf-8")
         shapes_path.write_text(json.dumps(SHAPES if shapes is None else shapes), encoding="utf-8")
         source_path.write_text(json.dumps(SOURCE_PROBES if source_probes is None else source_probes), encoding="utf-8")
-        network_path.write_text(json.dumps(NETWORK_PROBES if network_probes is None else network_probes), encoding="utf-8")
+        network_path.write_text(json.dumps(NETWORK_PROOF if network_probes is None else network_probes), encoding="utf-8")
         volume_path.write_text(json.dumps(VOLUME_PROBES if volume_probes is None else volume_probes), encoding="utf-8")
         volume_label_path.write_text(json.dumps(VOLUME_LABEL_PROBES if volume_label_probes is None else volume_label_probes), encoding="utf-8")
         result = subprocess.run(
@@ -126,12 +130,15 @@ class NativeEvidenceTests(unittest.TestCase):
         self.assertEqual(evidence["acquisition_api"], "1.49")
         self.assertEqual(evidence["rendering_api"], "1.52")
         self.assertEqual(evidence["runtime_components"], {"containerd": "2.3.5", "runc": "1.5.1"})
-        self.assertEqual(len(evidence["capability_outcome"]), 10)
+        self.assertEqual(len(evidence["capability_outcome"]), 11)
         self.assertEqual(set(evidence["capability_outcome"].values()), {"available"})
-        self.assertEqual(evidence["admitted_shapes"], SHAPES)
+        self.assertEqual(evidence["admitted_shapes"], {
+            **SHAPES, "NetworkInternal": ["InternalBridgeNetworkCreate"],
+        })
         self.assertEqual(evidence["source_probes"], SOURCE_PROBES)
         self.assertEqual(evidence["network_probes"], NETWORK_PROBES)
-        self.assertTrue(set(NETWORK_PROBES).isdisjoint(
+        self.assertEqual(evidence["capability_outcome"]["NetworkInternal"], "available")
+        self.assertTrue((set(NETWORK_PROBES) - {"InternalBridgeNetworkCreate"}).isdisjoint(
             shape for values in evidence["admitted_shapes"].values() for shape in values))
         self.assertEqual(evidence["volume_probes"], VOLUME_PROBES)
         self.assertEqual(evidence["volume_label_probes"], VOLUME_LABEL_PROBES)
@@ -219,10 +226,74 @@ class NativeEvidenceTests(unittest.TestCase):
                        NETWORK_PROBES[:-1] + [NETWORK_PROBES[0]],
                        NETWORK_PROBES[:19]):
             with self.subTest(probes=probes):
-                result, path = self.run_emit(version, network_probes=probes)
+                result, path = self.run_emit(version, network_probes={
+                    **NETWORK_PROOF, "probes": probes,
+                })
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse(path.exists())
                 self.assertNotIn("private-canary", result.stdout + result.stderr)
+
+    def test_internal_proof_is_required_and_closed(self) -> None:
+        version = {"Version": "29.8.1", "ApiVersion": "1.56", "MinAPIVersion": "1.44"}
+        for proof in (
+            NETWORK_PROBES,
+            {"probes": NETWORK_PROBES},
+            {**NETWORK_PROOF, "internal_shape": {}},
+            {**NETWORK_PROOF, "internal_shape": {"InternalBridgeNetworkCreate": "failed"}},
+            {**NETWORK_PROOF, "internal_shape": {"InternalBridgeNetworkCreate": True}},
+            {**NETWORK_PROOF, "internal_shape": {"InternalBridgeNetworkCreate": "passed",
+                                                   "private-canary": "passed"}},
+            {**NETWORK_PROOF, "private-canary": "secret"},
+        ):
+            with self.subTest(proof=proof):
+                result, path = self.run_emit(version, network_probes=proof)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(path.exists())
+                self.assertNotIn("private-canary", result.stdout + result.stderr)
+
+    def test_internal_proof_requires_bounded_regular_private_input(self) -> None:
+        version = {"Version": "29.8.1", "ApiVersion": "1.56", "MinAPIVersion": "1.44"}
+        result, destination = self.run_emit(version)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        root = destination.parent.parent
+        probe_path = root / "network.json"
+        command = ["python3", str(SCRIPT), str(root / "version.json"), str(root / "shapes.json"),
+                   str(root / "source.json"), str(probe_path), str(root / "volume.json"),
+                   str(root / "volume-label.json"), str(destination),
+                   "upstream-rootful", IMAGE, "rootful", "", SHA]
+        destination.unlink()
+        probe_path.write_bytes(b"[" + b"x" * 4096 + b"]")
+        oversized = subprocess.run(command, capture_output=True, text=True, check=False)
+        self.assertNotEqual(oversized.returncode, 0)
+        self.assertFalse(destination.exists())
+        probe_path.unlink()
+        probe_path.symlink_to(root / "source.json")
+        symlink = subprocess.run(command, capture_output=True, text=True, check=False)
+        self.assertNotEqual(symlink.returncode, 0)
+        self.assertFalse(destination.exists())
+        self.assertNotIn("private", oversized.stdout + oversized.stderr + symlink.stdout + symlink.stderr)
+
+    def test_internal_raw_shape_is_bound_to_exact_modes_and_versions(self) -> None:
+        for lane, mode, image, package, version in (
+            ("upstream-rootful", "rootful", IMAGE, "",
+             {"Version": "29.8.1", "ApiVersion": "1.56", "MinAPIVersion": "1.44"}),
+            ("debian11-rootless", "rootless",
+             "ghcr.io/strukturpiloten/docker-debian-11-rootless:v1.0.0@sha256:" + "c" * 64,
+             "20.10.5+dfsg1-1+deb11u2",
+             {"Version": "20.10.5+dfsg1", "ApiVersion": "1.41", "MinAPIVersion": "1.12"}),
+        ):
+            with self.subTest(lane=lane):
+                result, path = self.run_emit(version, lane=lane, mode=mode, image=image, package=package)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                record = json.loads(path.read_text(encoding="utf-8"))
+                self.assertEqual(record["expected_mode"], mode)
+                self.assertEqual(record["rendering_api"], version["ApiVersion"])
+                self.assertEqual(record["admitted_shapes"]["NetworkInternal"],
+                                 ["InternalBridgeNetworkCreate"])
+                wrong_mode, absent = self.run_emit(version, lane=lane, mode="other", image=image,
+                                                   package=package)
+                self.assertNotEqual(wrong_mode.returncode, 0)
+                self.assertFalse(absent.exists())
 
     def test_volume_probes_are_exact_closed_non_admission_evidence(self) -> None:
         version = {"Version": "29.8.1", "ApiVersion": "1.56", "MinAPIVersion": "1.44"}
