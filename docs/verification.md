@@ -93,7 +93,52 @@ masquerade values are accepted and inspectable, but this does not prove their
 routing or NAT effect. Representative empty and non-ASCII/escaped network-label
 values are checked through independent CLI and inert-rendered creates and Engine
 inspects; this does not prove every key or length boundary.
-These additional names are non-admission evidence, and the historical nineteen
+The separate ignored internal-network proof gets its own 180-second bound after
+the general network test. It compares independently CLI-created bridges with
+matched inert requests sent to Engine, then checks direct Engine inspect values.
+The rendered internal and ordinary bridges both enable ICC and masquerade; their
+single-homed peers must each have healthy same-bridge HTTP. A task-owned BusyBox
+HTTP sidecar and the nested Docker daemon attach to one separate outer Podman
+bridge with distinct private IPv4 addresses and network namespaces. The ordinary
+peer must fetch the sidecar by direct IPv4 before and after the internal peer
+fails to fetch that same address. The sidecar is not in the inner Docker host
+namespace: traffic from inner bridges crosses Docker's FORWARD path. No public
+Internet or DNS result is involved. Sidecar setup failures expose only closed
+phases, error categories, and a fixed canary-write stage. A successful write-stage
+marker proves only that the health file was written, not that HTTP started or
+that the permission text came from the sidecar rather than the Podman logs query.
+The HTTP document root contains only the synthetic canary. Private httpd stderr
+is captured outside that root with owner-only permissions, capped at 8 KiB or
+less by a checked file-size limit in the HTTP process subshell, and removed
+on exit. Supported shells use 512-byte or 1-KiB limit units; neither can exceed
+that cap. Limit setup failure prevents HTTP startup and fails the lane.
+A unique, exact closed cause marker from a nonzero httpd return takes precedence
+over unrelated Podman logs-query errors;
+missing applets and shell errors remain distinct causes. Missing, conflicting,
+or malformed cause markers do not establish an attributed cause. These
+diagnostics preserve sidecar privileges and cannot turn a failed lane into
+positive network evidence.
+A panic-time inner cleanup attempt separately reports a closed pass/fail result.
+Neither marker prints native output or turns a failed lane into evidence.
+A positive ordinary-bridge control and a blocked internal
+probe are both required independently; reachable internal traffic fails the
+proof even when all request and inspect fields match.
+The negative HTTP probe requires a successful Docker exec carrying a fixed
+`blocked` result from the running peer, with the control fetching the exact
+canary again afterward. Outer command timeouts and Docker exec failures cannot
+count as blocked traffic. Every proof operation reserves time for bounded
+label-verified cleanup within the 180-second runner deadline. Failed removals
+stay in the cleanup ledger for a retry, and only an exact direct Engine 404
+clears an uncertain resource. Only after the live assertions and verified
+cleanup does the test
+replace the private network probe file with a closed positive shape result.
+The manifest emitter rejects a missing, negative, malformed, oversized, or
+symlinked result; a valid result adds `NetworkInternal` and its sole
+`InternalBridgeNetworkCreate` shape to raw lane evidence. The compiled catalog
+and historical evidence remain unchanged until a separate review binds fresh
+four-lane artifacts. This test adds no dependency, image, action, or tool pin,
+so Renovate extraction and ownership need no change.
+The three option/label additions remain non-admission evidence, and the historical nineteen
 names and manifests are unchanged. IPv4 `/31` and `/32` bridge parents remain
 rejected by planning, independent of any Engine acceptance behavior.
 The typed-container offline regressions cover exact grouped `PortBindings`
@@ -640,6 +685,15 @@ runner shutdown can prevent cleanup; inspect the printed exact names and
 Podman existence-query errors are not treated as absence: cleanup attempts
 label-verified removal where possible, reads back exact resource absence, and
 still fails the lane for review when absence cannot be verified.
+Each cleanup command retains its eight-second deadline and two-second kill
+fallback; for elevated Podman the timeout also runs under sudo so it can signal
+the root-owned client. Only a task-named container with the matching run label
+is removed with `--force --time 0`: Podman's default ten-second stop grace
+otherwise exceeds that command budget. The daemon container and sidecar are
+removed before their exact network and data volume, which are never force-removed.
+Removal errors expose closed categories, with raw Podman output suppressed.
+The success summary is printed only after all cleanup and absence readbacks
+pass; a manifest written earlier is not passing lane evidence by itself.
 
 Release validation checks the supplied full SHA against current `main`, runs
 the complete gate, runs all four native lanes independently, then rechecks

@@ -49,6 +49,7 @@ NETWORK_PROBES = (
     "NetworkBridgeIccDisabled", "NetworkBridgeMasqueradeEnabled",
     "NetworkCreateLabelsValueDomain",
 )
+INTERNAL_PROOF = {"InternalBridgeNetworkCreate": "passed"}
 VOLUME_PROBES = (
     "ExistingVolumePrerequisite", "ExistingVolumeTargetIdentity",
     "ExistingVolumeReadOnlyData", "ExistingVolumeReadWriteData",
@@ -185,6 +186,27 @@ def read_volume_label_probes(path: Path) -> list[str]:
     return list(VOLUME_LABEL_PROBES)
 
 
+def read_network_proof(path: Path) -> list[str]:
+    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    with os.fdopen(descriptor, "rb") as source:
+        metadata = os.fstat(source.fileno())
+        if not stat.S_ISREG(metadata.st_mode) or not 0 < metadata.st_size <= 4096:
+            raise ValueError("invalid native network proof file")
+        payload = source.read(4097)
+    if len(payload) != metadata.st_size:
+        raise ValueError("native network proof file changed")
+    proof = json.loads(payload)
+    if not isinstance(proof, dict) or set(proof) != {"probes", "internal_shape"}:
+        raise ValueError("native network proof is incomplete")
+    probes = proof["probes"]
+    if (not isinstance(probes, list) or len(probes) != len(NETWORK_PROBES)
+            or any(not isinstance(probe, str) for probe in probes)
+            or set(probes) != set(NETWORK_PROBES)
+            or proof["internal_shape"] != INTERNAL_PROOF):
+        raise ValueError("native internal network proof is incomplete")
+    return list(NETWORK_PROBES)
+
+
 def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path: Path,
          volume_path: Path, container_path: Path, volume_label_path: Path,
          destination: Path, lane: str, image: str,
@@ -259,13 +281,7 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
     volume_probes = read_volume_probes(volume_path)
     volume_label_probes = read_volume_label_probes(volume_label_path)
 
-    if network_path.stat().st_size > 4096:
-        raise ValueError("native network evidence exceeds closed limit")
-    network_probes = json.loads(network_path.read_text(encoding="utf-8"))
-    if (not isinstance(network_probes, list) or len(network_probes) != len(NETWORK_PROBES)
-            or any(not isinstance(probe, str) for probe in network_probes)
-            or set(network_probes) != set(NETWORK_PROBES)):
-        raise ValueError("native network probe set is incomplete")
+    network_probes = read_network_proof(network_path)
 
     container_probes = read_container_probes(container_path, lane)
 
@@ -283,8 +299,10 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         "debian_docker_package": package or None,
         "runtime_components": runtime_components,
         "capability_version": maximum,
-        "capability_outcome": {name: "available" for name in CAPABILITIES},
-        "admitted_shapes": {name: list(REQUIRED_SHAPES[name]) for name in CAPABILITIES},
+        "capability_outcome": {**{name: "available" for name in CAPABILITIES},
+                               "NetworkInternal": "available"},
+        "admitted_shapes": {**{name: list(REQUIRED_SHAPES[name]) for name in CAPABILITIES},
+                            "NetworkInternal": ["InternalBridgeNetworkCreate"]},
         "source_probes": list(SOURCE_PROBES),
         "network_probes": list(NETWORK_PROBES),
         "volume_probes": volume_probes,

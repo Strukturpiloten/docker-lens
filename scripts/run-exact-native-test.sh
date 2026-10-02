@@ -58,7 +58,7 @@ summary=$(grep -Eo '^test result: (ok|FAILED)\. [0-9]+ passed; [0-9]+ failed; [0
 marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: (capture_(input|decode|daemon|counts|image|ports|mounts|environment|command|privacy)|acquire_(input|oracle|socket|route|network|decode|mode|settings|replay)|target_(daemon_uid|mode|ports|mounts|settings|traffic(_probe)?|health_(create|start|wait)|shape_(network_attach|bind_rw|volume_ro(_created|_inspected|_started|_accessible|_write_(zero|one|other))?|restart)|uid_(probe_failed|shape|count)|rootless_uid_zero|rootful_uid_nonzero|start_(uidmap|userns|cgroup|network|mount|storage|runtime|permission|unclassified|timeout|exec))|read_only_(acquire|route|status|decode|daemon|mode|api))$' "$capture_path" | tail -n 1 || true)
 source_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: (source_(fixture_oracles|discovery|narrow_selectors|all_and_resource_roots|multiple_bindings|typed_oracle|network_membership)|membership_cleanup_unverified)$' "$capture_path" | tail -n 1 || true)
 if [[ -n $source_marker ]]; then marker=$source_marker; fi
-network_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: network_(identity|oracle(_((primary|alternate)_(create|inspect|assert)|external_(create|inspect)))?|render|apply|inspect|aliases|traffic|isolation(_(edge_fixture(_exited)?|edge_alias_missing|backend_alias_missing|edge_dns(_(output_limit|cli_(timeout|resolver|lookup|docker|exec|answer_present|unclassified)|answer_(missing|wrong_ip|malformed|inconsistent)|alias_missing|fixture_exited|readiness_exhausted))?|edge_http|local_dns|local_http|collision_dns|collision_http|foreign_route|cleanup_unverified))?|external|negative|evidence)$' "$capture_path" | tail -n 1 || true)
+network_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: network_(identity|oracle(_((primary|alternate)_(create|inspect|assert)|external_(create|inspect)))?|render|apply|inspect|aliases|traffic|isolation(_(edge_fixture(_exited)?|edge_alias_missing|backend_alias_missing|edge_dns(_(output_limit|cli_(timeout|resolver|lookup|docker|exec|answer_present|unclassified)|answer_(missing|wrong_ip|malformed|inconsistent)|alias_missing|fixture_exited|readiness_exhausted))?|edge_http|local_dns|local_http|collision_dns|collision_http|foreign_route|cleanup_unverified))?|internal_(oracle|render|sidecar|peers|control|blocked|cleanup|topology)|external|negative|evidence)$' "$capture_path" | tail -n 1 || true)
 if [[ -n $network_marker ]]; then marker=$network_marker; fi
 volume_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: volume_(missing_precheck|seed|read_only|read_write|persistence|identity|cleanup_unverified)$' "$capture_path" | tail -n 1 || true)
 if [[ -n $volume_marker ]]; then marker=$volume_marker; fi
@@ -97,6 +97,7 @@ volume_label_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: volume_labels_(create|
 if [[ -n $volume_label_marker ]]; then marker=$volume_label_marker; fi
 if [[ -n $selection_error ]]; then error_category=$selection_error; fi
 network_cli_diag=$(grep -Eo '^DOCKERLENS_NATIVE_NETWORK_CLI_DIAG: exit=(timeout|other) category=(bridge_filter|icc_configuration|firewall_disabled|firewall|permission|address_pool|invalid_label|invalid_option|unknown)$' "$capture_path" | tail -n 1 || true)
+internal_cleanup=$(grep -Eo '^DOCKERLENS_NATIVE_CLEANUP: internal_proof=(pass|fail)$' "$capture_path" | tail -n 1 || true)
 # The first panic's selected test source and numeric location identify the
 # original assertion without disclosing its message, values, or build path.
 panic_site=
@@ -137,6 +138,7 @@ if (( run_status != 0 )); then
   if [[ -n $reason_marker ]]; then echo "$reason_marker" >&2; fi
   if [[ -n $error_category ]]; then echo "$error_category" >&2; fi
   if [[ -n $network_cli_diag ]]; then echo "$network_cli_diag" >&2; fi
+  if [[ -n $internal_cleanup ]]; then echo "$internal_cleanup" >&2; fi
   if [[ -n $panic_site ]]; then echo "$panic_site" >&2; fi
   if [[ -n $summary ]]; then
     echo "$summary" >&2

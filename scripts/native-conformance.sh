@@ -51,11 +51,13 @@ fi
 # module load; these environment guards prevent accidents, not impersonation.
 python3 "$script_dir/native-bridge-prerequisite.py"
 
-# A random directory, container, and volume belong to exactly this lane.
+# A random directory, two containers, network, and volume belong to this lane.
 run_dir=$(mktemp -d "${TMPDIR:-/tmp}/dockerlens-native.XXXXXXXX")
 run_id=${run_dir##*.}
 container="dl-native-${run_id}"
 volume="dl-native-data-${run_id}"
+outer_network="dl-native-net-${run_id}"
+sidecar="dl-native-egress-${run_id}"
 socket_dir="$run_dir/socket"
 socket="$socket_dir/docker.sock"
 mkdir -m 0777 "$socket_dir"
@@ -67,6 +69,31 @@ printf 'native-tcp-canary\n' > "$socket_dir/native-bind/index.html"
 chmod 0644 "$socket_dir/native-bind/canary" "$socket_dir/native-bind/index.html"
 chmod 0700 "$run_dir"
 watchdog_pid=
+native_success_summary=
+cleanup_podman() {
+  # The deadline must share root privileges with the Podman client; an
+  # unprivileged timeout cannot reliably terminate children behind sudo.
+  if [[ ${podman_cmd[0]} == sudo ]]; then
+    "${podman_cmd[@]:0:2}" timeout --signal=TERM --kill-after=2s 8s "${podman_cmd[@]:2}" "$@" 2>/dev/null
+  else
+    timeout --signal=TERM --kill-after=2s 8s "${podman_cmd[@]}" "$@" 2>/dev/null
+  fi
+}
+cleanup_remove() {
+  local role=$1 result=0 category
+  shift
+  cleanup_podman "$@" >/dev/null || result=$?
+  if (( result == 0 )); then return 0; fi
+  case $result in
+    124) category=timeout ;;
+    137) category=killed ;;
+    130 | 143) category=cancelled ;;
+    125 | 126 | 127) category=command_error ;;
+    *) category=error ;;
+  esac
+  echo "DOCKERLENS_NATIVE_CLEANUP: role=$role operation=remove category=$category" >&2
+  return 1
+}
 cleanup() {
   status=$?
   trap - EXIT HUP INT TERM
@@ -74,39 +101,45 @@ cleanup() {
     kill "$watchdog_pid" 2>/dev/null || true
     wait "$watchdog_pid" 2>/dev/null || true
   fi
-  container_state=0
-  "${podman_cmd[@]}" container exists "$container" || container_state=$?
-  if (( container_state != 1 )); then
-    if (( container_state != 0 )); then
-      echo "could not verify whether owned container $container exists (exit $container_state)" >&2
+  cleanup_container "$container" container || status=1
+  cleanup_container "$sidecar" sidecar || status=1
+  network_state=0
+  cleanup_podman network exists "$outer_network" || network_state=$?
+  if (( network_state != 1 )); then
+    if (( network_state != 0 )); then
+      echo "could not verify whether owned network $outer_network exists (exit $network_state)" >&2
       status=1
     fi
-    owner=$("${podman_cmd[@]}" inspect --format '{{index .Config.Labels "io.dockerlens.native-run"}}' "$container") || status=1
-    if [[ ${owner:-} == "$run_id" ]]; then
-      "${podman_cmd[@]}" rm -f "$container" >/dev/null || status=1
+    owner=
+    owner_state=0
+    owner=$(cleanup_podman network inspect --format '{{index .Labels "io.dockerlens.native-run"}}' "$outer_network") || owner_state=$?
+    if (( owner_state == 0 )) && [[ $owner == "$run_id" ]]; then
+      cleanup_remove network network rm "$outer_network" || status=1
       removed_state=0
-      "${podman_cmd[@]}" container exists "$container" || removed_state=$?
+      cleanup_podman network exists "$outer_network" || removed_state=$?
       if (( removed_state != 1 )); then
-        echo "owned container cleanup readback failed (exists exit $removed_state)" >&2
+        echo "owned network cleanup readback failed (exists exit $removed_state)" >&2
         status=1
       fi
     else
-      echo "refusing to remove container $container without matching ownership label" >&2
+      echo "refusing to remove network $outer_network without matching ownership label" >&2
       status=1
     fi
   fi
   volume_state=0
-  "${podman_cmd[@]}" volume exists "$volume" || volume_state=$?
+  cleanup_podman volume exists "$volume" || volume_state=$?
   if (( volume_state != 1 )); then
     if (( volume_state != 0 )); then
       echo "could not verify whether owned volume $volume exists (exit $volume_state)" >&2
       status=1
     fi
-    owner=$("${podman_cmd[@]}" volume inspect --format '{{index .Labels "io.dockerlens.native-run"}}' "$volume") || status=1
-    if [[ ${owner:-} == "$run_id" ]]; then
-      "${podman_cmd[@]}" volume rm "$volume" >/dev/null || status=1
+    owner=
+    owner_state=0
+    owner=$(cleanup_podman volume inspect --format '{{index .Labels "io.dockerlens.native-run"}}' "$volume") || owner_state=$?
+    if (( owner_state == 0 )) && [[ $owner == "$run_id" ]]; then
+      cleanup_remove volume volume rm "$volume" || status=1
       removed_state=0
-      "${podman_cmd[@]}" volume exists "$volume" || removed_state=$?
+      cleanup_podman volume exists "$volume" || removed_state=$?
       if (( removed_state != 1 )); then
         echo "owned volume cleanup readback failed (exists exit $removed_state)" >&2
         status=1
@@ -119,13 +152,44 @@ cleanup() {
   if [[ $run_dir == "${TMPDIR:-/tmp}"/dockerlens-native.* && -d $run_dir ]]; then
     rm -rf -- "$run_dir" || status=1
   fi
-  if (( status != 0 )); then echo "native lane $lane failed; verify owned resources $container and $volume" >&2; fi
+  if (( status != 0 )); then
+    echo "native lane $lane failed; verify owned resources $container, $sidecar, $outer_network, and $volume" >&2
+  elif [[ -n $native_success_summary ]]; then
+    echo "$native_success_summary"
+  fi
   exit "$status"
+}
+cleanup_container() {
+  local name=$1 role=$2 container_state owner owner_state removed_state
+  container_state=0
+  cleanup_podman container exists "$name" || container_state=$?
+  if (( container_state == 1 )); then return; fi
+  if (( container_state != 0 )); then
+    echo "could not verify whether owned $role $name exists (exit $container_state)" >&2
+    status=1
+  fi
+  owner=
+  owner_state=0
+  owner=$(cleanup_podman inspect --format '{{index .Config.Labels "io.dockerlens.native-run"}}' "$name") || owner_state=$?
+  if (( owner_state == 0 )) && [[ $owner == "$run_id" ]]; then
+    # Podman's default ten-second stop grace exceeds our eight-second client
+    # bound. Only this exact label-verified task container gets immediate stop.
+    cleanup_remove "$role" rm --force --time 0 "$name" || status=1
+    removed_state=0
+    cleanup_podman container exists "$name" || removed_state=$?
+    if (( removed_state != 1 )); then
+      echo "owned $role cleanup readback failed (exists exit $removed_state)" >&2
+      status=1
+    fi
+  else
+    echo "refusing to remove $role $name without matching ownership label" >&2
+    status=1
+  fi
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-echo "native lane $lane owns Podman container $container and volume $volume"
+echo "native lane $lane owns Podman container $container, sidecar $sidecar, network $outer_network, and volume $volume"
 
 diagnose_native_startup() {
   local state diagnosis
@@ -133,7 +197,7 @@ diagnose_native_startup() {
   [[ $state =~ ^(running|exited|created|configured|paused|stopped)\|[0-9]+\|(true|false)$ ]] || state=unavailable
   # Retain only the final 64 KiB of the last 80 lines. Logs can contain protected
   # values, so only fixed stage and category names leave this function.
-  diagnosis=$(timeout 10 "${podman_cmd[@]}" logs --tail 80 "$container" 2>/dev/null |
+  diagnosis=$(timeout --signal=TERM --kill-after=2s 10s "${podman_cmd[@]}" logs --tail 80 "$container" 2>/dev/null |
     python3 -c 'import sys
 tail = bytearray()
 for chunk in iter(lambda: sys.stdin.buffer.read(65536), b""):
@@ -170,10 +234,15 @@ else
   available_kib=$(sudo -n df -Pk "$graph_root" | awk 'END {print $4}')
 fi
 (( available_kib >= 8 * 1024 * 1024 )) || { echo 'native lane needs at least 8 GiB free in Podman storage' >&2; exit 1; }
-for resource in container volume; do
-  if [[ $resource == container ]]; then name=$container; else name=$volume; fi
+for resource in container sidecar network volume; do
+  case $resource in
+    container) name=$container; query=container ;;
+    sidecar) name=$sidecar; query=container ;;
+    network) name=$outer_network; query=network ;;
+    volume) name=$volume; query=volume ;;
+  esac
   resource_state=0
-  "${podman_cmd[@]}" "$resource" exists "$name" || resource_state=$?
+  "${podman_cmd[@]}" "$query" exists "$name" || resource_state=$?
   case $resource_state in
     0) echo "generated native $resource name already exists" >&2; exit 1 ;;
     1) ;;
@@ -304,15 +373,238 @@ run_flags=(--image-volume=ignore)
 if [[ $lane == debian11-rootless ]]; then
   run_flags+=(--oom-score-adj=0 --security-opt apparmor=unconfined)
 fi
+validated_outer_ipv4() {
+  local role=$1 name=$2 attachment
+  case $role in sidecar | daemon) ;; *) return 1 ;; esac
+  attachment=$(timeout --signal=TERM --kill-after=2s 10s "${podman_cmd[@]}" inspect \
+    --format '{{json .NetworkSettings.Networks}}' "$name" 2>/dev/null) || {
+    echo "DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=attachment role=$role category=inspect_failed" >&2
+    return 1
+  }
+  (( ${#attachment} <= 4096 )) || {
+    echo "DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=attachment role=$role category=output_limit" >&2
+    return 1
+  }
+  printf '%s' "$attachment" | python3 -c '
+import ipaddress, json, sys
+
+def fail(category):
+    print("DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=attachment role=" + sys.argv[2] +
+          " category=" + category, file=sys.stderr)
+    raise SystemExit(1)
+
+try:
+    networks = json.load(sys.stdin)
+except (ValueError, UnicodeError):
+    fail("json_shape")
+if not isinstance(networks, dict):
+    fail("json_shape")
+if sys.argv[1] not in networks:
+    fail("network_missing")
+if len(networks) != 1:
+    fail("network_extra")
+endpoint = networks[sys.argv[1]]
+if not isinstance(endpoint, dict):
+    fail("json_shape")
+raw_address = endpoint.get("IPAddress")
+if raw_address is None or raw_address == "":
+    fail("ipv4_missing")
+if not isinstance(raw_address, str):
+    fail("ipv4_malformed")
+try:
+    address = ipaddress.IPv4Address(raw_address)
+except (ValueError, TypeError, AttributeError):
+    fail("ipv4_malformed")
+if not address.is_private or address.is_loopback or address.is_link_local:
+    fail("ipv4_nonprivate")
+print(address)
+' "$outer_network" "$role"
+}
+sidecar_setup_failed() {
+  echo "DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=$1" >&2
+  exit 1
+}
+# Sidecar logs and Podman State.Error can contain authored values. Consume only
+# a bounded tail and emit a closed cause category; never print native text.
+classify_sidecar_error() {
+  python3 -c 'import re, sys
+tail = bytearray()
+for chunk in iter(lambda: sys.stdin.buffer.read(4096), b""):
+    tail.extend(chunk)
+    if len(tail) > 8192:
+        del tail[:-8192]
+output = tail.decode("utf-8", "replace")
+message = output.lower()
+checks = (
+    ("applet_missing", (r"\b(?:httpd|wget|sh): (?:applet )?not found\b",
+                        r"\bapplet not found\b", r"\bhttpd: applet not found\b")),
+    ("shell_error", (r"\bsyntax error\b", r"\bunexpected (?:token|end of file)\b")),
+    ("config_error", (r"\b(?:invalid|unknown|unrecognized) option\b",
+                      r"\bconfiguration error\b", r"\busage: httpd\b")),
+    ("bind_error", (r"\baddress already in use\b", r"\b(?:cannot|can.t|failed to) bind\b",
+                    r"\bbind:.*\b(?:denied|unavailable)\b")),
+    ("permission", (r"\bpermission denied\b", r"\boperation not permitted\b")),
+    ("storage", (r"\bno space left\b", r"\bdisk quota exceeded\b")),
+    ("runtime_error", (r"\berror\b", r"\bfailed\b", r"\bfailure\b")),
+)
+category = next((category for category, patterns in checks
+                 if any(re.search(pattern, message) for pattern in patterns)), "unknown")
+if sys.argv[1:] == ["--with-stage"]:
+    markers = set(re.findall(
+        r"(?m)^DOCKERLENS_SIDECAR_STAGE: (write_ok|write_failed)\r?$", output))
+    stage = next(iter(markers)) if len(markers) == 1 else "unknown"
+    httpd_markers = set(re.findall(
+        r"(?m)^DOCKERLENS_SIDECAR_HTTPD: (invoked|returned_zero|returned_nonzero)\r?$",
+        output))
+    httpd_stage = "unknown"
+    if stage == "write_ok" and "invoked" in httpd_markers:
+        returns = httpd_markers & {"returned_zero", "returned_nonzero"}
+        if len(returns) == 1:
+            httpd_stage = next(iter(returns))
+        elif not returns:
+            httpd_stage = "invoked"
+    causes = re.findall(r"(?m)^DOCKERLENS_SIDECAR_HTTPD_CAUSE: ([^\r\n]*)\r?$", output)
+    allowed_causes = {"applet_missing", "shell_error", "permission", "bind_error", "config_error", "unknown"}
+    httpd_cause = causes[0] if (httpd_stage == "returned_nonzero" and len(causes) == 1
+                               and causes[0] in allowed_causes) else "absent"
+    print(f"{stage}|{httpd_stage}|{category}|{httpd_cause}")
+else:
+    print(category)' "$@"
+}
+sidecar_failure_diagnostic() {
+  local category=unknown source=none write_stage=unknown httpd_stage=unknown state_error=unavailable observed logs_stage logs_httpd_stage logs_category logs_httpd_cause
+  # A successful Podman logs query may replay container output on either CLI
+  # stream. The query cannot identify which stream supplied the category.
+  if observed=$(timeout --signal=TERM --kill-after=2s 5s "${podman_cmd[@]}" logs --tail 32 "$sidecar" 2>&1 |
+    classify_sidecar_error --with-stage) &&
+    [[ $observed =~ ^(write_ok|write_failed|unknown)\|(invoked|returned_zero|returned_nonzero|unknown)\|(applet_missing|shell_error|config_error|bind_error|permission|storage|runtime_error|unknown)\|(applet_missing|shell_error|permission|bind_error|config_error|unknown|absent)$ ]]; then
+    logs_stage=${BASH_REMATCH[1]}
+    logs_httpd_stage=${BASH_REMATCH[2]}
+    logs_category=${BASH_REMATCH[3]}
+    logs_httpd_cause=${BASH_REMATCH[4]}
+    write_stage=$logs_stage
+    httpd_stage=$logs_httpd_stage
+    if [[ $logs_category != unknown ]]; then
+      category=$logs_category
+      source=logs_query
+    fi
+  fi
+  # Inspect independently: a logs category may come from the Podman CLI rather
+  # than the container. Emit only the closed classification, never State.Error.
+  if observed=$(timeout --signal=TERM --kill-after=2s 5s "${podman_cmd[@]}" inspect \
+    --format '{{.State.Error}}' "$sidecar" 2>/dev/null | classify_sidecar_error) &&
+    [[ $observed =~ ^(applet_missing|shell_error|config_error|bind_error|permission|storage|runtime_error|unknown)$ ]]; then
+    state_error=$observed
+    if [[ $category == unknown && $state_error != unknown ]]; then
+      category=$state_error
+      source=state_error
+    fi
+  fi
+  if [[ $httpd_stage == returned_nonzero ]]; then
+    category=unknown
+    source=none
+    if [[ $logs_httpd_cause != absent ]]; then
+      category=$logs_httpd_cause
+      source=httpd_stderr
+    fi
+  fi
+  echo "DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=sidecar_failure category=$category source=$source write_stage=$write_stage httpd_stage=$httpd_stage state_error=$state_error" >&2
+}
 watchdog &
 watchdog_pid=$!
 # Pull only the reviewed digest under the lane's time and free-space budget.
 # Prevent `run` from doing a second unbounded implicit pull.
-timeout 180 "${podman_cmd[@]}" pull "$image" >/dev/null
-timeout 120 "${podman_cmd[@]}" run --pull=never -d --name "$container" --label "io.dockerlens.native-run=$run_id" \
+timeout --signal=TERM --kill-after=2s 180s "${podman_cmd[@]}" pull "$image" >/dev/null
+timeout --signal=TERM --kill-after=2s 180s "${podman_cmd[@]}" pull "$FIXTURE_IMAGE" >/dev/null 2>&1 || sidecar_setup_failed image_pull
+timeout --signal=TERM --kill-after=2s 30s "${podman_cmd[@]}" network create --driver bridge \
+  --label "io.dockerlens.native-run=$run_id" "$outer_network" >/dev/null 2>&1 || sidecar_setup_failed network_create
+sidecar_start_category=$(timeout --signal=TERM --kill-after=2s 120s "${podman_cmd[@]}" run --pull=never -d --name "$sidecar" \
+  --label "io.dockerlens.native-run=$run_id" --network "$outer_network" \
+  --user=65534:65534 --cap-drop=all --security-opt no-new-privileges --pids-limit=64 --memory=128m \
+  "$FIXTURE_IMAGE" sh -c \
+  'umask 077
+   sidecar_tmp=$(mktemp -d /tmp/dockerlens-sidecar.XXXXXX 2>/dev/null) || exit 1
+   httpd_root="$sidecar_tmp/public"
+   httpd_capture="$sidecar_tmp/httpd.stderr"
+   trap '\''rm -f "$httpd_capture" "$httpd_root/index.html" >/dev/null 2>&1; rmdir "$httpd_root" "$sidecar_tmp" >/dev/null 2>&1'\'' EXIT
+   if { mkdir "$httpd_root" && printf proof-egress > "$httpd_root/index.html"; } 2>/dev/null; then
+     printf "DOCKERLENS_SIDECAR_STAGE: write_ok\n" >&2
+   else
+     printf "DOCKERLENS_SIDECAR_STAGE: write_failed\n" >&2
+     exit 1
+   fi
+   printf "DOCKERLENS_SIDECAR_HTTPD: invoked\n" >&2
+   # POSIX shells use 512-byte or 1-KiB blocks here: at most 8 KiB.
+   # Keep the checked file limit inside the HTTP process subshell only.
+   if (ulimit -f 8 && exec httpd -f -p 18084 -h "$httpd_root") 2>"$httpd_capture"; then
+     printf "DOCKERLENS_SIDECAR_HTTPD: returned_zero\n" >&2
+   else
+     status=$?
+     httpd_error=$(head -c 8192 "$httpd_capture" 2>/dev/null | tr "[:upper:]" "[:lower:]")
+     case $httpd_error in
+       *applet\ not\ found* | *httpd:\ not\ found*) httpd_cause=applet_missing ;;
+       *syntax\ error* | *unexpected\ token* | *unexpected\ end\ of\ file*) httpd_cause=shell_error ;;
+       *permission\ denied* | *operation\ not\ permitted*) httpd_cause=permission ;;
+       *address\ already\ in\ use* | *can?t\ bind* | *cannot\ bind* | *failed\ to\ bind* | *bind:*) httpd_cause=bind_error ;;
+       *invalid\ option* | *unknown\ option* | *unrecognized\ option* | *configuration\ error* | *usage:\ httpd*) httpd_cause=config_error ;;
+       *) httpd_cause=unknown ;;
+     esac
+     rm -f "$httpd_capture" >/dev/null 2>&1
+     printf "DOCKERLENS_SIDECAR_HTTPD_CAUSE: %s\n" "$httpd_cause" >&2
+     printf "DOCKERLENS_SIDECAR_HTTPD: returned_nonzero\n" >&2
+     exit "$status"
+   fi' 2>&1 >/dev/null |
+  classify_sidecar_error) || {
+  case $sidecar_start_category in
+    applet_missing | shell_error | config_error | bind_error | permission | storage | runtime_error | unknown) ;;
+    *) sidecar_start_category=unknown ;;
+  esac
+  echo "DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=sidecar_failure category=$sidecar_start_category" >&2
+  sidecar_setup_failed sidecar_start
+}
+timeout --signal=TERM --kill-after=2s 120s "${podman_cmd[@]}" run --pull=never -d --name "$container" --label "io.dockerlens.native-run=$run_id" \
+  --network "$outer_network" \
   --privileged --pids-limit=512 --memory=4g --cpus=2 "${run_flags[@]}" \
   --volume "$storage_mount" --volume "$socket_dir:/dockerlens-native" \
-  "$image" "${start[@]}" >/dev/null
+  "$image" "${start[@]}" >/dev/null 2>&1 || sidecar_setup_failed daemon_attach
+sidecar_state=$(timeout --signal=TERM --kill-after=2s 10s "${podman_cmd[@]}" inspect \
+  --format '{{.State.Running}}|{{.State.Status}}|{{.State.ExitCode}}' "$sidecar" 2>/dev/null) || {
+  echo 'DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=sidecar_state category=inspect_failed exit=unavailable' >&2
+  exit 1
+}
+if [[ ! $sidecar_state =~ ^(true|false)\|(running|exited|created|configured|paused|stopped|stopping|removing|unknown)\|([0-9]{1,3})$ ]] ||
+  (( 10#${BASH_REMATCH[3]:-999} > 255 )); then
+  echo 'DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=sidecar_state category=malformed exit=unavailable' >&2
+  exit 1
+fi
+sidecar_running=${BASH_REMATCH[1]}
+sidecar_status=${BASH_REMATCH[2]}
+sidecar_exit=${BASH_REMATCH[3]}
+if [[ $sidecar_running != true || $sidecar_status != running ]]; then
+  if [[ $sidecar_running == true || $sidecar_status == running ]]; then
+    sidecar_status=inconsistent
+  fi
+  if (( 10#$sidecar_exit == 0 )); then exit_class=zero; else exit_class=nonzero; fi
+  echo "DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=sidecar_state category=$sidecar_status exit=$exit_class" >&2
+  sidecar_failure_diagnostic
+  exit 1
+fi
+sidecar_health=
+for attempt in 1 2 3 4 5; do
+  sidecar_health=$(timeout --signal=TERM --kill-after=2s 3s "${podman_cmd[@]}" exec "$sidecar" wget -Y off -T 1 -qO- \
+    http://127.0.0.1:18084/ 2>/dev/null) || sidecar_health=
+  if [[ $sidecar_health == proof-egress ]]; then break; fi
+  if (( attempt < 5 )); then sleep 0.2; fi
+done
+[[ $sidecar_health == proof-egress ]] || {
+  sidecar_failure_diagnostic
+  sidecar_setup_failed sidecar_health
+}
+sidecar_ip=$(validated_outer_ipv4 sidecar "$sidecar") || exit 1
+daemon_ip=$(validated_outer_ipv4 daemon "$container") || exit 1
+[[ $sidecar_ip != "$daemon_ip" ]] || {
+  sidecar_setup_failed address_collision
+}
 privileged=$("${podman_cmd[@]}" inspect --format '{{.HostConfig.Privileged}}' "$container")
 [[ $privileged == true ]] || { echo 'outer container does not have reviewed nesting privilege' >&2; exit 1; }
 volume_mounts=$("${podman_cmd[@]}" inspect --format '{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}}:{{.Destination}}{{"\n"}}{{end}}{{end}}' "$container")
@@ -344,7 +636,7 @@ done
 if [[ $lane == debian11-rootless ]]; then
   # Linux mountinfo reports suid/dev by absence of nosuid/nodev. Check the
   # effective mount, not merely the requested Podman volume options.
-  if ! timeout 15 "${podman_cmd[@]}" exec "$container" cat /proc/self/mountinfo 2>/dev/null |
+  if ! timeout --signal=TERM --kill-after=2s 15s "${podman_cmd[@]}" exec "$container" cat /proc/self/mountinfo 2>/dev/null |
     python3 "$script_dir/native-storage-options.py" /home/docker/.local/share/docker; then
     echo 'Debian rootless outer data-root mount lacks required effective options' >&2
     exit 1
@@ -673,6 +965,7 @@ export NATIVE_ENGINE_VERSION="$server_version" NATIVE_DAEMON_MODE="$expected_mod
 export NATIVE_API_VERSION="$api_version"
 export NATIVE_LANE="$lane" NATIVE_DOCKER_PACKAGE="$installed_docker_package"
 export NATIVE_FIXTURE_IMAGE="$FIXTURE_IMAGE" NATIVE_OUTER_CONTAINER="$container"
+export NATIVE_EGRESS_SIDECAR_IPV4="$sidecar_ip"
 export NATIVE_BIND_SOURCE=/dockerlens-native/native-bind
 export NATIVE_SHAPES_PATH="$run_dir/target-shapes.json"
 export NATIVE_SOURCE_PROBES_PATH="$run_dir/source-probes.json"
@@ -687,6 +980,7 @@ if [[ $EUID == 0 ]]; then export NATIVE_PODMAN_USE_SUDO=0; else export NATIVE_PO
 "$(dirname "$0")/run-exact-native-test.sh" native_selection live_network_membership_matches_engine
 "$(dirname "$0")/run-exact-native-test.sh" native_target live_target_render_matches_engine
 "$(dirname "$0")/run-exact-native-test.sh" native_network live_network_render_matches_engine
+"$(dirname "$0")/run-exact-native-test.sh" native_network live_internal_network_blocks_external_egress
 "$(dirname "$0")/run-exact-native-test.sh" native_volume live_existing_volume_prerequisite_matches_engine
 "$(dirname "$0")/run-exact-native-test.sh" native_container live_container_settings_match_engine
 "$(dirname "$0")/run-exact-native-test.sh" native_volume_label live_created_volume_labels_match_engine
@@ -706,4 +1000,4 @@ if [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]; then
     "$installed_docker_package" "$candidate_sha"
 fi
 
-echo "native conformance passed: $lane; Engine $server_version; API $api_version; mode $expected_mode; inner cgroup $inner_cgroup; outer $("${podman_cmd[@]}" --version); kernel $(uname -r); privileged $privileged; nested storage ${used_kib} KiB"
+native_success_summary="native conformance passed: $lane; Engine $server_version; API $api_version; mode $expected_mode; inner cgroup $inner_cgroup; outer $("${podman_cmd[@]}" --version); kernel $(uname -r); privileged $privileged; nested storage ${used_kib} KiB"
