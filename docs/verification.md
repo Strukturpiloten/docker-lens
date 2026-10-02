@@ -393,6 +393,28 @@ have their own bounded timeout; cancellation,
 overflow, read errors, or identity changes produce closed unavailable states.
 No captured bytes, paths, PIDs, limits, or subprocess errors are printed.
 
+The outer start identity explicitly requests `{{json .State.StartedAt}}` and
+decodes a bounded JSON string before strict RFC3339 and calendar validation;
+the complete decoded value, including nanoseconds, participates in the
+before/after comparison. Plain Go display text, malformed JSON, non-string
+values, and changed timestamps remain unavailable. A read-only oracle using
+workspace Podman 6.0.2 compared `podman version --format
+'{{.Client.Version}}'`, `podman inspect --format '{{.State.StartedAt}}'
+<existing-owned-container>`, and `podman inspect --format
+'{{json .State.StartedAt}}' <existing-owned-container>`: the plain template
+returned Go display text, whereas explicit JSON returned quoted RFC3339.
+No container was launched or modified; its identity and timestamp are omitted.
+The published Ubuntu 24.04 runner record
+[`ubuntu24/20260927.320`](https://github.com/actions/runner-images/blob/ubuntu24/20260927.320/images/ubuntu/Ubuntu2404-Readme.md#L97)
+identifies Podman 4.9.3. The public source-contract oracle is
+[`v4.9.3/libpod/define/container_inspect.go`](https://github.com/containers/podman/blob/v4.9.3/libpod/define/container_inspect.go#L220),
+whose inspect-state start field is `time.Time`. Its exact-tag
+[`LICENSE`](https://github.com/containers/podman/blob/v4.9.3/LICENSE) was read
+and verified as Apache-2.0. These references describe the format boundary;
+no upstream source or native replies are copied or redistributed. The helper
+and synthetic display/JSON regressions were authored independently. This
+diagnostic correction does not change native assertions or admit compatibility.
+
 The helper reads `cgroup.controllers`, `cgroup.subtree_control`, `memory.max`,
 and `memory.swap.max` at the visible cgroup2 root. A daemon-directory read
 also requires exactly one mode-correct `dockerd`, stable process identity,

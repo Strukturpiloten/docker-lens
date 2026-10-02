@@ -51,11 +51,53 @@ class NativeHarnessTests(unittest.TestCase):
         for invalid in ("memory-private", "memory\nprivate", "protected-secret", "memory protectedsecret", "memory memory"):
             self.assertEqual(helper.controller_state(invalid, "memory"), "unknown")
 
+    def test_cgroup_identity_requires_json_serialization_not_go_display(self) -> None:
+        helper = self._cgroup_helper()
+        prefix = "a" * 64 + "|dl-native-Ab12Cd34|true|Ab12Cd34|123|"
+        # Independently authored realistic examples of time.Time's display and
+        # MarshalJSON boundaries, with no actual container identity or time.
+        display = "2031-04-05 06:07:08.123456789 +0000 UTC"
+        timestamp = "2031-04-05T06:07:08.123456789Z"
+        serialized = json.dumps(timestamp)
+        parsed = helper.inspect_identity((prefix + serialized + "\n").encode(), "dl-native-Ab12Cd34", "Ab12Cd34")
+        self.assertEqual(parsed[-1], timestamp)
+        for unsupported in (display, json.dumps(display), timestamp):
+            with self.assertRaises(helper.Unavailable):
+                helper.inspect_identity((prefix + unsupported + "\n").encode(), "dl-native-Ab12Cd34", "Ab12Cd34")
+        payload = b"outer\nmemory pids\nmemory\n1234\nmax\ndaemon\nunknown\nunknown\nunknown\nunknown\n"
+        before = (prefix + serialized + "\n").encode()
+        changed = (prefix + json.dumps(timestamp.replace("123456789", "123456788")) + "\n").encode()
+        replies = iter((before, payload, changed))
+        self.assertEqual(helper.diagnose("dl-native-Ab12Cd34", "Ab12Cd34", "rootful", ["podman"],
+                                        lambda *_args: next(replies)), [helper.unknown("outer"), helper.unknown("daemon")])
+
+    def test_cgroup_timestamp_json_is_bounded_typed_and_private(self) -> None:
+        helper = self._cgroup_helper()
+        prefix = "a" * 64 + "|dl-native-Ab12Cd34|true|Ab12Cd34|123|"
+        invalid = ("", '"unterminated-private-canary', "null", "true", "42",
+                   '["private-canary"]', '{"secret":"private-canary"}',
+                   json.dumps("private-canary"), json.dumps("2031-13-05T06:07:08Z"),
+                   json.dumps("2031-04-05T06:07:08+99:00"), json.dumps("private-canary" * 30))
+        for value in invalid:
+            calls = []
+
+            def runner(command, deadline):
+                calls.append(command)
+                return (prefix + value + "\n").encode()
+
+            records = helper.diagnose("dl-native-Ab12Cd34", "Ab12Cd34", "rootful", ["podman"], runner)
+            self.assertEqual(records, [helper.unknown("outer"), helper.unknown("daemon")])
+            self.assertEqual(len(calls), 1)
+            self.assertNotIn("private-canary", json.dumps(records))
+        with self.assertRaises(helper.Unavailable):
+            helper.inspect_identity(b"a" * 8193, "dl-native-Ab12Cd34", "Ab12Cd34")
+
     def test_cgroup_read_requires_same_owned_identity_and_shared_deadline(self) -> None:
         helper = self._cgroup_helper()
-        identity = ("a" * 64 + "|dl-native-Ab12Cd34|true|Ab12Cd34|123|2026-10-02T12:00:00Z\n").encode()
+        identity = ("a" * 64 + '|dl-native-Ab12Cd34|true|Ab12Cd34|123|"2026-10-02T12:00:00Z"\n').encode()
         payload = b"outer\nmemory pids\nmemory\n1234\nmax\ndaemon\nunknown\nunknown\nunknown\nunknown\n"
-        for changed in (identity.replace(b"123|", b"124|"), identity.replace(b"|true|", b"|false|")):
+        for changed in (identity.replace(b"123|", b"124|"), identity.replace(b"|true|", b"|false|"),
+                        identity.replace(b"12:00:00", b"12:00:01")):
             commands = []
 
             def runner(command, deadline):
@@ -65,6 +107,7 @@ class NativeHarnessTests(unittest.TestCase):
             records = helper.diagnose("dl-native-Ab12Cd34", "Ab12Cd34", "rootful", ["podman"], runner)
             self.assertEqual(records, [helper.unknown("outer"), helper.unknown("daemon")])
             self.assertEqual(len({deadline for _, deadline in commands}), 1)
+            self.assertIn("{{json .State.StartedAt}}", commands[0][0][3])
             self.assertEqual(commands[1][0][2], "a" * 64)
             self.assertIn("--kill-after=0.2", commands[1][0])
             self.assertIn("timeout", commands[1][0])
@@ -90,7 +133,7 @@ class NativeHarnessTests(unittest.TestCase):
 
     def test_cgroup_read_errors_and_expired_deadline_remain_unavailable(self) -> None:
         helper = self._cgroup_helper()
-        identity = ("a" * 64 + "|dl-native-Ab12Cd34|true|Ab12Cd34|123|2026-10-02T12:00:00Z\n").encode()
+        identity = ("a" * 64 + '|dl-native-Ab12Cd34|true|Ab12Cd34|123|"2026-10-02T12:00:00Z"\n').encode()
         expected = [helper.unknown("outer"), helper.unknown("daemon")]
         for failure in (helper.Unavailable(), OSError("protected-secret"),
                         subprocess.TimeoutExpired("protected-secret", 5)):
@@ -311,7 +354,7 @@ time.sleep(60)
 import os, subprocess, sys, time
 from pathlib import Path
 if sys.argv[1] == 'inspect':
-    print('a' * 64 + '|dl-native-Ab12Cd34|true|Ab12Cd34|123|2026-10-02T12:00:00Z')
+    print('a' * 64 + '|dl-native-Ab12Cd34|true|Ab12Cd34|123|"2026-10-02T12:00:00Z"')
 else:
     child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
     Path(os.environ['TEST_CGROUP_CHILD']).write_text(str(child.pid))
@@ -356,7 +399,7 @@ exec "$@"
 import os, subprocess, sys, time
 from pathlib import Path
 if sys.argv[1] == 'inspect':
-    print('a' * 64 + '|dl-native-Ab12Cd34|true|Ab12Cd34|123|2026-10-02T12:00:00Z')
+    print('a' * 64 + '|dl-native-Ab12Cd34|true|Ab12Cd34|123|"2026-10-02T12:00:00Z"')
 elif os.environ['TEST_CGROUP_CAUSE'] == 'ready':
     print('outer\\nmemory pids\\nmemory\\n1234\\nmax\\ndaemon\\nunknown\\nunknown\\nunknown\\nunknown')
 else:

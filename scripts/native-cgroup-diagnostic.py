@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Bounded read-only cgroup context; never enforcement or compatibility evidence."""
 
+import json
 import os
 import re
 import selectors
@@ -297,6 +298,8 @@ def classify(payload):
 
 
 def inspect_identity(payload, container, run_id):
+    if len(payload) > CAPTURE_LIMIT:
+        raise Unavailable()
     try:
         fields = payload.decode("ascii").strip().split("|")
     except UnicodeDecodeError as error:
@@ -307,13 +310,23 @@ def inspect_identity(payload, container, run_id):
         or fields[1] not in (container, "/" + container)
         or fields[2] != "true" or fields[3] != run_id
         or not re.fullmatch(r"[1-9][0-9]{0,9}", fields[4])
-        or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?(?:Z|[+-][0-9]{2}:[0-9]{2})", fields[5])
+        or len(fields[5]) > 256
     ):
         raise Unavailable()
     try:
-        datetime.fromisoformat(fields[5].replace("Z", "+00:00"))
+        started_at = json.loads(fields[5])
+    except json.JSONDecodeError as error:
+        raise Unavailable() from error
+    if not isinstance(started_at, str) or not re.fullmatch(
+        r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?(?:Z|[+-][0-9]{2}:[0-9]{2})",
+        started_at,
+    ):
+        raise Unavailable()
+    try:
+        datetime.fromisoformat(started_at.replace("Z", "+00:00"))
     except ValueError as error:
         raise Unavailable() from error
+    fields[5] = started_at
     return fields
 
 
@@ -332,7 +345,7 @@ def diagnose(container, run_id, mode, podman, runner=None):
 
         def runner(command, command_deadline):
             return bounded_command(command, command_deadline, budget)
-    template = '{{.Id}}|{{.Name}}|{{.State.Running}}|{{index .Config.Labels "io.dockerlens.native-run"}}|{{.State.Pid}}|{{.State.StartedAt}}'
+    template = '{{.Id}}|{{.Name}}|{{.State.Running}}|{{index .Config.Labels "io.dockerlens.native-run"}}|{{.State.Pid}}|{{json .State.StartedAt}}'
     inspection = [*podman, "inspect", "--format", template, container]
     try:
         before = inspect_identity(runner(inspection, deadline), container, run_id)
