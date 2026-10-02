@@ -344,6 +344,15 @@ runner shutdown can prevent cleanup; inspect the printed exact names and
 Podman existence-query errors are not treated as absence: cleanup attempts
 label-verified removal where possible, reads back exact resource absence, and
 still fails the lane for review when absence cannot be verified.
+Each cleanup command retains its eight-second deadline and two-second kill
+fallback; for elevated Podman the timeout also runs under sudo so it can signal
+the root-owned client. Only a task-named container with the matching run label
+is removed with `--force --time 0`: Podman's default ten-second stop grace
+otherwise exceeds that command budget. The daemon container and sidecar are
+removed before their exact network and data volume, which are never force-removed.
+Removal errors expose closed categories, with raw Podman output suppressed.
+The success summary is printed only after all cleanup and absence readbacks
+pass; a manifest written earlier is not passing lane evidence by itself.
 
 Release validation checks the supplied full SHA against current `main`, runs
 the complete gate, runs all four native lanes independently, then rechecks

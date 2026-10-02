@@ -16,6 +16,205 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class NativeHarnessTests(unittest.TestCase):
+    def test_cleanup_timeout_runs_with_the_podman_clients_privileges(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
+        helpers = "cleanup_podman() {" + source.split("cleanup_podman() {", 1)[1].split(
+            "\ncleanup() {", 1
+        )[0] + "\n"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tool(root, "sudo", '#!/bin/sh\nprintf "%s\\n" "$*" > "$FAKE_SUDO_ARGS"\n'
+                       '[ "$1" = -n ] || exit 42\nshift\nexec "$@"\n')
+            self._tool(root, "timeout", '#!/bin/sh\nprintf "%s\\n" "$*" > "$FAKE_TIMEOUT_ARGS"\n'
+                       '[ "$1" = --signal=TERM ] && [ "$2" = --kill-after=2s ] '
+                       '&& [ "$3" = 8s ] || exit 43\nshift 3\nexec "$@"\n')
+            self._tool(root, "podman", '#!/bin/sh\nprintf "%s\\n" "$*"\n'
+                       'echo "private-canary native failure" >&2\n')
+            env = os.environ.copy()
+            env.update(PATH=f"{root}:{env['PATH']}", FAKE_SUDO_ARGS=str(root / "sudo-args"),
+                       FAKE_TIMEOUT_ARGS=str(root / "timeout-args"))
+            for elevated in (False, True):
+                with self.subTest(elevated=elevated):
+                    (root / "sudo-args").unlink(missing_ok=True)
+                    prefix = "sudo -n podman" if elevated else "podman"
+                    result = subprocess.run(
+                        ["bash", "-c", f"podman_cmd=({prefix})\n" + helpers
+                         + "cleanup_podman inspect exact-task-name\n"],
+                        env=env, capture_output=True, text=True, timeout=5, check=False,
+                    )
+                    self.assertEqual(result.returncode, 0)
+                    self.assertEqual(result.stdout, "inspect exact-task-name\n")
+                    self.assertEqual(result.stderr, "")
+                    self.assertEqual((root / "sudo-args").exists(), elevated)
+                    if elevated:
+                        self.assertEqual(
+                            (root / "sudo-args").read_text().strip(),
+                            "-n timeout --signal=TERM --kill-after=2s 8s podman inspect exact-task-name",
+                        )
+                    self.assertEqual(
+                        (root / "timeout-args").read_text().strip(),
+                        "--signal=TERM --kill-after=2s 8s podman inspect exact-task-name",
+                    )
+
+    def test_cleanup_immediate_stop_preserves_ownership_and_absence_checks(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
+        helpers = "cleanup_podman() {" + source.split("cleanup_podman() {", 1)[1].split(
+            "\ncleanup() {", 1
+        )[0] + "\n"
+        container_helper = "cleanup_container() {" + source.split("cleanup_container() {", 1)[1].split(
+            "\ntrap cleanup EXIT", 1
+        )[0]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tool(root, "timeout", '#!/bin/sh\n[ "$3" = 8s ] || exit 43\n'
+                       'export FAKE_CLIENT_BOUND=8\nshift 3\nexec "$@"\n')
+            self._tool(root, "podman", '''#!/usr/bin/env bash
+set -eu
+echo 'private-canary resource-id' >&2
+case "$1" in
+  container)
+    if [[ $FAKE_MODE == query_error || ($FAKE_MODE == readback_error && ! -e $FAKE_RESOURCE) ]]; then
+      exit 125
+    fi
+    [[ -e $FAKE_RESOURCE ]] ;;
+  inspect)
+    if [[ $FAKE_MODE == mismatched_owner ]]; then echo foreign-run; else echo owned-run; fi ;;
+  rm)
+    printf '%s\\n' "$*" > "$FAKE_REMOVE_ARGS"
+    # Independent CLI semantics: default stop grace is ten seconds. A client
+    # deadline of eight seconds cannot reach removal without explicit time 0.
+    if [[ $* != 'rm --force --time 0 dl-native-synthetic' ]]; then
+      (( FAKE_CLIENT_BOUND < 10 )) && exit 124
+      exit 44
+    fi
+    case $FAKE_MODE in
+      remove_error) exit 42 ;;
+      remove_cancelled) exit 143 ;;
+      leftover) exit 0 ;;
+      *) rm -f "$FAKE_RESOURCE" ;;
+    esac ;;
+  *) exit 45 ;;
+esac
+''')
+            env = os.environ.copy()
+            env.update(PATH=f"{root}:{env['PATH']}", FAKE_RESOURCE=str(root / "resource"),
+                       FAKE_REMOVE_ARGS=str(root / "remove-args"))
+            for mode, original in (
+                ("success", False), ("success", True), ("query_error", False),
+                ("mismatched_owner", False), ("remove_error", False),
+                ("remove_cancelled", False), ("leftover", False), ("readback_error", False),
+            ):
+                with self.subTest(mode=mode, original=original):
+                    (root / "resource").touch()
+                    (root / "remove-args").unlink(missing_ok=True)
+                    env["FAKE_MODE"] = mode
+                    selected = container_helper.replace("rm --force --time 0", "rm --force") \
+                        if original else container_helper
+                    result = subprocess.run(
+                        ["bash", "-c", "set -euo pipefail\npodman_cmd=(podman)\n"
+                         "run_id=owned-run\nstatus=0\n" + helpers + selected
+                         + '\ncleanup_container dl-native-synthetic container\nexit "$status"\n'],
+                        env=env, capture_output=True, text=True, timeout=5, check=False,
+                    )
+                    self.assertEqual(result.returncode, 0 if mode == "success" and not original else 1)
+                    self.assertEqual(
+                        (root / "resource").exists(),
+                        original or mode in ("mismatched_owner", "remove_error", "remove_cancelled", "leftover"),
+                    )
+                    self.assertEqual((root / "remove-args").exists(), mode != "mismatched_owner")
+                    if mode != "mismatched_owner" and not original:
+                        self.assertEqual((root / "remove-args").read_text().strip(),
+                                         "rm --force --time 0 dl-native-synthetic")
+                    if original or mode in ("remove_error", "remove_cancelled"):
+                        category = "timeout" if original else "cancelled" if mode == "remove_cancelled" else "error"
+                        self.assertIn(
+                            "DOCKERLENS_NATIVE_CLEANUP: role=container operation=remove "
+                            f"category={category}", result.stderr,
+                        )
+                    self.assertNotIn("private-canary", result.stdout + result.stderr)
+                    if mode in ("leftover", "readback_error"):
+                        self.assertIn("owned container cleanup readback failed", result.stderr)
+
+    def test_cleanup_success_summary_requires_dependency_cleanup(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
+        helpers = "cleanup_podman() {" + source.split("cleanup_podman() {", 1)[1].split(
+            "\ntrap cleanup EXIT", 1
+        )[0] + "\n"
+        self.assertIn('native_success_summary="native conformance passed:', source)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tool(root, "timeout", '#!/bin/sh\n[ "$3" = 8s ] || exit 43\nshift 3\nexec "$@"\n')
+            self._tool(root, "podman", '''#!/usr/bin/env bash
+set -eu
+for name; do :; done
+case "$name" in
+  dl-native-synthetic) role=container ;;
+  dl-native-egress-synthetic) role=sidecar ;;
+  dl-native-net-synthetic) role=network ;;
+  dl-native-data-synthetic) role=volume ;;
+  *) exit 44 ;;
+esac
+echo 'private-canary native-resource-id' >&2
+if [[ $1 == inspect || ${2:-} == inspect ]]; then echo synthetic; exit 0; fi
+if [[ ${2:-} == exists ]]; then [[ -e $FAKE_STATE/$role ]]; exit; fi
+if [[ $1 == rm || ${2:-} == rm ]]; then
+  printf '%s\\n' "$*" >> "$FAKE_STATE/removals"
+  case $role in
+    container|sidecar)
+      [[ $* == "rm --force --time 0 $name" ]] || exit 45
+      [[ $FAKE_MODE != container_leftover || $role != container ]] || exit 0 ;;
+    network)
+      [[ $* == "network rm $name" ]] || exit 46
+      [[ ! -e $FAKE_STATE/container && ! -e $FAKE_STATE/sidecar ]] || exit 47
+      [[ $FAKE_MODE != network_error ]] || exit 42 ;;
+    volume)
+      [[ $* == "volume rm $name" ]] || exit 48
+      [[ ! -e $FAKE_STATE/container ]] || exit 49 ;;
+  esac
+  rm -f "$FAKE_STATE/$role"
+else exit 50; fi
+''')
+            env = os.environ.copy()
+            env.update(PATH=f"{root}:{env['PATH']}", FAKE_STATE=str(root))
+            for mode in ("success", "container_leftover", "network_error"):
+                with self.subTest(mode=mode), tempfile.TemporaryDirectory(
+                    prefix="dockerlens-native.", dir="/tmp",
+                ) as temporary:
+                    for role in ("container", "sidecar", "network", "volume"):
+                        (root / role).touch()
+                    (root / "removals").unlink(missing_ok=True)
+                    env["FAKE_MODE"] = mode
+                    script = (
+                        "set -euo pipefail\npodman_cmd=(podman)\nwatchdog_pid=\n"
+                        "run_id=synthetic\nlane=debian11-rootful\n"
+                        "container=dl-native-synthetic\nsidecar=dl-native-egress-synthetic\n"
+                        "outer_network=dl-native-net-synthetic\nvolume=dl-native-data-synthetic\n"
+                        "native_success_summary='native conformance passed: synthetic'\n"
+                        f"run_dir={shlex.quote(temporary)}\n"
+                        + helpers + "cleanup\n"
+                    )
+                    result = subprocess.run(
+                        ["bash", "-c", script], env=env, capture_output=True,
+                        text=True, timeout=5, check=False,
+                    )
+                    self.assertEqual(result.returncode, 0 if mode == "success" else 1)
+                    self.assertEqual(result.stdout, "native conformance passed: synthetic\n"
+                                     if mode == "success" else "")
+                    self.assertEqual(
+                        (root / "removals").read_text().splitlines(),
+                        ["rm --force --time 0 dl-native-synthetic",
+                         "rm --force --time 0 dl-native-egress-synthetic",
+                         "network rm dl-native-net-synthetic",
+                         "volume rm dl-native-data-synthetic"],
+                    )
+                    self.assertNotIn("private-canary", result.stdout + result.stderr)
+                    self.assertNotIn("native-resource-id", result.stdout + result.stderr)
+                    self.assertFalse(Path(temporary).exists())
+                    if mode == "network_error":
+                        self.assertIn("role=network operation=remove category=error", result.stderr)
+                    if mode == "container_leftover":
+                        self.assertIn("owned container cleanup readback failed", result.stderr)
+
     def test_sidecar_failure_source_requires_successful_classification(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
         helpers = "classify_sidecar_error() {" + source.split(

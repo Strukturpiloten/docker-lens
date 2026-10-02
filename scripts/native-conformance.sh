@@ -69,8 +69,30 @@ printf 'native-tcp-canary\n' > "$socket_dir/native-bind/index.html"
 chmod 0644 "$socket_dir/native-bind/canary" "$socket_dir/native-bind/index.html"
 chmod 0700 "$run_dir"
 watchdog_pid=
+native_success_summary=
 cleanup_podman() {
-  timeout --signal=TERM --kill-after=2s 8s "${podman_cmd[@]}" "$@"
+  # The deadline must share root privileges with the Podman client; an
+  # unprivileged timeout cannot reliably terminate children behind sudo.
+  if [[ ${podman_cmd[0]} == sudo ]]; then
+    "${podman_cmd[@]:0:2}" timeout --signal=TERM --kill-after=2s 8s "${podman_cmd[@]:2}" "$@" 2>/dev/null
+  else
+    timeout --signal=TERM --kill-after=2s 8s "${podman_cmd[@]}" "$@" 2>/dev/null
+  fi
+}
+cleanup_remove() {
+  local role=$1 result=0 category
+  shift
+  cleanup_podman "$@" >/dev/null || result=$?
+  if (( result == 0 )); then return 0; fi
+  case $result in
+    124) category=timeout ;;
+    137) category=killed ;;
+    130 | 143) category=cancelled ;;
+    125 | 126 | 127) category=command_error ;;
+    *) category=error ;;
+  esac
+  echo "DOCKERLENS_NATIVE_CLEANUP: role=$role operation=remove category=$category" >&2
+  return 1
 }
 cleanup() {
   status=$?
@@ -92,7 +114,7 @@ cleanup() {
     owner_state=0
     owner=$(cleanup_podman network inspect --format '{{index .Labels "io.dockerlens.native-run"}}' "$outer_network") || owner_state=$?
     if (( owner_state == 0 )) && [[ $owner == "$run_id" ]]; then
-      cleanup_podman network rm "$outer_network" >/dev/null || status=1
+      cleanup_remove network network rm "$outer_network" || status=1
       removed_state=0
       cleanup_podman network exists "$outer_network" || removed_state=$?
       if (( removed_state != 1 )); then
@@ -115,7 +137,7 @@ cleanup() {
     owner_state=0
     owner=$(cleanup_podman volume inspect --format '{{index .Labels "io.dockerlens.native-run"}}' "$volume") || owner_state=$?
     if (( owner_state == 0 )) && [[ $owner == "$run_id" ]]; then
-      cleanup_podman volume rm "$volume" >/dev/null || status=1
+      cleanup_remove volume volume rm "$volume" || status=1
       removed_state=0
       cleanup_podman volume exists "$volume" || removed_state=$?
       if (( removed_state != 1 )); then
@@ -130,7 +152,11 @@ cleanup() {
   if [[ $run_dir == "${TMPDIR:-/tmp}"/dockerlens-native.* && -d $run_dir ]]; then
     rm -rf -- "$run_dir" || status=1
   fi
-  if (( status != 0 )); then echo "native lane $lane failed; verify owned resources $container, $sidecar, $outer_network, and $volume" >&2; fi
+  if (( status != 0 )); then
+    echo "native lane $lane failed; verify owned resources $container, $sidecar, $outer_network, and $volume" >&2
+  elif [[ -n $native_success_summary ]]; then
+    echo "$native_success_summary"
+  fi
   exit "$status"
 }
 cleanup_container() {
@@ -146,7 +172,9 @@ cleanup_container() {
   owner_state=0
   owner=$(cleanup_podman inspect --format '{{index .Config.Labels "io.dockerlens.native-run"}}' "$name") || owner_state=$?
   if (( owner_state == 0 )) && [[ $owner == "$run_id" ]]; then
-    cleanup_podman rm -f "$name" >/dev/null || status=1
+    # Podman's default ten-second stop grace exceeds our eight-second client
+    # bound. Only this exact label-verified task container gets immediate stop.
+    cleanup_remove "$role" rm --force --time 0 "$name" || status=1
     removed_state=0
     cleanup_podman container exists "$name" || removed_state=$?
     if (( removed_state != 1 )); then
@@ -903,4 +931,4 @@ if [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]; then
     "$installed_docker_package" "$candidate_sha"
 fi
 
-echo "native conformance passed: $lane; Engine $server_version; API $api_version; mode $expected_mode; inner cgroup $inner_cgroup; outer $("${podman_cmd[@]}" --version); kernel $(uname -r); privileged $privileged; nested storage ${used_kib} KiB"
+native_success_summary="native conformance passed: $lane; Engine $server_version; API $api_version; mode $expected_mode; inner cgroup $inner_cgroup; outer $("${podman_cmd[@]}" --version); kernel $(uname -r); privileged $privileged; nested storage ${used_kib} KiB"
