@@ -1,5 +1,6 @@
 """Injected procfs/device metadata only; no daemon, namespace entry or device I/O."""
 
+import contextlib
 import errno
 import importlib.util
 import json
@@ -260,9 +261,13 @@ class DeviceSourceTests(unittest.TestCase):
                 fixture = Fixture(directory)
                 if fault in ("ambiguous", "churn"):
                     extra = fixture.guest / "9"
-                    extra.mkdir()
                     if fault == "ambiguous":
-                        extra.joinpath("comm").write_text("dockerd\n")
+                        # Either daemon may be encountered first. Both need a
+                        # complete identity; missing references model churn.
+                        fixture.process(extra, 9, "dockerd", fixture.daemon_root,
+                                        fixture.exe, uid=1000, different=True)
+                    else:
+                        extra.mkdir()
                 elif fault == "pid":
                     fixture.guest.joinpath("07").mkdir()
                 elif fault == "stat":
@@ -272,6 +277,31 @@ class DeviceSourceTests(unittest.TestCase):
                 else:
                     fixture.guest.joinpath("1/stat").write_text(process_stat(1, "systemd", ticks=21))
                 self.assert_unknown(fixture.diagnose(), reason)
+
+    def test_ambiguous_complete_daemons_are_independent_of_proc_scan_order(self):
+        real_scandir = os.scandir
+        for mode in ("rootful", "rootless"):
+            for first in ("1", "7", "9"):
+                with self.subTest(mode=mode, first=first), tempfile.TemporaryDirectory() as directory:
+                    fixture = Fixture(directory)
+                    fixture.process(fixture.guest / "9", 9, "dockerd", fixture.daemon_root,
+                                    fixture.exe, uid=1000, different=True)
+                    if mode == "rootful":
+                        for pid in ("7", "9"):
+                            fixture.guest.joinpath(pid, "status").write_text("Uid:\t0\t0\t0\t0\n")
+
+                    def ordered(path):
+                        # Descriptor enumeration is the production scan; leave
+                        # ordinary-path fixture filesystem checks untouched.
+                        if not isinstance(path, int):
+                            return real_scandir(path)
+                        with real_scandir(path) as entries:
+                            rows = sorted(entries, key=lambda row: (row.name != first, row.name))
+                        return contextlib.nullcontext(iter(rows))
+
+                    with patch.object(HELPER.os, "scandir", side_effect=ordered):
+                        self.assert_unknown(fixture.diagnose(mode), "ambiguous")
+                    self.assertEqual(fixture.action_calls, 0)
 
     def test_symlink_directories_and_leaves_are_never_followed(self):
         for fault in ("proc", "pid", "dev", "leaf"):
