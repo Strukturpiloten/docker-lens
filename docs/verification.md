@@ -351,9 +351,12 @@ closed group-failure markers are exposed. No failure becomes a skip, expected
 negative, or production capability.
 
 On a known non-204 resource/security oracle START response, the failed native
-test may run at most four independent, task-owned controls with the same image
+test may run at most five independent, task-owned controls with the same image
 and command: no resource/security flags, memory limit only, PID limit only,
-and device mapping only, in that order. Each inspected `HostConfig` must match
+and renamed device mapping only, followed by a separate same-path device
+mapping, in that order. The original `device` control remains
+`/dev/null:/dev/native-null:r`; `device-same-path` uses `/dev/null:/dev/null:r`.
+Each inspected `HostConfig` must match
 only its intended option before start; image, command, name, and run label must
 also match the task-owned fixture. Before any control, a bounded exact-ID
 readback must show that the failed original oracle remains created and not
@@ -372,9 +375,25 @@ original oracle START must still return 204; control outcomes cannot
 reclassify its failure.
 Each rejected control additionally retains its own closed
 `DOCKERLENS_NATIVE_RESOURCE_START_BODY_DIAG` record, correlated with its
-baseline, memory, PID-limit, or device role. The exact runner exposes at most
-four complete, allowlisted records alongside the original last global body
-diagnostic. These remain lexical mentions, not an Engine cause or capability.
+baseline, memory, PID-limit, renamed-device, or same-path device role. The exact
+runner exposes at most five complete, allowlisted records alongside the
+original last global body diagnostic. These remain lexical mentions, not an
+Engine cause or capability.
+
+The two device controls also emit bounded
+`DOCKERLENS_NATIVE_DEVICE_START_BODY_DIAG` records with exact fixture-path
+mentions and a closed errno-phrase category from the protected START body.
+Larger path substrings do not match; malformed, missing and oversized bodies
+remain unknown. Multiple recognized errno phrases are ambiguous. These are
+lexical observations, not a syscall errno or a causal attribution. No current
+probe binds the device paths to the exact dockerd/runc mount namespace, so
+namespace, source presence and source type explicitly remain unknown. The
+runner exposes at most two complete, allowlisted records. A successful
+same-path diagnostic cannot replace the required renamed mapping or relax a
+failed positive. Reading `/dev/null` proves neither restricted `r` permissions
+nor causal device-cgroup enforcement: that device is allowed by default with
+`rwm`. Effective memory and PID-limit assertions remain mandatory, and neither
+control admits `DeviceMappings` or another production capability.
 
 The startup-only `native-cgroup-diagnostic.py` helper reads cgroup context
 within the exact run-owned outer container. One five-second monotonic deadline

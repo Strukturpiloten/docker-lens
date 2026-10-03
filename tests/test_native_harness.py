@@ -1749,7 +1749,7 @@ fi
             self.assertIn("DOCKERLENS_NATIVE_START_BODY_DIAG: shape=message cgroup_mention=present device_mention=absent sysctl_mention=absent ulimit_mention=absent apparmor_mention=absent permission_phrase=present errno_mention=absent controller_mention=absent bpf_mention=absent", result.stderr)
             self.assertNotIn("protected-secret", result.stdout + result.stderr)
 
-    def test_control_start_body_diagnostics_preserve_four_closed_records(self) -> None:
+    def test_control_start_body_diagnostics_preserve_five_closed_records(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             bin_dir = Path(directory)
             self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
@@ -1758,7 +1758,7 @@ if [[ $* == *--list* ]]; then
   echo 'native_container_tests::live_container_settings_match_engine: test'
 else
   body='shape=message cgroup_mention=present device_mention=absent sysctl_mention=absent ulimit_mention=absent apparmor_mention=absent permission_phrase=present errno_mention=absent controller_mention=present bpf_mention=absent'
-  for control in baseline baseline baseline baseline memory pids device; do
+  for control in baseline baseline baseline baseline memory pids device device-same-path; do
     echo "DOCKERLENS_NATIVE_RESOURCE_START_BODY_DIAG: control=$control $body" >&2
   done
   echo "DOCKERLENS_NATIVE_START_BODY_DIAG: $body" >&2
@@ -1776,11 +1776,58 @@ fi
                 env=env, capture_output=True, text=True, timeout=15, check=False,
             )
             self.assertNotEqual(result.returncode, 0)
-            self.assertEqual(result.stderr.count("DOCKERLENS_NATIVE_RESOURCE_START_BODY_DIAG:"), 4)
-            for control in ("baseline", "memory", "pids", "device"):
+            self.assertEqual(result.stderr.count("DOCKERLENS_NATIVE_RESOURCE_START_BODY_DIAG:"), 5)
+            for control in ("baseline", "memory", "pids", "device", "device-same-path"):
                 self.assertIn(f"DOCKERLENS_NATIVE_RESOURCE_START_BODY_DIAG: control={control} shape=message", result.stderr)
             self.assertIn("DOCKERLENS_NATIVE_START_BODY_DIAG: shape=message", result.stderr)
             self.assertNotIn("protected-secret", result.stdout + result.stderr)
+
+    def test_device_body_diagnostics_are_bounded_private_and_non_admitting(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_container_tests::live_container_settings_match_engine: test'
+else
+  fields='host_path_mention=absent destination_path_mention=present errno_phrase=enoent namespace=unknown source_presence=unknown source_type=unknown'
+  echo "DOCKERLENS_NATIVE_DEVICE_START_BODY_DIAG: control=device $fields" >&2
+  echo "DOCKERLENS_NATIVE_DEVICE_START_BODY_DIAG: control=device $fields" >&2
+  echo "DOCKERLENS_NATIVE_DEVICE_START_BODY_DIAG: control=device-same-path $fields" >&2
+  echo "DOCKERLENS_NATIVE_DEVICE_START_BODY_DIAG: control=protected-secret $fields" >&2
+  echo "DOCKERLENS_NATIVE_DEVICE_START_BODY_DIAG: control=device $fields raw=protected-secret" >&2
+  echo 'DOCKERLENS_NATIVE_DEVICE_START_BODY_DIAG: control=device host_path_mention=present destination_path_mention=present errno_phrase=protected-secret namespace=unknown source_presence=unknown source_type=unknown' >&2
+  echo 'DOCKERLENS_NATIVE_DEVICE_START_BODY_DIAG: control=device host_path_mention=present destination_path_mention=present errno_phrase=enoent namespace=daemon source_presence=present source_type=character' >&2
+  echo 'DOCKERLENS_NATIVE_RESOURCE_CONTROL: control=device-same-path phase=start outcome=started' >&2
+  echo 'DOCKERLENS_NATIVE_RESOURCE_START_HTTP: control=device-same-path status=204' >&2
+  echo 'DOCKERLENS_NATIVE_RESOURCE_START_STATE: control=device-same-path state=running' >&2
+  echo "DOCKERLENS_NATIVE_CONTAINER_FLOW: phase=decision outcome=$TEST_FLOW_DECISION" >&2
+  echo 'DOCKERLENS_NATIVE_GROUP_FAILURE: group=resources_security reason=probe' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            for decision in ("probe_failed", "cleanup_unverified"):
+                with self.subTest(decision=decision):
+                    env["TEST_FLOW_DECISION"] = decision
+                    result = subprocess.run(
+                        [str(ROOT / "scripts/run-exact-native-test.sh"), "native_container",
+                         "live_container_settings_match_engine"],
+                        env=env, capture_output=True, text=True, timeout=15, check=False,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(result.stderr.count("DOCKERLENS_NATIVE_DEVICE_START_BODY_DIAG:"), 2)
+                    for control in ("device", "device-same-path"):
+                        self.assertIn(f"DOCKERLENS_NATIVE_DEVICE_START_BODY_DIAG: control={control} ", result.stderr)
+                    self.assertIn("control=device-same-path status=204", result.stderr)
+                    self.assertIn("control=device-same-path state=running", result.stderr)
+                    self.assertIn(f"phase=decision outcome={decision}", result.stderr)
+                    self.assertIn("group=resources_security reason=probe", result.stderr)
+                    self.assertNotIn("namespace=daemon", result.stderr)
+                    self.assertNotIn("protected-secret", result.stdout + result.stderr)
+                    self.assertNotIn("required native test passed", result.stdout + result.stderr)
 
     def test_group_failures_are_closed_bounded_and_do_not_print_panic_text(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1912,16 +1959,17 @@ fi
         self.assertIn('resource_control_may_continue(uncertain, resource_control_seconds_remaining())', source)
         self.assertLess(source.index('("resources_security", probe_resources_security_group)'),
                         source.index('("ports", probe_port_group)'))
-        self.assertIn('const RESOURCE_START_CONTROLS: [&str; 4] = ["baseline", "memory", "pids", "device"]', source)
+        self.assertIn('const RESOURCE_START_CONTROLS: [&str; 5]', source)
         self.assertIn('"memory" => Some(&["--memory=67108864"])', source)
         self.assertIn('"pids" => Some(&["--pids-limit=32"])', source)
         self.assertIn('"device" => Some(&["--device=/dev/null:/dev/native-null:r"])', source)
+        self.assertIn('"device-same-path" => Some(&["--device=/dev/null:/dev/null:r"])', source)
         self.assertNotIn('"--memory=67108864", "--pids-limit=32"', source)
         self.assertIn('self.cli_with_timeout(&args, "10")', source)
         self.assertIn('mark_container_flow("cleanup_readback",', source)
         runner = (ROOT / "scripts/run-exact-native-test.sh").read_text(encoding="utf-8")
-        self.assertIn('control=(baseline|memory|pids|device)', runner)
-        self.assertIn('"$capture_path" | tail -n 24', runner)
+        self.assertIn('control=(baseline|memory|pids|device|device-same-path)', runner)
+        self.assertIn('"$capture_path" | tail -n 35', runner)
         with tempfile.TemporaryDirectory() as directory:
             bin_dir = Path(directory)
             self._tool(bin_dir, "cargo", """#!/usr/bin/env bash

@@ -335,7 +335,8 @@ fn resource_control_start_outcome(status: u16, inspected: &Value) -> (&'static s
     }
 }
 
-const RESOURCE_START_CONTROLS: [&str; 4] = ["baseline", "memory", "pids", "device"];
+const RESOURCE_START_CONTROLS: [&str; 5] =
+    ["baseline", "memory", "pids", "device", "device-same-path"];
 
 fn resource_control_options(control: &str) -> Option<&'static [&'static str]> {
     match control {
@@ -343,6 +344,7 @@ fn resource_control_options(control: &str) -> Option<&'static [&'static str]> {
         "memory" => Some(&["--memory=67108864"]),
         "pids" => Some(&["--pids-limit=32"]),
         "device" => Some(&["--device=/dev/null:/dev/native-null:r"]),
+        "device-same-path" => Some(&["--device=/dev/null:/dev/null:r"]),
         _ => None,
     }
 }
@@ -375,13 +377,14 @@ fn resource_control_inspect_matches(
         "baseline" => memory == Some(0) && default_pids && default_devices,
         "memory" => memory == Some(67_108_864) && default_pids && default_devices,
         "pids" => memory == Some(0) && pids == 32 && default_devices,
-        "device" => {
+        "device" | "device-same-path" => {
             memory == Some(0)
                 && default_pids
                 && devices.as_array().is_some_and(|entries| {
                     entries.len() == 1
                         && entries[0]["PathOnHost"] == "/dev/null"
-                        && entries[0]["PathInContainer"] == "/dev/native-null"
+                        && entries[0]["PathInContainer"]
+                            == device_control_destination(control).expect("closed device control")
                         && entries[0]["CgroupPermissions"] == "r"
                 })
         }
@@ -423,6 +426,79 @@ fn failed_oracle_start_state(
 
 fn resource_control_may_continue(uncertain: bool, seconds_remaining: u64) -> bool {
     !uncertain && seconds_remaining >= 90
+}
+
+fn device_control_destination(control: &str) -> Option<&'static str> {
+    match control {
+        "device" => Some("/dev/native-null"),
+        "device-same-path" => Some("/dev/null"),
+        _ => None,
+    }
+}
+
+fn bounded_start_message(body: &[u8]) -> Option<String> {
+    if body.len() > 8192 {
+        return None;
+    }
+    let value: Value = serde_json::from_slice(body).ok()?;
+    let message = value.get("message")?.as_str()?;
+    (message.len() <= 4096).then(|| message.to_owned())
+}
+
+fn exact_fixture_path_mention(message: &str, path: &str) -> bool {
+    // Separate fixture paths from larger protected paths such as /private/dev/null
+    // or /dev/null-secret. This remains lexical evidence, never a syscall result.
+    let boundary = |character: char| {
+        character.is_ascii_whitespace()
+            || matches!(
+                character,
+                '\'' | '"' | ':' | ';' | ',' | '(' | ')' | '[' | ']'
+            )
+    };
+    message.match_indices(path).any(|(offset, _)| {
+        message[..offset].chars().next_back().is_none_or(boundary)
+            && message[offset + path.len()..]
+                .chars()
+                .next()
+                .is_none_or(boundary)
+    })
+}
+
+fn device_start_body_diagnostic(control: &str, body: &[u8]) -> String {
+    let destination = device_control_destination(control).expect("closed device control");
+    let mut host_path = "unknown";
+    let mut destination_path = "unknown";
+    let mut errno_phrase = "unknown";
+    if let Some(message) = bounded_start_message(body) {
+        let mention = |path| {
+            if exact_fixture_path_mention(&message, path) {
+                "present"
+            } else {
+                "absent"
+            }
+        };
+        host_path = mention("/dev/null");
+        destination_path = mention(destination);
+        let lower = message.to_ascii_lowercase();
+        let mut phrases = [
+            ("no such file or directory", "enoent"),
+            ("permission denied", "eacces"),
+            ("operation not permitted", "eperm"),
+            ("invalid argument", "einval"),
+        ]
+        .into_iter()
+        .filter_map(|(phrase, category)| lower.contains(phrase).then_some(category));
+        errno_phrase = match (phrases.next(), phrases.next()) {
+            (Some(category), None) => category,
+            (Some(_), Some(_)) => "ambiguous",
+            _ => "unknown",
+        };
+    }
+    // No probe currently binds these paths to dockerd/runc's mount namespace.
+    // A protected error phrase cannot establish source existence/type or cause.
+    format!(
+        "DOCKERLENS_NATIVE_DEVICE_START_BODY_DIAG: control={control} host_path_mention={host_path} destination_path_mention={destination_path} errno_phrase={errno_phrase} namespace=unknown source_presence=unknown source_type=unknown"
+    )
 }
 
 fn start_failure_body_diagnostic(body: &[u8]) -> String {
@@ -498,6 +574,69 @@ fn resource_start_body_diagnostics_keep_control_identity_and_privacy() {
         std::panic::catch_unwind(|| { resource_start_body_diagnostic("protected-secret", b"{}") })
             .is_err()
     );
+}
+
+#[test]
+fn device_start_body_diagnostic_is_bounded_exact_and_private() {
+    let body =
+        br#"{"message":"mount /dev/native-null: no such file or directory protected-secret"}"#;
+    assert_eq!(
+        device_start_body_diagnostic("device", body),
+        "DOCKERLENS_NATIVE_DEVICE_START_BODY_DIAG: control=device host_path_mention=absent destination_path_mention=present errno_phrase=enoent namespace=unknown source_presence=unknown source_type=unknown"
+    );
+    let same_path = device_start_body_diagnostic("device-same-path", body);
+    assert!(same_path.contains("destination_path_mention=absent"));
+    assert!(!same_path.contains("protected-secret"));
+    for (phrase, category) in [
+        ("no such file or directory", "enoent"),
+        ("permission denied", "eacces"),
+        ("operation not permitted", "eperm"),
+        ("invalid argument", "einval"),
+        ("errno 2 protected-secret", "unknown"),
+        ("permission denied; invalid argument", "ambiguous"),
+    ] {
+        let body = json!({"message":format!("open '/dev/null': {phrase}")}).to_string();
+        let diagnostic = device_start_body_diagnostic("device-same-path", body.as_bytes());
+        assert!(diagnostic.contains("host_path_mention=present destination_path_mention=present"));
+        assert!(diagnostic.contains(&format!("errno_phrase={category} ")));
+        assert!(
+            diagnostic.ends_with("namespace=unknown source_presence=unknown source_type=unknown")
+        );
+        assert!(!diagnostic.contains("protected-secret"));
+        assert!(!diagnostic.contains("/dev/"));
+    }
+    for body in [
+        b"protected-secret".to_vec(),
+        br#"{"message":null,"private":"protected-secret"}"#.to_vec(),
+        json!({"message":"protected-secret".repeat(300)})
+            .to_string()
+            .into_bytes(),
+        vec![b'x'; 8193],
+    ] {
+        let diagnostic = device_start_body_diagnostic("device", &body);
+        assert!(diagnostic.contains(
+            "host_path_mention=unknown destination_path_mention=unknown errno_phrase=unknown"
+        ));
+        assert!(!diagnostic.contains("protected-secret"));
+    }
+    for message in [
+        "/private/dev/null /private/dev/native-null",
+        "/dev/null-secret /dev/native-null/secret",
+        "/dev/null\u{00e9} /dev/native-null\u{00e9}",
+    ] {
+        let body = json!({"message":message}).to_string();
+        let diagnostic = device_start_body_diagnostic("device", body.as_bytes());
+        assert!(diagnostic.contains("host_path_mention=absent destination_path_mention=absent"));
+    }
+    for message in [
+        "/dev/null",
+        "'/dev/null':",
+        "open \"/dev/null\"",
+        "(/dev/null)",
+    ] {
+        assert!(exact_fixture_path_mention(message, "/dev/null"));
+    }
+    assert!(std::panic::catch_unwind(|| device_start_body_diagnostic("private", b"{}")).is_err());
 }
 
 #[test]
@@ -1585,6 +1724,9 @@ impl NativeRun {
         if status != 204 {
             eprintln!("{}", start_failure_body_diagnostic(&body));
             eprintln!("{}", resource_start_body_diagnostic(control, &body));
+            if device_control_destination(control).is_some() {
+                eprintln!("{}", device_start_body_diagnostic(control, &body));
+            }
         }
         let inspected = self.inspect(id);
         let (outcome, uncertain) = if inspected["Id"] == id {
@@ -5679,7 +5821,7 @@ fn group_decision_outcome(decision: GroupDecision) -> &'static str {
 fn failed_control_start_and_failed_probe_cannot_become_continuation_or_pass() {
     assert_eq!(
         RESOURCE_START_CONTROLS,
-        ["baseline", "memory", "pids", "device"]
+        ["baseline", "memory", "pids", "device", "device-same-path"]
     );
     assert_eq!(resource_control_options("baseline"), Some(&[][..]));
     assert_eq!(
@@ -5694,6 +5836,18 @@ fn failed_control_start_and_failed_probe_cannot_become_continuation_or_pass() {
         resource_control_options("device"),
         Some(&["--device=/dev/null:/dev/native-null:r"][..])
     );
+    assert_eq!(
+        resource_control_options("device-same-path"),
+        Some(&["--device=/dev/null:/dev/null:r"][..])
+    );
+    for control in RESOURCE_START_CONTROLS {
+        assert!(valid_container_suffix(&format!(
+            "resource-control-{control}"
+        )));
+    }
+    for invalid in ["device-same-path:rwm", "device_same_path", "device;private"] {
+        assert!(resource_control_options(invalid).is_none());
+    }
     assert!(resource_control_options("resource").is_none());
     let created = json!({"State":{"Status":"created","Running":false}});
     let running = json!({"State":{"Status":"running","Running":true}});
@@ -5763,6 +5917,30 @@ fn isolated_resource_controls_reject_extra_or_unverified_host_settings() {
     device["HostConfig"]["Devices"] = json!([{"PathOnHost":"/dev/null",
         "PathInContainer":"/dev/native-null","CgroupPermissions":"r"}]);
     assert!(matches("device", &device));
+    assert!(!matches("device-same-path", &device));
+    let mut same_path = device.clone();
+    same_path["HostConfig"]["Devices"][0]["PathInContainer"] = json!("/dev/null");
+    assert!(matches("device-same-path", &same_path));
+    assert!(!matches("device", &same_path));
+    for (field, value) in [
+        ("PathOnHost", json!("/private/dev/null")),
+        ("PathInContainer", json!("/dev/native-null")),
+        ("CgroupPermissions", json!("rwm")),
+    ] {
+        let mut wrong = same_path.clone();
+        wrong["HostConfig"]["Devices"][0][field] = value;
+        assert!(!matches("device-same-path", &wrong));
+    }
+    let mut wrong_state = same_path.clone();
+    wrong_state["State"] = json!({"Status":"running","Running":true});
+    assert!(!matches("device-same-path", &wrong_state));
+    same_path["HostConfig"]["Devices"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "PathOnHost":"/dev/null", "PathInContainer":"/dev/null", "CgroupPermissions":"r"
+        }));
+    assert!(!matches("device-same-path", &same_path));
     device["HostConfig"]["Devices"][0]["CgroupPermissions"] = json!("rw");
     assert!(!matches("device", &device));
     let mut wrong_id = baseline.clone();
