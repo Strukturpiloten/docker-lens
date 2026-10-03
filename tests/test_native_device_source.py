@@ -505,6 +505,435 @@ class DeviceSourceTests(unittest.TestCase):
         self.assertIn("scope=daemon-view view=unknown node=unknown uncertainty=input", result.stdout)
         self.assertIn("runtime_source=unknown permissions=unknown", result.stdout)
 
+    def test_context_root_timer_deadline_output_cap_and_closed_validation(self):
+        expected = HELPER._context_unknown()
+        expected[0].update(outcome="observed", memory_controller="present", memory_max="finite")
+        expected[2].update(view="different_mount", node="null", uncertainty="none")
+        expected[3].update(view="different_mount", node="missing", uncertainty="none")
+        payload = HELPER._format_context(expected).encode()
+        for sudo in ("0", "1"):
+            calls = []
+
+            def capture(command, deadline, **kwargs):
+                calls.append((command, deadline, kwargs))
+                return payload
+
+            self.assertEqual(HELPER.context(CONTAINER, RUN, "rootless", sudo,
+                                           clock=lambda: 10, monotonic=lambda: 10,
+                                           euid=lambda: 1000 if sudo == "1" else 0,
+                                           runner=capture), expected)
+            command, deadline, options = calls[0]
+            offset = 2 if sudo == "1" else 0
+            self.assertEqual(command[:offset], ["sudo", "-n"] if offset else [])
+            self.assertEqual(command[offset:offset + 3],
+                             ["timeout", "--signal=TERM", "--kill-after=0.2"])
+            self.assertEqual(command[offset + 3], "4.300")
+            self.assertEqual(command[offset + 6:],
+                             ["--batch", CONTAINER, RUN, "rootless", "14.300000"])
+            self.assertEqual(deadline, 15)
+            self.assertEqual(options, {"elevated_until": 14.8, "capture_limit": 2048,
+                                       "start_new_session": False, "reap_monitor": sudo == "1",
+                                       "stdin_lifeline": True})
+            self.assertNotIn("exec", command)
+
+        lines = payload.splitlines(keepends=True)
+        for invalid in (payload + b"protected-secret\n", b"".join(lines[:3]),
+                        b"".join(lines[:2] + [lines[2], lines[2]]),
+                        payload.replace(b"runtime_source=unknown", b"runtime_source=known"),
+                        payload.replace(b"node=null", b"node=null secret=protected-secret"),
+                        payload.replace(b"scope=daemon-view", b"scope=/protected-secret"),
+                        b"\xff", b"protected-secret" * 200):
+            with self.subTest(invalid=invalid[:50]):
+                result = HELPER.context(CONTAINER, RUN, "rootless", "0", clock=lambda: 10,
+                                        runner=lambda *_args, **_kwargs: invalid)
+                self.assertEqual(result, HELPER._context_unknown())
+                self.assertNotIn("protected-secret", HELPER._format_context(result))
+
+    def test_context_expired_startup_invalid_input_and_nonzero_capture_never_leak(self):
+        for args in ((CONTAINER, RUN, "rootless", "2"),
+                     ("protected-secret", RUN, "rootless", "0")):
+            capture = unittest.mock.Mock()
+            self.assertEqual(HELPER.context(*args, runner=capture), HELPER._context_unknown("input"))
+            capture.assert_not_called()
+        times = iter((10, 14.1))
+        capture = unittest.mock.Mock()
+        self.assertEqual(HELPER.context(CONTAINER, RUN, "rootless", "0",
+                                       clock=lambda: next(times), runner=capture), HELPER._context_unknown())
+        capture.assert_not_called()
+        for error in (HELPER.INSPECTION.Unavailable(), PermissionError("protected-secret"),
+                      subprocess.TimeoutExpired(["protected-secret"], 1)):
+            with patch.object(HELPER.INSPECTION, "bounded_command", side_effect=error):
+                self.assertEqual(HELPER.context(CONTAINER, RUN, "rootless", "0"),
+                                 HELPER._context_unknown())
+
+    def test_batch_slices_share_absolute_deadline_and_skip_exhausted_or_cancelled(self):
+        for elapsed, cancel in ((0, False), (3.5, False), (0, True)):
+            with self.subTest(elapsed=elapsed, cancel=cancel):
+                now = [10 + elapsed]
+                interrupted = [False]
+                calls, alarms = [], []
+
+                def cgroup(_container, _run, _mode, podman, *, deadline):
+                    self.assertEqual(podman, ["podman"])
+                    self.assertLessEqual(deadline - now[0], 2)
+                    self.assertLessEqual(deadline, 14.3)
+                    calls.append(("cgroup", deadline))
+                    now[0] = deadline
+                    interrupted[0] = cancel
+                    return HELPER._context_unknown()[:2]
+
+                def source(_container, _run, _mode, *, deadline):
+                    self.assertLessEqual(deadline - now[0], 2)
+                    self.assertLessEqual(deadline, 14.3)
+                    calls.append(("source", deadline))
+                    now[0] = deadline
+                    return HELPER._unknown("identity")
+
+                with patch.object(HELPER.INSPECTION, "diagnose", side_effect=cgroup), patch.object(
+                    HELPER, "diagnose", side_effect=source
+                ):
+                    records = HELPER.batch(CONTAINER, RUN, "rootless", 14.3,
+                                           clock=lambda: now[0], monotonic=lambda: now[0],
+                                           euid=lambda: 0, alarm=alarms.append,
+                                           interrupted=lambda: interrupted[0])
+                self.assertEqual([name for name, _ in calls],
+                                 ["cgroup"] if elapsed or cancel else ["cgroup", "source"])
+                self.assertEqual(alarms[-1], 0)
+                self.assertLessEqual(max(alarms), 1.8)
+                self.assertLessEqual(now[0], 14.3)
+                if cancel or elapsed:
+                    self.assertEqual(records, HELPER._context_unknown())
+        with patch.object(HELPER.INSPECTION, "diagnose") as cgroup:
+            self.assertEqual(HELPER.batch(CONTAINER, RUN, "rootless", 9,
+                                         clock=lambda: 10, euid=lambda: 0), HELPER._context_unknown())
+            self.assertEqual(HELPER.batch(CONTAINER, RUN, "rootless", 15,
+                                         clock=lambda: 10, euid=lambda: 1000),
+                             HELPER._context_unknown("privilege"))
+            cgroup.assert_not_called()
+
+    def test_supplied_device_deadline_is_not_restarted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            self.assert_unknown(fixture.diagnose(clock=lambda: 10, deadline=9), "budget")
+            self.assertEqual(fixture.inspect_calls, [])
+            records = fixture.diagnose(clock=lambda: 10, deadline=11)
+            self.assertEqual([row[1] for row in fixture.inspect_calls], [11, 11])
+            self.assertEqual(records[0]["node"], "null")
+            fixture.inspect_calls.clear()
+            fixture.diagnose(clock=lambda: 10, deadline=100)
+            self.assertEqual([row[1] for row in fixture.inspect_calls], [15, 15])
+
+    def test_phase_boot_clock_offset_converts_to_reader_monotonic_deadlines(self):
+        boot, mono = [100.0], [10.0]
+        deadlines = []
+
+        def reader(*args, deadline):
+            deadlines.append(deadline)
+            boot[0] += 2
+            mono[0] += 2
+            return HELPER._context_unknown()[:2]
+
+        with patch.object(HELPER.INSPECTION, "diagnose", side_effect=reader), patch.object(
+            HELPER, "diagnose", side_effect=reader
+        ):
+            HELPER.batch(CONTAINER, RUN, "rootless", 104.3, clock=lambda: boot[0],
+                         monotonic=lambda: mono[0], euid=lambda: 0, alarm=lambda _: None)
+        self.assertEqual(deadlines, [12, 14])
+        calls = []
+
+        def capture(command, deadline, **kwargs):
+            calls.append((command, deadline, kwargs))
+            return HELPER._format_context(HELPER._context_unknown()).encode()
+
+        HELPER.context(CONTAINER, RUN, "rootless", "1", deadline=109,
+                       clock=lambda: 104, monotonic=lambda: 14, runner=capture)
+        command, deadline, options = calls[0]
+        self.assertEqual(command[-1], "108.300000")
+        self.assertEqual(deadline, 19)
+        self.assertEqual(options["elevated_until"], 18.8)
+
+    def test_delayed_root_bootstrap_never_reads_after_absolute_cutoff(self):
+        now = [100.0]
+        alarm = unittest.mock.Mock()
+        with patch.object(HELPER.INSPECTION, "diagnose") as cgroup, patch.object(
+            HELPER, "diagnose"
+        ) as source:
+            # The root child starts after caller/interpreter/sudo delay. Its
+            # absolute deadline is stale; it must not start a fresh2s slice.
+            self.assertEqual(HELPER.batch(CONTAINER, RUN, "rootless", 99,
+                                         clock=lambda: now[0], monotonic=lambda: 10,
+                                         euid=lambda: 0, alarm=alarm), HELPER._context_unknown())
+            cgroup.assert_not_called()
+            source.assert_not_called()
+            alarm.assert_not_called()
+        with patch.object(HELPER, "phase_clock", return_value=100), patch.object(
+            sys, "argv", ["helper", "--context", CONTAINER, RUN, "rootless", "1", "99.0"]
+        ), patch.object(HELPER, "context") as context, patch("builtins.print") as output:
+            HELPER.main()
+            context.assert_not_called()
+            self.assertNotIn(CONTAINER, str(output.call_args))
+
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "unexpected-read"
+            done = Path(directory) / "bootstrap-complete"
+            original = HELPER.INSPECTION.bounded_command
+            program = """import importlib.util, sys, time
+from pathlib import Path
+time.sleep(1)
+spec = importlib.util.spec_from_file_location('helper', sys.argv[1])
+helper = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(helper)
+def unexpected(*args, **kwargs):
+    Path(sys.argv[3]).write_text('unexpected-read')
+    return helper._unknown('identity')
+helper.diagnose = unexpected
+helper.INSPECTION.diagnose = unexpected
+records = helper.batch('dl-native-Ab12Cd34', 'Ab12Cd34', 'rootless', float(sys.argv[2]),
+                       euid=lambda: 0, alarm=lambda _: None)
+Path(sys.argv[4]).write_text('done')
+print(helper._format_context(records), end='')
+"""
+
+            def delayed(command, deadline, **kwargs):
+                # Simulate sudo/root interpreter startup exceeding the already
+                # forwarded work cutoff; no actual elevation/runtime is used.
+                return original([sys.executable, "-c", program,
+                                 str(ROOT / "scripts/native-device-source.py"),
+                                 command[-1], str(marker), str(done)], deadline, **kwargs)
+
+            with patch.object(HELPER, "SECONDS", 2), patch.object(HELPER, "PHASE_RESERVE", 1.2):
+                self.assertEqual(HELPER.context(CONTAINER, RUN, "rootless", "1", runner=delayed),
+                                 HELPER._context_unknown())
+            self.assertTrue(done.exists())
+            self.assertFalse(marker.exists())
+
+    def test_context_monitor_kill_permission_failure_is_private_unknown(self):
+        original_popen = subprocess.Popen
+        original_capture = HELPER.INSPECTION.bounded_command
+        processes = []
+
+        def spawn(*args, **kwargs):
+            process = original_popen(*args, **kwargs)
+            process.wait(timeout=1)
+            process.wait = unittest.mock.Mock(side_effect=subprocess.TimeoutExpired("protected-secret", 1))
+            process.kill = unittest.mock.Mock(side_effect=PermissionError("protected-secret"))
+            processes.append(process)
+            return process
+
+        def capture(_command, deadline, **kwargs):
+            return original_capture([sys.executable, "-c", "pass"], deadline, **kwargs)
+
+        with patch.object(HELPER, "SECONDS", 0.8), patch.object(HELPER, "PHASE_RESERVE", 0.3), patch.object(
+            HELPER.INSPECTION.subprocess, "Popen", side_effect=spawn
+        ):
+            self.assertEqual(HELPER.context(CONTAINER, RUN, "rootless", "1",
+                                           euid=lambda: 1000, runner=capture), HELPER._context_unknown())
+        self.assertEqual(len(processes), 1)
+        processes[0].kill.assert_called_once()
+        self.assertTrue(processes[0].stdout.closed)
+        self.assertTrue(processes[0].stderr.closed)
+
+    def test_batch_lifeline_requires_open_empty_fifo(self):
+        read_fd, write_fd = os.pipe()
+        try:
+            self.assertTrue(HELPER._caller_alive(read_fd))
+            os.write(write_fd, b"protected-secret")
+            self.assertFalse(HELPER._caller_alive(read_fd))
+        finally:
+            os.close(read_fd)
+            os.close(write_fd)
+        read_fd, write_fd = os.pipe()
+        try:
+            os.close(write_fd)
+            self.assertFalse(HELPER._caller_alive(read_fd))
+        finally:
+            os.close(read_fd)
+        with patch.object(HELPER.INSPECTION, "diagnose") as cgroup, patch.object(
+            HELPER, "diagnose"
+        ) as source:
+            self.assertEqual(HELPER.batch(CONTAINER, RUN, "rootless", 14,
+                                         clock=lambda: 10, euid=lambda: 0,
+                                         lifeline=lambda: False), HELPER._context_unknown())
+            cgroup.assert_not_called()
+            source.assert_not_called()
+
+    def test_context_cancellation_lifeline_reaches_separate_root_timer_group(self):
+        with tempfile.TemporaryDirectory() as directory:
+            started_path = Path(directory) / "first-reader-started"
+            source_path = Path(directory) / "second-reader-started"
+            root_program = """import functools, importlib.util, sys, time
+from pathlib import Path
+spec = importlib.util.spec_from_file_location('helper', sys.argv[1])
+helper = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(helper)
+deadline, started, source_path = sys.argv[2:]
+def cgroup(*args, **kwargs):
+    Path(started).write_text('started')
+    time.sleep(0.4)
+    return helper._context_unknown()[:2]
+def source(*args, **kwargs):
+    Path(source_path).write_text('unexpected')
+    return helper._unknown('identity')
+helper.INSPECTION.diagnose = cgroup
+helper.diagnose = source
+helper.batch = functools.partial(helper.batch, euid=lambda: 0)
+sys.argv = ['helper', '--batch', 'dl-native-Ab12Cd34', 'Ab12Cd34', 'rootless', deadline]
+helper.main()
+"""
+            program = """import importlib.util, sys
+spec = importlib.util.spec_from_file_location('helper', sys.argv[1])
+helper = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(helper)
+helper.SECONDS = 2
+original = helper.INSPECTION.bounded_command
+helper_path = sys.argv[1]
+root_program, started, source_path = sys.argv[2:]
+def capture(command, deadline, **kwargs):
+    # Retain actual GNU timeout/process-group/pipe behavior; replace only the
+    # root Python bootstrap with synthetic readers, never a runtime request.
+    command = command[:4] + [sys.executable, '-c', root_program, helper_path,
+                            command[-1], started, source_path]
+    return original(command, deadline, **kwargs)
+helper.INSPECTION.bounded_command = capture
+sys.argv = ['helper', '--context', 'dl-native-Ab12Cd34', 'Ab12Cd34', 'rootless', '0']
+helper.main()
+"""
+            process = subprocess.Popen([sys.executable, "-c", program,
+                                        str(ROOT / "scripts/native-device-source.py"), root_program,
+                                        str(started_path), str(source_path)],
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            try:
+                deadline = time.monotonic() + 2
+                while not started_path.exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertTrue(started_path.exists())
+                process.terminate()
+                stdout, stderr = process.communicate(timeout=3)
+                self.assertEqual(process.returncode, 0)
+                self.assertEqual(stderr, "")
+                self.assertEqual(HELPER._parse_context(stdout.encode()), HELPER._context_unknown())
+                self.assertFalse(source_path.exists())
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                process.communicate(timeout=3)
+
+
+
+    def test_batch_cancellation_reaps_private_child_and_does_not_start_device_reader(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pid_path = Path(directory) / "private-child-pid"
+            source_path = Path(directory) / "source-invoked"
+            program = """import functools, importlib.util, sys, time
+from pathlib import Path
+spec = importlib.util.spec_from_file_location('helper', sys.argv[1])
+helper = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(helper)
+pid_path, source_path = sys.argv[2:]
+child = "import os,sys,time; open(sys.argv[1],'w').write(str(os.getpid())); time.sleep(10)"
+def cgroup(*args, deadline):
+    helper.INSPECTION.bounded_command([sys.executable, '-c', child, pid_path], deadline)
+def source(*args, **kwargs):
+    Path(source_path).write_text('unexpected')
+    return helper._unknown('identity')
+helper.INSPECTION.diagnose = cgroup
+helper.diagnose = source
+helper.batch = functools.partial(helper.batch, euid=lambda: 0)
+sys.argv = ['helper', '--batch', 'dl-native-Ab12Cd34', 'Ab12Cd34', 'rootless',
+            f'{helper.phase_clock() + 4:.6f}']
+helper.main()
+"""
+            process = subprocess.Popen([sys.executable, "-c", program,
+                                        str(ROOT / "scripts/native-device-source.py"),
+                                        str(pid_path), str(source_path)],
+                                       stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                       stderr=subprocess.PIPE, text=True)
+            try:
+                deadline = time.monotonic() + 2
+                while not pid_path.exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertTrue(pid_path.exists())
+                pid = int(pid_path.read_text())
+                process.terminate()
+                stdout, stderr = process.communicate(timeout=2)
+                self.assertEqual(process.returncode, 0)
+                self.assertEqual(stderr, "")
+                self.assertEqual(HELPER._parse_context(stdout.encode()), HELPER._context_unknown())
+                self.assertFalse(source_path.exists())
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(pid, 0)
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                process.communicate(timeout=2)
+
+            # A slice alarm is not whole-phase cancellation: after reaping the
+            # first private command, the second optional slice may still run.
+            timer_pid = Path(directory) / "timer-child-pid"
+            timer_source = Path(directory) / "timer-source-invoked"
+            timed = program.replace("helper.main()", "helper.SLICE_SECONDS = 0.7\nhelper.main()")
+            timed = timed.replace("helper.main()", "helper._caller_alive = lambda: True\nhelper.main()")
+            result = subprocess.run([sys.executable, "-c", timed,
+                                     str(ROOT / "scripts/native-device-source.py"),
+                                     str(timer_pid), str(timer_source)],
+                                    capture_output=True, text=True, timeout=2, check=False)
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(result.stderr, "")
+            self.assertEqual(HELPER._parse_context(result.stdout.encode()),
+                             HELPER._context_unknown()[:2] + HELPER._unknown("identity"))
+            self.assertTrue(timer_source.exists())
+            with self.assertRaises(ProcessLookupError):
+                os.kill(int(timer_pid.read_text()), 0)
+
+    def test_context_private_overflow_and_cancellation_wait_for_root_bound(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for cause in ("overflow", "cancel"):
+                with self.subTest(cause=cause):
+                    pid_path = Path(directory) / cause
+                    program = """import importlib.util, sys
+spec = importlib.util.spec_from_file_location('helper', sys.argv[1])
+helper = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(helper)
+helper.SECONDS = 1
+helper.PHASE_RESERVE = 0.3
+pid_path, cause = sys.argv[2:]
+original = helper.INSPECTION.bounded_command
+child = ("import os,sys,time; open(sys.argv[1],'w').write(str(os.getpid())); "
+         + ("print('protected-secret'*300, flush=True); " if cause == 'overflow' else '')
+         + "time.sleep(0.3)")
+def capture(command, deadline, **kwargs):
+    return original([sys.executable, '-c', child, pid_path], deadline, **kwargs)
+helper.INSPECTION.bounded_command = capture
+sys.argv = ['helper', '--context', 'dl-native-Ab12Cd34', 'Ab12Cd34', 'rootless', '1']
+helper.main()
+"""
+                    started = time.monotonic()
+                    process = subprocess.Popen([sys.executable, "-c", program,
+                                                str(ROOT / "scripts/native-device-source.py"),
+                                                str(pid_path), cause],
+                                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                    try:
+                        deadline = started + 1
+                        while not pid_path.exists() and time.monotonic() < deadline:
+                            time.sleep(0.01)
+                        self.assertTrue(pid_path.exists())
+                        if cause == "cancel":
+                            process.terminate()
+                        stdout, stderr = process.communicate(timeout=2)
+                        elapsed = time.monotonic() - started
+                        self.assertGreaterEqual(elapsed, 0.8)
+                        self.assertLess(elapsed, 1.8)
+                        self.assertEqual(process.returncode, 0)
+                        self.assertEqual(stderr, "")
+                        self.assertEqual(HELPER._parse_context(stdout.encode()), HELPER._context_unknown())
+                        self.assertNotIn("protected-secret", stdout)
+                        with self.assertRaises(ProcessLookupError):
+                            os.kill(int(pid_path.read_text()), 0)
+                    finally:
+                        if process.poll() is None:
+                            process.kill()
+                        process.communicate(timeout=2)
+
     def test_inspection_cleanup_exception_never_prints_private_argv(self):
         with patch.object(HELPER.INSPECTION, "bounded_command", side_effect=subprocess.TimeoutExpired(
             ["protected-secret"], 0.1

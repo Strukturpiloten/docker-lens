@@ -11,6 +11,9 @@ The monotonic/read/enumeration bounds and held descriptors make uncertainty
 explicit; these snapshots are not an atomic account of a transient runtime.
 In both modes the daemon must share the verified owned init's held PID namespace;
 a foreign or nested PID namespace yields unknown, even with genuine procfs.
+The private context/batch modes share one caller-timed five-second phase; an
+anonymous stdin lifeline stops later reads after caller cancellation. Neither
+local timeout nor lifeline EOF proves privileged/remote work was terminated.
 """
 
 import contextlib
@@ -20,6 +23,7 @@ import importlib.util
 import os
 from pathlib import Path
 import re
+import select
 import signal
 import stat
 import subprocess
@@ -38,6 +42,9 @@ def _inspection_helper():
 
 INSPECTION = _inspection_helper()
 SECONDS = 5
+SLICE_SECONDS = 2
+PHASE_RESERVE = 0.7
+BATCH_OUTPUT_LIMIT = 2048
 BYTE_LIMIT = 32768
 PROC_LIMIT = 1024
 PROCFS = 0x9FA0
@@ -65,9 +72,10 @@ class Uncertain(Exception):
 
 
 class Budget:
-    def __init__(self, clock=time.monotonic):
+    def __init__(self, clock=time.monotonic, deadline=None):
         self.clock = clock
-        self.deadline = clock() + SECONDS
+        limit = clock() + SECONDS
+        self.deadline = min(limit, deadline) if deadline is not None else limit
         self.total = 0
 
     def check(self):
@@ -329,13 +337,13 @@ def _os_category(error):
 
 
 def diagnose(container, run_id, mode, *, reader_factory=ProcReader,
-             runner=None, clock=time.monotonic, euid=os.geteuid):
+             runner=None, clock=time.monotonic, euid=os.geteuid, deadline=None):
     if (not re.fullmatch(r"[a-zA-Z0-9]{8}", run_id)
             or container != "dl-native-" + run_id or mode not in ("rootful", "rootless")):
         return _unknown("input")
     if euid() != 0:
         return _unknown("privilege")
-    budget = Budget(clock)
+    budget = Budget(clock, deadline)
     command_budget = {"total": 0}
     reader = reader_factory(budget)
 
@@ -412,27 +420,198 @@ def diagnose(container, run_id, mode, *, reader_factory=ProcReader,
         return _unknown("proc")
 
 
+def _context_unknown(reason="budget"):
+    return [INSPECTION.unknown(scope) for scope in ("outer", "daemon")] + _unknown(reason)
+
+
+def phase_clock():
+    # Linux /proc/uptime and CLOCK_BOOTTIME share a monotonic, suspend-inclusive
+    # clock. The runner reads the former before this interpreter starts.
+    return time.clock_gettime(time.CLOCK_BOOTTIME)
+
+
+def _caller_alive(fd=0):
+    # The caller never writes bytes. Only an open anonymous FIFO with no data
+    # proves its lifeline is still present; tty/device stdin is not read.
+    try:
+        return stat.S_ISFIFO(os.fstat(fd).st_mode) and not select.select([fd], [], [], 0)[0]
+    except (OSError, ValueError):
+        return False
+
+
+def _format_context(records):
+    lines = []
+    for index, record in enumerate(records):
+        prefix = "CGROUP_DIAG" if index < 2 else "DEVICE_SOURCE"
+        lines.append("DOCKERLENS_NATIVE_" + prefix + ": " + " ".join(
+            f"{field}={value}" for field, value in record.items()
+        ))
+    return "\n".join(lines) + "\n"
+
+
+def _parse_context(payload):
+    """Accept a whole closed batch, never grep a private or partial transcript."""
+    if len(payload) > BATCH_OUTPUT_LIMIT:
+        raise Uncertain("budget")
+    lines = payload.decode("ascii").splitlines()
+    if len(lines) != 4:
+        raise Uncertain("io")
+    records = []
+    for index, line in enumerate(lines):
+        if index < 2:
+            prefix = "DOCKERLENS_NATIVE_CGROUP_DIAG: "
+            fields = {"scope": (("outer", "daemon")[index],),
+                      "outcome": ("observed", "unavailable")}
+            fields.update({field: ("present", "absent", "unknown")
+                           for field in INSPECTION.FIELDS[:4]})
+            fields.update({field: ("finite", "max", "missing", "unknown")
+                           for field in INSPECTION.FIELDS[4:]})
+        else:
+            prefix = "DOCKERLENS_NATIVE_DEVICE_SOURCE: "
+            fields = {"role": (ROLES[index - 2][0],), "scope": ("daemon-view",),
+                      "view": ("same_mount", "different_mount", "unknown"),
+                      "node": ("null", "other", "missing", "unknown"),
+                      "uncertainty": UNCERTAINTIES,
+                      "runtime_source": ("unknown",), "permissions": ("unknown",)}
+        if not line.startswith(prefix):
+            raise Uncertain("io")
+        tokens = line[len(prefix):].split(" ")
+        if len(tokens) != len(fields):
+            raise Uncertain("io")
+        record = {}
+        for token, (field, allowed) in zip(tokens, fields.items()):
+            key, separator, value = token.partition("=")
+            if separator != "=" or key != field or value not in allowed:
+                raise Uncertain("io")
+            record[field] = value
+        records.append(record)
+    return records
+
+
+def batch(container, run_id, mode, deadline, *, clock=phase_clock,
+          monotonic=time.monotonic, euid=os.geteuid, alarm=None, interrupted=lambda: False,
+          lifeline=lambda: True):
+    """Two optional slices under the caller's root-owned, absolute phase bound."""
+    records = _context_unknown()
+    if euid() != 0:
+        return _context_unknown("privilege")
+    deadline = min(deadline, clock() + SECONDS - PHASE_RESERVE)
+    alarm = alarm or (lambda seconds: signal.setitimer(signal.ITIMER_REAL, seconds))
+    operations = (
+        lambda end: INSPECTION.diagnose(container, run_id, mode, ["podman"], deadline=end),
+        lambda end: diagnose(container, run_id, mode, deadline=end),
+    )
+    for index, operation in enumerate(operations):
+        if interrupted() or not lifeline():
+            return _context_unknown()
+        end = min(deadline, clock() + SLICE_SECONDS)
+        remaining = end - clock()
+        if remaining < 0.4:
+            continue
+        # The alarm interrupts blocking metadata work with local teardown still
+        # reserved. Podman's own bounded capture receives the same slice end.
+        alarm(remaining - 0.2)
+        try:
+            records[index * 2:index * 2 + 2] = operation(monotonic() + end - clock())
+        except (Uncertain, INSPECTION.Unavailable, OSError, subprocess.SubprocessError):
+            pass
+        finally:
+            alarm(0)
+        if interrupted() or not lifeline():
+            return _context_unknown()
+    return records
+
+
+def context(container, run_id, mode, use_sudo, *, deadline=None, clock=phase_clock,
+            monotonic=time.monotonic, euid=os.geteuid, runner=None):
+    """One root batch, capped private pipes, and no assumption of remote teardown."""
+    phase_end = min(clock() + SECONDS, deadline) if deadline is not None else clock() + SECONDS
+    if (not re.fullmatch(r"[a-zA-Z0-9]{8}", run_id)
+            or container != "dl-native-" + run_id or mode not in ("rootful", "rootless")
+            or use_sudo not in ("0", "1")):
+        return _context_unknown("input")
+    work_end = phase_end - PHASE_RESERVE
+    duration = work_end - clock()
+    if duration < 0.4:
+        return _context_unknown()
+    # Truncate, never round a root timer past the allocated work deadline.
+    duration = int(duration * 1000) / 1000
+    local_end = monotonic() + phase_end - clock()
+    command = (["sudo", "-n"] if use_sudo == "1" else []) + [
+        "timeout", "--signal=TERM", "--kill-after=0.2", f"{duration:.3f}",
+        sys.executable, str(Path(__file__).resolve()), "--batch",
+        container, run_id, mode, f"{work_end:.6f}",
+    ]
+    try:
+        capture = runner or INSPECTION.bounded_command
+        payload = capture(command, local_end, elevated_until=local_end - 0.2,
+                          capture_limit=BATCH_OUTPUT_LIMIT, start_new_session=False,
+                          reap_monitor=use_sudo == "1" and euid() != 0, stdin_lifeline=True)
+        if clock() >= phase_end:
+            return _context_unknown()
+        return _parse_context(payload)
+    except (Uncertain, INSPECTION.Unavailable, OSError, subprocess.SubprocessError,
+            UnicodeError, ValueError):
+        return _context_unknown()
+
+
 def main():
+    interrupted = [False]
+
     def cancelled(_signal, _frame):
-        signal.signal(signal.SIGTERM, signal.SIG_IGN)
-        signal.signal(signal.SIGINT, signal.SIG_IGN)
-        signal.signal(signal.SIGALRM, signal.SIG_IGN)
+        if _signal != signal.SIGALRM:
+            interrupted[0] = True
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            signal.signal(signal.SIGINT, signal.SIG_IGN)
         raise Uncertain("budget")
 
     for kind in (signal.SIGTERM, signal.SIGINT, signal.SIGALRM):
         signal.signal(kind, cancelled)
     signal.setitimer(signal.ITIMER_REAL, SECONDS)
+    is_context = len(sys.argv) > 1 and sys.argv[1] in ("--context", "--batch", "--validate-context")
+    is_validation = len(sys.argv) > 1 and sys.argv[1] == "--validate-context"
     try:
-        records = diagnose(*sys.argv[1:]) if len(sys.argv) == 4 else _unknown("input")
-    except Uncertain:
-        records = _unknown("budget")
+        if (len(sys.argv) == 3 and is_validation
+                and re.fullmatch(r"[0-9]{1,12}\.[0-9]{1,6}", sys.argv[2])):
+            remaining = float(sys.argv[2]) - phase_clock()
+            if remaining <= 0:
+                return 1
+            signal.setitimer(signal.ITIMER_REAL, min(SECONDS, remaining))
+            records = _parse_context(sys.stdin.buffer.read(BATCH_OUTPUT_LIMIT + 1))
+        elif is_validation:
+            return 1
+        elif (len(sys.argv) == 7 and sys.argv[1] == "--context"
+              and re.fullmatch(r"[0-9]{1,12}\.[0-9]{1,6}", sys.argv[6])):
+            remaining = float(sys.argv[6]) - phase_clock()
+            if remaining <= 0:
+                records = _context_unknown()
+            else:
+                signal.setitimer(signal.ITIMER_REAL, min(SECONDS, remaining))
+                records = context(*sys.argv[2:6], deadline=float(sys.argv[6]))
+        elif len(sys.argv) == 6 and sys.argv[1] == "--context":
+            records = context(*sys.argv[2:])
+        elif (len(sys.argv) == 6 and sys.argv[1] == "--batch"
+              and re.fullmatch(r"[0-9]{1,12}\.[0-9]{1,6}", sys.argv[5])):
+            records = batch(*sys.argv[2:5], float(sys.argv[5]),
+                            interrupted=lambda: interrupted[0], lifeline=_caller_alive)
+        elif is_context:
+            records = _context_unknown("input")
+        else:
+            records = diagnose(*sys.argv[1:]) if len(sys.argv) == 4 else _unknown("input")
+    except (Uncertain, UnicodeError, ValueError):
+        if is_validation:
+            return 1
+        records = _context_unknown() if is_context else _unknown("budget")
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
-    for record in records:
-        print("DOCKERLENS_NATIVE_DEVICE_SOURCE: " + " ".join(
-            f"{field}={value}" for field, value in record.items()
-        ))
+    if is_context:
+        print(_format_context(records), end="")
+    else:
+        for record in records:
+            print("DOCKERLENS_NATIVE_DEVICE_SOURCE: " + " ".join(
+                f"{field}={value}" for field, value in record.items()
+            ))
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

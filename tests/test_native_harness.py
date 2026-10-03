@@ -51,6 +51,126 @@ class NativeHarnessTests(unittest.TestCase):
         for invalid in ("memory-private", "memory\nprivate", "protected-secret", "memory protectedsecret", "memory memory"):
             self.assertEqual(helper.controller_state(invalid, "memory"), "unknown")
 
+    def test_cgroup_caller_deadline_is_shared_clamped_and_not_restarted(self) -> None:
+        helper = self._cgroup_helper()
+        identity = ("a" * 64 + '|dl-native-Ab12Cd34|true|Ab12Cd34|123|"2026-10-02T12:00:00Z"\n').encode()
+        payload = b"outer\nmemory pids\nmemory\n1234\nmax\ndaemon\nunknown\nunknown\nunknown\nunknown\n"
+        for supplied, expected in ((9, None), (11, 11), (100, 15)):
+            calls = []
+
+            def runner(command, deadline):
+                calls.append((command, deadline))
+                return payload if command[1] == "exec" else identity
+
+            with patch.object(helper.time, "monotonic", return_value=10):
+                records = helper.diagnose("dl-native-Ab12Cd34", "Ab12Cd34", "rootful", ["podman"],
+                                         runner, deadline=supplied)
+            if expected is None:
+                self.assertEqual(calls, [])
+                self.assertEqual(records, [helper.unknown("outer"), helper.unknown("daemon")])
+            else:
+                self.assertEqual([deadline for _, deadline in calls], [expected] * 3)
+                self.assertEqual(records[0]["outcome"], "observed")
+                self.assertLessEqual(float(calls[1][0][6]) + 0.75, expected - 10)
+
+    def test_shared_context_runner_is_optional_bounded_and_has_four_closed_defaults(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text()
+        block = source.split("# One five-second context phase,", 1)[1].split(
+            "if [[ $expected_mode == rootless ]]; then", 1
+        )[0]
+        block = "# One five-second context phase," + block
+        for sudo, expired, failed in ((False, False, False), (True, False, False),
+                                      (False, True, False), (True, False, True)):
+            with self.subTest(sudo=sudo, expired=expired, failed=failed):
+                fake = f'''python3() {{
+  if [[ $2 == --validate-context ]]; then
+    command python3 {shlex.quote(str(ROOT / "scripts/native-device-source.py"))} "$2" "$3"
+    return
+  fi
+  [[ $1 == /owned/native-device-source.py && $2 == --context &&
+     $3 == dl-native-Ab12Cd34 && $4 == Ab12Cd34 && $5 == rootless && $6 == {int(sudo)} ]] || exit 42
+  [[ {int(expired)} == 0 ]] || exit 43
+  if [[ {int(failed)} == 1 ]]; then
+    echo "DOCKERLENS_NATIVE_CGROUP_DIAG: scope=outer outcome=unavailable memory_controller=unknown pids_controller=unknown memory_delegated=unknown pids_delegated=unknown memory_max=unknown swap_max=unknown"
+    echo protected-secret >&2
+    return 1
+  fi
+  for role in outer daemon; do
+    echo "DOCKERLENS_NATIVE_CGROUP_DIAG: scope=$role outcome=unavailable memory_controller=unknown pids_controller=unknown memory_delegated=unknown pids_delegated=unknown memory_max=unknown swap_max=unknown"
+  done
+  for role in host-null renamed-null; do
+    echo "DOCKERLENS_NATIVE_DEVICE_SOURCE: role=$role scope=daemon-view view=different_mount node=other uncertainty=none runtime_source=unknown permissions=unknown"
+  done
+}}
+export -f python3
+'''
+                setup = ("set -euo pipefail\nscript_dir=/owned\ncontainer=dl-native-Ab12Cd34\n"
+                         "run_id=Ab12Cd34\nexpected_mode=rootless\n"
+                         + ("podman_cmd=(sudo -n podman)\n" if sudo else "podman_cmd=(podman)\n")
+                         + f"SECONDS={1800 if expired else 0}\n")
+                result = subprocess.run(["bash", "-c", setup + fake + block + "false\n"],
+                                        capture_output=True, text=True, timeout=2, check=False)
+                self.assertEqual(result.returncode, 1)  # The original assertion still fails.
+                self.assertEqual(result.stderr, "")
+                self.assertEqual(len(result.stdout.splitlines()), 4)
+                self.assertEqual(result.stdout.count("DOCKERLENS_NATIVE_DEVICE_SOURCE:"), 2)
+                self.assertEqual("node=other uncertainty=none" in result.stdout, not (failed or expired))
+                self.assertNotIn("protected-secret", result.stdout)
+                self.assertNotIn("Ab12Cd34", result.stdout)
+        self.assertNotIn("run-exact-native-test", block)
+        self.assertNotIn("native-evidence", block)
+        self.assertNotIn(" exec ", block)
+
+    def test_shared_context_does_not_swallow_whole_lane_cancellation(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text()
+        block = "# One five-second context phase," + source.split(
+            "# One five-second context phase,", 1
+        )[1].split("if [[ $expected_mode == rootless ]]; then", 1)[0]
+        setup = ("set -euo pipefail\ntrap 'echo cleanup; exit 143' TERM\n"
+                 "script_dir=/owned\ncontainer=dl-native-Ab12Cd34\nrun_id=Ab12Cd34\n"
+                 "expected_mode=rootless\npodman_cmd=(podman)\nSECONDS=0\n"
+                 "export native_parent=$BASHPID\n"
+                 "python3() { kill -TERM \"$native_parent\"; return 143; }\nexport -f python3\n")
+        result = subprocess.run(["bash", "-c", setup + block + "echo after\n"],
+                                capture_output=True, text=True, timeout=2, check=False)
+        self.assertEqual(result.returncode, 143)
+        self.assertEqual(result.stdout, "cleanup\n")
+        self.assertEqual(result.stderr, "")
+
+    def test_shared_context_outer_timer_bounds_stalled_initial_interpreter(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text()
+        block = "# One five-second context phase," + source.split(
+            "# One five-second context phase,", 1
+        )[1].split("if [[ $expected_mode == rootless ]]; then", 1)[0]
+        self.assertIn("timeout --signal=TERM --kill-after=0.2 4.8 bash -c", block)
+        block = block.replace("--kill-after=0.2 4.8", "--kill-after=0.2 0.3")
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "local-interpreter-pid"
+            setup = ("set -euo pipefail\nscript_dir=/owned\ncontainer=dl-native-Ab12Cd34\n"
+                     "run_id=Ab12Cd34\nexpected_mode=rootless\npodman_cmd=(sudo -n podman)\n"
+                     "SECONDS=0\n")
+            fake = f'''python3() {{
+  if [[ $2 == --validate-context ]]; then
+    command python3 {shlex.quote(str(ROOT / "scripts/native-device-source.py"))} "$2" "$3"
+    return
+  fi
+  trap '' TERM
+  echo "$BASHPID" > {shlex.quote(str(marker))}
+  sleep 10
+}}
+export -f python3
+'''
+            started = time.monotonic()
+            result = subprocess.run(["bash", "-c", setup + fake + block], capture_output=True,
+                                    text=True, timeout=2, check=False)
+            self.assertGreaterEqual(time.monotonic() - started, 0.3)
+            self.assertLess(time.monotonic() - started, 1.5)
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(result.stderr, "")
+            self.assertEqual(len(result.stdout.splitlines()), 4)
+            self.assertTrue(marker.exists())
+            self._assert_process_not_live(int(marker.read_text()))
+
     def test_cgroup_identity_requires_json_serialization_not_go_display(self) -> None:
         helper = self._cgroup_helper()
         prefix = "a" * 64 + "|dl-native-Ab12Cd34|true|Ab12Cd34|123|"

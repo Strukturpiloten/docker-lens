@@ -43,14 +43,19 @@ def command_with_timeout(command, deadline):
     return wrapped, now + duration + TEARDOWN_SECONDS + 0.2
 
 
-def bounded_command(command, deadline, budget=None):
+def bounded_command(command, deadline, budget=None, *, elevated_until=None,
+                    capture_limit=CAPTURE_LIMIT, start_new_session=True, reap_monitor=False,
+                    stdin_lifeline=False):
     """Cap combined private pipes; bound elevated and local teardown separately."""
     if time.monotonic() >= deadline - 0.2:
         raise Unavailable()
-    command, elevated_until = command_with_timeout(command, deadline)
+    command, command_until = command_with_timeout(command, deadline)
+    if elevated_until is None:
+        elevated_until = command_until
     process = subprocess.Popen(
         command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        start_new_session=True,
+        start_new_session=start_new_session,
+        stdin=subprocess.PIPE if stdin_lifeline else None,
     )
     complete = False
     if budget is None:
@@ -71,7 +76,7 @@ def bounded_command(command, deadline, budget=None):
                         selector.unregister(key.fileobj)
                         continue
                     buffer = buffers[key.data]
-                    if budget["total"] + len(chunk) > CAPTURE_LIMIT:
+                    if budget["total"] + len(chunk) > capture_limit:
                         raise Unavailable()
                     budget["total"] += len(chunk)
                     buffer.extend(chunk)
@@ -81,6 +86,13 @@ def bounded_command(command, deadline, budget=None):
             complete = True
             return bytes(buffers["stdout"])
     finally:
+        # EOF tells the root batch not to start another optional read, even
+        # when its separate privileged process group cannot be signalled.
+        if process.stdin is not None:
+            try:
+                process.stdin.close()
+            except OSError:
+                pass
         saved_handlers = None
         if not complete and elevated_until is not None:
             saved_handlers = {kind: signal.getsignal(kind) for kind in (signal.SIGTERM, signal.SIGINT)}
@@ -98,7 +110,8 @@ def bounded_command(command, deadline, budget=None):
                 else:
                     # Do not kill the root-owned timeout while leaving its
                     # elevated child alive. User killpg cannot prove teardown.
-                    # Even if sudo's user monitor exited, wait for its bound.
+                    # An explicit caller cutoff only bounds local waiting;
+                    # delayed root startup/remote teardown cannot be inferred.
                     process.stdout.close()
                     process.stderr.close()
                     while True:
@@ -106,7 +119,16 @@ def bounded_command(command, deadline, budget=None):
                         if remaining <= 0:
                             break
                         time.sleep(min(0.05, remaining))
-                process.wait(timeout=max(0.01, deadline - time.monotonic()))
+                try:
+                    reserve = 0.1 if reap_monitor else 0
+                    process.wait(timeout=max(0.01, deadline - time.monotonic() - reserve))
+                except subprocess.TimeoutExpired:
+                    if not reap_monitor:
+                        raise
+                    # Reap only our user-owned sudo monitor, never infer the
+                    # fate of its privileged timer or remote Podman work.
+                    process.kill()
+                    process.wait(timeout=max(0.01, deadline - time.monotonic()))
         finally:
             process.stdout.close()
             process.stderr.close()
@@ -330,7 +352,7 @@ def inspect_identity(payload, container, run_id):
     return fields
 
 
-def diagnose(container, run_id, mode, podman, runner=None):
+def diagnose(container, run_id, mode, podman, runner=None, *, deadline=None):
     records = [unknown("outer"), unknown("daemon")]
     if (
         not re.fullmatch(r"[a-zA-Z0-9]{8}", run_id)
@@ -339,7 +361,10 @@ def diagnose(container, run_id, mode, podman, runner=None):
         or podman not in (["podman"], ["sudo", "-n", "podman"])
     ):
         return records
-    deadline = time.monotonic() + DIAGNOSTIC_SECONDS
+    now = time.monotonic()
+    deadline = min(now + DIAGNOSTIC_SECONDS, deadline) if deadline is not None else now + DIAGNOSTIC_SECONDS
+    if now >= deadline - 0.2:
+        return records
     if runner is None:
         budget = {"total": 0}
 

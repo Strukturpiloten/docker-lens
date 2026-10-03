@@ -694,19 +694,40 @@ native_package_version() {
   printf '%s' "$version"
 }
 echo "DOCKERLENS_NATIVE_ENV: cgroup_driver=$inner_cgroup_driver cgroup_version=$inner_cgroup runc=$(native_package_version runc) containerd=$(native_package_version containerd) libseccomp2=$(native_package_version libseccomp2)"
-# This five-second best-effort read shares the existing 30-minute outer budget;
-# it runs before the unchanged exact-test/cleanup deadlines. It cannot make a
-# native assertion pass. Ambiguous namespace mapping or read errors stay unknown.
-cgroup_use_sudo=0
-if [[ $EUID != 0 ]]; then cgroup_use_sudo=1; fi
-if (( SECONDS <= 1795 )); then
-  cgroup_diagnostic_args=("$container" "$run_id" "$expected_mode" "$cgroup_use_sudo")
+# One five-second context phase, not five seconds per helper. The device helper
+# owns the root-timed batch, <=2s slices, capped private pipes and closed parser.
+# Startup and teardown count inside that bound and the existing outer budget;
+# neither context record can pass an assertion or establish remote termination.
+diagnostic_use_sudo=0
+if [[ ${podman_cmd[0]} == sudo ]]; then diagnostic_use_sudo=1; fi
+diagnostic_status=0
+diagnostic_output=
+# /proc/uptime is CLOCK_BOOTTIME, truncated to hundredths. This conservative
+# timestamp includes interpreter/sudo startup; no wall-clock timestamp is used.
+if (( SECONDS <= 1795 )) && read -r diagnostic_uptime _ 2>/dev/null </proc/uptime &&
+  [[ $diagnostic_uptime =~ ^[0-9]{1,12}\.[0-9]{2}$ ]]; then
+  diagnostic_end_ms=$((10#${diagnostic_uptime%.*} * 1000 + 10#${diagnostic_uptime#*.} * 10 + 5000))
+  printf -v diagnostic_deadline '%d.%03d' "$((diagnostic_end_ms / 1000))" "$((diagnostic_end_ms % 1000))"
+  diagnostic_output=$(timeout --signal=TERM --kill-after=0.2 4.8 bash -c '
+    set -o pipefail
+    # Keep the direct timer child alive through TERM until its local pipeline
+    # finishes, or KILL fires; otherwise a TERM-ignoring child could outlive it.
+    trap "" TERM INT
+    python3 "$1" --context "$2" "$3" "$4" "$5" "$6" 2>/dev/null |
+      python3 "$1" --validate-context "$6" 2>/dev/null
+  ' diagnostic "$script_dir/native-device-source.py" "$container" "$run_id" \
+    "$expected_mode" "$diagnostic_use_sudo" "$diagnostic_deadline" 2>/dev/null) || diagnostic_status=$?
 else
-  cgroup_diagnostic_args=()
+  diagnostic_status=1
 fi
-if ! python3 "$script_dir/native-cgroup-diagnostic.py" "${cgroup_diagnostic_args[@]}" 2>/dev/null; then
+if (( diagnostic_status == 0 )); then
+  printf '%s\n' "$diagnostic_output"
+else
   for cgroup_scope in outer daemon; do
     echo "DOCKERLENS_NATIVE_CGROUP_DIAG: scope=$cgroup_scope outcome=unavailable memory_controller=unknown pids_controller=unknown memory_delegated=unknown pids_delegated=unknown memory_max=unknown swap_max=unknown"
+  done
+  for device_role in host-null renamed-null; do
+    echo "DOCKERLENS_NATIVE_DEVICE_SOURCE: role=$device_role scope=daemon-view view=unknown node=unknown uncertainty=budget runtime_source=unknown permissions=unknown"
   done
 fi
 if [[ $expected_mode == rootless ]]; then

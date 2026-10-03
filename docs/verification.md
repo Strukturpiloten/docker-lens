@@ -395,18 +395,56 @@ nor causal device-cgroup enforcement: that device is allowed by default with
 `rwm`. Effective memory and PID-limit assertions remain mandatory, and neither
 control admits `DeviceMappings` or another production capability.
 
-The startup-only `native-cgroup-diagnostic.py` helper reads cgroup context
-within the exact run-owned outer container. One five-second monotonic deadline
-and one cumulative 8 KiB bound cover private stdout and stderr combined across
-all operations. The time counts inside the unchanged 30-minute outer deadline;
-the helper runs before the unchanged 180-second exact-test deadline and
-90-second control/cleanup reservation. It validates the running outer
+The startup-only context call in `native-conformance.sh` uses
+`native-device-source.py --context` for one combined five-second monotonic phase,
+not five seconds per diagnostic. Before interpreter launch the shell reads a
+conservative `/proc/uptime` timestamp (monotonic CLOCK_BOOTTIME, including suspend)
+and starts a caller-owned TERM/KILL timer around the entire pipeline: 4.8 seconds
+plus a 0.2-second kill reserve. Thus stalled imports and local capture/parser
+waiting count, not merely successful operations. The direct timer child stays
+alive through TERM until its pipeline finishes or KILL fires. The absolute cutoff
+is also forwarded to the root-owned batch, reserving 0.7 seconds for startup,
+timer fallback, local teardown and reporting. The cgroup and device reads each
+receive at most two seconds, clamped to the actual remaining work deadline;
+an exhausted slice produces fixed unknown records without another read. Slice
+alarms reserve local teardown, and both readers honor the supplied deadline
+internally; remaining BOOTTIME durations are converted to the readers' existing
+monotonic clock without assuming zero suspend offset. The standalone helpers
+retain their existing five-second defaults.
+The time counts inside the unchanged 30-minute outer deadline; the phase runs
+before the unchanged 180-second exact-test deadline and 90-second control/cleanup
+reservation. The context capture caps combined private stdout and stderr at
+2 KiB, then accepts only one complete batch: exactly two closed cgroup records
+and two closed device records with fixed field order, identities and value
+domains. Nonzero exits, overflow, partial, duplicate, extra or malformed records
+become fixed unknowns; raw output, arguments and subprocess errors are never
+printed or written to capture files. The shell buffers the validated result and
+prints it only after the whole pipeline succeeds. A batch that receives
+whole-phase cancellation does not start its second reader, and the caller
+preserves the lane's existing cleanup traps.
+An anonymous stdin lifeline also connects caller cancellation to the root
+batch's separate process group: the capture closes its writer before local
+failure/cancellation waiting, and the batch requires a live, empty FIFO before
+and after each slice. EOF, unexpected data or non-FIFO stdin produce all-unknown
+records without starting another reader. This does not synchronously interrupt
+an already-running remote read or prove its termination.
+
+The `native-cgroup-diagnostic.py` reader uses one cumulative 8 KiB bound for its
+private stdout and stderr combined across operations. It validates the running outer
 container's immutable ID, exact name, ownership label, PID, and start identity
-before and after. Every elevated Podman operation, including both inspections,
-runs under a root-owned TERM/KILL timeout with teardown time reserved inside
-the original deadline. Cancellation or overflow waits for that bound rather
-than treating an unprivileged signal or an exited sudo monitor as proof that
-root descendants stopped. Local unprivileged groups are killed and reaped;
+before and after. The context batch runs as host UID zero under its root-owned
+timeout; standalone elevated Podman operations, including both inspections,
+also have root-owned TERM/KILL timers with teardown time reserved inside
+their deadline. Context cancellation or overflow uses the remaining local wait
+reserve, not an assertion that a delayed privileged timer has expired. The
+unprivileged sudo monitor remains in the caller's timed local process group;
+where permitted it is individually stopped and reaped before local return.
+Permission or wait failure remains private and unknown. Root process groups,
+delayed sudo/root startup, and remote Podman work have independent lifetimes:
+neither an unprivileged signal, monitor exit, nor a host timeout proves their
+termination. The forwarded absolute work cutoff prevents late batch work;
+SIGKILL, uninterruptible kernel work and runner loss remain irreducible limits.
+Standalone local unprivileged command groups are killed and reaped;
 both private pipes close even if signaling or waiting fails. Guest reads also
 have their own bounded timeout; cancellation,
 overflow, read errors, or identity changes produce closed unavailable states.
@@ -470,6 +508,24 @@ report only enabled subtree flags: they do not establish writable delegation,
 permission, effective limits, enforcement, or a reason to weaken a failed
 native assertion. The helper makes no writes or policy/privilege changes and
 does not affect native success, manifests, or production capability admission.
+
+The two `DOCKERLENS_NATIVE_DEVICE_SOURCE` records describe only fixed leaf
+metadata in the verified daemon's view, with roles `host-null` and `renamed-null`.
+Both have `scope=daemon-view`: the role name is not host-namespace attribution.
+The reader requires authentic procfs for every process/namespace directory and
+metadata file, independently verifies proc magic-link targets, binds the guest
+init to the owned outer process, and requires the daemon's held PID namespace
+to match that init in both modes. Foreign or nested PID namespaces remain
+unknown. A 32 KiB cumulative read bound and a bounded process scan apply; only
+leaf metadata is read, never device contents. Process, namespace, root, `/dev`,
+leaf and container identities are rechecked. No guest exec or namespace entry
+is added by the device reader. `runtime_source` and `permissions` always remain
+unknown: these non-atomic observations neither identify transient runc's source
+namespace nor prove access or enforcement. Diagnostic timeout is optional,
+not permission to skip the renamed-device or effective memory/PID assertions.
+Offline integration does not establish native compatibility or resolve the
+Containers #344 systemd prerequisites; fresh genuine exact-candidate native
+evidence remains required before any corresponding admission.
 
 `native-conformance.sh` remains the canonical caller for local lanes,
 `check.yml` main push, `native-validation.yml` reviewed dispatch, and
