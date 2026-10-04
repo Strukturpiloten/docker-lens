@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Define three bounded prerequisite groups for future raw native evidence after
+  complete validated volume, volume-label and network proofs. This does not
+  admit reviewed catalogue capabilities; fresh four-lane runs, independent
+  review and the required consumer gates remain pending.
 - Preserve observation-scoped `/info` memory and swap support reports as
   independently available typed fields. Pure assessment distinguishes reported
   unavailable, reported available but unverified, and unknown without granting

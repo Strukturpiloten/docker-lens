@@ -82,7 +82,7 @@ container names, including exact `networks/{id}/connect` paths. The separate clo
 `network_probes` manifest field retains the original nineteen network renderer
 shapes and appends `NetworkBridgeIccDisabled`,
 `NetworkBridgeMasqueradeEnabled`, and `NetworkCreateLabelsValueDomain` only
-after the exact ignored test passes; it does not extend
+after the exact ignored test passes; these three added markers do not extend
 `admitted_shapes`, catalog capabilities, or a compatibility claim. IPAM fields,
 labels, masquerade and host-binding options have request/inspect checks, not
 independent kernel-behavior proof. Matched control bridges differ only in ICC;
@@ -469,6 +469,26 @@ exact cleanup. Its closed results are not catalogue admission: all four exact
 lanes must pass and be independently
 reviewed before an exact capability claim. Historical unlabelled `NamedVolume`
 evidence cannot prove `VolumeLabels`.
+
+The evidence emitter's bounded #31 prerequisite checkpoint maps complete,
+validated existing native proof files to exactly three additional raw groups:
+`VolumeExternalReference` to `ExternalVolumeReference` after all six volume
+probes, `VolumeLabels` to `VolumeCreateLabels` after all four volume-label
+probes, and `NetworkExternalReference` to `ExternalNetworkReference` after all
+twenty-two network probes and the separate passing internal proof. The existing
+`NetworkInternal` group remains separate. Missing, partial, duplicate, unknown,
+or failed proof inputs reject the complete manifest; no probe name alone
+admits a capability. This changes only future raw `capability_outcome` and
+`admitted_shapes` emission, not the source nineteen-marker set, historical
+records, schema or reviewed catalogue. Earlier #67 raw records did not emit
+these three groups and cannot be retroactively treated as having admitted
+them. Fresh exact-candidate four-lane runs, independent review and separate
+new-cohort admission remain required. ADR 0010 additionally requires the six
+BoxFerry authored fixture mappings and consumer rehearsal before a positive
+production `VolumeLabels` record; those gates remain pending. No arbitrary
+destination prerequisite, data availability, application compatibility or
+release is established by this checkpoint. No native request, operational pin,
+dependency or Renovate extraction path changes are introduced.
 
 ## Reviewed target-profile records
 
