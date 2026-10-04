@@ -559,8 +559,9 @@ also requires exactly one mode-correct `dockerd`, stable process identity,
 effective UID and cgroup membership, matching mount/cgroup namespaces, one
 total mountpoint entry with a rooted cgroup2 mount, and a traversal- and
 symlink-free directory mapping. Rootful requires effective UID zero; rootless
-requires the exact nonzero UID from one validated local `docker` account
-entry, without assuming UID 1000. The account and effective UID are rechecked
+requires the canonical selected lane's account and exact UID: Debian
+`dockertest`, upstream `docker`, both UID 1000. No mode-only account default
+or alternate account fallback is used. The account and effective UID are rechecked
 after reads. Missing or ambiguous account evidence and stacked mounts stay
 unavailable. Different
 RootlessKit namespaces or ambiguous mappings leave that scope unavailable;
@@ -590,6 +591,30 @@ not permission to skip the renamed-device or effective memory/PID assertions.
 Offline integration does not establish native compatibility or resolve the
 Containers #344 systemd prerequisites; fresh genuine exact-candidate native
 evidence remains required before any corresponding admission.
+
+The failed-resource control matrix can additionally read bounded, fixed
+memory/PID controller files inside a started, run-owned control container.
+Its private readout is limited to two records and 512 bytes at classification;
+each file read is capped at 65 bytes, with a one-second guest timer inside the
+three-second CLI bound and the existing shared control budget. Closed
+`DOCKERLENS_NATIVE_RESOURCE_EFFECT_DIAG` records distinguish configured
+finite/unset/unlimited limits from observed matching, different or unlimited
+limit files and missing, denied, invalid-file, malformed, oversized or failed
+reads. Neither START 204, configured values, controller flags nor matching
+file values proves enforcement: every record retains `enforcement=unknown`.
+The wrapper admits at most five exact closed records on failure, never raw
+numbers or paths. The required native memory/PID effect assertions, failure
+propagation, cleanup and evidence schema are unchanged.
+
+The exact PR #73 run `37218370132` failed all four lanes. Rootful memory-only
+START rejection and absent visible subtree flags leave the cgroup fixture
+prerequisites unresolved, not a proven Engine incompatibility. Rootless
+renamed-device rejection remains an unadmitted exact-shape candidate;
+same-path `/dev/null` success is insufficient because that node already exists
+in an ordinary container. Debian rootless repeated-dynamic IPv4 START timeout
+and unverified cleanup are inconclusive, never an unsupported classification
+or permission to emit evidence. These diagnostics repair no host policy and
+do not resolve any of those blockers.
 
 `native-conformance.sh` remains the canonical caller for local lanes,
 `check.yml` main push, `native-validation.yml` reviewed dispatch, and

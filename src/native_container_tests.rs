@@ -428,6 +428,252 @@ fn resource_control_may_continue(uncertain: bool, seconds_remaining: u64) -> boo
     !uncertain && seconds_remaining >= 90
 }
 
+// Fixed controller files only, no policy writes or device access. The guest's
+// own timer bounds descendants if the outer CLI client dies. Values stay in
+// private, capped CLI output; only closed categories are exposed below.
+const RESOURCE_EFFECT_GUEST: &str = r#"
+set -eu
+LC_ALL=C; export LC_ALL
+read_limit() {
+  role=$1
+  file=$2
+  if [ ! -e "$file" ] && [ ! -L "$file" ]; then file=$3; fi
+  if [ ! -e "$file" ] && [ ! -L "$file" ]; then printf '%s missing\n' "$role"; return; fi
+  if [ -L "$file" ] || [ ! -f "$file" ]; then printf '%s invalid_file\n' "$role"; return; fi
+  if [ ! -r "$file" ]; then printf '%s denied\n' "$role"; return; fi
+  if value=$(head -c 65 "$file" 2>/dev/null); then
+    if [ "${#value}" -gt 64 ]; then printf '%s oversized\n' "$role"; return; fi
+    case "$value" in
+      max) ;;
+      ''|*[!0-9]*) printf '%s malformed\n' "$role"; return ;;
+    esac
+    printf '%s ok %s\n' "$role" "$value"
+  else
+    printf '%s read_error\n' "$role"
+  fi
+}
+read_limit memory /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory/memory.limit_in_bytes
+read_limit pids /sys/fs/cgroup/pids.max /sys/fs/cgroup/pids/pids.max
+"#;
+
+#[derive(Clone, Copy)]
+struct ResourceEffectRead {
+    category: &'static str,
+    value: Option<u64>,
+}
+
+fn parse_resource_effect_reads(payload: Option<&str>) -> [ResourceEffectRead; 2] {
+    let unknown = ResourceEffectRead {
+        category: "unavailable",
+        value: None,
+    };
+    let Some(payload) = payload.filter(|value| value.len() <= 512) else {
+        return [unknown; 2];
+    };
+    let mut lines = payload.lines();
+    let mut result = [unknown; 2];
+    for (index, role) in ["memory", "pids"].iter().enumerate() {
+        let Some(line) = lines.next() else {
+            return [unknown; 2];
+        };
+        let fields = line.split(' ').collect::<Vec<_>>();
+        let read = match fields.as_slice() {
+            [name, "ok", "max"] if name == role => ResourceEffectRead {
+                category: "unlimited",
+                value: None,
+            },
+            [name, "ok", value]
+                if name == role
+                    && !value.is_empty()
+                    && value.bytes().all(|byte| byte.is_ascii_digit()) =>
+            {
+                let Ok(value) = value.parse::<u64>() else {
+                    return [unknown; 2];
+                };
+                ResourceEffectRead {
+                    category: "finite",
+                    value: Some(value),
+                }
+            }
+            [name, category] if name == role => ResourceEffectRead {
+                category: match *category {
+                    "missing" => "missing",
+                    "denied" => "denied",
+                    "invalid_file" => "invalid_file",
+                    "oversized" => "oversized",
+                    "malformed" => "malformed",
+                    "read_error" => "read_error",
+                    _ => return [unknown; 2],
+                },
+                value: None,
+            },
+            _ => return [unknown; 2],
+        };
+        result[index] = read;
+    }
+    if lines.next().is_some() {
+        return [unknown; 2];
+    }
+    result
+}
+
+fn resource_effect_diagnostic(
+    control: &str,
+    inspected: &Value,
+    outcome: &str,
+    payload: Option<&str>,
+) -> String {
+    assert!(RESOURCE_START_CONTROLS.contains(&control));
+    let configured = |field: &str| match inspected["HostConfig"][field].as_i64() {
+        Some(value) if value > 0 => ("finite", u64::try_from(value).ok()),
+        Some(0) => ("unset", None),
+        Some(-1) if field == "PidsLimit" => ("unlimited", None),
+        _ => ("unknown", None),
+    };
+    let memory = configured("Memory");
+    let pids = configured("PidsLimit");
+    let reads = if outcome == "started"
+        && inspected["State"]["Status"] == "running"
+        && inspected["State"]["Running"] == true
+    {
+        parse_resource_effect_reads(payload)
+    } else {
+        [ResourceEffectRead {
+            category: if inspected["State"]["Status"] == "created"
+                && inspected["State"]["Running"] == false
+            {
+                "not_running"
+            } else {
+                "unavailable"
+            },
+            value: None,
+        }; 2]
+    };
+    let compared = |read: ResourceEffectRead, configured: Option<u64>| match (
+        read.category,
+        read.value,
+        configured,
+    ) {
+        ("unlimited", _, _) => "unlimited",
+        ("finite", Some(actual), Some(expected)) if actual == expected => "matches",
+        ("finite", Some(_), Some(_)) => "differs",
+        _ => "unknown",
+    };
+    format!(
+        "DOCKERLENS_NATIVE_RESOURCE_EFFECT_DIAG: control={control} memory_configured={} memory_read={} memory_effect={} pids_configured={} pids_read={} pids_effect={} enforcement=unknown",
+        memory.0,
+        reads[0].category,
+        compared(reads[0], memory.1),
+        pids.0,
+        reads[1].category,
+        compared(reads[1], pids.1)
+    )
+}
+
+#[test]
+fn resource_effect_diagnostics_never_promote_configuration_or_flags_to_enforcement() {
+    let inspected = json!({"HostConfig":{"Memory":67108864,"PidsLimit":32,"CgroupControllers":["memory","pids"]},"State":{"Status":"running","Running":true}});
+    for payload in [
+        None,
+        Some("memory controllers present\npids controllers present\n"),
+        Some("memory missing\npids denied\n"),
+    ] {
+        let diagnostic = resource_effect_diagnostic("memory", &inspected, "started", payload);
+        assert!(diagnostic.contains("memory_effect=unknown"));
+        assert!(diagnostic.contains("pids_effect=unknown"));
+        assert!(diagnostic.ends_with("enforcement=unknown"));
+    }
+    let matched = resource_effect_diagnostic(
+        "memory",
+        &inspected,
+        "started",
+        Some("memory ok 67108864\npids ok 32\n"),
+    );
+    assert!(matched.contains("memory_effect=matches"));
+    assert!(matched.contains("pids_effect=matches"));
+    assert!(matched.ends_with("enforcement=unknown"));
+    for outcome in ["rejected", "uncertain"] {
+        let diagnostic = resource_effect_diagnostic(
+            "memory",
+            &inspected,
+            outcome,
+            Some("memory ok 67108864\npids ok 32\n"),
+        );
+        assert!(diagnostic.contains("memory_read=unavailable memory_effect=unknown"));
+        assert!(diagnostic.contains("pids_read=unavailable pids_effect=unknown"));
+    }
+    let ignored = resource_effect_diagnostic(
+        "pids",
+        &inspected,
+        "started",
+        Some("memory ok max\npids ok max\n"),
+    );
+    assert!(ignored.contains("memory_effect=unlimited"));
+    assert!(ignored.contains("pids_effect=unlimited"));
+    let different = resource_effect_diagnostic(
+        "memory",
+        &inspected,
+        "started",
+        Some("memory ok 123\npids ok 123\n"),
+    );
+    assert!(different.contains("memory_effect=differs"));
+    assert!(different.contains("pids_effect=differs"));
+    let mut not_running = inspected;
+    not_running["State"] = json!({"Status":"created","Running":false});
+    let diagnostic = resource_effect_diagnostic(
+        "memory",
+        &not_running,
+        "rejected",
+        Some("memory ok 67108864\npids ok 32\n"),
+    );
+    assert!(diagnostic.contains("memory_read=not_running memory_effect=unknown"));
+    let inconsistent_start = resource_effect_diagnostic(
+        "memory",
+        &not_running,
+        "started",
+        Some("memory ok 67108864\npids ok 32\n"),
+    );
+    assert!(inconsistent_start.contains("memory_effect=unknown"));
+    assert!(inconsistent_start.contains("pids_effect=unknown"));
+}
+
+#[test]
+fn resource_effect_parser_requires_two_closed_bounded_controller_reads() {
+    for category in [
+        "missing",
+        "denied",
+        "invalid_file",
+        "oversized",
+        "malformed",
+        "read_error",
+    ] {
+        let payload = format!("memory {category}\npids {category}\n");
+        let reads = parse_resource_effect_reads(Some(&payload));
+        assert_eq!(reads[0].category, category);
+        assert_eq!(reads[1].category, category);
+        assert!(reads.iter().all(|read| read.value.is_none()));
+    }
+    for payload in [
+        "memory ok 67108864\n",
+        "pids ok 32\nmemory ok 67108864\n",
+        "memory ok -1\npids ok 32\n",
+        "memory ok 18446744073709551616\npids ok 32\n",
+        "memory ok 64\npids ok 32\nprotected-secret\n",
+        "memory protected-secret\npids ok 32\n",
+    ] {
+        assert!(
+            parse_resource_effect_reads(Some(payload))
+                .iter()
+                .all(|read| read.category == "unavailable" && read.value.is_none())
+        );
+    }
+    assert!(
+        parse_resource_effect_reads(Some(&"x".repeat(513)))
+            .iter()
+            .all(|read| read.category == "unavailable")
+    );
+}
+
 fn device_control_destination(control: &str) -> Option<&'static str> {
     match control {
         "device" => Some("/dev/native-null"),
@@ -1748,6 +1994,38 @@ impl NativeRun {
         if uncertain {
             self.uncertain_mutation.set(true);
         }
+        // This matrix runs only after the required resource oracle has failed.
+        // Its readback cannot admit a shape or waive assert_resource_effects.
+        // A failed remote exec retains mutation uncertainty and cleanup gates.
+        let payload = if outcome == "started"
+            && resource_control_may_continue(
+                self.uncertain_mutation.get(),
+                resource_control_seconds_remaining(),
+            ) {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.cli_with_timeout(
+                    &[
+                        "exec".into(),
+                        id.into(),
+                        "timeout".into(),
+                        "-k".into(),
+                        "0.2".into(),
+                        "1".into(),
+                        "sh".into(),
+                        "-c".into(),
+                        RESOURCE_EFFECT_GUEST.into(),
+                    ],
+                    "3",
+                )
+            }))
+            .ok()
+        } else {
+            None
+        };
+        eprintln!(
+            "{}",
+            resource_effect_diagnostic(control, &inspected, outcome, payload.as_deref())
+        );
         outcome
     }
 

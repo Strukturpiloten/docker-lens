@@ -1953,6 +1953,99 @@ fi
             self.assertIn("DOCKERLENS_NATIVE_START_BODY_DIAG: shape=message cgroup_mention=present device_mention=absent sysctl_mention=absent ulimit_mention=absent apparmor_mention=absent permission_phrase=present errno_mention=absent controller_mention=absent bpf_mention=absent", result.stderr)
             self.assertNotIn("protected-secret", result.stdout + result.stderr)
 
+    def test_resource_effect_guest_reads_only_bounded_synthetic_controller_files(self) -> None:
+        source = (ROOT / "src/native_container_tests.rs").read_text()
+        guest = source.split('const RESOURCE_EFFECT_GUEST: &str = r#"', 1)[1].split('"#;', 1)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "cgroup"
+            root.mkdir()
+            script = guest.replace("/sys/fs/cgroup", str(root))
+
+            def read(env=None):
+                result = subprocess.run(["sh", "-c", script], env=env, capture_output=True,
+                                        text=True, timeout=2, check=False)
+                self.assertEqual(result.returncode, 0)
+                self.assertEqual(result.stderr, "")
+                return result.stdout
+
+            self.assertEqual(read(), "memory missing\npids missing\n")
+            memory = root / "memory.max"
+            pids = root / "pids.max"
+            memory.write_text("67108864\n")
+            pids.write_text("32\n")
+            self.assertEqual(read(), "memory ok 67108864\npids ok 32\n")
+            for value, category in (("max\n", "ok max"), ("protected-secret\n", "malformed"),
+                                    ("12\n34\n", "malformed"), ("9" * 66, "oversized")):
+                memory.write_text(value)
+                self.assertEqual(read(), f"memory {category}\npids ok 32\n")
+            memory.unlink()
+            secret = Path(directory) / "secret"
+            secret.write_text("protected-secret\n")
+            memory.symlink_to(secret)
+            self.assertEqual(read(), "memory invalid_file\npids ok 32\n")
+            memory.unlink()
+            memory.mkdir()
+            self.assertEqual(read(), "memory invalid_file\npids ok 32\n")
+            memory.rmdir()
+            (root / "memory").mkdir()
+            (root / "memory/memory.limit_in_bytes").write_text("67108864\n")
+            self.assertEqual(read(), "memory ok 67108864\npids ok 32\n")
+            bin_dir = Path(directory) / "bin"
+            bin_dir.mkdir()
+            self._tool(bin_dir, "head", "#!/bin/sh\nexit 1\n")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            self.assertEqual(read(env), "memory read_error\npids read_error\n")
+
+    def test_resource_effect_diagnostics_are_closed_capped_and_never_enforcement(self) -> None:
+        source = (ROOT / "src/native_container_tests.rs").read_text()
+        control = source.split("fn resource_control_start(", 1)[1].split("fn namespace_probe(", 1)[0]
+        self.assertIn("resource_control_may_continue(", control)
+        self.assertIn('"1".into()', control)
+        self.assertIn('"3",', control)
+        required = source.split("fn probe_resources_and_security(", 1)[1].split(
+            "fn runtime_unlimited_cgroups(", 1
+        )[0]
+        self.assertIn("assert_native_api_status(NativeApiOperation::Start, oracle_start_status, 204);", required)
+        self.assertIn('assert_resource_effects(run, &oracle_id, "oracle");', required)
+        self.assertIn('assert_resource_effects(run, &id, "rendered");', required)
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_container_tests::live_container_settings_match_engine: test'
+else
+  fields='memory_configured=finite memory_read=finite memory_effect=matches pids_configured=finite pids_read=finite pids_effect=matches enforcement=unknown'
+  for control in baseline baseline baseline memory pids device device-same-path; do
+    echo "DOCKERLENS_NATIVE_RESOURCE_EFFECT_DIAG: control=$control $fields" >&2
+  done
+  echo "DOCKERLENS_NATIVE_RESOURCE_EFFECT_DIAG: control=protected-secret $fields" >&2
+  echo "DOCKERLENS_NATIVE_RESOURCE_EFFECT_DIAG: control=memory $fields raw=protected-secret" >&2
+  echo "DOCKERLENS_NATIVE_RESOURCE_EFFECT_DIAG: control=memory ${fields/enforcement=unknown/enforcement=proven}" >&2
+  echo "DOCKERLENS_NATIVE_RESOURCE_EFFECT_DIAG: control=memory ${fields/memory_configured=finite/memory_configured=67108864}" >&2
+  echo "DOCKERLENS_NATIVE_RESOURCE_EFFECT_DIAG: control=memory ${fields/memory_read=finite/memory_read=controller_present}" >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            result = subprocess.run(
+                [str(ROOT / "scripts/run-exact-native-test.sh"), "native_container",
+                 "live_container_settings_match_engine"], env=env, capture_output=True,
+                text=True, timeout=15, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            records = [line for line in result.stderr.splitlines()
+                       if line.startswith("DOCKERLENS_NATIVE_RESOURCE_EFFECT_DIAG:")]
+            self.assertEqual(len(records), 5)
+            self.assertEqual([line.split("control=", 1)[1].split(" ", 1)[0] for line in records],
+                             ["baseline", "memory", "pids", "device", "device-same-path"])
+            self.assertTrue(all(line.endswith("enforcement=unknown") for line in records))
+            for private in ("protected-secret", "67108864", "controller_present", "enforcement=proven"):
+                self.assertNotIn(private, result.stdout + result.stderr)
+
     def test_control_start_body_diagnostics_preserve_five_closed_records(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             bin_dir = Path(directory)
