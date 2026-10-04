@@ -361,9 +361,26 @@ It deletes its exact named container, volume, and temporary files after
 success, failure, or catchable termination. SIGKILL, host failure, or hard
 runner shutdown can prevent cleanup; inspect the printed exact names and
 `io.dockerlens.native-run` labels before manual removal. Never global-prune.
-Podman existence-query errors are not treated as absence: cleanup attempts
-label-verified removal where possible, reads back exact resource absence, and
-still fails the lane for review when absence cannot be verified.
+The validation-only `scripts/native-presence.py` helper gives preflight and
+cleanup a closed `present`/0, `absent`/1, `unknown`/2 protocol. Only an actual
+completed native exit 0 or 1 with completely empty combined stdout and stderr
+proves presence or absence. Warnings (including exit 0), diagnostics on exit 1,
+other exits, timeout, cancellation, overflow or unverified group termination
+are unknown. The helper streams into private mode-0600 evidence with a combined
+16 KiB cap, observes exit without reaping the group leader, then terminates its
+group and verifies teardown before classifying. The helper and its outer
+timeout share the Podman client's root privileges where sudo is used. A separate
+six-second timeout with a two-second kill fallback bounds the actual client
+inside its teardown group, even if the helper is killed.
+This applies to the daemon container, sidecar, network and volume, including
+all positive absence readbacks and generated-name preflight. The existing inner
+Docker exact-name cleanup listing uses the same helper: only completed empty
+exit 0 on both streams establishes absence. No query or mutation is added.
+Unknown presence retains the private run directory for manual review, attempts
+label-verified removal where possible, and fails teardown even when later
+readback succeeds. Raw diagnostics never reach logs. Mocked regression tests
+exercise these outcomes without launching a native runtime; they establish no
+new compatibility or capability admission.
 Each cleanup command retains its eight-second deadline and two-second kill
 fallback; for elevated Podman the timeout also runs under sudo so it can signal
 the root-owned client. Only a task-named container with the matching run label
