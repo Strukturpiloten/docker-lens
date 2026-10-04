@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "lane": "upstream-rootful",
+  "candidate_sha": "702910b003daae58babd540d7ba3de4998275feb",
+  "run_url": "https://github.com/Strukturpiloten/docker-lens/actions/runs/37209363801/attempts/1",
+  "native_manifest_artifact_name": "dockerlens-native-upstream-rootful",
+  "native_manifest_sha256": "cff1c7eee2883671a28009e0c97d027f01d526039c8beb2ebcadeafe48d38ce0",
+  "identity": {
+    "build": {
+      "kind": "upstream"
+    },
+    "engine_release": "29.8.1",
+    "advertised_api": "1.56",
+    "acquisition_api": "1.49",
+    "rendering_api": "1.56",
+    "mode": "rootful"
+  },
+  "capabilities": [
+    {
+      "name": "BindMount",
+      "state": "available",
+      "admitted_shapes": [
+        "BindMountReadWrite",
+        "BindMountReadOnly"
+      ]
+    },
+    {
+      "name": "BridgeNetwork",
+      "state": "available",
+      "admitted_shapes": [
+        "BridgeNetworkCreate",
+        "BridgeNetworkAttach"
+      ]
+    },
+    {
+      "name": "Command",
+      "state": "available",
+      "admitted_shapes": [
+        "ExecCommand"
+      ]
+    },
+    {
+      "name": "Entrypoint",
+      "state": "available",
+      "admitted_shapes": [
+        "ExecEntrypoint"
+      ]
+    },
+    {
+      "name": "EnvironmentAssignment",
+      "state": "available",
+      "admitted_shapes": [
+        "EnvironmentValue",
+        "EnvironmentEmptyValue"
+      ]
+    },
+    {
+      "name": "Healthcheck",
+      "state": "available",
+      "admitted_shapes": [
+        "ExecHealthcheck"
+      ]
+    },
+    {
+      "name": "NamedVolume",
+      "state": "available",
+      "admitted_shapes": [
+        "NamedVolumeCreate",
+        "NamedVolumeMountReadWrite",
+        "NamedVolumeMountReadOnly"
+      ]
+    },
+    {
+      "name": "NetworkExternalReference",
+      "state": "available",
+      "admitted_shapes": [
+        "ExternalNetworkReference"
+      ]
+    },
+    {
+      "name": "NetworkInternal",
+      "state": "available",
+      "admitted_shapes": [
+        "InternalBridgeNetworkCreate"
+      ]
+    },
+    {
+      "name": "PortPublish",
+      "state": "available",
+      "admitted_shapes": [
+        "FixedTcpPort",
+        "FixedUdpPort"
+      ]
+    },
+    {
+      "name": "RestartPolicy",
+      "state": "available",
+      "admitted_shapes": [
+        "RestartNo",
+        "RestartAlways",
+        "RestartUnlessStopped",
+        "RestartOnFailureUnlimited",
+        "RestartOnFailureLimited"
+      ]
+    },
+    {
+      "name": "StandaloneContainer",
+      "state": "available",
+      "admitted_shapes": [
+        "StandaloneCreate"
+      ]
+    },
+    {
+      "name": "VolumeExternalReference",
+      "state": "available",
+      "admitted_shapes": [
+        "ExternalVolumeReference"
+      ]
+    }
+  ]
+}

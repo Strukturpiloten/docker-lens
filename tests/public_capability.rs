@@ -3,7 +3,8 @@
 
 use docker_lens::observation::ResourceRef;
 use docker_lens::target::{
-    DockerApiRenderer, DockerPlanner, Planner, Renderer, TargetIdentity, TargetIntent,
+    DockerApiRenderer, DockerPlanner, NetworkCreate, NetworkDriver, NetworkIntent, NetworkRole,
+    NetworkSource, Planner, PlanningContext, Renderer, TargetIdentity, TargetIntent,
     TargetResource,
 };
 use docker_lens::version::{
@@ -15,6 +16,168 @@ use std::num::NonZeroU16;
 
 fn api(minor: u16) -> ApiVersion {
     ApiVersion::new(NonZeroU16::new(1).unwrap(), minor)
+}
+
+#[test]
+fn exact_profiles_admit_reviewed_prerequisites_but_keep_other_groups_closed() {
+    let catalog = TargetCapabilityCatalog::reviewed();
+    assert_eq!(catalog.profiles().len(), 4);
+    for profile in catalog.profiles() {
+        let resolved = catalog.resolve(profile).unwrap();
+        assert_eq!(
+            resolved.evidence().candidate_sha(),
+            "702910b003daae58babd540d7ba3de4998275feb"
+        );
+        assert_eq!(
+            resolved.evidence().run_url(),
+            "https://github.com/Strukturpiloten/docker-lens/actions/runs/37209363801/attempts/1"
+        );
+        for capability in [
+            Capability::VolumeExternalReference,
+            Capability::NetworkExternalReference,
+            Capability::NetworkInternal,
+        ] {
+            assert!(resolved.supports(capability));
+        }
+        for capability in [
+            Capability::VolumeLabels,
+            Capability::NetworkIpv6,
+            Capability::NetworkIpam,
+            Capability::NetworkOptions,
+            Capability::NetworkLabels,
+            Capability::NetworkAliases,
+            Capability::NetworkStaticAddress,
+            Capability::NetworkMultipleAttachment,
+            Capability::PortEphemeral,
+            Capability::CommandClear,
+            Capability::HealthShell,
+            Capability::HealthStartInterval,
+            Capability::ContainerLabels,
+            Capability::ContainerUser,
+            Capability::MemoryLimit,
+            Capability::PidsLimit,
+            Capability::SecurityOptions,
+            Capability::UserNamespace,
+        ] {
+            assert!(!resolved.supports(capability));
+        }
+    }
+}
+
+fn reviewed_prerequisite_context(profile: &TargetProfile) -> serde_json::Value {
+    let (build, release, rendering_api, acquisition_api, rootful_key, rootless_key) =
+        match profile.identity().build() {
+            EngineBuild::DebianPackage(_) => (
+                serde_json::json!({
+                    "kind": "debian_package",
+                    "revision": "20.10.5+dfsg1-1+deb11u2",
+                }),
+                "20.10.5+dfsg1",
+                "1.41",
+                "1.41",
+                "b9f3064cadfc2302678b9a334597907fd35eeb856464d4e6c81bf4465875d0e8",
+                "365e8a70e2e5a369912da47d2a510e45acd7cca3ac6e932e3536ad75f22c64b9",
+            ),
+            EngineBuild::Upstream => (
+                serde_json::json!({"kind": "upstream"}),
+                "29.8.1",
+                "1.56",
+                "1.49",
+                "27c47307f4fdd523a22448415238a729e7a6458fddc554259f23ea99fff5ff76",
+                "c0f8160bf8787e9490713595f58c1b4eeb9aeee3ff5f4739776a1010bdea6e1f",
+            ),
+        };
+    let (mode, evidence_key) = match profile.mode() {
+        DaemonMode::Rootful => ("rootful", rootful_key),
+        DaemonMode::Rootless => ("rootless", rootless_key),
+        DaemonMode::Unknown => panic!("reviewed profiles must bind a daemon mode"),
+    };
+    serde_json::json!({
+        "kind": "target",
+        "build": build,
+        "engine_release": release,
+        "advertised_api_version": rendering_api,
+        "acquisition_api_version": acquisition_api,
+        "rendering_api_version": rendering_api,
+        "daemon_mode": mode,
+        "evidence_sha256": evidence_key,
+    })
+}
+
+#[test]
+fn reviewed_profiles_plan_and_render_exact_prerequisites_and_internal_bridge() {
+    let mut internal = NetworkCreate::bridge();
+    internal.internal = true;
+    let intent = TargetIntent::new(vec![
+        TargetResource::ExternalVolume {
+            reference: ResourceRef::new(11),
+            identity: TargetIdentity::new(b"existing-data".to_vec()).unwrap(),
+        },
+        TargetResource::Network(NetworkIntent {
+            reference: ResourceRef::new(22),
+            identity: TargetIdentity::new(b"existing-edge".to_vec()).unwrap(),
+            role: NetworkRole::Declared,
+            source: NetworkSource::External {
+                expected_driver: NetworkDriver::Bridge,
+            },
+        }),
+        TargetResource::Network(NetworkIntent {
+            reference: ResourceRef::new(33),
+            identity: TargetIdentity::new(b"private-backend".to_vec()).unwrap(),
+            role: NetworkRole::Declared,
+            source: NetworkSource::Create(internal),
+        }),
+    ])
+    .unwrap();
+    let catalog = TargetCapabilityCatalog::reviewed();
+    assert_eq!(catalog.profiles().len(), 4);
+    for profile in catalog.profiles() {
+        let admitted = catalog.resolve(profile).unwrap();
+        let graph = DockerPlanner.plan(&intent, &admitted).unwrap();
+        assert_eq!(graph.context(), &PlanningContext::Target(profile.clone()));
+        let artifact = DockerApiRenderer.render(&graph).unwrap();
+        assert_eq!(artifact.context(), Some(graph.context()));
+
+        assert_eq!(artifact.volume_prerequisites().len(), 1);
+        let volume = &artifact.volume_prerequisites()[0];
+        assert_eq!(volume.reference, ResourceRef::new(11));
+        assert_eq!(volume.identity(), b"existing-data");
+        assert_eq!(artifact.network_prerequisites().len(), 1);
+        let network = &artifact.network_prerequisites()[0];
+        assert_eq!(network.reference, ResourceRef::new(22));
+        assert_eq!(network.identity(), b"existing-edge");
+        assert_eq!(network.expected_driver, NetworkDriver::Bridge);
+
+        let context = reviewed_prerequisite_context(profile);
+        let request = serde_json::json!({
+            "method": "POST",
+            "path": format!(
+                "/v{}/networks/create",
+                context["rendering_api_version"].as_str().unwrap(),
+            ),
+            "body": {"Name": "private-backend", "Driver": "bridge", "Internal": true},
+        });
+        // Parsing the entire stream as one object rejects any external create request.
+        let request_only: serde_json::Value = serde_json::from_slice(artifact.bytes()).unwrap();
+        assert_eq!(request_only, request);
+        let complete: serde_json::Value =
+            serde_json::from_slice(&artifact.complete_bytes().unwrap()).unwrap();
+        assert_eq!(
+            complete,
+            serde_json::json!({
+                "schema_version": 1,
+                "context": context,
+                "requests": [request],
+                "prerequisites": [
+                    {"kind": "volume", "reference": "11", "identity": "existing-data"},
+                    {
+                        "kind": "network", "reference": "22", "identity": "existing-edge",
+                        "expected_driver": "bridge",
+                    },
+                ],
+            }),
+        );
+    }
 }
 
 #[test]

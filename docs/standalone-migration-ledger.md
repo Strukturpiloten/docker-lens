@@ -11,10 +11,12 @@ BoxFerry loss decision.
 DockerLens #29 now has typed bridge creation, application-default identity,
 external-reference prerequisites, independent per-container aliases and
 addresses, and ordered secondary connect requests. These are inert target
-contracts only. The historical four-profile catalog still admits no new
-network shape; #31's native network harness extension still requires genuine
-passing exact-lane evidence and independent review, and BoxFerry's six-scenario
-consumer checks remain required before a full migration claim.
+contracts, not executed output. The original historical cohort admits no new
+network shape; the separately reviewed #68 cohort admits only the external
+bridge prerequisite and internal bridge creation singleton groups. Remaining
+network groups still require genuine passing exact-lane evidence and independent
+review, and BoxFerry's six-scenario consumer checks remain required before a full
+migration claim.
 
 The following authored topology anchors are read from BoxFerry's
 `fixtures/conformance/{forgejo,nextcloud,paperless-ngx,immich,observability,supabase}-application/compose.yaml`
@@ -53,10 +55,12 @@ DockerLens #44 adds an inert existing named-volume target contract:
 `RequireExisting(Volume)` graph step and protected `VolumePrerequisite`, with no
 volume-create request. `Mount::volume` still renders the exact declared target
 name. Inspected source identity is not authored destination ownership or proof
-that data exists there. Historical profiles remain unadmitted for this branch.
-DockerLens #44 requires independent four-lane native absence, mount-data and
-persistence evidence before admission; BoxFerry #343 must make an explicit
-promotion or loss decision and verify the destination prerequisite. The target
+that data exists there. The original historical cohort remains unadmitted for
+this branch; the separately reviewed #68 cohort admits its singleton reference
+group after independent four-lane absence, mount-data and persistence proof.
+BoxFerry #343 must still make an explicit promotion or loss decision and verify
+the destination prerequisite; this admission does not close the wider #44
+consumer contract. The target
 checkpoint does not transfer data or close the migration issue.
 
 DockerLens #49 adds bounded protected labels to created named-volume intent,
@@ -164,5 +168,6 @@ ADR 0006; native baseline test constructors follow the new contract. Further
 target fields, constructors, capability names, or cross-repository API changes
 require explicit reviewed contracts before parallel edits. ADR 0007 records
 the reviewed #30 container contract. Historical catalog records remain
-unchanged, and new network and container shapes remain unadmitted. DockerLens
+unchanged; remaining network and additional container-setting shapes remain
+unadmitted. DockerLens
 #3 remains open after this checkpoint.

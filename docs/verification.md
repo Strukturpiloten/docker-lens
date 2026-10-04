@@ -134,9 +134,10 @@ cleanup does the test
 replace the private network probe file with a closed positive shape result.
 The manifest emitter rejects a missing, negative, malformed, oversized, or
 symlinked result; a valid result adds `NetworkInternal` and its sole
-`InternalBridgeNetworkCreate` shape to raw lane evidence. The compiled catalog
-and historical evidence remain unchanged until a separate review binds fresh
-four-lane artifacts. This test adds no dependency, image, action, or tool pin,
+`InternalBridgeNetworkCreate` shape to raw lane evidence. The separate reviewed
+#68 cohort below admits only that singleton internal-network group; original
+historical evidence remains unchanged. This test adds no dependency, image,
+action, or tool pin,
 so Renovate extraction and ownership need no change.
 The three option/label additions remain non-admission evidence, and the historical nineteen
 names and manifests are unchanged. IPv4 `/31` and `/32` bridge parents remain
@@ -492,8 +493,19 @@ dependency or Renovate extraction path changes are introduced.
 
 ## Reviewed target-profile records
 
-The catalog contains four reviewed records from native run `36451790131`,
-attempt 1, of source candidate `d51d7dbfda5ee6f8fefe92605afe8baea3dc504e`.
+The compiled catalogue selects four reviewed records from native run
+[`37209363801`, attempt 1](https://github.com/Strukturpiloten/docker-lens/actions/runs/37209363801/attempts/1),
+of source candidate `702910b003daae58babd540d7ba3de4998275feb`. This separate
+#68 cohort admits the original ten capabilities/twenty shapes plus exactly
+`VolumeExternalReference` / `ExternalVolumeReference`,
+`NetworkExternalReference` / `ExternalNetworkReference`, and
+`NetworkInternal` / `InternalBridgeNetworkCreate`: thirteen capabilities and
+twenty-three shapes for each exact lane identity. The original four records
+from run `36451790131`, attempt 1, candidate
+`d51d7dbfda5ee6f8fefe92605afe8baea3dc504e`, and all of their raw bytes remain
+preserved. They retain their original ten/twenty admissions and are not
+relabeled as #68 evidence. The public catalogue still has four identities,
+selected from the new cohort rather than duplicate old/new profile entries.
 Exact raw manifests and reviewed envelopes are checked in under
 `docs/evidence/native/sha256/` and `docs/evidence/reviewed/sha256/`. Each
 changed candidate and release needs fresh complete and four-lane native gates.
@@ -504,8 +516,13 @@ Engine release, advertised maximum API, negotiated acquisition API, tested
 rendering API, and rootful or rootless mode. The run URL includes the attempt
 number. `candidate_sha` names the source tree actually executed by that run.
 The schema recognizes the capability and renderer-shape names already defined
-by DockerLens, but recognition is not admission. The compiled historical
-catalog still requires its exact ten capabilities and twenty shapes per lane.
+by DockerLens, but recognition is not admission. The compiled catalogue
+requires exactly the new cohort's thirteen capabilities and twenty-three
+shapes per lane. `VolumeLabels` / `VolumeCreateLabels` remains excluded even
+though #68's raw manifests contain positive label proof. ADR 0010's six
+BoxFerry authored fixtures and consumer rehearsal still gate that separate
+admission. Other topology, resource, security and container-setting groups
+remain unadmitted; the broader #31, #44 and consumer milestones remain open.
 A later cohort must explicitly bind its candidate SHA, source run, each lane's
 identity and content digests, and the complete
 `NativeCapabilityShape::required_for` group for every positive capability.
@@ -514,6 +531,25 @@ admitted shapes, and its raw capability outcome must be `available`.
 Duplicate or missing lanes, partial groups, and shapes belonging to another
 capability cannot establish a catalog claim. Preserve historical evidence
 bytes unchanged when preparing that separate review.
+
+The new envelopes were generated from the four unmodified #68 artifacts named
+`dockerlens-native-<lane>`, each containing `<lane>.json`. SHA-256 was computed
+over each downloaded artifact file's exact bytes with `sha256sum`; the raw file
+was retained verbatim at that digest's native evidence path. Each envelope
+derives upstream versus Debian build provenance from the observed lane and
+exact package field, copies Engine, advertised/acquisition/rendering APIs and
+mode from its linked raw manifest, binds the actual source
+candidate and run attempt above, and selects only the closed thirteen groups
+whose ordered shape lists exactly match those raw positive outcomes. It adds
+no default identity or inferred probe-to-capability admission. The envelope is
+UTF-8 JSON with two-space indentation and one final newline; its independent
+SHA-256 names the reviewed file and compiled evidence key. The cohort
+specification in `tests/test_reviewed_catalog.py` pins all four raw and
+reviewed digests and checks both old and new cohorts, source binding, complete
+`required_for` groups and the exact compiled selection. Historical source and
+reviewed files were neither regenerated nor rewritten. No operational pin,
+manager ownership or Renovate extraction path changes are introduced; these
+content-addressed historical evidence files remain outside update streams.
 `native_manifest_artifact_name` identifies the run's per-lane artifact;
 `native_manifest_sha256` is the SHA-256 of its sanitized JSON manifest
 emitted by the native harness after success; that manifest contains observed
