@@ -1,0 +1,147 @@
+{
+  "acquisition_api": "1.49",
+  "admitted_shapes": {
+    "BindMount": [
+      "BindMountReadWrite",
+      "BindMountReadOnly"
+    ],
+    "BridgeNetwork": [
+      "BridgeNetworkCreate",
+      "BridgeNetworkAttach"
+    ],
+    "Command": [
+      "ExecCommand"
+    ],
+    "Entrypoint": [
+      "ExecEntrypoint"
+    ],
+    "EnvironmentAssignment": [
+      "EnvironmentValue",
+      "EnvironmentEmptyValue"
+    ],
+    "Healthcheck": [
+      "ExecHealthcheck"
+    ],
+    "NamedVolume": [
+      "NamedVolumeCreate",
+      "NamedVolumeMountReadWrite",
+      "NamedVolumeMountReadOnly"
+    ],
+    "NetworkExternalReference": [
+      "ExternalNetworkReference"
+    ],
+    "NetworkInternal": [
+      "InternalBridgeNetworkCreate"
+    ],
+    "PortPublish": [
+      "FixedTcpPort",
+      "FixedUdpPort"
+    ],
+    "RestartPolicy": [
+      "RestartNo",
+      "RestartAlways",
+      "RestartUnlessStopped",
+      "RestartOnFailureUnlimited",
+      "RestartOnFailureLimited"
+    ],
+    "StandaloneContainer": [
+      "StandaloneCreate"
+    ],
+    "VolumeExternalReference": [
+      "ExternalVolumeReference"
+    ],
+    "VolumeLabels": [
+      "VolumeCreateLabels"
+    ]
+  },
+  "candidate_sha": "0d8268155a5aacddaeb501adf7f8b2fe06a718ca",
+  "capability_outcome": {
+    "BindMount": "available",
+    "BridgeNetwork": "available",
+    "Command": "available",
+    "Entrypoint": "available",
+    "EnvironmentAssignment": "available",
+    "Healthcheck": "available",
+    "NamedVolume": "available",
+    "NetworkExternalReference": "available",
+    "NetworkInternal": "available",
+    "PortPublish": "available",
+    "RestartPolicy": "available",
+    "StandaloneContainer": "available",
+    "VolumeExternalReference": "available",
+    "VolumeLabels": "available"
+  },
+  "capability_version": "1.56",
+  "debian_docker_package": null,
+  "engine_api_max": "1.56",
+  "engine_api_min": "1.40",
+  "engine_version": "29.8.1",
+  "expected_mode": "rootful",
+  "lane": "upstream-rootful",
+  "network_probes": [
+    "ExternalNetworkReference",
+    "InternalBridgeNetworkCreate",
+    "Ipv6BridgeNetworkCreate",
+    "NetworkIpamV4",
+    "NetworkIpamV6",
+    "NetworkIpamGateway",
+    "NetworkIpamRange",
+    "NetworkIpamAuxiliary",
+    "NetworkIpamDefaultDriver",
+    "NetworkBridgeMtu",
+    "NetworkBridgeIcc",
+    "NetworkBridgeMasquerade",
+    "NetworkBridgeHostBindingIp",
+    "NetworkCreateLabels",
+    "NetworkPrimaryAliases",
+    "NetworkSecondaryAliases",
+    "NetworkStaticIpv4",
+    "NetworkStaticIpv6",
+    "NetworkSecondaryConnect",
+    "NetworkBridgeIccDisabled",
+    "NetworkBridgeMasqueradeEnabled",
+    "NetworkCreateLabelsValueDomain"
+  ],
+  "outer_image": "ghcr.io/strukturpiloten/docker-29-rootful:v29.8.1@sha256:bc71d19fbcd6d84d1452f61e6c3cbac77b6acaba214d7eb830b79124d1a4d563",
+  "rendering_api": "1.56",
+  "runtime_components": {
+    "containerd": "v2.3.5",
+    "runc": "1.5.1"
+  },
+  "schema_version": 1,
+  "source_probes": [
+    "DiscoveryMetadata",
+    "ExactContainerId",
+    "ExactContainerName",
+    "LiteralNamePrefix",
+    "ExactLabel",
+    "ExplicitAllContainers",
+    "ExactNetworkRoot",
+    "ExactVolumeRoot",
+    "UnrelatedInspectExcluded",
+    "IdentityFieldsOracle",
+    "PortBindingsOracle",
+    "MultipleHostIpBindingsOracle",
+    "MountEnvironmentOracle",
+    "HealthRestartOracle",
+    "SelectedFieldOrigins",
+    "DaemonResourceSupportOracle",
+    "NetworkActiveMembership",
+    "NetworkStoppedMembershipBoundary",
+    "ContainerInspectIdOracle"
+  ],
+  "volume_label_probes": [
+    "VolumeCreateLabels",
+    "VolumeLabelInspect",
+    "VolumeLabelPersistence",
+    "VolumeLabelOwnershipCleanup"
+  ],
+  "volume_probes": [
+    "ExistingVolumePrerequisite",
+    "ExistingVolumeTargetIdentity",
+    "ExistingVolumeReadOnlyData",
+    "ExistingVolumeReadWriteData",
+    "ExistingVolumePersistence",
+    "MissingVolumePrecheck"
+  ]
+}

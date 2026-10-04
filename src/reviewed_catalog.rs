@@ -1,5 +1,6 @@
-//! Crate-owned admission of four independently reviewed native records.
+//! Crate-owned candidate admission of four independently reviewed native records.
 //! The JSON is part of the published crate; no caller-supplied bytes enter here.
+//! ADR 0012 bounds label admission to pre-merge rehearsal until all production gates pass.
 
 use std::{collections::HashSet, num::NonZeroU16};
 
@@ -12,9 +13,9 @@ use crate::version::{
     TargetProfileIdentity,
 };
 
-const SOURCE_CANDIDATE: &str = "702910b003daae58babd540d7ba3de4998275feb";
+const SOURCE_CANDIDATE: &str = "0d8268155a5aacddaeb501adf7f8b2fe06a718ca";
 const SOURCE_RUN: &str =
-    "https://github.com/Strukturpiloten/docker-lens/actions/runs/37209363801/attempts/1";
+    "https://github.com/Strukturpiloten/docker-lens/actions/runs/37214738475/attempts/1";
 
 // This is the exact admission set for the currently compiled cohort. A later
 // reviewed cohort must explicitly replace the set for each lane; extending the
@@ -33,6 +34,7 @@ const REVIEWED_CAPABILITIES: &[Capability] = &[
     Capability::VolumeExternalReference,
     Capability::NetworkExternalReference,
     Capability::NetworkInternal,
+    Capability::VolumeLabels,
 ];
 const REVIEWED_SHAPES: &[NativeCapabilityShape] = &[
     NativeCapabilityShape::StandaloneCreate,
@@ -58,6 +60,7 @@ const REVIEWED_SHAPES: &[NativeCapabilityShape] = &[
     NativeCapabilityShape::ExternalVolumeReference,
     NativeCapabilityShape::ExternalNetworkReference,
     NativeCapabilityShape::InternalBridgeNetworkCreate,
+    NativeCapabilityShape::VolumeCreateLabels,
 ];
 
 fn expected_admission(
@@ -74,30 +77,30 @@ fn expected_admission(
 const RECORDS: [(NativeEvidenceLane, &str, &str); 4] = [
     (
         NativeEvidenceLane::Debian11Rootful,
-        "b9f3064cadfc2302678b9a334597907fd35eeb856464d4e6c81bf4465875d0e8",
+        "2306973726b1ecaeac9b26936cfe4df127a9f4927ae5f7bd41be99b528ee37fa",
         include_str!(
-            "../docs/evidence/reviewed/sha256/b9f3064cadfc2302678b9a334597907fd35eeb856464d4e6c81bf4465875d0e8.json"
+            "../docs/evidence/reviewed/sha256/2306973726b1ecaeac9b26936cfe4df127a9f4927ae5f7bd41be99b528ee37fa.json"
         ),
     ),
     (
         NativeEvidenceLane::Debian11Rootless,
-        "365e8a70e2e5a369912da47d2a510e45acd7cca3ac6e932e3536ad75f22c64b9",
+        "f471fc1f6998bfdebb130734a11c484ff7bb7e42a406805ab269bd482347eac4",
         include_str!(
-            "../docs/evidence/reviewed/sha256/365e8a70e2e5a369912da47d2a510e45acd7cca3ac6e932e3536ad75f22c64b9.json"
+            "../docs/evidence/reviewed/sha256/f471fc1f6998bfdebb130734a11c484ff7bb7e42a406805ab269bd482347eac4.json"
         ),
     ),
     (
         NativeEvidenceLane::UpstreamRootful,
-        "27c47307f4fdd523a22448415238a729e7a6458fddc554259f23ea99fff5ff76",
+        "dd2dec14ce75c1dfb672f018a8ade98334783edcd964758da6b4a432d22429a0",
         include_str!(
-            "../docs/evidence/reviewed/sha256/27c47307f4fdd523a22448415238a729e7a6458fddc554259f23ea99fff5ff76.json"
+            "../docs/evidence/reviewed/sha256/dd2dec14ce75c1dfb672f018a8ade98334783edcd964758da6b4a432d22429a0.json"
         ),
     ),
     (
         NativeEvidenceLane::UpstreamRootless,
-        "c0f8160bf8787e9490713595f58c1b4eeb9aeee3ff5f4739776a1010bdea6e1f",
+        "280839c9f4d6cfd1adda9f25bbf17fdfbb3fab162e91c346a614c31e1e318c44",
         include_str!(
-            "../docs/evidence/reviewed/sha256/c0f8160bf8787e9490713595f58c1b4eeb9aeee3ff5f4739776a1010bdea6e1f.json"
+            "../docs/evidence/reviewed/sha256/280839c9f4d6cfd1adda9f25bbf17fdfbb3fab162e91c346a614c31e1e318c44.json"
         ),
     ),
 ];
@@ -499,11 +502,12 @@ mod tests {
     }
 
     #[test]
-    fn rejects_partial_prerequisite_groups_and_unreviewed_volume_labels() {
+    fn rejects_partial_prerequisite_and_label_groups_and_unreviewed_network_labels() {
         for name in [
             "VolumeExternalReference",
             "NetworkExternalReference",
             "NetworkInternal",
+            "VolumeLabels",
         ] {
             rejected(|value| {
                 let entry = value["capabilities"]
@@ -526,7 +530,7 @@ mod tests {
         }
         rejected(|value| {
             value["capabilities"].as_array_mut().unwrap().push(serde_json::json!({
-                "name": "VolumeLabels", "state": "available", "admitted_shapes": ["VolumeCreateLabels"]
+                "name": "NetworkLabels", "state": "available", "admitted_shapes": ["NetworkCreateLabels"]
             }));
         });
     }

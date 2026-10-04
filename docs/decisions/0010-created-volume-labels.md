@@ -2,6 +2,10 @@
 
 Status: accepted target contract; native admission and consumer rehearsal remain open.
 
+[ADR 0012](0012-candidate-volume-label-admission.md) supersedes only this decision's
+final admission-sequencing clause for a bounded pre-merge candidate. The label,
+privacy, external-volume and inert-target contract below remains accepted.
+
 This extends ADR 0003's created named-volume target without changing its
 unlabelled request bytes, inert-rendering boundary or reviewed-catalog rule.
 `TargetResource::Volume` carries explicit `VolumeLabel` values. A label key is

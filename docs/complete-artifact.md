@@ -39,7 +39,11 @@ from a prerequisite. `prerequisites` retains the renderer's dependency order,
 including when there are no requests. A created-volume request includes its
 authored `Labels` object only when nonempty; an external-volume prerequisite
 never contains or applies labels. The labelled create branch remains
-capability-unadmitted pending exact native evidence.
+admitted only in the #49 candidate for pre-merge consumer rehearsal under
+[ADR 0012](decisions/0012-candidate-volume-label-admission.md). Production
+merge/main/release remain blocked on fresh exact-final-candidate four-lane
+native proof, independently reviewed six-authored-fixture volume-only consumer
+rehearsal and complete gates; the version 1 format and inert API are unchanged.
 A `reference` is the exact unsigned
 decimal string of a caller-local `u64` target graph index, never a Docker
 resource ID. It is a string so even indices above 2^53, through
