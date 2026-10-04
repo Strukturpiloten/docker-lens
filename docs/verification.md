@@ -491,6 +491,67 @@ destination prerequisite, data availability, application compatibility or
 release is established by this checkpoint. No native request, operational pin,
 dependency or Renovate extraction path changes are introduced.
 
+## Bounded container process identity proof (#74)
+
+The exact ignored `live_container_process_identity_matches_engine` test is a
+separate tenth mandatory native check; none of the existing nine checks is
+removed, filtered, retried, or made optional. Its only authored setting shape
+is numeric container user `1000:1000` and the already-existing `/tmp` directory
+in the unchanged pinned BusyBox fixture. An independently authored Docker CLI
+create and the ordinary crate-private sealed planner/inert renderer each create
+one labelled container. Direct Engine inspection checks both Config fields,
+the command and inherited entrypoint before either starts. Their actual PID1
+workload runs `id -u`, `id -g`, and `pwd -P`; exact output must be numeric
+`1000`, numeric `1000`, and `/tmp`, followed by inspected exited state, not
+running, and exit code zero. Docker exec with a user override is not an identity
+oracle. Rootful/rootless daemon mode and exact Engine/API context are checked
+separately: the container process account is not the daemon or host account,
+even where their numeric values coincide. This proves no named-user/group
+lookup, arbitrary directory creation or ownership, supplementary groups,
+host-mapped UID, or general user-namespace guarantee.
+
+Each role is bound through its exact run-owned name and literal ownership
+label to a distinct canonical immutable ID. Cleanup revalidates that binding,
+deletes by ID only, and requires genuine direct Engine 404s for both names and
+both IDs twice. A failed assertion, timeout, unresolved ownership or cleanup
+failure cannot produce positive proof. Bounded commands share the runner
+deadline, reserve cleanup time, and keep native stdout/stderr private; closed
+markers and selected numeric panic locations alone may reach logs. Abrupt
+SIGKILL or host failure can prevent cleanup and is not positive evidence.
+
+Only after every assertion and cleanup succeeds does the test create a fresh
+mode-0600 private proof bound to candidate SHA, lane, daemon mode, rendering API
+and run token. The emitter requires one bounded regular owner-private,
+single-link, non-symlink file, exact fields and marker order, distinct IDs,
+exact names/owner, and every configured/runtime/cleanup result. Missing,
+partial, failed, duplicate-key, stale, malformed or unbound files reject the
+entire manifest. This is trusted-harness provenance, not cryptographic
+attestation against a privileged writer able to replace a valid proof.
+
+Future sanitized manifests add only the closed `identity_probes` group:
+`ContainerUser`, `ContainerWorkdir`, `ContainerNumericUidGid`,
+`ContainerProcessWorkingDirectory`, and `ContainerIdentityOwnershipCleanup`.
+Raw IDs, names, owner labels and run tokens are not emitted. These markers do
+not extend `capability_outcome`, `admitted_shapes`, production capabilities or
+the reviewed catalogue. The schema's reviewed-record root remains unchanged;
+dedicated `$defs` describe the separate raw group and private proof. Historical
+evidence is preserved byte-for-byte. Fresh exact-head four-lane success and
+independent review are still required; this source checkpoint claims neither
+native compatibility nor #39 completion. In particular, #39 / PR #73's failed
+run [`37218370132`](https://github.com/Strukturpiloten/docker-lens/actions/runs/37218370132)
+remains failed, with its resource/device assertions and cleanup requirements
+unchanged. No cgroup/device workaround or production admission is delivered.
+
+The canonical harness is shared by DockerLens local/main/dispatch/Release
+native execution; the offline gates also exercise its regression tests. The
+consumer audit found no external raw-manifest parser: BoxFerry reads the
+digest-bound reviewed records and sealed catalogue and owns its receipts and
+application tests; other workflows transport/upload artifact bytes. No
+cross-repository API or consumer edits are needed. All five existing native
+image/fixture pins remain in `scripts/native-conformance.sh`, with unchanged
+Renovate ownership, extraction paths, grouping and approvals; no dependency,
+downloaded tool, or operational definition is added or moved.
+
 ## Reviewed target-profile records
 
 The compiled catalogue selects four reviewed records from native run

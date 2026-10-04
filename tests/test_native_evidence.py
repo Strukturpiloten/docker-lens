@@ -1,6 +1,9 @@
 """Closed native evidence cannot admit unreviewed identity or leak API bodies."""
 
+import copy
+import hashlib
 import json
+import os
 import re
 import subprocess
 import tempfile
@@ -10,6 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/native-evidence.py"
 SHA = "a" * 40
+RUN_ID = "Ab12Cd34"
 IMAGE = ("ghcr.io/strukturpiloten/docker-29-rootful:v29.8.1@sha256:"
          + "b" * 64)
 SHAPES = {
@@ -68,9 +72,133 @@ VOLUME_LABEL_PROBES = [
     "VolumeCreateLabels", "VolumeLabelInspect",
     "VolumeLabelPersistence", "VolumeLabelOwnershipCleanup",
 ]
+IDENTITY_PROBES = [
+    "ContainerUser", "ContainerWorkdir", "ContainerNumericUidGid",
+    "ContainerProcessWorkingDirectory", "ContainerIdentityOwnershipCleanup",
+]
+
+
+def identity_proof(lane: str, mode: str, api: str, sha: str) -> dict:
+    return {
+        "schema_version": 1, "candidate_sha": sha, "lane": lane,
+        "mode": mode, "rendering_api": api, "run_id": RUN_ID,
+        "probes": IDENTITY_PROBES,
+        "containers": [
+            {"role": role, "id": digit * 64,
+             "name": f"dl-identity-{RUN_ID}-{role}", "owner": RUN_ID,
+             "configured_user": "passed", "configured_workdir": "passed",
+             "runtime_uid": "passed", "runtime_gid": "passed",
+             "runtime_workdir": "passed", "cleanup": "absent"}
+            for role, digit in (("oracle", "c"), ("rendered", "d"))
+        ],
+    }
 
 
 class NativeEvidenceTests(unittest.TestCase):
+    def test_identity_schema_is_additive_not_reviewed_admission(self) -> None:
+        schema = json.loads((ROOT / "docs/native-evidence.schema.json").read_text())
+        defs = schema["$defs"]
+        self.assertEqual([item["const"] for item in defs["identity_probes"]["prefixItems"]],
+                         IDENTITY_PROBES)
+        self.assertFalse(defs["identity_probes"]["items"])
+        self.assertFalse(defs["native_identity_proof"]["additionalProperties"])
+        self.assertNotIn("identity_probes", schema["properties"])
+        self.assertNotIn("identity_probes", schema["required"])
+        self.assertEqual(set(defs), {"api_version", "identity_probes",
+                                     "identity_container_proof", "native_identity_proof"})
+        unchanged = copy.deepcopy(schema)
+        for name in ("identity_probes", "identity_container_proof", "native_identity_proof"):
+            del unchanged["$defs"][name]
+        # Canonical reviewed-record contract from the #74 clean base 946abb3;
+        # adding disconnected definitions cannot rewrite historical admission.
+        self.assertEqual(hashlib.sha256(json.dumps(unchanged, sort_keys=True,
+                                                   separators=(",", ":")).encode()).hexdigest(),
+                         "2ec0167732b28c917ad75137b64874b4b0b1ba64a9905ea0435673d4f4d744d9")
+
+    def test_identity_proof_requires_every_binding_check_and_owned_pair(self) -> None:
+        version = {"Version": "29.8.1", "ApiVersion": "1.56", "MinAPIVersion": "1.44"}
+        good = identity_proof("upstream-rootful", "rootful", "1.56", SHA)
+        cases = []
+        for key, bad in (("schema_version", True), ("candidate_sha", "b" * 40),
+                         ("lane", "upstream-rootless"), ("mode", "rootless"),
+                         ("rendering_api", "1.41"), ("run_id", "Stale123"),
+                         ("probes", IDENTITY_PROBES[:-1]), ("probes", IDENTITY_PROBES[::-1]),
+                         ("probes", [*IDENTITY_PROBES, "protected-secret"]),
+                         ("containers", good["containers"][:1])):
+            changed = copy.deepcopy(good)
+            changed[key] = bad
+            cases.append(changed)
+        for index in (0, 1):
+            for key in good["containers"][index]:
+                for missing in (False, True):
+                    changed = copy.deepcopy(good)
+                    if missing:
+                        del changed["containers"][index][key]
+                    else:
+                        changed["containers"][index][key] = "protected-secret"
+                    cases.append(changed)
+        for key in good:
+            changed = copy.deepcopy(good)
+            del changed[key]
+            cases.append(changed)
+        for omitted in IDENTITY_PROBES:
+            changed = copy.deepcopy(good)
+            changed["probes"] = [probe for probe in IDENTITY_PROBES if probe != omitted]
+            cases.append(changed)
+        repeated = copy.deepcopy(good)
+        repeated["containers"][1]["id"] = repeated["containers"][0]["id"]
+        extra = copy.deepcopy(good)
+        extra["protected-secret"] = "protected-secret"
+        extra_record = copy.deepcopy(good)
+        extra_record["containers"][0]["protected-secret"] = "protected-secret"
+        cases.extend([repeated, extra, extra_record, [], {}, [good]])
+        for index, proof in enumerate(cases):
+            with self.subTest(case=index):
+                result, path = self.run_emit(version, identity=proof)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(path.exists())
+                self.assertEqual(result.stderr.strip(), "native evidence rejected")
+                self.assertNotIn("protected-secret", result.stdout + result.stderr)
+
+    def test_identity_file_requires_private_bounded_regular_unique_json(self) -> None:
+        version = {"Version": "29.8.1", "ApiVersion": "1.56", "MinAPIVersion": "1.44"}
+        for failure in ("missing", "empty", "partial", "oversized", "symlink", "fifo",
+                        "hardlink", "public", "duplicate_outer", "duplicate_record"):
+            with self.subTest(failure=failure):
+                result, destination = self.run_emit(version)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                root = destination.parent.parent
+                proof = root / "identity.json"
+                destination.unlink()
+                if failure in ("missing", "symlink", "fifo"):
+                    proof.unlink()
+                    if failure == "symlink":
+                        proof.symlink_to(root / "version.json")
+                    elif failure == "fifo":
+                        os.mkfifo(proof, 0o600)
+                elif failure == "hardlink":
+                    os.link(proof, root / "second-link")
+                elif failure == "public":
+                    proof.chmod(0o640)
+                else:
+                    content = proof.read_text()
+                    invalid = {"empty": "", "partial": '{"schema_version":',
+                               "oversized": "x" * 4097,
+                               "duplicate_outer": content.replace('"schema_version": 1',
+                                                                  '"schema_version": 0, "schema_version": 1'),
+                               "duplicate_record": content.replace('"runtime_uid": "passed"',
+                                                                    '"runtime_uid": "failed", "runtime_uid": "passed"')}
+                    proof.write_text(invalid[failure])
+                command = ["python3", str(SCRIPT), *[str(root / name) for name in
+                           ("version.json", "shapes.json", "source.json", "network.json",
+                            "volume.json", "volume-label.json", "identity.json")],
+                           str(destination), "upstream-rootful", IMAGE, "rootful", "", SHA, RUN_ID]
+                rejected = subprocess.run(command, capture_output=True, text=True,
+                                          timeout=5, check=False)
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertFalse(destination.exists())
+                self.assertEqual(rejected.stderr.strip(), "native evidence rejected")
+
     def test_reviewed_record_schema_recognizes_defined_vocabulary_without_admission(self) -> None:
         schema = json.loads((ROOT / "docs/native-evidence.schema.json").read_text(encoding="utf-8"))
         reviewed = schema["properties"]["capabilities"]["items"]["properties"]
@@ -104,7 +232,8 @@ class NativeEvidenceTests(unittest.TestCase):
                  source_probes: list[str] | None = None,
                  network_probes: object = None,
                  volume_probes: object = None,
-                 volume_label_probes: object = None) -> tuple[subprocess.CompletedProcess[str], Path]:
+                 volume_label_probes: object = None,
+                 identity: object = None) -> tuple[subprocess.CompletedProcess[str], Path]:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
@@ -114,6 +243,7 @@ class NativeEvidenceTests(unittest.TestCase):
         network_path = root / "network.json"
         volume_path = root / "volume.json"
         volume_label_path = root / "volume-label.json"
+        identity_path = root / "identity.json"
         destination = root / "out" / f"{lane}.json"
         version_path.write_text(json.dumps(version), encoding="utf-8")
         shapes_path.write_text(json.dumps(SHAPES if shapes is None else shapes), encoding="utf-8")
@@ -121,10 +251,13 @@ class NativeEvidenceTests(unittest.TestCase):
         network_path.write_text(json.dumps(NETWORK_PROOF if network_probes is None else network_probes), encoding="utf-8")
         volume_path.write_text(json.dumps(VOLUME_PROBES if volume_probes is None else volume_probes), encoding="utf-8")
         volume_label_path.write_text(json.dumps(VOLUME_LABEL_PROBES if volume_label_probes is None else volume_label_probes), encoding="utf-8")
+        identity_path.write_text(json.dumps(identity_proof(lane, mode, version.get("ApiVersion"), sha)
+                                            if identity is None else identity), encoding="utf-8")
+        identity_path.chmod(0o600)
         result = subprocess.run(
             ["python3", str(SCRIPT), str(version_path), str(shapes_path), str(source_path),
-             str(network_path), str(volume_path), str(volume_label_path), str(destination),
-             lane, image, mode, package, sha],
+             str(network_path), str(volume_path), str(volume_label_path), str(identity_path), str(destination),
+             lane, image, mode, package, sha, RUN_ID],
             capture_output=True, text=True, check=False,
         )
         return result, destination
@@ -153,6 +286,9 @@ class NativeEvidenceTests(unittest.TestCase):
             shape for values in evidence["admitted_shapes"].values() for shape in values))
         self.assertEqual(evidence["volume_probes"], VOLUME_PROBES)
         self.assertEqual(evidence["volume_label_probes"], VOLUME_LABEL_PROBES)
+        self.assertEqual(evidence["identity_probes"], IDENTITY_PROBES)
+        for private in (RUN_ID, "c" * 64, "d" * 64, "dl-identity-"):
+            self.assertNotIn(private, path.read_text(encoding="utf-8"))
         self.assertNotIn("protected-secret", path.read_text(encoding="utf-8"))
 
     def test_rejects_unreviewed_identity_and_unacquirable_api(self) -> None:
@@ -273,6 +409,7 @@ class NativeEvidenceTests(unittest.TestCase):
                     })
                     self.assertEqual(record["admitted_shapes"], EXPECTED_RAW_SHAPES)
                     self.assertEqual(record["source_probes"], SOURCE_PROBES)
+                    self.assertEqual(record["identity_probes"], IDENTITY_PROBES)
 
     def test_every_prerequisite_probe_is_required_before_any_manifest(self) -> None:
         version = {"Version": "29.8.1", "ApiVersion": "1.52", "MinAPIVersion": "1.44"}
@@ -322,8 +459,8 @@ class NativeEvidenceTests(unittest.TestCase):
                     command = ["python3", str(SCRIPT), str(root / "version.json"),
                                str(root / "shapes.json"), str(root / "source.json"),
                                str(root / "network.json"), str(root / "volume.json"),
-                               str(root / "volume-label.json"), str(destination),
-                               "upstream-rootful", IMAGE, "rootful", "", SHA]
+                               str(root / "volume-label.json"), str(root / "identity.json"), str(destination),
+                               "upstream-rootful", IMAGE, "rootful", "", SHA, RUN_ID]
                     rejected = subprocess.run(command, capture_output=True, text=True, check=False)
                     self.assertNotEqual(rejected.returncode, 0)
                     self.assertFalse(destination.exists())
@@ -373,8 +510,8 @@ class NativeEvidenceTests(unittest.TestCase):
         probe_path = root / "network.json"
         command = ["python3", str(SCRIPT), str(root / "version.json"), str(root / "shapes.json"),
                    str(root / "source.json"), str(probe_path), str(root / "volume.json"),
-                   str(root / "volume-label.json"), str(destination),
-                   "upstream-rootful", IMAGE, "rootful", "", SHA]
+                   str(root / "volume-label.json"), str(root / "identity.json"), str(destination),
+                   "upstream-rootful", IMAGE, "rootful", "", SHA, RUN_ID]
         destination.unlink()
         probe_path.write_bytes(b"[" + b"x" * 4096 + b"]")
         oversized = subprocess.run(command, capture_output=True, text=True, check=False)
@@ -428,8 +565,8 @@ class NativeEvidenceTests(unittest.TestCase):
         probe_path = root / "volume.json"
         command = ["python3", str(SCRIPT), str(root / "version.json"), str(root / "shapes.json"),
                    str(root / "source.json"), str(root / "network.json"),
-                   str(probe_path), str(root / "volume-label.json"), str(destination),
-                   "upstream-rootful", IMAGE, "rootful", "", SHA]
+                   str(probe_path), str(root / "volume-label.json"), str(root / "identity.json"), str(destination),
+                   "upstream-rootful", IMAGE, "rootful", "", SHA, RUN_ID]
         valid = subprocess.run(command, capture_output=True, text=True, check=False)
         self.assertEqual(valid.returncode, 0, valid.stderr)
         destination.unlink()
@@ -463,8 +600,8 @@ class NativeEvidenceTests(unittest.TestCase):
         probe_path = root / "volume-label.json"
         command = ["python3", str(SCRIPT), str(root / "version.json"), str(root / "shapes.json"),
                    str(root / "source.json"), str(root / "network.json"),
-                   str(root / "volume.json"), str(probe_path), str(destination),
-                   "upstream-rootful", IMAGE, "rootful", "", SHA]
+                   str(root / "volume.json"), str(probe_path), str(root / "identity.json"), str(destination),
+                   "upstream-rootful", IMAGE, "rootful", "", SHA, RUN_ID]
         valid = subprocess.run(command, capture_output=True, text=True, check=False)
         self.assertEqual(valid.returncode, 0, valid.stderr)
         destination.unlink()
