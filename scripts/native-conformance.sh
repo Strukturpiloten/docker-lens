@@ -905,6 +905,10 @@ export NATIVE_SOURCE_PROBES_PATH="$run_dir/source-probes.json"
 export NATIVE_NETWORK_PROBES_PATH="$run_dir/network-probes.json"
 export NATIVE_VOLUME_PROBES_PATH="$run_dir/volume-probes.json"
 export NATIVE_VOLUME_LABEL_PROBES_PATH="$run_dir/volume-label-probes.json"
+export NATIVE_IDENTITY_PROBES_PATH="$run_dir/identity-probes.json"
+export NATIVE_IDENTITY_CANDIDATE_SHA
+NATIVE_IDENTITY_CANDIDATE_SHA=$(git -C "$script_dir/.." rev-parse HEAD)
+[[ $NATIVE_IDENTITY_CANDIDATE_SHA =~ ^[0-9a-f]{40}$ ]] || { echo 'native identity requires exact candidate SHA' >&2; exit 1; }
 if [[ $EUID == 0 ]]; then export NATIVE_PODMAN_USE_SUDO=0; else export NATIVE_PODMAN_USE_SUDO=1; fi
 "$(dirname "$0")/run-exact-native-test.sh" native_capture live_engine_capture_decodes
 "$(dirname "$0")/run-exact-native-test.sh" acquisition live_read_only_acquisition_matches_oracle
@@ -915,6 +919,7 @@ if [[ $EUID == 0 ]]; then export NATIVE_PODMAN_USE_SUDO=0; else export NATIVE_PO
 "$(dirname "$0")/run-exact-native-test.sh" native_network live_internal_network_blocks_external_egress
 "$(dirname "$0")/run-exact-native-test.sh" native_volume live_existing_volume_prerequisite_matches_engine
 "$(dirname "$0")/run-exact-native-test.sh" native_volume_label live_created_volume_labels_match_engine
+"$(dirname "$0")/run-exact-native-test.sh" native_identity live_container_process_identity_matches_engine
 
 if [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]; then
   candidate_sha=$(git -C "$script_dir/.." rev-parse HEAD)
@@ -926,9 +931,9 @@ if [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]; then
     echo 'native evidence requires a clean candidate checkout' >&2
     exit 1
   }
-  python3 "$script_dir/native-evidence.py" "$run_dir/version.json" "$NATIVE_SHAPES_PATH" "$NATIVE_SOURCE_PROBES_PATH" "$NATIVE_NETWORK_PROBES_PATH" "$NATIVE_VOLUME_PROBES_PATH" "$NATIVE_VOLUME_LABEL_PROBES_PATH" \
+  python3 "$script_dir/native-evidence.py" "$run_dir/version.json" "$NATIVE_SHAPES_PATH" "$NATIVE_SOURCE_PROBES_PATH" "$NATIVE_NETWORK_PROBES_PATH" "$NATIVE_VOLUME_PROBES_PATH" "$NATIVE_VOLUME_LABEL_PROBES_PATH" "$NATIVE_IDENTITY_PROBES_PATH" \
     "$DOCKERLENS_NATIVE_EVIDENCE_DIR/$lane.json" "$lane" "$image" "$expected_mode" \
-    "$installed_docker_package" "$candidate_sha"
+    "$installed_docker_package" "$candidate_sha" "$run_id"
 fi
 
 native_success_summary="native conformance passed: $lane; Engine $server_version; API $api_version; mode $expected_mode; inner cgroup $inner_cgroup; outer $("${podman_cmd[@]}" --version); kernel $(uname -r); privileged $privileged; nested storage ${used_kib} KiB"

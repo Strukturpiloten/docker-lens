@@ -16,6 +16,97 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class NativeHarnessTests(unittest.TestCase):
+    def test_identity_is_independent_tenth_mandatory_check_before_manifest(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text()
+        invocations = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$',
+                                 source, re.MULTILINE)
+        self.assertEqual(invocations, [
+            ("native_capture", "live_engine_capture_decodes"),
+            ("acquisition", "live_read_only_acquisition_matches_oracle"),
+            ("native_selection", "live_native_selection_and_source_observations"),
+            ("native_selection", "live_network_membership_matches_engine"),
+            ("native_target", "live_target_render_matches_engine"),
+            ("native_network", "live_network_render_matches_engine"),
+            ("native_network", "live_internal_network_blocks_external_egress"),
+            ("native_volume", "live_existing_volume_prerequisite_matches_engine"),
+            ("native_volume_label", "live_created_volume_labels_match_engine"),
+            ("native_identity", "live_container_process_identity_matches_engine"),
+        ])
+        self.assertLess(source.index('native_identity live_container_process_identity_matches_engine'),
+                        source.index('python3 "$script_dir/native-evidence.py"'))
+        self.assertIn('export NATIVE_IDENTITY_PROBES_PATH="$run_dir/identity-probes.json"', source)
+
+    def test_identity_source_requires_pid1_owned_id_cleanup_and_positive_absence(self) -> None:
+        source = (ROOT / "src/native_identity_tests.rs").read_text()
+        self.assertIn('set -eu; id -u; id -g; pwd -P', source)
+        self.assertIn('--user=1000:1000', source)
+        self.assertIn('--workdir=/tmp', source)
+        self.assertNotIn('exec --user', source)
+        self.assertIn('"State"]["ExitCode"], 0', source)
+        self.assertIn('"State"]["Status"], "exited"', source)
+        self.assertIn('"State"]["Running"], false', source)
+        self.assertIn('if !self.attempted[index]', source)
+        bind = source.split('fn bind(', 1)[1].split('fn cleanup(', 1)[0]
+        self.assertLess(bind.index('self.inspect(&self.names[index]'), bind.index('self.ids[index] ='))
+        self.assertIn('registered != id', bind)
+        cleanup = source.split('fn cleanup(', 1)[1].split('fn facts(', 1)[0]
+        self.assertIn('owned(&before, Some(&id), &name, &self.run)', cleanup)
+        self.assertIn('containers/{id}?force=1', cleanup)
+        self.assertNotIn('containers/{name}?force=1', cleanup)
+        self.assertIn('!= 204', cleanup)
+        self.assertIn('for _ in 0..2', cleanup)
+        self.assertIn('self.inspect(&self.names[index], true).0 != 404', cleanup)
+        self.assertIn('self.inspect(id, true).0 != 404', cleanup)
+        self.assertLess(source.index('assert!(passed && cleaned'), source.index('create_new(true)'))
+        self.assertIn('mode(0o600)', source)
+
+    def test_identity_exact_selection_and_closed_failure_privacy(self) -> None:
+        selected = "native_identity_tests::live_container_process_identity_matches_engine"
+        for mode in ("pass", "absent", "duplicate", "zero", "fail"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self._tool(root, "cargo", '''#!/usr/bin/env bash
+set -eu
+printf '%s\\n' "$*" >> "$FAKE_NATIVE_INVOCATIONS"
+if [[ $* == *--list* ]]; then
+  [[ $FAKE_MODE != absent ]] || exit 0
+  echo 'native_identity_tests::live_container_process_identity_matches_engine: test'
+  if [[ $FAKE_MODE == duplicate ]]; then
+    echo 'native_identity_tests::live_container_process_identity_matches_engine: test'
+  fi
+elif [[ $FAKE_MODE == fail ]]; then
+  echo 'DOCKERLENS_NATIVE_CHECK: identity_render protected-secret'
+  echo 'DOCKERLENS_NATIVE_CHECK: identity_private'
+  echo 'DOCKERLENS_NATIVE_CHECK: identity_cleanup_unverified'
+  echo "thread 'protected-secret' panicked at src/native_identity_tests.rs:123:4:"
+  echo 'protected-secret raw-native-ID'
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 42
+elif [[ $FAKE_MODE == zero ]]; then
+  echo 'test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;'
+else
+  echo 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;'
+fi
+''')
+                calls = root / "calls"
+                env = os.environ.copy()
+                env.update(PATH=f"{root}:{env['PATH']}", FAKE_MODE=mode,
+                           FAKE_NATIVE_INVOCATIONS=str(calls))
+                result = subprocess.run([str(ROOT / "scripts/run-exact-native-test.sh"),
+                                         "native_identity", "live_container_process_identity_matches_engine"],
+                                        env=env, capture_output=True, text=True, timeout=10, check=False)
+                self.assertEqual(result.returncode == 0, mode == "pass")
+                invocations = calls.read_text().splitlines()
+                self.assertTrue(all('--lib' in call and '--test' not in call for call in invocations))
+                if mode not in ("absent", "duplicate"):
+                    self.assertIn(f'--ignored --exact {selected}', invocations[1])
+                self.assertNotIn('protected-secret', result.stdout + result.stderr)
+                self.assertNotIn('identity_private', result.stderr)
+                self.assertNotIn('identity_render', result.stderr)
+                if mode == "fail":
+                    self.assertIn('DOCKERLENS_NATIVE_CHECK: identity_cleanup_unverified', result.stderr)
+                    self.assertIn('DOCKERLENS_NATIVE_PANIC: source=native_identity_tests line=123 column=4', result.stderr)
+
     def test_cleanup_timeout_runs_with_the_podman_clients_privileges(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
         helpers = "cleanup_podman() {" + source.split("cleanup_podman() {", 1)[1].split(
