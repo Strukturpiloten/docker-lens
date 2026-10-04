@@ -100,6 +100,15 @@ def read_volume_label_probes(path: Path) -> list[str]:
     return list(VOLUME_LABEL_PROBES)
 
 
+def unique_proof_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate native proof field")
+        result[key] = value
+    return result
+
+
 def read_network_proof(path: Path) -> list[str]:
     descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
     with os.fdopen(descriptor, "rb") as source:
@@ -109,7 +118,7 @@ def read_network_proof(path: Path) -> list[str]:
         payload = source.read(4097)
     if len(payload) != metadata.st_size:
         raise ValueError("native network proof file changed")
-    proof = json.loads(payload)
+    proof = json.loads(payload, object_pairs_hook=unique_proof_object)
     if not isinstance(proof, dict) or set(proof) != {"probes", "internal_shape"}:
         raise ValueError("native network proof is incomplete")
     probes = proof["probes"]
@@ -193,6 +202,16 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
 
     network_probes = read_network_proof(network_path)
 
+    # Only these closed mappings follow the complete, validated native proof
+    # files above. They extend raw lane evidence, never the reviewed catalogue.
+    # Other network probes and source daemon reports grant no capability here.
+    proof_shapes = {
+        "NetworkInternal": ["InternalBridgeNetworkCreate"],
+        "VolumeExternalReference": ["ExternalVolumeReference"],
+        "VolumeLabels": ["VolumeCreateLabels"],
+        "NetworkExternalReference": ["ExternalNetworkReference"],
+    }
+
     record = {
         "schema_version": 1,
         "lane": lane,
@@ -208,9 +227,9 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         "runtime_components": runtime_components,
         "capability_version": maximum,
         "capability_outcome": {**{name: "available" for name in CAPABILITIES},
-                               "NetworkInternal": "available"},
+                               **{name: "available" for name in proof_shapes}},
         "admitted_shapes": {**{name: list(REQUIRED_SHAPES[name]) for name in CAPABILITIES},
-                            "NetworkInternal": ["InternalBridgeNetworkCreate"]},
+                            **proof_shapes},
         "source_probes": list(SOURCE_PROBES),
         "network_probes": list(NETWORK_PROBES),
         "volume_probes": volume_probes,
