@@ -1,5 +1,66 @@
 # Verification
 
+## Closed native fixture launcher seam
+
+The four registered lanes still execute exactly the image-native
+`/usr/local/bin/start-dockerd --host=unix:///dockerlens-native/docker.sock`.
+`native-conformance.sh` remains the sole operational image tag/digest and
+Engine-release source; the launcher helper derives these identities there.
+Its closed declaration binds the lane, repository, native launcher defaults
+(no new config-file override), account, home, private socket and exclusive
+run-owned data root. Debian rootless uses `dockertest`, upstream rootless
+uses `docker`, both guest UID 1000 and `/home/docker`; rootful uses root.
+This is not a global account rename. Existing Debian package checks, volume
+options, BusyBox sidecar/workload pin, outer limits and mandatory native
+RAM/no-swap/PID assertions are unchanged. No archive, label or caller-supplied
+launcher can register a new lane or create published image evidence.
+
+After readiness, a mandatory read-only acquisition checks the actual unique
+passwd account, numeric UID/home, `id` result and daemon effective UID/HOME.
+A bounded proc scan requires one dockerd, its executable identity, start ticks
+and owned init PID namespace; user/mount namespace identities are retained
+without assuming rootless shares those namespaces with init. Account and
+process identities are read twice. Outer running ID/name/ownership label,
+PID/start timestamp and pinned image identity are inspected before and after.
+The canonical pinned reference is resolved read-only to its immutable local
+image ID, which must match the container's image ID; tag spelling is not
+treated as identity proof.
+Guest exec targets the inspected immutable container ID. A mismatch, failed
+read, oversized reply, deadline or cancellation fails the lane, with only a
+closed failure category exposed. This non-atomic check establishes neither
+writable cgroup delegation, controller enforcement nor compatibility.
+
+The caller forwards a nine-second CLOCK_BOOTTIME cutoff before interpreter
+startup. The root batch has its own GNU TERM/KILL timer, each Podman call
+has a root timer, each guest read has a three-second short-option timer,
+and captured stdout/stderr share an 8 KiB cap. An anonymous stdin lifeline
+prevents another read after caller cancellation. Local timeout/monitor exit
+never proves an already-running remote command terminated; guest timers,
+runner loss, SIGKILL and uninterruptible kernel work retain those limits.
+Offline synthetic proc and subprocess tests verify the source checks and
+failure behavior, not an acquired real fixture or native conformance.
+
+Systemd is a closed but unregistered, deliberately unimplemented alternative.
+Its source prerequisite list requires actual systemd PID 1, a reviewed exact
+runtime, fixture-specific account, fixed config/private listener/data root
+and systemd cgroup driver, account-derived user manager/bus, writable memory
+and PID delegation, placement revalidation and bounded shutdown with stopped
+readback. The pure lifecycle ordering guard rejects missing ownership,
+failure, cancellation, expiry, out-of-order removal and failed stop/readback;
+it neither executes these steps nor supplies observation provenance. No
+systemd unit names, runtime versions or fixture identities are invented.
+Containers #344 fixture adoption and actual bounded systemd orchestration
+remain separate work. Emergency removal remains failed-run cleanup, never
+positive shutdown evidence. ADR 0004's current native-launcher contract and
+all registrations are unchanged, so no ADR is superseded.
+
+Renovate still owns and extracts exactly the same five pins from
+`native-conformance.sh`; no manager, extraction path, grouping or approval
+definition changes. The new helper uses existing host Python/coreutils and
+guest image utilities, without downloads or new tool pins. Fresh genuine
+exact-candidate native runs and independent review remain required before
+any corresponding admission.
+
 The complete inert review artifact has offline exact-byte, schema, order,
 privacy, context-binding, and fail-closed opaque-artifact tests. These verify
 serialization, not destination existence, data migration, or native Engine

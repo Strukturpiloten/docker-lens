@@ -32,6 +32,22 @@ case "$lane" in
   *) usage ;;
 esac
 
+# Launcher identity belongs to the selected fixture, not image labels or a
+# caller-controlled account rename. Pins/releases above remain canonical.
+launcher_kind=start-dockerd
+native_config=native-launcher-default
+case "$lane" in
+  debian11-rootful | upstream-rootful)
+    daemon_account=root; daemon_home=/root; daemon_data_root=/var/lib/docker ;;
+  debian11-rootless)
+    daemon_account=dockertest; daemon_home=/home/docker; daemon_data_root=/home/docker/.local/share/docker ;;
+  upstream-rootless)
+    daemon_account=docker; daemon_home=/home/docker; daemon_data_root=/home/docker/.local/share/docker ;;
+esac
+python3 "$script_dir/native-fixture-launch.py" --declaration "$lane" "$image" \
+  "$launcher_kind" "$daemon_account" "$daemon_home" "$expected_mode" \
+  "$expected_release" "$daemon_data_root" "$native_config"
+
 for tool in podman curl python3 timeout df du mktemp; do
   command -v "$tool" >/dev/null || { echo "missing native test tool: $tool" >&2; exit 1; }
 done
@@ -633,6 +649,18 @@ done
   diagnose_native_startup
   exit 1
 }
+# Mandatory read-only fixture context. A caller-owned timer cannot terminate
+# root children behind sudo: the collector adds root and guest timers plus an
+# anonymous stdin lifeline. Pass BOOTTIME before Python/sudo startup so delayed
+# startup cannot begin a fresh acquisition window. No raw guest output escapes.
+IFS=' ' read -r fixture_uptime _ </proc/uptime
+[[ $fixture_uptime =~ ^[0-9]{1,12}\.[0-9]{2}$ ]] || exit 1
+fixture_end_ms=$((10#${fixture_uptime%.*} * 1000 + 10#${fixture_uptime#*.} * 10 + 9000))
+printf -v fixture_deadline '%d.%03d' "$((fixture_end_ms / 1000))" "$((fixture_end_ms % 1000))"
+fixture_sudo=0
+if [[ ${podman_cmd[0]} == sudo ]]; then fixture_sudo=1; fi
+timeout --signal=TERM --kill-after=0.2 10s python3 "$script_dir/native-fixture-launch.py" \
+  --collect "$lane" "$container" "$run_id" "$fixture_sudo" "$fixture_deadline" || exit 1
 if [[ $lane == debian11-rootless ]]; then
   # Linux mountinfo reports suid/dev by absence of nosuid/nodev. Check the
   # effective mount, not merely the requested Podman volume options.
