@@ -46,6 +46,7 @@ pub mod decoder;
 pub mod evidence;
 pub mod finding;
 pub mod observation;
+pub mod resource_support;
 pub mod target;
 pub mod version;
 

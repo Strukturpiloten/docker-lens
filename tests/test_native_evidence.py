@@ -32,6 +32,7 @@ SOURCE_PROBES = [
     "IdentityFieldsOracle", "PortBindingsOracle",
     "MultipleHostIpBindingsOracle", "MountEnvironmentOracle",
     "HealthRestartOracle", "SelectedFieldOrigins",
+    "DaemonResourceSupportOracle",
     "NetworkActiveMembership", "NetworkStoppedMembershipBoundary",
     "ContainerInspectIdOracle",
 ]
@@ -202,18 +203,36 @@ class NativeEvidenceTests(unittest.TestCase):
 
     def test_source_probes_are_exact_closed_non_admission_evidence(self) -> None:
         version = {"Version": "29.8.1", "ApiVersion": "1.56", "MinAPIVersion": "1.44"}
-        self.assertEqual(len(SOURCE_PROBES), 18)
+        self.assertEqual(len(SOURCE_PROBES), 19)
+        self.assertEqual(SOURCE_PROBES[15], "DaemonResourceSupportOracle")
         self.assertEqual(SOURCE_PROBES[-3:], [
             "NetworkActiveMembership", "NetworkStoppedMembershipBoundary",
             "ContainerInspectIdOracle",
         ])
-        for probes in (SOURCE_PROBES[:-1], SOURCE_PROBES + ["private-canary"],
+        historical_probes = [probe for probe in SOURCE_PROBES
+                             if probe != "DaemonResourceSupportOracle"]
+        for probes in (historical_probes, SOURCE_PROBES[:-1], SOURCE_PROBES + ["private-canary"],
                        SOURCE_PROBES[:-1] + [SOURCE_PROBES[0]]):
             with self.subTest(probes=probes):
                 result, path = self.run_emit(version, source_probes=probes)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse(path.exists())
                 self.assertNotIn("private-canary", result.stdout + result.stderr)
+
+    def test_resource_report_marker_never_admits_resource_capabilities(self) -> None:
+        version = {"Version": "29.8.1", "ApiVersion": "1.52", "MinAPIVersion": "1.44"}
+        result, path = self.run_emit(version)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        evidence = json.loads(path.read_text(encoding="utf-8"))
+        self.assertIn("DaemonResourceSupportOracle", evidence["source_probes"])
+        self.assertEqual(set(evidence["capability_outcome"]), set(SHAPES) | {"NetworkInternal"})
+        self.assertEqual(evidence["admitted_shapes"], {
+            **SHAPES, "NetworkInternal": ["InternalBridgeNetworkCreate"],
+        })
+        self.assertNotIn("MemoryLimit", evidence["capability_outcome"])
+        self.assertNotIn("SwapLimit", evidence["capability_outcome"])
+        self.assertNotIn("DaemonResourceSupportOracle", (
+            shape for shapes in evidence["admitted_shapes"].values() for shape in shapes))
 
     def test_network_probes_are_exact_closed_non_admission_evidence(self) -> None:
         version = {"Version": "29.8.1", "ApiVersion": "1.56", "MinAPIVersion": "1.44"}
