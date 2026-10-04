@@ -183,10 +183,10 @@ inspect request. After stopping that peer it repeats the comparison to the
 actual Engine response without assuming that stopped peers remain listed.
 Only successful assertions and verified fixture cleanup append
 `NetworkActiveMembership`, `NetworkStoppedMembershipBoundary`, and
-`ContainerInspectIdOracle` to the original fifteen source probes. The last
+`ContainerInspectIdOracle` to the sixteen baseline source probes. The last
 marker follows comparisons of the protected container inspect ID with both the
 canonical narrowed-selection request ID and the direct inspect `Id` for exact
-ID, name, prefix, and label selectors. The emitter requires all eighteen; a
+ID, name, prefix, and label selectors. The emitter requires all nineteen; a
 failure cannot emit partial source evidence. These are source-observation
 checks, not ownership, atomic-snapshot, or target-capability admission. All
 four exact lanes still require genuine passing runs and independent review
@@ -225,6 +225,25 @@ ignored test passes; it contains no native values and does not add target
 capability admissions. Existing reviewed manifests and the reviewed catalog
 remain historical evidence for their original shapes. The new assertions need
 genuine runs in all four exact lanes before a source compatibility claim.
+
+The source test's `DaemonResourceSupportOracle` assertion compares typed
+`MemoryLimit` and `SwapLimit` reports with the already saved independent direct
+`/info` response. It reuses the existing acquisition, checks effective origin,
+independent boolean/unavailable states, matching capture scope and rejection of
+another capture's scope, and adds no request. Reported false stays bounded
+source-environment evidence; true stays available but unverified, even when
+separate effect evidence fails. Missing, null and explicit redaction remain
+unknown. Neither the assertion nor its closed marker proves enforcement or
+adds a capability or admitted shape. The baseline list contains the original
+fifteen markers plus this new marker; membership completion retains its three
+markers, and the emitter rejects the old eighteen-marker list. Historical
+reviewed evidence bytes and catalogue admission remain unchanged. These are
+new assertion definitions: genuine passing four-lane exact-candidate runs and
+independent review are still required before source compatibility is claimed.
+The direct oracle and acquisition are separate observations in time; matching
+capture identity correlates typed evidence, not authentication or an atomic
+snapshot. Offline helper tests check classification and value-free rejection
+only. No operational pin or Renovate extraction path changes are introduced.
 
 The created-volume label probe is a separate exact ignored library test,
 `native_volume_label_tests::live_created_volume_labels_match_engine`. Each lane

@@ -157,6 +157,20 @@ prove rootful mode. Neither endpoint supplies a trustworthy client release or
 distribution package revision, so those stay unknown until separate evidence
 is available. Decoded version strings do not add positive capability facts.
 
+`DecodedVersion::resource_support` retains independently available effective
+`Observed<bool>` reports for `/info` `MemoryLimit` and `SwapLimit`, tied to the
+capture's opaque observation ID. Missing, null and explicitly redacted reports
+remain unavailable; malformed booleans fail with value-free decoder errors.
+The pure assessment requires the same observation ID, even when two captures
+report identical Engine versions. Only present effective booleans are reports;
+caller-assembled redacted-but-valued or non-effective fields remain unknown.
+Reported false is bounded source-environment evidence. Reported true remains
+unverified, including when an independent effect probe fails. Neither report
+grants a target capability, a destination guarantee, or catalogue admission.
+The assessment does not evaluate effect evidence or veto a target. It reads no
+endpoint and introduces no acquisition request; fresh native conformance and
+downstream application acceptance remain separate release evidence.
+
 DockerLens has no BoxFerry or other Lens product dependency. BoxFerry will
 consume a released DockerLens and route all conversions through its neutral
 model. Debian 11 and upstream Engine 29 coverage in both daemon modes uses

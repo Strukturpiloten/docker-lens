@@ -35,6 +35,7 @@ SOURCE_PROBES = (
     "IdentityFieldsOracle", "PortBindingsOracle",
     "MultipleHostIpBindingsOracle", "MountEnvironmentOracle",
     "HealthRestartOracle", "SelectedFieldOrigins",
+    "DaemonResourceSupportOracle",
     "NetworkActiveMembership", "NetworkStoppedMembershipBoundary",
     "ContainerInspectIdOracle",
 )

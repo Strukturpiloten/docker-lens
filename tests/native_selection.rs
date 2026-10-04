@@ -19,10 +19,11 @@ use docker_lens::decoder::{
 };
 use docker_lens::evidence::{Capture, CaptureRoute, ProtectedValue};
 use docker_lens::observation::{Availability, Observed, Origin};
+use docker_lens::resource_support::{ReportedResourceSupport, ResourceSupportError};
 use docker_lens::version::DaemonMode;
 use serde_json::Value;
 
-const SOURCE_PROBES: [&str; 15] = [
+const SOURCE_PROBES: [&str; 16] = [
     "DiscoveryMetadata",
     "ExactContainerId",
     "ExactContainerName",
@@ -38,6 +39,7 @@ const SOURCE_PROBES: [&str; 15] = [
     "MountEnvironmentOracle",
     "HealthRestartOracle",
     "SelectedFieldOrigins",
+    "DaemonResourceSupportOracle",
 ];
 
 fn required(name: &str) -> String {
@@ -102,6 +104,181 @@ fn effective_string(observed: &Observed<ProtectedValue>, raw: Option<&Value>) {
             observed
                 .value()
                 .is_some_and(|value| value.as_bytes() == text.as_bytes())
+        );
+    }
+}
+
+// Independent direct-JSON oracle: no production field parser or assessment is
+// used to determine the expected report. Errors never contain native values.
+fn resource_report_oracle(
+    raw: Option<&Value>,
+) -> Result<(Availability, Option<bool>, ReportedResourceSupport), &'static str> {
+    match raw {
+        None => Ok((
+            Availability::Missing,
+            None,
+            ReportedResourceSupport::Unknown,
+        )),
+        Some(Value::Null) => Ok((Availability::Null, None, ReportedResourceSupport::Unknown)),
+        Some(Value::Bool(false)) => Ok((
+            Availability::Present,
+            Some(false),
+            ReportedResourceSupport::ReportedUnavailable,
+        )),
+        Some(Value::Bool(true)) => Ok((
+            Availability::Present,
+            Some(true),
+            ReportedResourceSupport::ReportedAvailableUnverified,
+        )),
+        Some(Value::Object(object))
+            if object.len() == 1
+                && object.get("__docker_lens_redacted__") == Some(&Value::Bool(true)) =>
+        {
+            Ok((
+                Availability::Redacted,
+                None,
+                ReportedResourceSupport::Unknown,
+            ))
+        }
+        Some(_) => Err("invalid direct resource-support shape"),
+    }
+}
+
+fn resource_report_matches_direct(
+    observed: &Observed<bool>,
+    raw: Option<&Value>,
+) -> ReportedResourceSupport {
+    let (availability, value, assessment) =
+        resource_report_oracle(raw).expect("closed direct resource-support oracle");
+    assert_eq!(observed.origin, Origin::Effective);
+    assert_eq!(observed.availability, availability);
+    assert!(
+        observed.value().copied() == value,
+        "typed resource-support report differs from direct oracle"
+    );
+    assessment
+}
+
+#[test]
+fn offline_resource_report_oracle_preserves_independent_states() {
+    let cases = [
+        (
+            None,
+            Availability::Missing,
+            None,
+            ReportedResourceSupport::Unknown,
+        ),
+        (
+            Some("null"),
+            Availability::Null,
+            None,
+            ReportedResourceSupport::Unknown,
+        ),
+        (
+            Some(r#"{"__docker_lens_redacted__":true}"#),
+            Availability::Redacted,
+            None,
+            ReportedResourceSupport::Unknown,
+        ),
+        (
+            Some("false"),
+            Availability::Present,
+            Some(false),
+            ReportedResourceSupport::ReportedUnavailable,
+        ),
+        (
+            Some("true"),
+            Availability::Present,
+            Some(true),
+            ReportedResourceSupport::ReportedAvailableUnverified,
+        ),
+    ];
+    for (memory, memory_availability, memory_value, memory_assessment) in cases {
+        for (swap, swap_availability, swap_value, swap_assessment) in cases {
+            let fields: Vec<_> = [("MemoryLimit", memory), ("SwapLimit", swap)]
+                .into_iter()
+                .filter_map(|(name, value)| value.map(|value| format!("\"{name}\":{value}")))
+                .collect();
+            let body: Value = serde_json::from_str(&format!("{{{}}}", fields.join(","))).unwrap();
+            for (name, availability, value, assessment) in [
+                (
+                    "MemoryLimit",
+                    memory_availability,
+                    memory_value,
+                    memory_assessment,
+                ),
+                ("SwapLimit", swap_availability, swap_value, swap_assessment),
+            ] {
+                assert_eq!(
+                    resource_report_oracle(body.get(name)),
+                    Ok((availability, value, assessment))
+                );
+                let observed = match value {
+                    Some(value) => Observed::present(value, availability, Origin::Effective),
+                    None => Observed::unavailable(availability, Origin::Effective),
+                };
+                assert_eq!(
+                    resource_report_matches_direct(&observed, body.get(name)),
+                    assessment
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn offline_resource_report_oracle_rejects_malformed_shapes_without_values() {
+    for literal in [
+        r#""private-resource-canary""#,
+        "0",
+        "1",
+        "[]",
+        "{}",
+        r#"{"__docker_lens_redacted__":false}"#,
+        r#"{"__docker_lens_redacted__":true,"private-resource-canary":false}"#,
+    ] {
+        let raw: Value = serde_json::from_str(literal).unwrap();
+        let error = resource_report_oracle(Some(&raw)).unwrap_err();
+        assert_eq!(error, "invalid direct resource-support shape");
+        assert!(!format!("{error:?}").contains("private-resource-canary"));
+    }
+    for (availability, origin, value, raw) in [
+        (
+            Availability::Redacted,
+            Origin::Effective,
+            Some(true),
+            r#"{"__docker_lens_redacted__":true}"#,
+        ),
+        (Availability::Present, Origin::Unknown, Some(true), "true"),
+        (
+            Availability::Missing,
+            Origin::Effective,
+            Some(false),
+            "false",
+        ),
+        (Availability::Null, Origin::Effective, Some(false), "null"),
+        (Availability::Present, Origin::Effective, None, "true"),
+        (
+            Availability::Present,
+            Origin::Effective,
+            Some(false),
+            "true",
+        ),
+        (
+            Availability::Present,
+            Origin::Effective,
+            Some(true),
+            "false",
+        ),
+    ] {
+        let observed = match value {
+            Some(value) => Observed::present(value, availability, origin),
+            None => Observed::unavailable(availability, origin),
+        };
+        let raw: Value = serde_json::from_str(raw).unwrap();
+        assert!(
+            std::panic::catch_unwind(|| resource_report_matches_direct(&observed, Some(&raw)))
+                .is_err()
         );
     }
 }
@@ -594,6 +771,11 @@ fn live_native_selection_and_source_observations() {
     let oracle_ports = direct_json(&directory, "ports-container.json");
     let oracle_network = direct_json(&directory, "network.json");
     let oracle_volume = direct_json(&directory, "volume.json");
+    let oracle_info = direct_json(&directory, "info.json");
+    assert!(
+        oracle_info.is_object(),
+        "direct info oracle must be an object"
+    );
     assert!(selected_id != peer_id && selected_id != ports_id && peer_id != ports_id);
     assert!(selected_name != peer_name && selected_name != ports_name);
     assert!(oracle_container["Id"].as_str() == Some(selected_id.as_str()));
@@ -822,7 +1004,7 @@ fn live_native_selection_and_source_observations() {
     }
 
     eprintln!("DOCKERLENS_NATIVE_CHECK: source_typed_oracle");
-    let (_, inventory) = capture(
+    let (source_capture, inventory) = capture(
         &endpoint,
         Selector::ContainerIds(vec![NativeId::new(selected_id).unwrap()]),
     );
@@ -832,6 +1014,35 @@ fn live_native_selection_and_source_observations() {
         assert_eq!(mode, "rootful");
         assert_ne!(inventory.version.daemon.mode, DaemonMode::Rootless);
     }
+    let reports = &inventory.version.resource_support;
+    assert_eq!(reports.observation_id, source_capture.observation_id());
+    assert_eq!(reports.observation_id, inventory.observation_id);
+    assert_eq!(
+        reports.observation_id,
+        inventory.version.daemon.observation_id
+    );
+    let assessment = reports.assess(source_capture.observation_id()).unwrap();
+    assert_eq!(
+        assessment.memory_limit,
+        resource_report_matches_direct(&reports.memory_limit, oracle_info.get("MemoryLimit"))
+    );
+    assert_eq!(
+        assessment.swap_limit,
+        resource_report_matches_direct(&reports.swap_limit, oracle_info.get("SwapLimit"))
+    );
+    assert_eq!(
+        reports.assess(discovery.observation_id()),
+        Err(ResourceSupportError::ObservationScopeMismatch)
+    );
+    assert_eq!(
+        source_capture
+            .exchanges()
+            .iter()
+            .filter(|exchange| matches!(exchange.request(), ReadRequest::DaemonInfo))
+            .count(),
+        1
+    );
+    assert!(inventory.version.daemon.capabilities.is_empty());
     let observed = &inventory.containers[0];
     let config = &oracle_container["Config"];
     let host = &oracle_container["HostConfig"];

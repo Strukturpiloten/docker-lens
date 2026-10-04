@@ -13,6 +13,7 @@ use crate::acquisition::{ReadRequest, RootKind, SelectedRoot, Selector, selected
 use crate::evidence::{Capture, ProtectedValue};
 use crate::finding::{Finding, FindingCode, Severity};
 use crate::observation::{Availability, FieldPath, Observed, Origin, ResourceRef};
+use crate::resource_support::ResourceSupportObservation;
 use crate::version::{ApiVersion, DaemonFacts, DaemonMode, EngineRelease, ObservationId};
 
 const MAX_JSON_BYTES: usize = 8 * 1024 * 1024;
@@ -38,6 +39,8 @@ pub enum DecodeError {
 /// from the daemon release and cannot be reconstructed from `/version`.
 pub struct DecodedVersion {
     pub daemon: DaemonFacts,
+    /// Independent `/info` memory/swap reports from this capture, not capabilities.
+    pub resource_support: ResourceSupportObservation,
     pub client_release: Option<ProtectedValue>,
     pub distribution_package_revision: Option<ProtectedValue>,
     pub requested_api_versions: Vec<ApiVersion>,
@@ -1415,6 +1418,11 @@ pub fn decode_capture(capture: &Capture) -> Result<DecodedInventory, DecodeError
                 mode: DaemonMode::Unknown,
                 capabilities: Vec::new(),
             },
+            resource_support: ResourceSupportObservation {
+                observation_id: capture.observation_id(),
+                memory_limit: Observed::unavailable(Availability::Missing, Origin::Effective),
+                swap_limit: Observed::unavailable(Availability::Missing, Origin::Effective),
+            },
             client_release: None,
             distribution_package_revision: None,
             requested_api_versions: Vec::new(),
@@ -1480,6 +1488,18 @@ pub fn decode_capture(capture: &Capture) -> Result<DecodedInventory, DecodeError
                 }
                 info_seen = true;
                 object(&body, FieldPath::Other)?;
+                result.version.resource_support.memory_limit = bool_field(
+                    &body,
+                    &["MemoryLimit"],
+                    FieldPath::ResourceLimit,
+                    Origin::Effective,
+                )?;
+                result.version.resource_support.swap_limit = bool_field(
+                    &body,
+                    &["SwapLimit"],
+                    FieldPath::ResourceLimit,
+                    Origin::Effective,
+                )?;
                 if let Some(release) = release_field(&body, "ServerVersion")? {
                     if result
                         .version
@@ -1753,6 +1773,228 @@ pub fn decode_capture(capture: &Capture) -> Result<DecodedInventory, DecodeError
         });
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod resource_support_tests {
+    use super::*;
+    use crate::acquisition::{Budget, Limits};
+    use crate::evidence::HttpStatus;
+    use crate::resource_support::{ReportedResourceSupport, ResourceSupportError};
+    use crate::version::{
+        Capability, CapabilityFact, CapabilityScope, CapabilityState, FactProvenance,
+        TargetCapabilityCatalog,
+    };
+    use std::time::Duration;
+
+    fn resource_capture(api_minor: u16, info: Option<&str>) -> Capture {
+        let mut budget = Budget::new(Limits {
+            max_requests: 2,
+            max_selected_resources: 1,
+            max_expansions: 1,
+            max_response_bytes: 4096,
+            max_total_bytes: 8192,
+            max_elapsed: Duration::from_secs(2),
+        })
+        .unwrap();
+        budget
+            .record_request(ReadRequest::DaemonVersion, None, None)
+            .unwrap();
+        budget
+            .read_response(
+                HttpStatus::new(200).unwrap(),
+                &br#"{"Version":"20.10.5+dfsg1","ApiVersion":"1.49","MinAPIVersion":"1.41"}"#[..],
+            )
+            .unwrap();
+        if let Some(info) = info {
+            budget
+                .record_request(
+                    ReadRequest::DaemonInfo,
+                    None,
+                    Some(ApiVersion::new(NonZeroU16::new(1).unwrap(), api_minor)),
+                )
+                .unwrap();
+            budget
+                .read_response(HttpStatus::new(200).unwrap(), info.as_bytes())
+                .unwrap();
+        }
+        budget.into_capture().unwrap()
+    }
+
+    #[test]
+    fn literal_memory_and_swap_reports_preserve_independent_states() {
+        let cases = [
+            (
+                None,
+                Availability::Missing,
+                None,
+                ReportedResourceSupport::Unknown,
+            ),
+            (
+                Some("null"),
+                Availability::Null,
+                None,
+                ReportedResourceSupport::Unknown,
+            ),
+            (
+                Some(r#"{"__docker_lens_redacted__":true}"#),
+                Availability::Redacted,
+                None,
+                ReportedResourceSupport::Unknown,
+            ),
+            (
+                Some("false"),
+                Availability::Present,
+                Some(false),
+                ReportedResourceSupport::ReportedUnavailable,
+            ),
+            (
+                Some("true"),
+                Availability::Present,
+                Some(true),
+                ReportedResourceSupport::ReportedAvailableUnverified,
+            ),
+        ];
+        for api_minor in [41, 49] {
+            for (memory, memory_availability, memory_value, memory_assessment) in cases {
+                for (swap, swap_availability, swap_value, swap_assessment) in cases {
+                    let fields: Vec<_> = [("MemoryLimit", memory), ("SwapLimit", swap)]
+                        .into_iter()
+                        .filter_map(|(name, value)| {
+                            value.map(|value| format!("\"{name}\":{value}"))
+                        })
+                        .collect();
+                    let body = format!("{{{}}}", fields.join(","));
+                    let capture = resource_capture(api_minor, Some(&body));
+                    let decoded = decode_capture(&capture).unwrap();
+                    let reports = &decoded.version.resource_support;
+                    assert_eq!(reports.observation_id, capture.observation_id());
+                    assert_eq!(
+                        reports.observation_id,
+                        decoded.version.daemon.observation_id
+                    );
+                    assert_eq!(reports.memory_limit.availability, memory_availability);
+                    assert_eq!(reports.swap_limit.availability, swap_availability);
+                    assert_eq!(reports.memory_limit.origin, Origin::Effective);
+                    assert_eq!(reports.swap_limit.origin, Origin::Effective);
+                    assert_eq!(reports.memory_limit.value().copied(), memory_value);
+                    assert_eq!(reports.swap_limit.value().copied(), swap_value);
+                    let assessed = reports.assess(decoded.observation_id).unwrap();
+                    assert_eq!(assessed.memory_limit, memory_assessment);
+                    assert_eq!(assessed.swap_limit, swap_assessment);
+                    assert!(decoded.version.daemon.capabilities.is_empty());
+                    assert_eq!(capture.exchanges().len(), 2);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn absent_info_and_equal_version_in_another_capture_are_not_support() {
+        let capture = resource_capture(41, None);
+        let decoded = decode_capture(&capture).unwrap();
+        let reports = &decoded.version.resource_support;
+        assert_eq!(reports.memory_limit.availability, Availability::Missing);
+        assert_eq!(reports.swap_limit.availability, Availability::Missing);
+        let assessment = reports.assess(capture.observation_id()).unwrap();
+        assert_eq!(assessment.memory_limit, ReportedResourceSupport::Unknown);
+        assert_eq!(assessment.swap_limit, ReportedResourceSupport::Unknown);
+        assert_eq!(capture.exchanges().len(), 1);
+
+        let other_capture = resource_capture(41, Some(r#"{"MemoryLimit":true,"SwapLimit":false}"#));
+        let other = decode_capture(&other_capture).unwrap();
+        assert_eq!(decoded.version.daemon.release, other.version.daemon.release);
+        assert_eq!(
+            decoded.version.daemon.api_version,
+            other.version.daemon.api_version
+        );
+        assert_eq!(
+            other
+                .version
+                .resource_support
+                .assess(capture.observation_id()),
+            Err(ResourceSupportError::ObservationScopeMismatch)
+        );
+        assert_eq!(
+            reports.assess(other.observation_id),
+            Err(ResourceSupportError::ObservationScopeMismatch)
+        );
+    }
+
+    #[test]
+    fn malformed_resource_booleans_fail_with_value_free_errors() {
+        for name in ["MemoryLimit", "SwapLimit"] {
+            for malformed in [
+                r#""private-resource-canary""#,
+                "0",
+                "1",
+                "[]",
+                "{}",
+                r#"{"__docker_lens_redacted__":false}"#,
+                r#"{"__docker_lens_redacted__":true,"private-resource-canary":true}"#,
+            ] {
+                let other_name = if name == "MemoryLimit" {
+                    "SwapLimit"
+                } else {
+                    "MemoryLimit"
+                };
+                let body = format!("{{\"{name}\":{malformed},\"{other_name}\":true}}");
+                let error = decode_capture(&resource_capture(41, Some(&body)))
+                    .err()
+                    .unwrap();
+                assert_eq!(error, DecodeError::InvalidShape(FieldPath::ResourceLimit));
+                assert_eq!(format!("{error:?}"), "InvalidShape(ResourceLimit)");
+            }
+        }
+    }
+
+    #[test]
+    fn reported_true_with_failed_effect_evidence_stays_unverified() {
+        let capture = resource_capture(41, Some(r#"{"MemoryLimit":true,"SwapLimit":true}"#));
+        let mut decoded = decode_capture(&capture).unwrap();
+        // Separate, caller-supplied negative effect evidence cannot be promoted
+        // by a daemon's positive report. It is not native compatibility proof.
+        let failed_effect = CapabilityFact {
+            capability: Capability::MemoryLimit,
+            state: CapabilityState::Unavailable,
+            provenance: FactProvenance::NativeConformance,
+            scope: Some(CapabilityScope {
+                observation_id: decoded.observation_id,
+                release: decoded.version.daemon.release.clone().unwrap(),
+                api_version: decoded.version.daemon.api_version.unwrap(),
+                mode: DaemonMode::Unknown,
+            }),
+        };
+        decoded
+            .version
+            .daemon
+            .capabilities
+            .push(failed_effect.clone());
+        let assessment = decoded
+            .version
+            .resource_support
+            .assess(decoded.observation_id)
+            .unwrap();
+        assert_eq!(
+            assessment.memory_limit,
+            ReportedResourceSupport::ReportedAvailableUnverified
+        );
+        assert_eq!(
+            assessment.swap_limit,
+            ReportedResourceSupport::ReportedAvailableUnverified
+        );
+        assert_eq!(decoded.version.daemon.capabilities, vec![failed_effect]);
+        let catalog = TargetCapabilityCatalog::reviewed();
+        assert_eq!(catalog.profiles().len(), 4);
+        for profile in catalog.profiles() {
+            assert!(
+                !catalog
+                    .resolve(profile)
+                    .unwrap()
+                    .supports(Capability::MemoryLimit)
+            );
+        }
+    }
 }
 
 #[cfg(test)]
