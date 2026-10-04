@@ -1,21 +1,674 @@
 """Fault injection for exact resource cleanup and ignored native test selection."""
 
+import importlib.util
 import json
 import os
 import re
 import shlex
+import signal
+import shutil
 import stat
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class NativeHarnessTests(unittest.TestCase):
+    @staticmethod
+    def _cgroup_helper():
+        spec = importlib.util.spec_from_file_location(
+            "native_cgroup_diagnostic", ROOT / "scripts/native-cgroup-diagnostic.py"
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_cgroup_classification_is_closed_private_and_fail_closed(self) -> None:
+        helper = self._cgroup_helper()
+        payload = b"outer\ncpu memory pids\npids\n4294967296\nmax\ndaemon\nmemory\n\nmissing\nprotected-secret\n"
+        records = helper.classify(payload)
+        self.assertEqual(records[0], {
+            "scope": "outer", "outcome": "observed",
+            "memory_controller": "present", "pids_controller": "present",
+            "memory_delegated": "absent", "pids_delegated": "present",
+            "memory_max": "finite", "swap_max": "max",
+        })
+        self.assertEqual(records[1]["memory_max"], "missing")
+        self.assertEqual(records[1]["swap_max"], "unknown")
+        self.assertNotIn("protected-secret", str(records))
+        self.assertNotIn("4294967296", str(records))
+        unknown = b"outer\nunknown\nunknown\nunknown\nunknown\ndaemon\nunknown\nunknown\nunknown\nunknown\n"
+        self.assertEqual(helper.classify(unknown), [helper.unknown("outer"), helper.unknown("daemon")])
+        for malformed in (payload + b"raw=protected-secret\n", b"\xff", b"x" * 8193):
+            with self.assertRaises(helper.Unavailable):
+                helper.classify(malformed)
+        for invalid in ("memory-private", "memory\nprivate", "protected-secret", "memory protectedsecret", "memory memory"):
+            self.assertEqual(helper.controller_state(invalid, "memory"), "unknown")
+
+    def test_cgroup_caller_deadline_is_shared_clamped_and_not_restarted(self) -> None:
+        helper = self._cgroup_helper()
+        identity = ("a" * 64 + '|dl-native-Ab12Cd34|true|Ab12Cd34|123|"2026-10-02T12:00:00Z"\n').encode()
+        payload = b"outer\nmemory pids\nmemory\n1234\nmax\ndaemon\nunknown\nunknown\nunknown\nunknown\n"
+        for supplied, expected in ((9, None), (11, 11), (100, 15)):
+            calls = []
+
+            def runner(command, deadline):
+                calls.append((command, deadline))
+                return payload if command[1] == "exec" else identity
+
+            with patch.object(helper.time, "monotonic", return_value=10):
+                records = helper.diagnose("dl-native-Ab12Cd34", "Ab12Cd34", "rootful", ["podman"],
+                                         runner, deadline=supplied, lane="upstream-rootful")
+            if expected is None:
+                self.assertEqual(calls, [])
+                self.assertEqual(records, [helper.unknown("outer"), helper.unknown("daemon")])
+            else:
+                self.assertEqual([deadline for _, deadline in calls], [expected] * 3)
+                self.assertEqual(records[0]["outcome"], "observed")
+                self.assertLessEqual(float(calls[1][0][6]) + 0.75, expected - 10)
+
+    def test_shared_context_runner_is_optional_bounded_and_has_four_closed_defaults(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text()
+        block = source.split("# One five-second context phase,", 1)[1].split(
+            "if [[ $expected_mode == rootless ]]; then", 1
+        )[0]
+        block = "# One five-second context phase," + block
+        for sudo, expired, failed in ((False, False, False), (True, False, False),
+                                      (False, True, False), (True, False, True)):
+            with self.subTest(sudo=sudo, expired=expired, failed=failed):
+                fake = f'''python3() {{
+  if [[ $2 == --validate-context ]]; then
+    command python3 {shlex.quote(str(ROOT / "scripts/native-device-source.py"))} "$2" "$3"
+    return
+  fi
+  [[ $1 == /owned/native-device-source.py && $2 == --context &&
+     $3 == dl-native-Ab12Cd34 && $4 == Ab12Cd34 && $5 == rootless && $6 == {int(sudo)} &&
+     $8 == upstream-rootless ]] || exit 42
+  [[ {int(expired)} == 0 ]] || exit 43
+  if [[ {int(failed)} == 1 ]]; then
+    echo "DOCKERLENS_NATIVE_CGROUP_DIAG: scope=outer outcome=unavailable memory_controller=unknown pids_controller=unknown memory_delegated=unknown pids_delegated=unknown memory_max=unknown swap_max=unknown"
+    echo protected-secret >&2
+    return 1
+  fi
+  for role in outer daemon; do
+    echo "DOCKERLENS_NATIVE_CGROUP_DIAG: scope=$role outcome=unavailable memory_controller=unknown pids_controller=unknown memory_delegated=unknown pids_delegated=unknown memory_max=unknown swap_max=unknown"
+  done
+  for role in host-null renamed-null; do
+    echo "DOCKERLENS_NATIVE_DEVICE_SOURCE: role=$role scope=daemon-view view=different_mount node=other uncertainty=none runtime_source=unknown permissions=unknown"
+  done
+}}
+export -f python3
+'''
+                setup = ("set -euo pipefail\nscript_dir=/owned\ncontainer=dl-native-Ab12Cd34\n"
+                         "run_id=Ab12Cd34\nexpected_mode=rootless\nlane=upstream-rootless\n"
+                         + ("podman_cmd=(sudo -n podman)\n" if sudo else "podman_cmd=(podman)\n")
+                         + f"SECONDS={1800 if expired else 0}\n")
+                result = subprocess.run(["bash", "-c", setup + fake + block + "false\n"],
+                                        capture_output=True, text=True, timeout=2, check=False)
+                self.assertEqual(result.returncode, 1)  # The original assertion still fails.
+                self.assertEqual(result.stderr, "")
+                self.assertEqual(len(result.stdout.splitlines()), 4)
+                self.assertEqual(result.stdout.count("DOCKERLENS_NATIVE_DEVICE_SOURCE:"), 2)
+                self.assertEqual("node=other uncertainty=none" in result.stdout, not (failed or expired))
+                self.assertNotIn("protected-secret", result.stdout)
+                self.assertNotIn("Ab12Cd34", result.stdout)
+        self.assertNotIn("run-exact-native-test", block)
+        self.assertNotIn("native-evidence", block)
+        self.assertNotIn(" exec ", block)
+
+    def test_shared_context_does_not_swallow_whole_lane_cancellation(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text()
+        block = "# One five-second context phase," + source.split(
+            "# One five-second context phase,", 1
+        )[1].split("if [[ $expected_mode == rootless ]]; then", 1)[0]
+        setup = ("set -euo pipefail\ntrap 'echo cleanup; exit 143' TERM\n"
+                 "script_dir=/owned\ncontainer=dl-native-Ab12Cd34\nrun_id=Ab12Cd34\n"
+                 "expected_mode=rootless\nlane=upstream-rootless\npodman_cmd=(podman)\nSECONDS=0\n"
+                 "export native_parent=$BASHPID\n"
+                 "python3() { kill -TERM \"$native_parent\"; return 143; }\nexport -f python3\n")
+        result = subprocess.run(["bash", "-c", setup + block + "echo after\n"],
+                                capture_output=True, text=True, timeout=2, check=False)
+        self.assertEqual(result.returncode, 143)
+        self.assertEqual(result.stdout, "cleanup\n")
+        self.assertEqual(result.stderr, "")
+
+    def test_shared_context_outer_timer_bounds_stalled_initial_interpreter(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text()
+        block = "# One five-second context phase," + source.split(
+            "# One five-second context phase,", 1
+        )[1].split("if [[ $expected_mode == rootless ]]; then", 1)[0]
+        self.assertIn("timeout --signal=TERM --kill-after=0.2 4.8 bash -c", block)
+        block = block.replace("--kill-after=0.2 4.8", "--kill-after=0.2 0.3")
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "local-interpreter-pid"
+            setup = ("set -euo pipefail\nscript_dir=/owned\ncontainer=dl-native-Ab12Cd34\n"
+                     "run_id=Ab12Cd34\nexpected_mode=rootless\nlane=upstream-rootless\npodman_cmd=(sudo -n podman)\n"
+                     "SECONDS=0\n")
+            fake = f'''python3() {{
+  if [[ $2 == --validate-context ]]; then
+    command python3 {shlex.quote(str(ROOT / "scripts/native-device-source.py"))} "$2" "$3"
+    return
+  fi
+  trap '' TERM
+  echo "$BASHPID" > {shlex.quote(str(marker))}
+  sleep 10
+}}
+export -f python3
+'''
+            started = time.monotonic()
+            result = subprocess.run(["bash", "-c", setup + fake + block], capture_output=True,
+                                    text=True, timeout=2, check=False)
+            self.assertGreaterEqual(time.monotonic() - started, 0.3)
+            self.assertLess(time.monotonic() - started, 1.5)
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(result.stderr, "")
+            self.assertEqual(len(result.stdout.splitlines()), 4)
+            self.assertTrue(marker.exists())
+            self._assert_process_not_live(int(marker.read_text()))
+
+    def test_cgroup_identity_requires_json_serialization_not_go_display(self) -> None:
+        helper = self._cgroup_helper()
+        prefix = "a" * 64 + "|dl-native-Ab12Cd34|true|Ab12Cd34|123|"
+        # Independently authored realistic examples of time.Time's display and
+        # MarshalJSON boundaries, with no actual container identity or time.
+        display = "2031-04-05 06:07:08.123456789 +0000 UTC"
+        timestamp = "2031-04-05T06:07:08.123456789Z"
+        serialized = json.dumps(timestamp)
+        parsed = helper.inspect_identity((prefix + serialized + "\n").encode(), "dl-native-Ab12Cd34", "Ab12Cd34")
+        self.assertEqual(parsed[-1], timestamp)
+        for unsupported in (display, json.dumps(display), timestamp):
+            with self.assertRaises(helper.Unavailable):
+                helper.inspect_identity((prefix + unsupported + "\n").encode(), "dl-native-Ab12Cd34", "Ab12Cd34")
+        payload = b"outer\nmemory pids\nmemory\n1234\nmax\ndaemon\nunknown\nunknown\nunknown\nunknown\n"
+        before = (prefix + serialized + "\n").encode()
+        changed = (prefix + json.dumps(timestamp.replace("123456789", "123456788")) + "\n").encode()
+        replies = iter((before, payload, changed))
+        self.assertEqual(helper.diagnose("dl-native-Ab12Cd34", "Ab12Cd34", "rootful", ["podman"],
+                                        lambda *_args: next(replies), lane="upstream-rootful"), [helper.unknown("outer"), helper.unknown("daemon")])
+
+    def test_cgroup_timestamp_json_is_bounded_typed_and_private(self) -> None:
+        helper = self._cgroup_helper()
+        prefix = "a" * 64 + "|dl-native-Ab12Cd34|true|Ab12Cd34|123|"
+        invalid = ("", '"unterminated-private-canary', "null", "true", "42",
+                   '["private-canary"]', '{"secret":"private-canary"}',
+                   json.dumps("private-canary"), json.dumps("2031-13-05T06:07:08Z"),
+                   json.dumps("2031-04-05T06:07:08+99:00"), json.dumps("private-canary" * 30))
+        for value in invalid:
+            calls = []
+
+            def runner(command, deadline):
+                calls.append(command)
+                return (prefix + value + "\n").encode()
+
+            records = helper.diagnose("dl-native-Ab12Cd34", "Ab12Cd34", "rootful", ["podman"], runner, lane="upstream-rootful")
+            self.assertEqual(records, [helper.unknown("outer"), helper.unknown("daemon")])
+            self.assertEqual(len(calls), 1)
+            self.assertNotIn("private-canary", json.dumps(records))
+        with self.assertRaises(helper.Unavailable):
+            helper.inspect_identity(b"a" * 8193, "dl-native-Ab12Cd34", "Ab12Cd34")
+
+    def test_cgroup_read_requires_same_owned_identity_and_shared_deadline(self) -> None:
+        helper = self._cgroup_helper()
+        identity = ("a" * 64 + '|dl-native-Ab12Cd34|true|Ab12Cd34|123|"2026-10-02T12:00:00Z"\n').encode()
+        payload = b"outer\nmemory pids\nmemory\n1234\nmax\ndaemon\nunknown\nunknown\nunknown\nunknown\n"
+        for changed in (identity.replace(b"123|", b"124|"), identity.replace(b"|true|", b"|false|"),
+                        identity.replace(b"12:00:00", b"12:00:01")):
+            commands = []
+
+            def runner(command, deadline):
+                commands.append((command, deadline))
+                return (identity, payload, changed)[len(commands) - 1]
+
+            records = helper.diagnose("dl-native-Ab12Cd34", "Ab12Cd34", "rootful", ["podman"], runner, lane="upstream-rootful")
+            self.assertEqual(records, [helper.unknown("outer"), helper.unknown("daemon")])
+            self.assertEqual(len({deadline for _, deadline in commands}), 1)
+            self.assertIn("{{json .State.StartedAt}}", commands[0][0][3])
+            self.assertEqual(commands[1][0][2], "a" * 64)
+            self.assertEqual(commands[1][0][4:6], ["-k", "0.2"])
+            self.assertIn("timeout", commands[1][0])
+        commands = []
+
+        def wrong_owner(command, deadline):
+            commands.append(command)
+            return identity.replace(b"|Ab12Cd34|", b"|wrong-owner|")
+
+        self.assertEqual(helper.diagnose("dl-native-Ab12Cd34", "Ab12Cd34", "rootful", ["podman"], wrong_owner, lane="upstream-rootful"),
+                         [helper.unknown("outer"), helper.unknown("daemon")])
+        self.assertEqual(len(commands), 1)
+        # Names or Podman commands outside the closed run scope never execute.
+        def forbidden(*_args):
+            self.fail("unscoped command executed")
+        self.assertEqual(helper.diagnose("ambient", "Ab12Cd34", "rootful", ["podman"], forbidden, lane="upstream-rootful"),
+                         [helper.unknown("outer"), helper.unknown("daemon")])
+        self.assertEqual(helper.diagnose("dl-native-Ab12Cd34", "Ab12Cd34", "rootful", ["podman", "--remote"], forbidden, lane="upstream-rootful"),
+                         [helper.unknown("outer"), helper.unknown("daemon")])
+        replies = iter((identity, payload, identity))
+        self.assertEqual(helper.diagnose("dl-native-Ab12Cd34", "Ab12Cd34", "rootless", ["podman"],
+                                        lambda *_args: next(replies), lane="upstream-rootless"), helper.classify(payload))
+
+    def test_cgroup_lane_selects_only_canonical_account_and_uid(self) -> None:
+        helper = self._cgroup_helper()
+        identity = ("a" * 64 + '|dl-native-Ab12Cd34|true|Ab12Cd34|123|"2031-04-05T06:07:08Z"\n').encode()
+        payload = b"outer\nmemory pids\nmemory\n1234\nmax\ndaemon\nunknown\nunknown\nunknown\nunknown\n"
+        for lane, mode, account, uid in (
+            ("debian11-rootless", "rootless", "dockertest", "1000"),
+            ("upstream-rootless", "rootless", "docker", "1000"),
+            ("debian11-rootful", "rootful", "root", "0"),
+            ("upstream-rootful", "rootful", "root", "0"),
+        ):
+            commands = []
+
+            def runner(command, _deadline):
+                commands.append(command)
+                return payload if command[1] == "exec" else identity
+
+            records = helper.diagnose("dl-native-Ab12Cd34", "Ab12Cd34", mode,
+                                      ["podman"], runner, lane=lane)
+            self.assertEqual(records, helper.classify(payload))
+            self.assertEqual(commands[1][-3:], [mode, account, uid])
+        for lane, mode in ((None, "rootless"), ("unknown", "rootless"),
+                           ("debian11-rootless", "rootful"), ("upstream-rootful", "rootless")):
+            runner = unittest.mock.Mock()
+            self.assertEqual(helper.diagnose("dl-native-Ab12Cd34", "Ab12Cd34", mode,
+                                            ["podman"], runner, lane=lane),
+                             [helper.unknown("outer"), helper.unknown("daemon")])
+            runner.assert_not_called()
+
+    def test_cgroup_guest_timer_uses_short_options_and_propagates_failure(self) -> None:
+        helper = self._cgroup_helper()
+        identity = ("a" * 64 + '|dl-native-Ab12Cd34|true|Ab12Cd34|123|"2031-04-05T06:07:08Z"\n').encode()
+        payload = b"outer\nmemory pids\nmemory\n1234\nmax\ndaemon\nunknown\nunknown\nunknown\nunknown\n"
+        # Independently authored short-option-only contract fake. It executes
+        # only a synthetic shell reply, never the guest script or runtime tools.
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            self._tool(fixture, "timeout", f"#!{sys.executable}\n" + '''import subprocess
+import sys
+args = sys.argv[1:]
+if (len(args) != 10 or args[:2] != ["-k", "0.2"]
+        or args[3:5] != ["sh", "-c"] or args[6] != "diagnostic"
+        or args[7] not in ("rootful", "rootless")
+        or args[8:] != (["root", "0"] if args[7] == "rootful" else ["docker", "1000"])):
+    sys.exit(64)
+try:
+    if not 0.2 < float(args[2]) <= 3.0:
+        sys.exit(65)
+except ValueError:
+    sys.exit(65)
+sys.exit(subprocess.run(args[3:], check=False).returncode)
+''')
+            timer = fixture / "timeout"
+            former = subprocess.run([str(timer), "--kill-after=0.2", "3.000", "sh", "-c",
+                                     "exit 0", "diagnostic", "rootful"],
+                                    capture_output=True, timeout=2, check=False)
+            self.assertEqual(former.returncode, 64)
+            self.assertEqual(former.stdout, b"")
+            for mode in ("rootful", "rootless"):
+                for status in (0, 71):
+                    with self.subTest(mode=mode, status=status):
+                        commands = []
+
+                        def runner(command, deadline):
+                            commands.append((command, deadline))
+                            if command[1] == "inspect":
+                                return identity
+                            self.assertEqual(command[:6], ["podman", "exec", "a" * 64,
+                                                           "timeout", "-k", "0.2"])
+                            self.assertEqual(command[7:], ["sh", "-c", helper.GUEST_SCRIPT,
+                                                           "diagnostic", mode,
+                                                           "root" if mode == "rootful" else "docker",
+                                                           "0" if mode == "rootful" else "1000"])
+                            synthetic = "printf '%s' " + shlex.quote(payload.decode()) + f"; exit {status}"
+                            result = helper.bounded_command(
+                                [str(timer), *command[4:9], synthetic, *command[10:]], deadline)
+                            return result
+
+                        records = helper.diagnose("dl-native-Ab12Cd34", "Ab12Cd34", mode, ["podman"], runner, lane="upstream-" + mode)
+                        expected = helper.classify(payload) if status == 0 else [helper.unknown("outer"), helper.unknown("daemon")]
+                        self.assertEqual(records, expected)
+                        self.assertEqual(len(commands), 3 if status == 0 else 2)
+                        self.assertEqual(len({deadline for _, deadline in commands}), 1)
+
+    def test_cgroup_read_errors_and_expired_deadline_remain_unavailable(self) -> None:
+        helper = self._cgroup_helper()
+        identity = ("a" * 64 + '|dl-native-Ab12Cd34|true|Ab12Cd34|123|"2026-10-02T12:00:00Z"\n').encode()
+        expected = [helper.unknown("outer"), helper.unknown("daemon")]
+        for failure in (helper.Unavailable(), OSError("protected-secret"),
+                        subprocess.TimeoutExpired("protected-secret", 5)):
+            def runner(*_args):
+                raise failure
+            self.assertEqual(helper.diagnose("dl-native-Ab12Cd34", "Ab12Cd34", "rootless", ["podman"], runner, lane="upstream-rootless"), expected)
+        with patch.object(helper.time, "monotonic", side_effect=[0, 5]):
+            self.assertEqual(helper.diagnose("dl-native-Ab12Cd34", "Ab12Cd34", "rootless", ["podman"],
+                                            lambda *_args: identity, lane="upstream-rootless"), expected)
+
+    def test_cgroup_guest_requires_namespace_mapping_and_closed_reads(self) -> None:
+        helper = self._cgroup_helper()
+        # Only synthetic files are read. No daemon, host cgroup, or runtime
+        # namespace is contacted by this guest-script regression.
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            proc = fixture / "proc"
+            root = fixture / "sys/fs/cgroup"
+            daemon = root / "slice/daemon"
+            daemon.mkdir(parents=True)
+            for path in (proc / "self/ns", proc / "123/ns"):
+                path.mkdir(parents=True)
+                (path / "cgroup").symlink_to("cgroup:[100]")
+                (path / "mnt").symlink_to("mnt:[200]")
+            (proc / "self/mountinfo").write_text(f"1 0 0:1 / {root} rw - cgroup2 cgroup rw\n")
+            (proc / "123/comm").write_text("dockerd\n")
+            (proc / "123/status").write_text("Name:\tdockerd\nUid:\t0\t0\t0\t0\n")
+            passwd = fixture / "passwd"
+            passwd.write_text("docker:x:1000:1000:fixture:/home/docker:/bin/sh\n")
+            # Field 22 is the stable process start identity.
+            (proc / "123/stat").write_text("123 (dockerd) S " + " ".join(["0"] * 18 + ["1234"]) + "\n")
+            (proc / "123/cgroup").write_text("0::/slice/daemon\n")
+            for path in (root, daemon):
+                (path / "cgroup.controllers").write_text("cpu memory pids\n")
+                (path / "cgroup.subtree_control").write_text("memory\n")
+                (path / "memory.max").write_text("1234\n")
+                (path / "memory.swap.max").write_text("max\n")
+            script = helper.GUEST_SCRIPT.replace("/proc/", str(proc) + "/").replace("/sys/fs/cgroup", str(root)).replace("/etc/passwd", str(passwd))
+
+            def read_guest(mode="rootful", env=None, lane=None):
+                contract = helper.fixture_contract(lane or "upstream-" + mode, mode)
+                return subprocess.run(["sh", "-c", script, "diagnostic", mode,
+                                       contract.account, str(contract.uid)],
+                                      capture_output=True, timeout=2, check=False, env=env)
+
+            observed = read_guest()
+            self.assertEqual(observed.returncode, 0, observed.stderr)
+            self.assertEqual([record["outcome"] for record in helper.classify(observed.stdout)], ["observed", "observed"])
+            (proc / "123/ns/mnt").unlink()
+            (proc / "123/ns/mnt").symlink_to("mnt:[201]")
+            mismatched = read_guest()
+            self.assertEqual(mismatched.returncode, 0)
+            self.assertEqual(helper.classify(mismatched.stdout)[1], helper.unknown("daemon"))
+            (proc / "123/ns/mnt").unlink()
+            (proc / "123/ns/mnt").symlink_to("mnt:[200]")
+            for member in ("0::/../private", "0::/slice/./daemon", "0::/slice//daemon", "1:memory:/private"):
+                (proc / "123/cgroup").write_text(member + "\n")
+                self.assertNotEqual(read_guest().returncode, 0)
+            (proc / "123/cgroup").write_text("0::/slice/daemon\n")
+            secret = fixture / "protected-secret"
+            secret.write_text("protected-secret\n")
+            (daemon / "memory.max").unlink()
+            (daemon / "memory.max").symlink_to(secret)
+            protected = read_guest()
+            self.assertEqual(protected.returncode, 0)
+            self.assertNotIn(b"protected-secret", protected.stdout + protected.stderr)
+            self.assertEqual(helper.classify(protected.stdout)[1]["memory_max"], "unknown")
+            (proc / "123/status").write_text("Uid:\t1732\t1732\t1732\t1732\n")
+            self.assertNotEqual(read_guest("rootful").returncode, 0)
+            self.assertNotEqual(read_guest("rootless").returncode, 0)
+            (proc / "123/status").write_text("Uid:\t1000\t1000\t1000\t1000\n")
+            self.assertEqual(read_guest("rootless").returncode, 0)
+            # Both names exist, but only the selected lane's canonical account
+            # and UID may establish daemon identity. The other account is not a
+            # fallback, and an arbitrary positive UID is not acceptable.
+            for lane, selected, other in (("debian11-rootless", "dockertest", "docker"),
+                                          ("upstream-rootless", "docker", "dockertest")):
+                passwd.write_text(f"{selected}:x:1000:1000:fixture:/home/docker:/bin/sh\n"
+                                  f"{other}:x:1732:1732:fixture:/home/docker:/bin/sh\n")
+                self.assertEqual(read_guest("rootless", lane=lane).returncode, 0)
+                passwd.write_text(f"{selected}:x:1732:1732:fixture:/home/docker:/bin/sh\n"
+                                  f"{other}:x:1000:1000:fixture:/home/docker:/bin/sh\n")
+                self.assertNotEqual(read_guest("rootless", lane=lane).returncode, 0)
+            for accounts in ("", "docker:x:0:0:fixture:/home/docker:/bin/sh\n",
+                             "docker:x:1000:1000:fixture:/home/docker:/bin/sh\n" * 2,
+                             "docker:x:1000:1000:fixture:/home/docker:/bin/sh:extra\n"):
+                passwd.write_text(accounts)
+                self.assertNotEqual(read_guest("rootless").returncode, 0)
+            passwd.write_text("docker:x:1000:1000:fixture:/home/docker:/bin/sh\n")
+            bin_dir = fixture / "bin"
+            bin_dir.mkdir()
+            self._tool(bin_dir, "head", """#!/usr/bin/env python3
+import os, sys
+from pathlib import Path
+if sys.argv[-1] == os.environ['TEST_CGROUP_UID_FILE']:
+    counter = Path(os.environ['TEST_CGROUP_UID_COUNTER'])
+    reads = int(counter.read_text()) + 1 if counter.exists() else 1
+    counter.write_text(str(reads))
+    if reads == 2:
+        if os.environ['TEST_CGROUP_UID_ROLE'] == 'status':
+            print('Uid:\\t1733\\t1733\\t1733\\t1733')
+        else:
+            print('docker:x:1733:1733:fixture:/home/docker:/bin/sh')
+        raise SystemExit(0)
+os.execv(os.environ['TEST_CGROUP_REAL_HEAD'], ['head', *sys.argv[1:]])
+""")
+            for role, target in (("status", proc / "123/status"), ("account", passwd)):
+                env = os.environ.copy()
+                env.update(PATH=f"{bin_dir}:{env['PATH']}", TEST_CGROUP_UID_ROLE=role,
+                           TEST_CGROUP_UID_FILE=str(target), TEST_CGROUP_UID_COUNTER=str(fixture / role),
+                           TEST_CGROUP_REAL_HEAD=shutil.which("head"))
+                self.assertNotEqual(read_guest("rootless", env).returncode, 0)
+            valid_mount = f"1 0 0:1 / {root} rw - cgroup2 cgroup rw\n"
+            for stacked in (valid_mount, f"2 0 0:2 / {root} rw - tmpfs tmpfs rw\n"):
+                (proc / "self/mountinfo").write_text(valid_mount + stacked)
+                self.assertNotEqual(read_guest("rootless").returncode, 0)
+            # The first 8193 bytes end in a newline; command substitution must
+            # not strip it and admit a prefix hiding a later stacked mount.
+            padding = "2 0 0:2 / /padding rw - tmpfs "
+            prefix = valid_mount + padding + "x" * (8192 - len(valid_mount.encode()) - len(padding)) + "\n"
+            self.assertEqual(len(prefix.encode()), 8193)
+            (proc / "self/mountinfo").write_text(prefix + f"3 0 0:3 / {root} rw - tmpfs tmpfs rw\n")
+            self.assertNotEqual(read_guest("rootless").returncode, 0)
+            utf8_env = dict(os.environ, LC_ALL="C.UTF-8")
+            ascii_control = valid_mount + padding + "x" * (8191 - len(valid_mount.encode()) - len(padding)) + "\n"
+            self.assertEqual(len(ascii_control.encode()), 8192)
+            (proc / "self/mountinfo").write_text(ascii_control)
+            ascii_result = subprocess.run(["bash", "-c", script, "diagnostic", "rootless", "docker", "1000"],
+                                          env=utf8_env, capture_output=True, timeout=2, check=False)
+            self.assertEqual(ascii_result.returncode, 0, ascii_result.stderr)
+            self.assertEqual(helper.classify(ascii_result.stdout)[0]["outcome"], "observed")
+            unicode_bytes = 8192 - len(valid_mount.encode()) - len(padding)
+            unicode_prefix = valid_mount + padding + "é" * (unicode_bytes // 2) + "x" * (unicode_bytes % 2) + "\n"
+            self.assertEqual(len(unicode_prefix.encode()), 8193)
+            self.assertLessEqual(len(unicode_prefix), 8192)
+            (proc / "self/mountinfo").write_text(unicode_prefix + f"3 0 0:3 / {root} rw - tmpfs tmpfs rw\n")
+            unprotected = script.replace("LC_ALL=C\nexport LC_ALL\n", "", 1)
+            without_c = subprocess.run(["bash", "-c", unprotected, "diagnostic", "rootless", "docker", "1000"],
+                                       env=utf8_env, capture_output=True, timeout=2, check=False)
+            self.assertEqual(without_c.returncode, 0, without_c.stderr)
+            self.assertEqual(helper.classify(without_c.stdout)[0]["outcome"], "observed")
+            with_c = subprocess.run(["bash", "-c", script, "diagnostic", "rootless", "docker", "1000"],
+                                    env=utf8_env, capture_output=True, timeout=2, check=False)
+            self.assertNotEqual(with_c.returncode, 0)
+            (proc / "self/mountinfo").write_text(f"1 0 0:1 /private {root} rw - cgroup2 cgroup rw\n")
+            self.assertNotEqual(read_guest("rootless").returncode, 0)
+
+    @staticmethod
+    def _assert_process_not_live(pid):
+        status = Path(f"/proc/{pid}/stat")
+        if status.exists():
+            # A killed orphan can briefly await PID 1's reaper; it cannot run.
+            assert status.read_text().rsplit(")", 1)[1].split()[0] == "Z"
+
+    def test_cgroup_capture_bounds_both_streams_and_reaps_children(self) -> None:
+        helper = self._cgroup_helper()
+        with tempfile.TemporaryDirectory() as directory:
+            for cause in ("stdout", "stderr", "timeout"):
+                pid_path = Path(directory) / cause
+                program = """import os, subprocess, sys, time
+from pathlib import Path
+child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+Path(sys.argv[1]).write_text(str(child.pid))
+if sys.argv[2] != 'timeout':
+    os.write(1 if sys.argv[2] == 'stdout' else 2, b'protected-secret' * 1000)
+time.sleep(60)
+"""
+                with self.assertRaises(helper.Unavailable):
+                    helper.bounded_command([sys.executable, "-c", program, str(pid_path), cause], time.monotonic() + 0.6)
+                self.assertTrue(pid_path.exists())
+                self._assert_process_not_live(int(pid_path.read_text()))
+            budget = {"total": 8190}
+            with self.assertRaises(helper.Unavailable):
+                helper.bounded_command([sys.executable, "-c", "print('secret')"], time.monotonic() + 1, budget)
+            self.assertLessEqual(budget["total"], helper.CAPTURE_LIMIT)
+
+    def test_cgroup_capture_combines_alternating_streams_across_commands(self) -> None:
+        helper = self._cgroup_helper()
+        deadline = time.monotonic() + 2
+        budget = {"total": 0}
+        helper.bounded_command([sys.executable, "-c", "import os; os.write(1, b'a'*3000); os.write(2, b'b'*3000)"], deadline, budget)
+        self.assertEqual(budget["total"], 6000)
+        with self.assertRaises(helper.Unavailable):
+            helper.bounded_command([sys.executable, "-c", "import os; os.write(2, b'c'*1200); os.write(1, b'd'*1200)"], deadline, budget)
+        self.assertLessEqual(budget["total"], helper.CAPTURE_LIMIT)
+
+    def test_cgroup_elevated_commands_have_root_owned_timeout_and_teardown_margin(self) -> None:
+        helper = self._cgroup_helper()
+        for operation in ("inspect", "exec", "inspect"):
+            with patch.object(helper.time, "monotonic", return_value=10):
+                command, elevated_until = helper.command_with_timeout(["sudo", "-n", "podman", operation], 15)
+            self.assertEqual(command[:5], ["sudo", "-n", "timeout", "--signal=TERM", "--kill-after=0.2"])
+            self.assertEqual(command[6:], ["podman", operation])
+            self.assertLessEqual(10 + float(command[5]) + helper.TEARDOWN_SECONDS, elevated_until)
+            self.assertLess(elevated_until, 15)
+        with patch.object(helper.time, "monotonic", return_value=14.2):
+            command, elevated_until = helper.command_with_timeout(["sudo", "-n", "podman", "inspect"], 15)
+        self.assertLess(elevated_until, 15)
+        with patch.object(helper.time, "monotonic", return_value=14.9):
+            with self.assertRaises(helper.Unavailable):
+                helper.command_with_timeout(["sudo", "-n", "podman", "inspect"], 15)
+
+    def test_cgroup_cleanup_closes_pipes_on_signal_permission_and_wait_errors(self) -> None:
+        helper = self._cgroup_helper()
+        real_popen = subprocess.Popen
+        for wait_error in (False, True):
+            processes = []
+
+            def spawn(*args, **kwargs):
+                process = real_popen(*args, **kwargs)
+                process.wait(timeout=1)
+                if wait_error:
+                    def fail_wait(**_kwargs):
+                        raise subprocess.TimeoutExpired("protected-secret", 1)
+                    process.wait = fail_wait
+                processes.append(process)
+                return process
+
+            with patch.object(helper.subprocess, "Popen", side_effect=spawn), \
+                 patch.object(helper.os, "killpg", side_effect=PermissionError("protected-secret")):
+                with self.assertRaises((helper.Unavailable, subprocess.TimeoutExpired)):
+                    helper.bounded_command([sys.executable, "-c", "raise SystemExit(7)"], time.monotonic() + 2)
+            self.assertTrue(processes[0].stdout.closed)
+            self.assertTrue(processes[0].stderr.closed)
+
+    def test_cgroup_helper_cancellation_reaps_its_command(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            pid_path = bin_dir / "child.pid"
+            self._tool(bin_dir, "podman", """#!/usr/bin/env python3
+import os, subprocess, sys, time
+from pathlib import Path
+if sys.argv[1] == 'inspect':
+    print('a' * 64 + '|dl-native-Ab12Cd34|true|Ab12Cd34|123|"2026-10-02T12:00:00Z"')
+else:
+    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+    Path(os.environ['TEST_CGROUP_CHILD']).write_text(str(child.pid))
+    time.sleep(60)
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            env["TEST_CGROUP_CHILD"] = str(pid_path)
+            process = subprocess.Popen([sys.executable, str(ROOT / "scripts/native-cgroup-diagnostic.py"),
+                                        "dl-native-Ab12Cd34", "Ab12Cd34", "rootful", "0", "upstream-rootful"],
+                                       env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                deadline = time.monotonic() + 3
+                while not pid_path.exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertTrue(pid_path.exists())
+                process.send_signal(signal.SIGTERM)
+                stdout, stderr = process.communicate(timeout=2)
+                self.assertEqual(process.returncode, 0)
+                self.assertEqual(stdout.count(b"outcome=unavailable"), 2)
+                self.assertEqual(stderr, b"")
+                self._assert_process_not_live(int(pid_path.read_text()))
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.communicate(timeout=2)
+
+    def test_cgroup_elevated_timer_bounds_cancellation_and_overflow(self) -> None:
+        # Fake sudo forwards into the real timer without gaining privilege.
+        # Construction proves timer ownership ordering; these processes prove
+        # cancellation never relies on the Python process killing that timer.
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "sudo", """#!/usr/bin/env bash
+set -eu
+[[ $1 == -n ]]
+shift
+printf '%s\n' "${*:1:7}" >> "$TEST_CGROUP_TIMER_TRACE"
+exec "$@"
+""")
+            self._tool(bin_dir, "podman", """#!/usr/bin/env python3
+import os, subprocess, sys, time
+from pathlib import Path
+if sys.argv[1] == 'inspect':
+    print('a' * 64 + '|dl-native-Ab12Cd34|true|Ab12Cd34|123|"2026-10-02T12:00:00Z"')
+elif os.environ['TEST_CGROUP_CAUSE'] == 'ready':
+    print('outer\\nmemory pids\\nmemory\\n1234\\nmax\\ndaemon\\nunknown\\nunknown\\nunknown\\nunknown')
+else:
+    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+    Path(os.environ['TEST_CGROUP_CHILD']).write_text(str(child.pid))
+    if os.environ['TEST_CGROUP_CAUSE'] == 'overflow':
+        os.write(2, b'protected-secret' * 1000)
+    time.sleep(60)
+""")
+            for cause in ("ready", "cancel", "overflow"):
+                pid_path = bin_dir / f"{cause}.pid"
+                trace = bin_dir / f"{cause}.trace"
+                env = os.environ.copy()
+                env.update(PATH=f"{bin_dir}:{env['PATH']}", TEST_CGROUP_CAUSE=cause,
+                           TEST_CGROUP_CHILD=str(pid_path), TEST_CGROUP_TIMER_TRACE=str(trace))
+                started = time.monotonic()
+                process = subprocess.Popen([sys.executable, str(ROOT / "scripts/native-cgroup-diagnostic.py"),
+                                            "dl-native-Ab12Cd34", "Ab12Cd34", "rootful", "1", "upstream-rootful"],
+                                           env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                try:
+                    if cause in ("cancel", "overflow"):
+                        while not pid_path.exists() and time.monotonic() - started < 2:
+                            time.sleep(0.01)
+                        self.assertTrue(pid_path.exists())
+                        if cause == "overflow":
+                            # Overflow already entered reserved teardown; a
+                            # cancellation there must not abandon its timer.
+                            time.sleep(0.1)
+                        process.send_signal(signal.SIGTERM)
+                        time.sleep(0.05)
+                        process.send_signal(signal.SIGTERM)
+                    stdout, stderr = process.communicate(timeout=5.2)
+                    self.assertEqual(process.returncode, 0)
+                    self.assertLess(time.monotonic() - started, 5.2)
+                    self.assertEqual(stderr, b"")
+                    self.assertNotIn(b"protected-secret", stdout)
+                    commands = trace.read_text().splitlines()
+                    self.assertTrue(all(command.startswith("timeout --signal=TERM --kill-after=0.2 ") for command in commands))
+                    if cause == "ready":
+                        self.assertEqual(len(commands), 3)
+                        self.assertIn(" podman inspect ", commands[0])
+                        self.assertIn(" podman inspect ", commands[-1])
+                        self.assertIn(b"scope=outer outcome=observed", stdout)
+                    else:
+                        self.assertEqual(stdout.count(b"outcome=unavailable"), 2)
+                        self.assertTrue(pid_path.exists())
+                        self._assert_process_not_live(int(pid_path.read_text()))
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                        process.communicate(timeout=2)
+
     def test_cleanup_timeout_runs_with_the_podman_clients_privileges(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
         helpers = "cleanup_podman() {" + source.split("cleanup_podman() {", 1)[1].split(
@@ -860,6 +1513,44 @@ fi
                     for private in ("protected-native-canary", "protected-name-canary", "/private/source", "(342)"):
                         self.assertNotIn(private, result.stdout + result.stderr)
 
+    def test_failure_reports_first_panic_before_aggregate_panic(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_container_tests::live_container_settings_match_engine: test'
+else
+  echo 'DOCKERLENS_NATIVE_CHECK: container_resolver_logging_ipv6_rendered_create' >&2
+  echo "thread 'protected-first-name' (342) panicked at src/native_container_tests.rs:4111:7:" >&2
+  echo 'protected-first-message and native value' >&2
+  echo "thread 'protected-aggregate-name' panicked at src/native_container_tests.rs:5527:9:" >&2
+  echo 'protected-aggregate-message and private path' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 101
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            result = subprocess.run(
+                [str(ROOT / "scripts/run-exact-native-test.sh"), "native_container",
+                 "live_container_settings_match_engine"],
+                env=env, text=True, capture_output=True, timeout=10, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "DOCKERLENS_NATIVE_CHECK: container_resolver_logging_ipv6_rendered_create",
+                result.stderr,
+            )
+            self.assertEqual(
+                ["DOCKERLENS_NATIVE_PANIC: source=native_container_tests line=4111 column=7"],
+                [line for line in result.stderr.splitlines()
+                 if line.startswith("DOCKERLENS_NATIVE_PANIC:")],
+            )
+            for private in ("protected-first", "protected-aggregate", "native value",
+                            "private path", "(342)"):
+                self.assertNotIn(private, result.stdout + result.stderr)
+
     def test_isolation_positive_controls_query_ipv4_before_negative_controls(self) -> None:
         source = (ROOT / "src/native_network_tests.rs").read_text(encoding="utf-8")
         markers = [
@@ -1025,6 +1716,755 @@ fi
                     self.assertIn("network_isolation_collision_dns", result.stderr)
                     self.assertNotIn("protected-secret", result.stdout + result.stderr)
                     self.assertNotIn("protected native response", result.stdout + result.stderr)
+
+    def test_tmpfs_option_proof_precedes_positive_shape_recording(self) -> None:
+        source = (ROOT / "src/native_container_tests.rs").read_text()
+        effects = source.split("fn assert_tmpfs_effects(", 1)[1].split("fn assert_signal_effect(", 1)[0]
+        self.assertIn("run.cli_with_timeout(", effects)
+        self.assertIn("stat -f -c '%S %b'", effects)
+        self.assertIn("stat -c '%a'", effects)
+        self.assertIn("for path in /scratch /sealed", effects)
+        self.assertIn("assert_tmpfs_options(&options);", effects)
+        storage = source.split("fn probe_storage_and_lifecycle(", 1)[1].split(
+            "fn assert_resource_effects(", 1
+        )[0]
+        before_positive = storage.split('"TmpfsMountOptions"', 1)[0]
+        self.assertIn("assert_tmpfs_effects(run, &oracle_id);", before_positive)
+        self.assertIn("assert_tmpfs_effects(run, &id);", before_positive)
+        self.assertEqual(before_positive.count("assert_tmpfs_effects("), 2)
+
+    def test_container_checkpoint_preserves_all_nine_existing_native_checks(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
+        calls = re.findall(
+            r'^"\$\(dirname "\$0"\)/run-exact-native-test\.sh" ([a-z_]+) ([a-z_]+)$',
+            source, re.MULTILINE,
+        )
+        # Independently reviewed baseline order; the new checkpoint may not
+        # replace, duplicate or skip any prior native requirement.
+        existing = [
+            ("native_capture", "live_engine_capture_decodes"),
+            ("acquisition", "live_read_only_acquisition_matches_oracle"),
+            ("native_selection", "live_native_selection_and_source_observations"),
+            ("native_selection", "live_network_membership_matches_engine"),
+            ("native_target", "live_target_render_matches_engine"),
+            ("native_network", "live_network_render_matches_engine"),
+            ("native_network", "live_internal_network_blocks_external_egress"),
+            ("native_volume", "live_existing_volume_prerequisite_matches_engine"),
+            ("native_volume_label", "live_created_volume_labels_match_engine"),
+        ]
+        checkpoint = ("native_container", "live_container_settings_match_engine")
+        self.assertEqual(calls, [*existing[:-1], checkpoint, existing[-1]])
+        self.assertLess(source.index(checkpoint[1]), source.index('python3 "$script_dir/native-evidence.py"'))
+
+    def test_container_probe_is_exact_and_precedes_manifest_emission(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
+        selected = '"$(dirname "$0")/run-exact-native-test.sh" native_container live_container_settings_match_engine'
+        network = '"$(dirname "$0")/run-exact-native-test.sh" native_network live_network_render_matches_engine'
+        manifest = 'python3 "$script_dir/native-evidence.py"'
+        self.assertEqual(source.count(selected), 1)
+        self.assertLess(source.index(network), source.index(selected))
+        self.assertLess(source.index(selected), source.index(manifest))
+        self.assertIn('export NATIVE_CONTAINER_PROBES_PATH="$run_dir/container-probes.json"', source)
+        self.assertIn('"$NATIVE_CONTAINER_PROBES_PATH"', source)
+
+    def test_container_failure_marker_is_closed_and_private(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_container_tests::live_container_settings_match_engine: test'
+else
+  echo 'protected native response' >&2
+  echo "DOCKERLENS_NATIVE_CHECK: container_$TEST_MARKER" >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: container_private' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            for marker in (
+                "ports", "ports_ipv6", "identity_health", "health_disabled", "clear",
+                "start_interval", "storage_lifecycle", "resources_security",
+                "resolver_logging",
+                "resources_security_oracle_inspect",
+                "resources_security_oracle_memory",
+                "resources_security_rendered_pids",
+                "resources_security_rendered_shm",
+            ):
+                with self.subTest(marker=marker):
+                    env["TEST_MARKER"] = marker
+                    result = subprocess.run(
+                        [str(ROOT / "scripts/run-exact-native-test.sh"), "native_container",
+                         "live_container_settings_match_engine"],
+                        env=env, capture_output=True, text=True, timeout=15, check=False,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(f"DOCKERLENS_NATIVE_CHECK: container_{marker}", result.stderr)
+                    self.assertNotIn("private", result.stdout + result.stderr)
+
+    def test_port_failure_stage_and_categories_never_expose_native_details(self) -> None:
+        source = (ROOT / "src/native_container_tests.rs").read_text(encoding="utf-8")
+        for suffix in (
+            "port-oracle", "port-rendered", "ipv6-oracle", "ipv6-rendered",
+            "ipv6-dynamic-oracle", "ipv6-dynamic-rendered",
+            "multi-dynamic-oracle", "multi-dynamic-rendered",
+        ):
+            self.assertIn(f'"{suffix}" =>', source)
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_container_tests::live_container_settings_match_engine: test'
+else
+  echo 'protected-secret native response' >&2
+  echo "DOCKERLENS_NATIVE_CHECK: container_port_$TEST_PORT_STAGE" >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: container_port_fixed_ipv6_rendered_protected-secret' >&2
+  echo 'DOCKERLENS_NATIVE_CLI_DIAG: exit=other stderr=address_family' >&2
+  echo 'DOCKERLENS_NATIVE_CLI_DIAG: exit=other stderr=protected-secret' >&2
+  echo 'DOCKERLENS_NATIVE_API_DIAG: operation=start status=conflict' >&2
+  echo 'DOCKERLENS_NATIVE_API_DIAG: operation=protected-secret status=conflict' >&2
+  echo 'DOCKERLENS_NATIVE_API_DIAG: operation=start status=protected-secret' >&2
+  echo 'DOCKERLENS_NATIVE_API_DIAG: operation=start status=conflict raw=protected-secret' >&2
+  echo 'DOCKERLENS_NATIVE_IPV6_BOUNDARY_DIAG: result=refused' >&2
+  echo 'DOCKERLENS_NATIVE_IPV6_BOUNDARY_DIAG: result=protected-secret' >&2
+  echo 'DOCKERLENS_NATIVE_PORT_BINDINGS_DIAG: key=array count=one ipv4=one ipv6=zero other=zero v4_port=nonzero v6_port=absent' >&2
+  echo 'DOCKERLENS_NATIVE_PORT_BINDINGS_DIAG: key=array count=protected-secret ipv4=one ipv6=zero other=zero v4_port=nonzero v6_port=absent' >&2
+  echo 'DOCKERLENS_NATIVE_PORT_BINDINGS_DIAG: key=array count=one ipv4=one ipv6=zero other=zero v4_port=nonzero v6_port=absent raw=protected-secret' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            for stage in (
+                "fixed_ipv4_oracle_cli_inspect", "fixed_ipv6_rendered_cli_http",
+                "fixed_ipv6_rendered_tcp6_boundary",
+                "fixed_ipv6_rendered_negative_recheck",
+                "fixed_ipv6_rendered_runtime_absence",
+                "dynamic_ipv6_oracle_dynamic_binding",
+                "dynamic_ipv6_oracle_tcp6_boundary",
+                "dynamic_ipv6_oracle_negative_recheck",
+                "dynamic_ipv6_oracle_runtime_absence",
+                "repeated_dynamic_ipv4_rendered_cli_http_secondary",
+                "fixed_ipv4_rendered_udp_assert",
+            ):
+                with self.subTest(stage=stage):
+                    env["TEST_PORT_STAGE"] = stage
+                    result = subprocess.run(
+                        [str(ROOT / "scripts/run-exact-native-test.sh"), "native_container",
+                         "live_container_settings_match_engine"],
+                        env=env, capture_output=True, text=True, timeout=15, check=False,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(f"container_port_{stage}", result.stderr)
+                    self.assertIn("DOCKERLENS_NATIVE_CLI_DIAG: exit=other stderr=address_family", result.stderr)
+                    self.assertIn("DOCKERLENS_NATIVE_API_DIAG: observation=last operation=start status=conflict", result.stderr)
+                    self.assertIn("DOCKERLENS_NATIVE_IPV6_BOUNDARY_DIAG: result=refused", result.stderr)
+                    self.assertIn("DOCKERLENS_NATIVE_PORT_BINDINGS_DIAG: key=array count=one ipv4=one ipv6=zero other=zero v4_port=nonzero v6_port=absent", result.stderr)
+                    self.assertNotIn("protected-secret", result.stdout + result.stderr)
+
+    def test_command_clear_stages_and_diagnostic_are_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_container_tests::live_container_settings_match_engine: test'
+else
+  echo "DOCKERLENS_NATIVE_CHECK: container_clear_$TEST_STAGE" >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: container_clear_protected-secret' >&2
+  echo 'DOCKERLENS_NATIVE_CLEAR_DIAG: phase=paired cmd=null entrypoint=shell path=shell args=empty' >&2
+  echo 'DOCKERLENS_NATIVE_CLEAR_DIAG: phase=paired cmd=protected-secret entrypoint=shell path=shell args=empty' >&2
+  echo 'DOCKERLENS_NATIVE_CLEAR_DIAG: phase=paired cmd=null entrypoint=shell path=shell args=empty raw=protected-secret' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            for stage in ("baseline", "cmd_alone", "override_omit", "paired_literal",
+                          "rendered", "entrypoint"):
+                with self.subTest(stage=stage):
+                    env["TEST_STAGE"] = stage
+                    result = subprocess.run(
+                        [str(ROOT / "scripts/run-exact-native-test.sh"), "native_container",
+                         "live_container_settings_match_engine"],
+                        env=env, capture_output=True, text=True, timeout=15, check=False,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(f"container_clear_{stage}", result.stderr)
+                    self.assertIn("DOCKERLENS_NATIVE_CLEAR_DIAG: phase=paired cmd=null entrypoint=shell path=shell args=empty", result.stderr)
+                    self.assertNotIn("protected-secret", result.stdout + result.stderr)
+
+    def test_cap_drop_diagnostic_is_exact_and_private(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_container_tests::live_container_settings_match_engine: test'
+else
+  echo 'DOCKERLENS_NATIVE_CHECK: container_resources_security' >&2
+  echo 'DOCKERLENS_NATIVE_CAP_DROP_DIAG: phase=oracle state=array count=one spelling=cap_sys_admin' >&2
+  echo 'DOCKERLENS_NATIVE_CAP_DROP_DIAG: phase=oracle state=array count=one spelling=protected-secret' >&2
+  echo 'DOCKERLENS_NATIVE_CAP_DROP_DIAG: phase=oracle state=array count=one spelling=cap_sys_admin raw=protected-secret' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            result = subprocess.run(
+                [str(ROOT / "scripts/run-exact-native-test.sh"), "native_container",
+                 "live_container_settings_match_engine"],
+                env=env, capture_output=True, text=True, timeout=15, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("DOCKERLENS_NATIVE_CAP_DROP_DIAG: phase=oracle state=array count=one spelling=cap_sys_admin", result.stderr)
+            self.assertNotIn("protected-secret", result.stdout + result.stderr)
+
+    def test_start_failure_body_diagnostic_is_closed_and_private(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_container_tests::live_container_settings_match_engine: test'
+else
+  echo 'DOCKERLENS_NATIVE_CHECK: container_resources_security_oracle_start' >&2
+  echo 'DOCKERLENS_NATIVE_START_BODY_DIAG: shape=message cgroup_mention=present device_mention=absent sysctl_mention=absent ulimit_mention=absent apparmor_mention=absent permission_phrase=present errno_mention=absent controller_mention=absent bpf_mention=absent' >&2
+  echo 'DOCKERLENS_NATIVE_START_BODY_DIAG: shape=message cgroup_mention=protected-secret device_mention=absent sysctl_mention=absent ulimit_mention=absent apparmor_mention=absent permission_phrase=present errno_mention=absent controller_mention=absent bpf_mention=absent' >&2
+  echo 'DOCKERLENS_NATIVE_START_BODY_DIAG: shape=message cgroup_mention=present device_mention=absent sysctl_mention=absent ulimit_mention=absent apparmor_mention=absent permission_phrase=present errno_mention=absent controller_mention=absent bpf_mention=absent raw=protected-secret' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            result = subprocess.run(
+                [str(ROOT / "scripts/run-exact-native-test.sh"), "native_container",
+                 "live_container_settings_match_engine"],
+                env=env, capture_output=True, text=True, timeout=15, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("DOCKERLENS_NATIVE_START_BODY_DIAG: shape=message cgroup_mention=present device_mention=absent sysctl_mention=absent ulimit_mention=absent apparmor_mention=absent permission_phrase=present errno_mention=absent controller_mention=absent bpf_mention=absent", result.stderr)
+            self.assertNotIn("protected-secret", result.stdout + result.stderr)
+
+    def test_control_start_body_diagnostics_preserve_five_closed_records(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_container_tests::live_container_settings_match_engine: test'
+else
+  body='shape=message cgroup_mention=present device_mention=absent sysctl_mention=absent ulimit_mention=absent apparmor_mention=absent permission_phrase=present errno_mention=absent controller_mention=present bpf_mention=absent'
+  for control in baseline baseline baseline baseline memory pids device device-same-path; do
+    echo "DOCKERLENS_NATIVE_RESOURCE_START_BODY_DIAG: control=$control $body" >&2
+  done
+  echo "DOCKERLENS_NATIVE_START_BODY_DIAG: $body" >&2
+  echo "DOCKERLENS_NATIVE_RESOURCE_START_BODY_DIAG: control=protected-secret $body" >&2
+  echo "DOCKERLENS_NATIVE_RESOURCE_START_BODY_DIAG: control=memory $body raw=protected-secret" >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            result = subprocess.run(
+                [str(ROOT / "scripts/run-exact-native-test.sh"), "native_container",
+                 "live_container_settings_match_engine"],
+                env=env, capture_output=True, text=True, timeout=15, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(result.stderr.count("DOCKERLENS_NATIVE_RESOURCE_START_BODY_DIAG:"), 5)
+            for control in ("baseline", "memory", "pids", "device", "device-same-path"):
+                self.assertIn(f"DOCKERLENS_NATIVE_RESOURCE_START_BODY_DIAG: control={control} shape=message", result.stderr)
+            self.assertIn("DOCKERLENS_NATIVE_START_BODY_DIAG: shape=message", result.stderr)
+            self.assertNotIn("protected-secret", result.stdout + result.stderr)
+
+    def test_device_body_diagnostics_are_bounded_private_and_non_admitting(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_container_tests::live_container_settings_match_engine: test'
+else
+  fields='host_path_mention=absent destination_path_mention=present errno_phrase=enoent namespace=unknown source_presence=unknown source_type=unknown'
+  echo "DOCKERLENS_NATIVE_DEVICE_START_BODY_DIAG: control=device $fields" >&2
+  echo "DOCKERLENS_NATIVE_DEVICE_START_BODY_DIAG: control=device $fields" >&2
+  echo "DOCKERLENS_NATIVE_DEVICE_START_BODY_DIAG: control=device-same-path $fields" >&2
+  echo "DOCKERLENS_NATIVE_DEVICE_START_BODY_DIAG: control=protected-secret $fields" >&2
+  echo "DOCKERLENS_NATIVE_DEVICE_START_BODY_DIAG: control=device $fields raw=protected-secret" >&2
+  echo 'DOCKERLENS_NATIVE_DEVICE_START_BODY_DIAG: control=device host_path_mention=present destination_path_mention=present errno_phrase=protected-secret namespace=unknown source_presence=unknown source_type=unknown' >&2
+  echo 'DOCKERLENS_NATIVE_DEVICE_START_BODY_DIAG: control=device host_path_mention=present destination_path_mention=present errno_phrase=enoent namespace=daemon source_presence=present source_type=character' >&2
+  echo 'DOCKERLENS_NATIVE_RESOURCE_CONTROL: control=device-same-path phase=start outcome=started' >&2
+  echo 'DOCKERLENS_NATIVE_RESOURCE_START_HTTP: control=device-same-path status=204' >&2
+  echo 'DOCKERLENS_NATIVE_RESOURCE_START_STATE: control=device-same-path state=running' >&2
+  echo "DOCKERLENS_NATIVE_CONTAINER_FLOW: phase=decision outcome=$TEST_FLOW_DECISION" >&2
+  echo 'DOCKERLENS_NATIVE_GROUP_FAILURE: group=resources_security reason=probe' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            for decision in ("probe_failed", "cleanup_unverified"):
+                with self.subTest(decision=decision):
+                    env["TEST_FLOW_DECISION"] = decision
+                    result = subprocess.run(
+                        [str(ROOT / "scripts/run-exact-native-test.sh"), "native_container",
+                         "live_container_settings_match_engine"],
+                        env=env, capture_output=True, text=True, timeout=15, check=False,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(result.stderr.count("DOCKERLENS_NATIVE_DEVICE_START_BODY_DIAG:"), 2)
+                    for control in ("device", "device-same-path"):
+                        self.assertIn(f"DOCKERLENS_NATIVE_DEVICE_START_BODY_DIAG: control={control} ", result.stderr)
+                    self.assertIn("control=device-same-path status=204", result.stderr)
+                    self.assertIn("control=device-same-path state=running", result.stderr)
+                    self.assertIn(f"phase=decision outcome={decision}", result.stderr)
+                    self.assertIn("group=resources_security reason=probe", result.stderr)
+                    self.assertNotIn("namespace=daemon", result.stderr)
+                    self.assertNotIn("protected-secret", result.stdout + result.stderr)
+                    self.assertNotIn("required native test passed", result.stdout + result.stderr)
+
+    def test_group_failures_are_closed_bounded_and_do_not_print_panic_text(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_container_tests::live_container_settings_match_engine: test'
+else
+  for _ in 1 2 3 4 5 6; do
+    echo 'DOCKERLENS_NATIVE_GROUP_FAILURE: group=ports reason=probe' >&2
+  done
+  echo 'DOCKERLENS_NATIVE_GROUP_FAILURE: group=protected-secret reason=probe' >&2
+  echo 'thread protected-secret panicked at secret path and value' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            result = subprocess.run(
+                [str(ROOT / "scripts/run-exact-native-test.sh"), "native_container",
+                 "live_container_settings_match_engine"],
+                env=env, capture_output=True, text=True, timeout=15, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(result.stderr.count("DOCKERLENS_NATIVE_GROUP_FAILURE:"), 5)
+            self.assertNotIn("protected-secret", result.stdout + result.stderr)
+            self.assertNotIn("secret path", result.stdout + result.stderr)
+
+    def test_resource_start_diagnostics_allow_only_closed_markers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_container_tests::live_container_settings_match_engine: test'
+else
+  echo 'DOCKERLENS_NATIVE_RESOURCE_CONTROL: control=memory phase=start outcome=rejected' >&2
+  echo 'DOCKERLENS_NATIVE_RESOURCE_START_HTTP: control=memory status=500' >&2
+  echo 'DOCKERLENS_NATIVE_RESOURCE_START_STATE: control=memory state=created' >&2
+  echo 'DOCKERLENS_NATIVE_ORACLE_START_STATE: state=created' >&2
+  echo 'DOCKERLENS_NATIVE_RESOURCE_CONTROL: control=protected-secret phase=start outcome=rejected' >&2
+  echo 'DOCKERLENS_NATIVE_RESOURCE_START_HTTP: control=memory status=protected-secret' >&2
+  echo 'DOCKERLENS_NATIVE_RESOURCE_START_HTTP: control=memory status=500 raw=protected-secret' >&2
+  echo 'DOCKERLENS_NATIVE_RESOURCE_START_STATE: control=memory state=protected-secret' >&2
+  echo 'DOCKERLENS_NATIVE_ORACLE_START_STATE: state=protected-secret' >&2
+  echo 'protected-secret raw Engine response' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            result = subprocess.run(
+                [str(ROOT / "scripts/run-exact-native-test.sh"), "native_container",
+                 "live_container_settings_match_engine"],
+                env=env, capture_output=True, text=True, timeout=15, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            for marker in (
+                "DOCKERLENS_NATIVE_RESOURCE_CONTROL: control=memory phase=start outcome=rejected",
+                "DOCKERLENS_NATIVE_RESOURCE_START_HTTP: control=memory status=500",
+                "DOCKERLENS_NATIVE_RESOURCE_START_STATE: control=memory state=created",
+                "DOCKERLENS_NATIVE_ORACLE_START_STATE: state=created",
+            ):
+                self.assertEqual(result.stderr.count(marker), 1)
+            self.assertNotIn("protected-secret", result.stdout + result.stderr)
+
+    def test_start_timeout_and_cleanup_diagnostics_are_closed_and_bounded(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_container_tests::live_container_settings_match_engine: test'
+else
+  echo 'DOCKERLENS_NATIVE_START_TIMEOUT_DIAG: state=running reason=none' >&2
+  echo 'DOCKERLENS_NATIVE_START_TIMEOUT_DIAG: state=unavailable reason=transport' >&2
+  echo 'DOCKERLENS_NATIVE_START_TIMEOUT_DIAG: state=protected-secret reason=transport' >&2
+  echo 'DOCKERLENS_NATIVE_START_TIMEOUT_DIAG: state=running reason=protected-secret' >&2
+  echo 'DOCKERLENS_NATIVE_START_TIMEOUT_DIAG: state=running reason=transport' >&2
+  echo 'DOCKERLENS_NATIVE_START_TIMEOUT_DIAG: state=unavailable reason=transport raw=protected-secret' >&2
+  echo 'DOCKERLENS_NATIVE_CLEANUP_STEP: step=tracked_delete outcome=begin' >&2
+  echo 'DOCKERLENS_NATIVE_CLEANUP_STEP: step=delete_inspect outcome=begin' >&2
+  echo 'DOCKERLENS_NATIVE_CLEANUP_STEP: step=delete_request outcome=begin' >&2
+  for ((i=0; i<40; i++)); do
+    echo 'DOCKERLENS_NATIVE_CLEANUP_STEP: step=container_name_list outcome=begin' >&2
+  done
+  echo 'DOCKERLENS_NATIVE_CLEANUP_STEP: step=readback_stable outcome=begin' >&2
+  echo 'DOCKERLENS_NATIVE_CLEANUP_STEP: step=protected-secret outcome=begin' >&2
+  echo 'DOCKERLENS_NATIVE_CLEANUP_STEP: step=readback_stable outcome=protected-secret' >&2
+  echo 'DOCKERLENS_NATIVE_CLEANUP_STEP: step=readback_stable outcome=begin raw=protected-secret' >&2
+  echo 'DOCKERLENS_NATIVE_GROUP_CLEANUP: group=ports outcome=begin' >&2
+  echo 'DOCKERLENS_NATIVE_CLEANUP_READBACK: group=ports phase=first containers=nonzero images=zero' >&2
+  echo 'DOCKERLENS_NATIVE_GROUP_CLEANUP: group=ports outcome=unverified' >&2
+  echo 'DOCKERLENS_NATIVE_GROUP_CLEANUP: group=protected-secret outcome=verified' >&2
+  echo 'DOCKERLENS_NATIVE_CLEANUP_READBACK: group=ports phase=first containers=protected-secret images=zero' >&2
+  echo 'DOCKERLENS_NATIVE_CLEANUP_READBACK: group=ports phase=first containers=nonzero images=zero raw=protected-secret' >&2
+  echo 'protected-secret raw Engine response' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            result = subprocess.run(
+                [str(ROOT / "scripts/run-exact-native-test.sh"), "native_container",
+                 "live_container_settings_match_engine"],
+                env=env, capture_output=True, text=True, timeout=15, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("DOCKERLENS_NATIVE_START_TIMEOUT_DIAG: state=unavailable reason=transport", result.stderr)
+            self.assertIn("DOCKERLENS_NATIVE_CLEANUP_STEP: step=readback_stable outcome=begin", result.stderr)
+            self.assertIn(
+                "DOCKERLENS_NATIVE_CLEANUP_READBACK: group=ports phase=first containers=nonzero images=zero",
+                result.stderr,
+            )
+            self.assertIn("DOCKERLENS_NATIVE_GROUP_CLEANUP: group=ports outcome=unverified", result.stderr)
+            self.assertEqual(result.stderr.count("DOCKERLENS_NATIVE_CLEANUP_STEP:"), 32)
+            self.assertNotIn("protected-secret", result.stdout + result.stderr)
+
+    def test_resource_controls_resolver_subphases_and_cleanup_flow_are_closed(self) -> None:
+        source = (ROOT / "src/native_container_tests.rs").read_text(encoding="utf-8")
+        self.assertIn("if oracle_start_status != 204 {", source)
+        self.assertIn("resource_start_control_matrix(run);", source)
+        self.assertLess(source.index("resource_start_control_matrix(run);"),
+                        source.index("assert_native_api_status(NativeApiOperation::Start, oracle_start_status, 204);"))
+        self.assertIn('resource_control_may_continue(uncertain, resource_control_seconds_remaining())', source)
+        self.assertLess(source.index('("resources_security", probe_resources_security_group)'),
+                        source.index('("ports", probe_port_group)'))
+        self.assertIn('const RESOURCE_START_CONTROLS: [&str; 5]', source)
+        self.assertIn('"memory" => Some(&["--memory=67108864"])', source)
+        self.assertIn('"pids" => Some(&["--pids-limit=32"])', source)
+        self.assertIn('"device" => Some(&["--device=/dev/null:/dev/native-null:r"])', source)
+        self.assertIn('"device-same-path" => Some(&["--device=/dev/null:/dev/null:r"])', source)
+        self.assertNotIn('"--memory=67108864", "--pids-limit=32"', source)
+        self.assertIn('self.cli_with_timeout(&args, "10")', source)
+        self.assertIn('mark_container_flow("cleanup_readback",', source)
+        runner = (ROOT / "scripts/run-exact-native-test.sh").read_text(encoding="utf-8")
+        self.assertIn('control=(baseline|memory|pids|device|device-same-path)', runner)
+        self.assertIn('"$capture_path" | tail -n 35', runner)
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_container_tests::live_container_settings_match_engine: test'
+else
+  echo 'DOCKERLENS_NATIVE_CHECK: container_resolver_logging_ipv6_rendered_hosts' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: container_resolver_logging_ipv6_rendered_private' >&2
+  echo 'DOCKERLENS_NATIVE_RESOURCE_CONTROL: control=baseline phase=start outcome=started' >&2
+  echo 'DOCKERLENS_NATIVE_RESOURCE_CONTROL: control=memory phase=start outcome=started' >&2
+  echo 'DOCKERLENS_NATIVE_RESOURCE_CONTROL: control=pids phase=start outcome=uncertain' >&2
+  echo 'DOCKERLENS_NATIVE_RESOURCE_CONTROL: control=device phase=start outcome=timeout' >&2
+  echo 'DOCKERLENS_NATIVE_RESOURCE_CONTROL: control=resource phase=start outcome=started' >&2
+  echo 'DOCKERLENS_NATIVE_RESOURCE_CONTROL: control=private phase=start outcome=started' >&2
+  echo 'DOCKERLENS_NATIVE_RESOURCE_CONTROL: control=device phase=start outcome=started raw=protected-secret' >&2
+  echo 'DOCKERLENS_NATIVE_CONTAINER_FLOW: phase=mutation outcome=timeout' >&2
+  echo 'DOCKERLENS_NATIVE_CONTAINER_FLOW: phase=cleanup_tracked outcome=begin' >&2
+  echo 'DOCKERLENS_NATIVE_CONTAINER_FLOW: phase=cleanup_tracked outcome=pass' >&2
+  echo 'DOCKERLENS_NATIVE_CONTAINER_FLOW: phase=cleanup_inventory outcome=begin' >&2
+  echo 'DOCKERLENS_NATIVE_CONTAINER_FLOW: phase=cleanup_inventory outcome=pass' >&2
+  echo 'DOCKERLENS_NATIVE_CONTAINER_FLOW: phase=cleanup_readback outcome=begin' >&2
+  echo 'DOCKERLENS_NATIVE_CONTAINER_FLOW: phase=cleanup_readback outcome=pass' >&2
+  echo "DOCKERLENS_NATIVE_CONTAINER_FLOW: phase=decision outcome=$TEST_FLOW_DECISION" >&2
+  echo 'DOCKERLENS_NATIVE_CONTAINER_FLOW: phase=decision outcome=pass' >&2
+  echo 'DOCKERLENS_NATIVE_CONTAINER_FLOW: phase=cleanup_private outcome=pass' >&2
+  echo "DOCKERLENS_NATIVE_GROUP_FAILURE: group=ports reason=$TEST_GROUP_REASON" >&2
+  echo 'protected-secret raw native output' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 101
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            for decision, reason in (("mutation_uncertain", "mutation_uncertain"),
+                                     ("probe_failed", "probe")):
+                with self.subTest(decision=decision):
+                    env["TEST_FLOW_DECISION"] = decision
+                    env["TEST_GROUP_REASON"] = reason
+                    result = subprocess.run(
+                        [str(ROOT / "scripts/run-exact-native-test.sh"), "native_container",
+                         "live_container_settings_match_engine"],
+                        env=env, capture_output=True, text=True, timeout=15, check=False,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("container_resolver_logging_ipv6_rendered_hosts", result.stderr)
+                    self.assertIn("control=memory phase=start outcome=started", result.stderr)
+                    self.assertIn("control=pids phase=start outcome=uncertain", result.stderr)
+                    self.assertIn("control=device phase=start outcome=timeout", result.stderr)
+                    self.assertNotIn("control=resource phase=start", result.stderr)
+                    self.assertIn("phase=mutation outcome=timeout", result.stderr)
+                    self.assertIn("phase=cleanup_readback outcome=pass", result.stderr)
+                    self.assertIn(f"phase=decision outcome={decision}", result.stderr)
+                    self.assertNotIn("phase=decision outcome=pass", result.stderr)
+                    self.assertIn(f"group=ports reason={reason}", result.stderr)
+                    self.assertEqual(result.stderr.count("DOCKERLENS_NATIVE_CONTAINER_FLOW:"), 8)
+                    self.assertNotIn("private", result.stdout + result.stderr)
+                    self.assertNotIn("protected-secret", result.stdout + result.stderr)
+
+    def test_ipv6_probe_name_and_repeated_ipv4_oracle_are_live_and_bounded(self) -> None:
+        source = (ROOT / "src/native_container_tests.rs").read_text(encoding="utf-8")
+        self.assertIn("byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'", source)
+        self.assertIn('assert!(valid_container_suffix("ipv6-oracle"));', source)
+        oracle_start = source.index('mark_port_stage("port-oracle", "oracle_start");')
+        oracle_primary = source.index('assert_fixed_ipv4_http(run, &oracle_id, "port-oracle", false);')
+        oracle_secondary = source.index('assert_fixed_ipv4_http(run, &oracle_id, "port-oracle", true);')
+        oracle_cleanup = source.index('mark_port_stage("port-oracle", "oracle_cleanup");')
+        rendered_start = source.index('mark_port_stage("port-rendered", "api_start");')
+        self.assertLess(oracle_start, oracle_primary)
+        self.assertLess(oracle_primary, oracle_secondary)
+        self.assertLess(oracle_secondary, oracle_cleanup)
+        self.assertLess(oracle_cleanup, rendered_start)
+        self.assertIn('for attempt in 1 2 3 4 5;', source)
+        self.assertIn('wget -qO- -T 2', source)
+        self.assertIn('assert_fixed_ipv4_http(run, &id, "port-rendered", true);', source)
+
+    def test_port_probes_use_outer_namespace_without_new_probe_containers(self) -> None:
+        source = (ROOT / "src/native_container_tests.rs").read_text(encoding="utf-8")
+        port_source = source.split("fn probe_ports(", 1)[1].split("fn probe_complementary_ports(", 1)[0]
+        self.assertNotIn('"--network".into(),', port_source)
+        self.assertIn('run.namespace_probe("tcp_refusal", None)', port_source)
+        self.assertIn('isolated.status.success() && isolation_result == "refused"', port_source)
+        self.assertIn('run.require_outer_identity();', port_source)
+        self.assertIn('run.require_outer_curl();', port_source)
+        self.assertIn('run.require_outer_bash();', port_source)
+        self.assertIn('run.namespace_probe("udp", Some(&assigned))', port_source)
+        self.assertIn('let assigned: u16 = assigned.parse()', port_source)
+        self.assertIn('assert!(assigned > 0);', port_source)
+        helper = (ROOT / "scripts/native-net-probe.py").read_text(encoding="utf-8")
+        self.assertRegex(helper, r'"--noproxy",\s*"\*",\s*"--proxy",\s*""')
+        self.assertRegex(helper, r'"--connect-timeout",\s*"2",\s*"--max-time",\s*"3"')
+        self.assertIn('pass_fds=(net_fd,)', helper)
+        self.assertIn('f"--net=/proc/self/fd/{net_fd}"', helper)
+
+    def test_api_and_resolver_logs_failure_labels_are_closed(self) -> None:
+        source = (ROOT / "src/native_container_tests.rs").read_text(encoding="utf-8")
+        self.assertIn('DOCKERLENS_NATIVE_API_DIAG: operation={} status={}', source)
+        self.assertIn('DOCKERLENS_NATIVE_RESOLVER_LOGS_DIAG: operation=logs outcome=cli_failure', source)
+        self.assertIn('mark_ipv4_log_canary(side, canary_present);', source)
+        self.assertIn('log_canary_ready(|| run.cli_with_timeout(&["logs".into(), id.into()], "3"))', source)
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_container_tests::live_container_settings_match_engine: test'
+else
+  echo 'DOCKERLENS_NATIVE_API_DIAG: operation=inspect status=not_found' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: container_resolver_logging_ipv4_oracle_logs' >&2
+  echo 'DOCKERLENS_NATIVE_RESOLVER_LOGS_DIAG: operation=logs outcome=cli_failure' >&2
+  echo 'DOCKERLENS_NATIVE_RESOLVER_LOG_CANARY: side=oracle outcome=missing' >&2
+  echo 'DOCKERLENS_NATIVE_RESOLVER_LOG_CANARY: side=private outcome=missing' >&2
+  echo 'DOCKERLENS_NATIVE_RESOLVER_LOGS_DIAG: operation=private outcome=cli_failure' >&2
+  echo 'DOCKERLENS_NATIVE_GROUP_FAILURE: group=resolver_logging reason=probe' >&2
+  echo 'DOCKERLENS_NATIVE_CHECK: container_resolver_logging_local_rendered_create' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            result = subprocess.run(
+                [str(ROOT / "scripts/run-exact-native-test.sh"), "native_container",
+                 "live_container_settings_match_engine"],
+                env=env, capture_output=True, text=True, timeout=15, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "DOCKERLENS_NATIVE_API_DIAG: observation=last operation=inspect status=not_found",
+                result.stderr,
+            )
+            self.assertIn(
+                "DOCKERLENS_NATIVE_RESOLVER_LOGS_DIAG: operation=logs outcome=cli_failure",
+                result.stderr,
+            )
+            self.assertIn(
+                "DOCKERLENS_NATIVE_RESOLVER_LOG_CANARY: side=oracle outcome=missing",
+                result.stderr,
+            )
+            self.assertIn("DOCKERLENS_NATIVE_GROUP_FAILURE: group=resolver_logging reason=probe", result.stderr)
+            self.assertNotIn("private", result.stdout + result.stderr)
+
+    def test_container_http_and_health_diagnostics_are_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_container_tests::live_container_settings_match_engine: test'
+else
+  echo 'DOCKERLENS_NATIVE_CHECK: container_health_disabled_rendered_wait'
+  echo 'DOCKERLENS_NATIVE_CHECK: container_health_disabled_private'
+  echo 'DOCKERLENS_NATIVE_HTTP_DIAG: exit=other category=connection_refused'
+  echo 'DOCKERLENS_NATIVE_HTTP_DIAG: exit=other category=private'
+  echo 'DOCKERLENS_NATIVE_IPV6_DIAG: local_service=fail inner_all=enabled inner_lo=disabled outer_tcp6=bind_unavailable curl_exit=7'
+  echo 'DOCKERLENS_NATIVE_IPV6_DIAG: local_service=private inner_all=enabled inner_lo=disabled outer_tcp6=bind_unavailable curl_exit=7'
+  echo 'DOCKERLENS_NATIVE_ISOLATION_DIAG: result=connected'
+  echo 'DOCKERLENS_NATIVE_ISOLATION_DIAG: result=private'
+  echo 'DOCKERLENS_NATIVE_NAMESPACE_DIAG: category=changed'
+  echo 'DOCKERLENS_NATIVE_NAMESPACE_DIAG: category=private'
+  echo 'private native response' >&2
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            result = subprocess.run(
+                [str(ROOT / "scripts/run-exact-native-test.sh"), "native_container",
+                 "live_container_settings_match_engine"],
+                env=env, capture_output=True, text=True, timeout=15, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("container_health_disabled_rendered_wait", result.stderr)
+            self.assertIn("exit=other category=connection_refused", result.stderr)
+            self.assertIn(
+                "local_service=fail inner_all=enabled inner_lo=disabled outer_tcp6=bind_unavailable curl_exit=7",
+                result.stderr,
+            )
+            self.assertIn("DOCKERLENS_NATIVE_ISOLATION_DIAG: result=connected", result.stderr)
+            self.assertIn("DOCKERLENS_NATIVE_NAMESPACE_DIAG: category=changed", result.stderr)
+            self.assertNotIn("private", result.stdout + result.stderr)
+
+    def test_health_image_uses_run_owned_create_commit_and_closed_stage(self) -> None:
+        source = (ROOT / "src/native_container_tests.rs").read_text(encoding="utf-8")
+        health = source.split("fn image_with_failing_health(", 1)[1].split("\n}\n", 1)[0]
+        for token in (
+            '"health-default-source"', '"--health-cmd=/bin/false"',
+            '"--health-interval=1s"', '"--health-timeout=1s"',
+            '"--health-retries=2"', '"commit".into()',
+            '"Interval", "Timeout", "Retries"',
+            '"io.dockerlens.native-run"', 'self.delete(&source_id);',
+        ):
+            self.assertIn(token, health)
+        self.assertNotIn('"build".into()', health)
+        self.assertNotIn("fn cli_with_stdin", source)
+        self.assertIn('dockerlens-native-{role}:r{run_id}', source)
+        self.assertNotIn('format!("{}:local", self.name(', source)
+        runner = (ROOT / "scripts/run-exact-native-test.sh").read_text(encoding="utf-8")
+        self.assertIn("health_disabled(_(source_(create|inspect|cleanup)|image_(commit|inspect)|", runner)
+        self.assertNotIn("health_disabled(_(image_build|", runner)
+
+    def test_health_substages_and_known_cli_categories_are_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_container_tests::live_container_settings_match_engine: test'
+else
+  echo "DOCKERLENS_NATIVE_CHECK: container_health_disabled_$TEST_STAGE"
+  echo 'DOCKERLENS_NATIVE_CHECK: container_health_disabled_private'
+  echo "DOCKERLENS_NATIVE_CLI_DIAG: exit=other stderr=$TEST_CATEGORY"
+  echo 'DOCKERLENS_NATIVE_CLI_DIAG: exit=other stderr=protected-secret'
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 23
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            for stage in ("source_create", "source_inspect", "image_commit",
+                          "image_inspect", "source_cleanup"):
+                for category in ("storage_exhausted", "invalid_reference",
+                                 "missing_resource", "image_storage", "unknown"):
+                    with self.subTest(stage=stage, category=category):
+                        env["TEST_STAGE"] = stage
+                        env["TEST_CATEGORY"] = category
+                        result = subprocess.run(
+                            [str(ROOT / "scripts/run-exact-native-test.sh"), "native_container",
+                             "live_container_settings_match_engine"],
+                            env=env, capture_output=True, text=True, timeout=15, check=False,
+                        )
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn(f"container_health_disabled_{stage}", result.stderr)
+                        self.assertIn(f"stderr={category}", result.stderr)
+                        self.assertNotIn("private", result.stdout + result.stderr)
+                        self.assertNotIn("protected-secret", result.stdout + result.stderr)
+
+    def test_native_test_output_limit_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  if [[ $TEST_PHASE == list ]]; then
+    head -c 300000 /dev/zero
+  else
+    echo 'native_container_tests::live_container_settings_match_engine: test'
+  fi
+else
+  head -c 300000 /dev/zero
+fi
+echo 'private-canary' >&2
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            for phase in ("list", "run"):
+                with self.subTest(phase=phase):
+                    env["TEST_PHASE"] = phase
+                    result = subprocess.run(
+                        [str(ROOT / "scripts/run-exact-native-test.sh"), "native_container",
+                         "live_container_settings_match_engine"],
+                        env=env, capture_output=True, text=True, timeout=15, check=False,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("output exceeded closed byte limit", result.stderr)
+                    self.assertNotIn("private-canary", result.stdout + result.stderr)
+
+    def test_native_test_output_limit_does_not_cap_build_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            artifact = bin_dir / "fake-build-artifact"
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_container_tests::live_container_settings_match_engine: test'
+else
+  head -c 300000 /dev/zero > "$TEST_ARTIFACT_PATH"
+  echo 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;'
+fi
+""")
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            env["TEST_ARTIFACT_PATH"] = str(artifact)
+            result = subprocess.run(
+                [str(ROOT / "scripts/run-exact-native-test.sh"), "native_container",
+                 "live_container_settings_match_engine"],
+                env=env, capture_output=True, text=True, timeout=15, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(artifact.stat().st_size, 300000)
 
     def test_network_probe_is_exact_and_precedes_manifest_emission(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
@@ -1349,6 +2789,70 @@ fi
                 self.assertEqual("native-work-admitted" in result.stdout, admitted)
                 self.assertNotIn("protected-secret", result.stdout + result.stderr)
                 self.assertNotIn("private-source", result.stdout + result.stderr)
+
+    def test_storage_sampling_resamples_only_transient_descendant_loss(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text()
+        sampler = "sample_storage_kib() {" + source.split("sample_storage_kib() {", 1)[1].split(
+            "\nmain_pid=$$", 1
+        )[0]
+        self.assertIn('ulimit -f 4; LC_ALL=C timeout --kill-after=1 10 "${du_cmd[@]}"', sampler)
+        self.assertIn('timeout --kill-after=1 10 "${df_cmd[@]}" -Pk -- "$graph_root"', sampler)
+        self.assertIn('timeout --kill-after=1 10 "${stat_cmd[@]}" -c', sampler)
+        self.assertIn('stat_cmd=(sudo -n stat)', source)
+        bash = """set -euo pipefail
+volume_path=$TEST_VOLUME_PATH
+run_dir=$TEST_RUN_DIR
+graph_root=$run_dir
+storage_root_identity='directory|1:1'
+stat_cmd=(stat)
+timeout() { shift 2; "$@"; }
+sudo() { shift; "$@"; }
+stat() {
+  [[ -d $volume_path ]] || return 1
+  if [[ $TEST_STORAGE_CASE == identity_change ]]; then printf 'directory|1:2'; else printf 'directory|1:1'; fi
+}
+df() { printf 'Filesystem 1024-blocks Used Available Capacity Mounted\\nmock 9000000 0 8000000 0%% /\\n'; }
+du() {
+  mock_calls=$(<"$TEST_COUNT_FILE")
+  mock_calls=$((mock_calls + 1))
+  printf '%s' "$mock_calls" >"$TEST_COUNT_FILE"
+  case $TEST_STORAGE_CASE in
+    transient) if (( mock_calls == 1 )); then printf "du: cannot access '%s/vanished': No such file or directory\\n" "$volume_path" >&2; return 1; fi ;;
+    unterminated) if (( mock_calls == 1 )); then printf "du: cannot access '%s/vanished': No such file or directory" "$volume_path" >&2; return 1; fi ;;
+    persistent) printf "du: cannot access '%s/vanished': No such file or directory\\n" "$volume_path" >&2; return 1 ;;
+    root_loss) rmdir "$volume_path"; printf "du: cannot access '%s': No such file or directory\\n" "$volume_path" >&2; return 1 ;;
+    permission) printf "du: cannot read directory '%s/private': Permission denied\\n" "$volume_path" >&2; return 1 ;;
+    stderr_overflow) head -c 100000 /dev/zero >&2; return 1 ;;
+    timeout) return 124 ;;
+    malformed) printf 'not-a-total\\t%s\\n' "$volume_path"; return 0 ;;
+    large) printf '5000000\\t%s\\n' "$volume_path"; return 0 ;;
+  esac
+  printf '100\\t%s\\n' "$volume_path"
+}
+""" + sampler + """
+if sample_storage_kib; then printf 'admitted:%s\\n' "$SAMPLED_STORAGE_KIB"; else printf 'rejected\\n'; fi
+"""
+        for case, admitted in (
+            ("transient", True), ("unterminated", True), ("persistent", False),
+            ("identity_change", False), ("root_loss", False),
+            ("permission", False), ("stderr_overflow", False), ("timeout", False),
+            ("malformed", False),
+            ("large", False),
+        ):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                volume = Path(directory) / "owned-volume"
+                volume.mkdir()
+                counter = Path(directory) / "du-calls"
+                counter.write_text("0")
+                env = os.environ.copy()
+                env.update(TEST_VOLUME_PATH=str(volume), TEST_RUN_DIR=directory,
+                           TEST_STORAGE_CASE=case, TEST_COUNT_FILE=str(counter))
+                result = subprocess.run(
+                    ["bash", "-c", bash], env=env, text=True,
+                    capture_output=True, timeout=5, check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), "admitted:100" if admitted else "rejected")
 
     def test_read_only_volume_start_keeps_classified_failure_probe(self) -> None:
         source = (ROOT / "src/native_target_tests.rs").read_text(encoding="utf-8")
