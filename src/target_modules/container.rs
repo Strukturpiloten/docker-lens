@@ -12,7 +12,11 @@ impl ImageReference {
         let Ok(value) = std::str::from_utf8(&bytes) else {
             return Err(IntentError::InvalidImage);
         };
-        if value.is_empty() || value.chars().any(char::is_whitespace) || value.contains('\0') {
+        if value.is_empty()
+            || value.chars().any(char::is_whitespace)
+            || value.contains('\0')
+            || value.contains('$')
+        {
             return Err(IntentError::InvalidImage);
         }
         Ok(Self(ProtectedValue::new(bytes)))
@@ -707,4 +711,31 @@ pub struct ContainerIntent {
     pub healthcheck: Option<Healthcheck>,
     pub restart: Option<RestartPolicy>,
     pub settings: ContainerSettings,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ImageReference, IntentError};
+
+    #[test]
+    fn image_reference_rejects_unresolved_variables_without_narrowing_existing_forms() {
+        for invalid in ["${IMAGE}", "registry/$IMAGE:1", "repo:tag$SUFFIX"] {
+            assert!(matches!(
+                ImageReference::new(invalid.as_bytes().to_vec()),
+                Err(IntentError::InvalidImage)
+            ));
+        }
+        for valid in [
+            "registry.example:5000/team/app:1.2.3",
+            "team/app@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        ] {
+            assert_eq!(
+                ImageReference::new(valid.as_bytes().to_vec())
+                    .unwrap()
+                    .bytes(),
+                valid.as_bytes()
+            );
+        }
+    }
 }
