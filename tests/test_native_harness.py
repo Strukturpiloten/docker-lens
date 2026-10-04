@@ -157,11 +157,11 @@ fi
         )[0]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            self._tool(root, "timeout", '#!/bin/sh\n[ "$3" = 8s ] || exit 43\n'
+            self._tool(root, "timeout", '#!/bin/sh\n[ "$3" = 8s ] || [ "$3" = 6.0s ] || exit 43\n'
                        'export FAKE_CLIENT_BOUND=8\nshift 3\nexec "$@"\n')
             self._tool(root, "podman", '''#!/usr/bin/env bash
 set -eu
-echo 'private-canary resource-id' >&2
+[[ $1 == container ]] || echo 'private-canary resource-id' >&2
 case "$1" in
   container)
     if [[ $FAKE_MODE == query_error || ($FAKE_MODE == readback_error && ! -e $FAKE_RESOURCE) ]]; then
@@ -203,7 +203,9 @@ esac
                         if original else container_helper
                     result = subprocess.run(
                         ["bash", "-c", "set -euo pipefail\npodman_cmd=(podman)\n"
-                         "run_id=owned-run\nstatus=0\n" + helpers + selected
+                         "run_id=owned-run\nstatus=0\npreserve_run_dir=0\n"
+                         f"script_dir={shlex.quote(str(ROOT / 'scripts'))}\nrun_dir={shlex.quote(str(root))}\n"
+                         + helpers + selected
                          + '\ncleanup_container dl-native-synthetic container\nexit "$status"\n'],
                         env=env, capture_output=True, text=True, timeout=5, check=False,
                     )
@@ -234,7 +236,7 @@ esac
         self.assertIn('native_success_summary="native conformance passed:', source)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            self._tool(root, "timeout", '#!/bin/sh\n[ "$3" = 8s ] || exit 43\nshift 3\nexec "$@"\n')
+            self._tool(root, "timeout", '#!/bin/sh\n[ "$3" = 8s ] || [ "$3" = 6.0s ] || exit 43\nshift 3\nexec "$@"\n')
             self._tool(root, "podman", '''#!/usr/bin/env bash
 set -eu
 for name; do :; done
@@ -245,7 +247,7 @@ case "$name" in
   dl-native-data-synthetic) role=volume ;;
   *) exit 44 ;;
 esac
-echo 'private-canary native-resource-id' >&2
+[[ ${2:-} == exists ]] || echo 'private-canary native-resource-id' >&2
 if [[ $1 == inspect || ${2:-} == inspect ]]; then echo synthetic; exit 0; fi
 if [[ ${2:-} == exists ]]; then [[ -e $FAKE_STATE/$role ]]; exit; fi
 if [[ $1 == rm || ${2:-} == rm ]]; then
@@ -280,7 +282,8 @@ else exit 50; fi
                         "run_id=synthetic\nlane=debian11-rootful\n"
                         "container=dl-native-synthetic\nsidecar=dl-native-egress-synthetic\n"
                         "outer_network=dl-native-net-synthetic\nvolume=dl-native-data-synthetic\n"
-                        "native_success_summary='native conformance passed: synthetic'\n"
+                        "native_success_summary='native conformance passed: synthetic'\npreserve_run_dir=0\n"
+                        f"script_dir={shlex.quote(str(ROOT / 'scripts'))}\n"
                         f"run_dir={shlex.quote(temporary)}\n"
                         + helpers + "cleanup\n"
                     )
