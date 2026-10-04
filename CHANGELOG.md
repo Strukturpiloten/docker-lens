@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Define the test-only 57-shape container checkpoint, bounded fixture identity
+  checks and private failure diagnostics, and reject unresolved image variables
+  before inert target planning. Failed resource assertions still fail the lane;
+  this source checkpoint grants no new catalogue capability or enforcement
+  claim and requires fresh exact-candidate native validation and review.
 - Admit only the reviewed #68 external-volume, external-network and internal
   bridge singleton groups on the four exact profiles, preserving historical
   evidence. Volume labels and other topology/runtime groups remain unadmitted;

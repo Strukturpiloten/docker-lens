@@ -1,5 +1,68 @@
 # Verification
 
+## Closed native fixture launcher seam
+
+The four registered lanes still execute exactly the image-native
+`/usr/local/bin/start-dockerd --host=unix:///dockerlens-native/docker.sock`.
+`native-conformance.sh` remains the sole operational image tag/digest and
+Engine-release source; the launcher helper derives these identities there.
+Its closed declaration binds the lane, repository, native launcher defaults
+(no new config-file override), account, home, private socket and exclusive
+run-owned data root. Debian rootless uses `dockertest`, upstream rootless
+uses `docker`, both guest UID 1000 and `/home/docker`; rootful uses root.
+This is not a global account rename. Existing Debian package checks, volume
+options, BusyBox sidecar/workload pin and configured outer memory/PID limits
+are unchanged. Configuration does not prove enforcement or no-swap behavior;
+the strict native effective memory/PID assertions remain required, and the
+Containers #344 resource-fixture failure remains unresolved. No archive, label or caller-supplied
+launcher can register a new lane or create published image evidence.
+
+After readiness, a mandatory read-only acquisition checks the actual unique
+passwd account, numeric UID/home, `id` result and daemon effective UID/HOME.
+A bounded proc scan requires one dockerd, its executable identity, start ticks
+and owned init PID namespace; user/mount namespace identities are retained
+without assuming rootless shares those namespaces with init. Account and
+process identities are read twice. Outer running ID/name/ownership label,
+PID/start timestamp and pinned image identity are inspected before and after.
+The canonical pinned reference is resolved read-only to its immutable local
+image ID, which must match the container's image ID; tag spelling is not
+treated as identity proof.
+Guest exec targets the inspected immutable container ID. A mismatch, failed
+read, oversized reply, deadline or cancellation fails the lane, with only a
+closed failure category exposed. This non-atomic check establishes neither
+writable cgroup delegation, controller enforcement nor compatibility.
+
+The caller forwards a nine-second CLOCK_BOOTTIME cutoff before interpreter
+startup. The root batch has its own GNU TERM/KILL timer, each Podman call
+has a root timer, each guest read has a three-second short-option timer,
+and captured stdout/stderr share an 8 KiB cap. An anonymous stdin lifeline
+prevents another read after caller cancellation. Local timeout/monitor exit
+never proves an already-running remote command terminated; guest timers,
+runner loss, SIGKILL and uninterruptible kernel work retain those limits.
+Offline synthetic proc and subprocess tests verify the source checks and
+failure behavior, not an acquired real fixture or native conformance.
+
+Systemd is a closed but unregistered, deliberately unimplemented alternative.
+Its source prerequisite list requires actual systemd PID 1, a reviewed exact
+runtime, fixture-specific account, fixed config/private listener/data root
+and systemd cgroup driver, account-derived user manager/bus, writable memory
+and PID delegation, placement revalidation and bounded shutdown with stopped
+readback. The pure lifecycle ordering guard rejects missing ownership,
+failure, cancellation, expiry, out-of-order removal and failed stop/readback;
+it neither executes these steps nor supplies observation provenance. No
+systemd unit names, runtime versions or fixture identities are invented.
+Containers #344 fixture adoption and actual bounded systemd orchestration
+remain separate work. Emergency removal remains failed-run cleanup, never
+positive shutdown evidence. ADR 0004's current native-launcher contract and
+all registrations are unchanged, so no ADR is superseded.
+
+Renovate still owns and extracts exactly the same five pins from
+`native-conformance.sh`; no manager, extraction path, grouping or approval
+definition changes. The new helper uses existing host Python/coreutils and
+guest image utilities, without downloads or new tool pins. Fresh genuine
+exact-candidate native runs and independent review remain required before
+any corresponding admission.
+
 The complete inert review artifact has offline exact-byte, schema, order,
 privacy, context-binding, and fail-closed opaque-artifact tests. These verify
 serialization, not destination existence, data migration, or native Engine
@@ -155,6 +218,529 @@ access, process identity, health behavior, and resource/security outcomes in
 each claimed mode and API. `StartInterval` needs exact native support and a
 1.41 negative boundary before any catalog admission; no generic introduction
 floor is inferred from Compose documentation.
+
+## Typed container native evidence checkpoint
+
+The isolated `native_container_tests::live_container_settings_match_engine`
+test is separate from the historical target test. It uses the pinned BusyBox
+fixture and task-owned names in the existing private inner daemon. Independent
+Docker CLI creates establish expected native fields before corresponding inert
+renderer bodies are compared against independently authored, closed JSON
+requests, applied only by the test, inspected directly, and checked for live
+effects. Clear command and entrypoint are an explicit exception to the CLI
+oracle: the test derives task-owned local images with nonempty defaults from
+the pinned BusyBox image, then compares independent literal Engine API and
+rendered empty-array creates, inspect results, and distinct inherited-versus-
+cleared process exit codes for command and entrypoint separately.
+The derived images are not downloaded or product dependencies.
+
+The test writes a private schema-1 `container-probes.json` only after every
+compiled expected shape has exactly one closed result and exact resource cleanup
+succeeds. `positive` contains exact `NativeCapabilityShape` names whose closed
+request, independent native inspect, and stated shape-specific effects passed.
+It is a non-admission checkpoint: timing, rotation, and resource-enforcement
+claims must be limited to the effects actually asserted, not inferred from
+acceptance alone. Unlimited nofile must exceed the independently checked
+1024/2048 finite control. NET_BIND_SERVICE is a Docker default: separate
+CLI drop-all and drop-all/add-back controls establish a causal runtime effect
+for the exact Engine and mode, while the rendered request proves its `CapAdd`
+body and inspect value and checks its resulting bit. That rendered bit alone
+does not establish a runtime delta. `expected_negative`
+contains only `{shape,reason}` with two distinct Debian API 1.41 boundaries:
+positive `StartInterval` is `HealthStartIntervalPositive` /
+`api_1_41_no_start_interval`, while explicit zero is
+`HealthStartIntervalZero` / `api_1_41_start_interval_zero_unobservable` because
+its inspect value is indistinguishable from an absent field. The zero probe
+first checks the positive support witness, then sends explicit zero and compares
+both inspected results against an absent-field baseline. Upstream API 1.56 must
+prove both shapes positively, including a healthy container after zero timing.
+An unexpected native rejection,
+transport/start failure, or semantic mismatch fails the lane; it is never
+converted into an unsupported pass. The test-only scoped facts enable an
+inert renderer branch after independent oracle checks and do not authorize a
+production profile. Raw Engine replies, labels, and authored values remain
+private. Native CLI stdout and stderr are each capped at 8 KiB before capture;
+the exact-test wrapper caps its private Cargo/libtest output file at 256 KiB
+before parsing closed diagnostics. Exceeding either cap fails the lane without
+printing raw output. The shared exact runner and manifest emitter own admission of this
+closed output. On a failed port probe, the wrapper reports only its last closed
+subphase: fixed or repeated IPv4 versus fixed or dynamic IPv6, independent CLI
+oracle versus rendered request, and create, inspect, binding, start, HTTP, or
+UDP checks. A failing CLI command adds only a closed exit and recognized stderr
+category; an Engine API transport or unexpected status adds only a closed
+category. These diagnostics do not print native output, change the assertion,
+skip a probe, or permit a failed lane to produce evidence.
+The repeated fixed-IPv4 CLI oracle must also start and serve both exact
+loopback publications before the rendered container is created. Each HTTP
+check now observes the outer Podman network namespace directly, with no extra
+Docker host-network probe container and no dependence on tools inside the
+outer image. A bounded host helper verifies the exact running, labelled Podman
+container and its PID/start identity, opens its network namespace through a
+held file descriptor, and invokes only closed host `curl` or Bash probes via
+`nsenter`; identity is checked again before and after. The host tools and
+namespace entry are preflighted. HTTP requests disable proxies and have five
+bounded attempts. The separate negative loopback-isolation check uses a direct
+three-second TCP connection in the same pinned namespace and accepts only the
+kernel's `ECONNREFUSED`; an open connection, timeout, permission/routing error,
+or malformed result fails. It does not depend on curl's version-dependent error
+wording. The preceding exact-canary positive proves the service is available.
+Each HTTP attempt has a two-second connection and three-second total limit.
+A local in-container service check
+precedes each published-port assertion; for the IPv6 fixture either local
+address family may establish service readiness, and the `::1` local result is
+reported separately on publication failure. Only after the original published
+IPv6 HTTP assertion fails, a fixed diagnostic reads `all/disable_ipv6` and
+`lo/disable_ipv6` in that exact run-owned inner container and checks TCP6
+creation, `::1` bind, and loopback connect in the separately verified,
+file-descriptor-pinned outer network namespace. It emits bounded closed states
+and a recognized curl exit-code token, never addresses, ports, or native output.
+If exact inner inspect or pinned outer probing fails, that optional field is
+`unavailable` or `probe_failed`; the original HTTP failure marker remains.
+Outer namespace availability does not establish inner-container IPv6 support
+or the cause of an HTTP failure; diagnostics neither reclassify nor pass the
+failed positive. For the exact Debian 11 nested default-bridge fixture, both
+fixed and ephemeral IPv6 CLI and rendered requests additionally carry a
+Debian-only `127.0.0.1` binding to the same container service. Each must show
+its exact configured and runtime bindings, running container state, a local
+IPv4 service canary, and a successful published IPv4 canary. The pinned outer
+namespace must independently prove TCP6 loopback availability. Only then may
+the direct TCP6 probe accept kernel `ECONNREFUSED` at the exact fixed or
+runtime-assigned `::1` port, with both CLI and rendered fixtures agreeing, as
+`nested_default_bridge_ipv6_unavailable`. Five direct probes spaced 250 ms
+apart must all return exact refusal, covering the former positive HTTP
+readiness window. Before accepting a negative, the fixture repeats running
+state, default-bridge identity, configured and runtime bindings, local and
+published IPv4 canaries, and pinned outer TCP6 availability, then requires one
+final exact refusal and disabled inner IPv6 state. A connection at any probe,
+including that final check, must instead
+pass the published IPv6 HTTP canary and records a positive; timeout, routing
+or permission errors, malformed output, missing identity, or differing fixture
+outcomes fail the lane. This narrow expected negative is not an Engine 20.10,
+API 1.41, rootless, or general IPv6 rule. Upstream fixtures retain their
+positive IPv6 HTTP assertions without a Debian control binding. No profile
+or production capability is admitted by this test-only outcome.
+Run `36525280564` established a narrower Debian fixture observation in both
+daemon modes: the fixed CLI request had both exact configured bindings, but
+runtime inspect reported only the exact IPv4 control binding. A separate
+`nested_default_bridge_ipv6_runtime_binding_absent` outcome now requires an
+exact one-entry IPv4 runtime array with a numeric host port, no IPv6 or other
+entry, and unchanged running/configured/default-bridge state. Five inspected
+snapshots spaced 250 ms apart and a final post-control snapshot must retain
+that exact shape and IPv4 port. The local and published IPv4 canaries, pinned
+outer TCP6 loopback, and inner `all`/`lo` IPv6-disabled states are checked
+before and after the window. For a fixed requested IPv6 port, every snapshot
+and the final check additionally require exact kernel `ECONNREFUSED` at that
+requested port. For an ephemeral request there is no inspected IPv6 host port:
+the harness never guesses an allocation or probes an unrelated port. Any
+transition to an assigned binding, malformed value, mismatched CLI/rendered
+outcome, or failed control fails the lane. This reason means an IPv6 runtime
+binding is absent from inspect, not that no hidden host port exists or that
+Docker 20.10 generically lacks IPv6. It does not admit `PortHostIpv6`.
+Run `36523854395` reached the Debian fixed IPv6 CLI fixture but failed before
+the TCP6 boundary because its runtime port-binding array did not satisfy the
+two-entry assertion. The log does not reveal which address or port was
+missing. A new closed diagnostic reports only runtime key state, count and
+exact-address cardinality buckets, and numeric/empty/malformed port-shape
+categories. It never prints a binding, address, assigned port, or native JSON;
+the original two-entry assigned-binding branch and all traffic oracles remain
+unchanged. In
+particular, an absent ephemeral IPv6 assignment is never guessed.
+The same run reached the command-clear literal on both upstream lanes and
+showed that `Cmd:[]` alone retained the image command rather than clearing it.
+The native oracle therefore requires that control to retain the image command
+and exit 7. A separate control sends an explicit `/bin/sh` entrypoint with
+`Cmd` omitted to show whether the entrypoint override itself removes the
+default command; its inspected arguments and exit status must agree with the
+observed branch. Only the paired explicit `/bin/sh` entrypoint plus `Cmd:[]`
+literal and identically rendered request may count as `ClearCommand`: each
+must inspect with exact entrypoint, `Config.Cmd` explicitly `[]` or `null`,
+runtime `Path=/bin/sh` and `Args=[]`, and exit 0. This proves only conditional
+no-argument behavior, not that `Cmd:[]` alone clears a command. `ClearEntrypoint`
+remains a separate native shape. Closed substage and command-shape diagnostics
+report failures without native values. Even successful native evidence does
+not admit a generic production `CommandClear` capability: intent validation
+now rejects clearing with inherited or cleared entrypoint, and catalog admission
+requires separate review and an exact passing candidate.
+Run `36525280564` passed that conditional command-clear region on both
+upstream lanes, then failed the resource/security oracle at exact inspected
+`HostConfig.CapDrop` spelling. Docker's published container-run reference
+accepts capability names with or without `CAP_`; native inspect may therefore
+be checked against only a singleton `SYS_ADMIN` or `CAP_SYS_ADMIN`. The
+rendered request remains exactly `SYS_ADMIN`, and the existing effective
+runtime `CapBnd` check requires bit 21 to be absent. Docker's default capability
+set already omits `SYS_ADMIN`: this proves request preservation and observed
+absence, not causal removal by the drop operation, and does not independently
+authorize production admission of `CapDropSysAdmin`. A closed spelling
+and cardinality diagnostic exposes no native value. Any other spelling,
+case, extra drop, or failed effective check still fails the lane.
+Closed resource/security substages distinguish create, inspect, start, and
+each effective process/cgroup check without disclosing values. In particular,
+rootless `cgroup_driver=none` is diagnostic context, not permission to treat
+configured memory or PID limits as effective; both runtime assertions remain
+strict and have no expected-negative exception.
+Run `36527523744` failed in both Debian lanes before the fixed IPv6 refusal
+probe: the closed namespace-mode validator omitted the already-used
+`tcp6_refusal` mode. The validator now shares one explicit mode list with a
+local regression that enumerates static call sites and exercises allowed and
+rejected modes. This restores the intended probe; it does not establish an
+IPv6 result. Both upstream lanes reached the resource/security oracle START,
+where Engine returned unexpected HTTP 500 (rootful) and 400 (rootless). The
+closed API status alone does not establish why either request failed. On an
+unexpected START status, a bounded diagnostic now classifies the protected
+JSON response body's shape and emits only fixed lexical mention flags for
+`cgroup`, `device`, `sysctl`, `ulimit`/`rlimit`, `apparmor`, `errno`, `controller`,
+`bpf`, and fixed permission phrases. A mention may come from a protected path
+or secret and is not a cause,
+an effective-setting check, or native capability evidence. Missing, malformed,
+and oversized bodies report unknown flags. The exact-test runner accepts only
+the closed diagnostic line; it never prints body text. START must still return
+204, and all resource/security assertions and admission rules remain strict.
+Run `36528815479` reached the resource/security START in Debian rootful and
+upstream rootful, where both returned unexpected HTTP 500 and a `cgroup`
+mention. Upstream rootless returned HTTP 400 with a `device` mention; Debian
+rootless timed out in the repeated/dynamic IPv4 CLI oracle START. These closed
+markers do not identify an Engine cause. The container native test now executes
+five independent groups—ports, identity/health/clear, storage/lifecycle,
+resources/security, and resolver/logging—each with fresh test state. A failed
+group may be followed by another only after bounded cleanup verifies exact
+container-test names, canonical IDs, and the run label, checks the three exact
+task-owned derived-image references and labels, and reads back absence. A
+run-labeled image with an unexpected or dangling tag makes cleanup unverified;
+the harness leaves that image untouched and does not start the next group. A
+transport-uncertain mutation or unverified cleanup stops the lane even if a
+single inventory appears empty. Completed groups contribute shapes only after
+cleanup; any group failure prevents the 57-shape manifest. The existing
+180-second wrapper timeout and closed-output boundary remain, and at most five
+closed group-failure markers are exposed. No failure becomes a skip, expected
+negative, or production capability.
+
+On a known non-204 resource/security oracle START response, the failed native
+test may run at most five independent, task-owned controls with the same image
+and command: no resource/security flags, memory limit only, PID limit only,
+and renamed device mapping only, followed by a separate same-path device
+mapping, in that order. The original `device` control remains
+`/dev/null:/dev/native-null:r`; `device-same-path` uses `/dev/null:/dev/null:r`.
+Each inspected `HostConfig` must match
+only its intended option before start; image, command, name, and run label must
+also match the task-owned fixture. Before any control, a bounded exact-ID
+readback must show that the failed original oracle remains created and not
+running. Running, exited, missing, mismatched, or unreadable original state
+stops controls as mutation uncertainty. Controls use exact-ID Engine API START,
+then inspect state: only HTTP 204 and running counts started; a non-204 response
+with still-created state is a rejected control, while transport errors or
+status/state disagreement remain uncertain. Closed HTTP status, lexical
+response-body category, and state are diagnostics, never native capability
+evidence. Each control starts only while the wrapper deadline leaves at least
+90 seconds for bounded create, inspect, START, and exact cleanup. An uncertain
+mutation stops further controls and the next group even when inventory reads
+empty. The closed group-decision marker reports `probe_failed` after a failed
+positive and verified cleanup; only a passing probe can report `merge`. The
+original oracle START must still return 204; control outcomes cannot
+reclassify its failure.
+Each rejected control additionally retains its own closed
+`DOCKERLENS_NATIVE_RESOURCE_START_BODY_DIAG` record, correlated with its
+baseline, memory, PID-limit, renamed-device, or same-path device role. The exact
+runner exposes at most five complete, allowlisted records alongside the
+original last global body diagnostic. These remain lexical mentions, not an
+Engine cause or capability.
+
+The two device controls also emit bounded
+`DOCKERLENS_NATIVE_DEVICE_START_BODY_DIAG` records with exact fixture-path
+mentions and a closed errno-phrase category from the protected START body.
+Larger path substrings do not match; malformed, missing and oversized bodies
+remain unknown. Multiple recognized errno phrases are ambiguous. These are
+lexical observations, not a syscall errno or a causal attribution. No current
+probe binds the device paths to the exact dockerd/runc mount namespace, so
+namespace, source presence and source type explicitly remain unknown. The
+runner exposes at most two complete, allowlisted records. A successful
+same-path diagnostic cannot replace the required renamed mapping or relax a
+failed positive. Reading `/dev/null` proves neither restricted `r` permissions
+nor causal device-cgroup enforcement: that device is allowed by default with
+`rwm`. Effective memory and PID-limit assertions remain mandatory, and neither
+control admits `DeviceMappings` or another production capability.
+
+The startup-only context call in `native-conformance.sh` uses
+`native-device-source.py --context` for one combined five-second monotonic phase,
+not five seconds per diagnostic. Before interpreter launch the shell reads a
+conservative `/proc/uptime` timestamp (monotonic CLOCK_BOOTTIME, including suspend)
+and starts a caller-owned TERM/KILL timer around the entire pipeline: 4.8 seconds
+plus a 0.2-second kill reserve. Thus stalled imports and local capture/parser
+waiting count, not merely successful operations. The direct timer child stays
+alive through TERM until its pipeline finishes or KILL fires. The absolute cutoff
+is also forwarded to the root-owned batch, reserving 0.7 seconds for startup,
+timer fallback, local teardown and reporting. The cgroup and device reads each
+receive at most two seconds, clamped to the actual remaining work deadline;
+an exhausted slice produces fixed unknown records without another read. Slice
+alarms reserve local teardown, and both readers honor the supplied deadline
+internally; remaining BOOTTIME durations are converted to the readers' existing
+monotonic clock without assuming zero suspend offset. The standalone helpers
+retain their existing five-second defaults.
+The time counts inside the unchanged 30-minute outer deadline; the phase runs
+before the unchanged 180-second exact-test deadline and 90-second control/cleanup
+reservation. The context capture caps combined private stdout and stderr at
+2 KiB, then accepts only one complete batch: exactly two closed cgroup records
+and two closed device records with fixed field order, identities and value
+domains. Nonzero exits, overflow, partial, duplicate, extra or malformed records
+become fixed unknowns; raw output, arguments and subprocess errors are never
+printed or written to capture files. The shell buffers the validated result and
+prints it only after the whole pipeline succeeds. A batch that receives
+whole-phase cancellation does not start its second reader, and the caller
+preserves the lane's existing cleanup traps.
+An anonymous stdin lifeline also connects caller cancellation to the root
+batch's separate process group: the capture closes its writer before local
+failure/cancellation waiting, and the batch requires a live, empty FIFO before
+and after each slice. EOF, unexpected data or non-FIFO stdin produce all-unknown
+records without starting another reader. This does not synchronously interrupt
+an already-running remote read or prove its termination.
+
+The `native-cgroup-diagnostic.py` reader uses one cumulative 8 KiB bound for its
+private stdout and stderr combined across operations. It validates the running outer
+container's immutable ID, exact name, ownership label, PID, and start identity
+before and after. The context batch runs as host UID zero under its root-owned
+timeout; standalone elevated Podman operations, including both inspections,
+also have root-owned TERM/KILL timers with teardown time reserved inside
+their deadline. Context cancellation or overflow uses the remaining local wait
+reserve, not an assertion that a delayed privileged timer has expired. The
+unprivileged sudo monitor remains in the caller's timed local process group;
+where permitted it is individually stopped and reaped before local return.
+Permission or wait failure remains private and unknown. Root process groups,
+delayed sudo/root startup, and remote Podman work have independent lifetimes:
+neither an unprivileged signal, monitor exit, nor a host timeout proves their
+termination. The forwarded absolute work cutoff prevents late batch work;
+SIGKILL, uninterruptible kernel work and runner loss remain irreducible limits.
+Standalone local unprivileged command groups are killed and reaped;
+both private pipes close even if signaling or waiting fails. Guest reads also
+have their own bounded timeout; cancellation,
+overflow, read errors, or identity changes produce closed unavailable states.
+No captured bytes, paths, PIDs, limits, or subprocess errors are printed.
+
+The guest timer uses `timeout -k 0.2 <seconds>` rather than GNU-only
+`--kill-after=0.2`; the root-owned host GNU wrappers remain unchanged. The
+read-only portability oracle was
+[`mirror/busybox@371fe9f71d445d18be28c82a2a6d82115c8af19d/coreutils/timeout.c`](https://github.com/mirror/busybox/blob/371fe9f71d445d18be28c82a2a6d82115c8af19d/coreutils/timeout.c#L89),
+whose option parser admits the short `-s` and `-k` options, and workspace GNU
+coreutils 9.12 `timeout --version` / `timeout --help`, which identifies `-k`
+as the kill-after option. The exact BusyBox commit's
+[`LICENSE`](https://github.com/mirror/busybox/blob/371fe9f71d445d18be28c82a2a6d82115c8af19d/LICENSE)
+and timeout-file license notice were read and verified as GPL-2.0-only; GNU's
+version output identifies GPL-3.0-or-later. These are interface references,
+not proof of the exact guest build or native compatibility. No oracle source
+or binaries are copied or redistributed. An independently authored
+short-option-only fake rejects the former invocation and checks the exact
+new argument shape and nonzero-exit failure propagation using synthetic
+replies, without any runtime resources. This correction neither relaxes the
+native assertions nor resolves missing rootless systemd prerequisites.
+
+The outer start identity explicitly requests `{{json .State.StartedAt}}` and
+decodes a bounded JSON string before strict RFC3339 and calendar validation;
+the complete decoded value, including nanoseconds, participates in the
+before/after comparison. Plain Go display text, malformed JSON, non-string
+values, and changed timestamps remain unavailable. A read-only oracle using
+workspace Podman 6.0.2 compared `podman version --format
+'{{.Client.Version}}'`, `podman inspect --format '{{.State.StartedAt}}'
+<existing-owned-container>`, and `podman inspect --format
+'{{json .State.StartedAt}}' <existing-owned-container>`: the plain template
+returned Go display text, whereas explicit JSON returned quoted RFC3339.
+No container was launched or modified; its identity and timestamp are omitted.
+The published Ubuntu 24.04 runner record
+[`ubuntu24/20260927.320`](https://github.com/actions/runner-images/blob/ubuntu24/20260927.320/images/ubuntu/Ubuntu2404-Readme.md#L97)
+identifies Podman 4.9.3. The public source-contract oracle is
+[`v4.9.3/libpod/define/container_inspect.go`](https://github.com/containers/podman/blob/v4.9.3/libpod/define/container_inspect.go#L220),
+whose inspect-state start field is `time.Time`. Its exact-tag
+[`LICENSE`](https://github.com/containers/podman/blob/v4.9.3/LICENSE) was read
+and verified as Apache-2.0. These references describe the format boundary;
+no upstream source or native replies are copied or redistributed. The helper
+and synthetic display/JSON regressions were authored independently. This
+diagnostic correction does not change native assertions or admit compatibility.
+
+The helper reads `cgroup.controllers`, `cgroup.subtree_control`, `memory.max`,
+and `memory.swap.max` at the visible cgroup2 root. A daemon-directory read
+also requires exactly one mode-correct `dockerd`, stable process identity,
+effective UID and cgroup membership, matching mount/cgroup namespaces, one
+total mountpoint entry with a rooted cgroup2 mount, and a traversal- and
+symlink-free directory mapping. Rootful requires effective UID zero; rootless
+requires the canonical selected lane's account and exact UID: Debian
+`dockertest`, upstream `docker`, both UID 1000. No mode-only account default
+or alternate account fallback is used. The account and effective UID are rechecked
+after reads. Missing or ambiguous account evidence and stacked mounts stay
+unavailable. Different
+RootlessKit namespaces or ambiguous mappings leave that scope unavailable;
+the helper never guesses their host correspondence or enters another namespace.
+The two `DOCKERLENS_NATIVE_CGROUP_DIAG` records expose only scope, read outcome,
+memory/PID controller presence, subtree flags, and finite/max/missing/unknown
+memory and swap states. Fields called `memory_delegated` and `pids_delegated`
+report only enabled subtree flags: they do not establish writable delegation,
+permission, effective limits, enforcement, or a reason to weaken a failed
+native assertion. The helper makes no writes or policy/privilege changes and
+does not affect native success, manifests, or production capability admission.
+
+The two `DOCKERLENS_NATIVE_DEVICE_SOURCE` records describe only fixed leaf
+metadata in the verified daemon's view, with roles `host-null` and `renamed-null`.
+Both have `scope=daemon-view`: the role name is not host-namespace attribution.
+The reader requires authentic procfs for every process/namespace directory and
+metadata file, independently verifies proc magic-link targets, binds the guest
+init to the owned outer process, and requires the daemon's held PID namespace
+to match that init in both modes. Foreign or nested PID namespaces remain
+unknown. A 32 KiB cumulative read bound and a bounded process scan apply; only
+leaf metadata is read, never device contents. Process, namespace, root, `/dev`,
+leaf and container identities are rechecked. No guest exec or namespace entry
+is added by the device reader. `runtime_source` and `permissions` always remain
+unknown: these non-atomic observations neither identify transient runc's source
+namespace nor prove access or enforcement. Diagnostic timeout is optional,
+not permission to skip the renamed-device or effective memory/PID assertions.
+Offline integration does not establish native compatibility or resolve the
+Containers #344 systemd prerequisites; fresh genuine exact-candidate native
+evidence remains required before any corresponding admission.
+
+The finite resource assertions, unlimited-resource comparison and failed-resource
+control matrix resolve memory/PID controller files from the owned container's
+PID1 membership and mountinfo, rather than reading a fixed visible cgroup root.
+The resolver requires one matching hierarchy and mount-root/mountpoint mapping
+per controller, supporting a namespace root, an unambiguous bind-root mapping,
+and split v1 controllers. Authenticated v1 assignments take precedence in hybrid
+views and never fall back to a visible unified hierarchy. Mount parent chains
+must establish the active view for both proc evidence and controller files;
+an unrelated ancestor overmount cannot supply substitute data. Unsafe paths,
+unrelated roots, escaped paths, stacked or shadowing mounts, ambiguous membership
+and incomplete replies fail closed.
+It never substitutes an ancestor limit or guesses a namespace correspondence.
+Before and after the leaf reads, immutable ID, exact name/run label, running
+PID/start timestamp, PID1 start ticks, PID/mount/cgroup namespaces and complete
+membership/mount snapshots must remain consistent. Private PID mode is required:
+host/shared PID namespaces cannot identify the target init through PID1. The
+guest must share those namespaces and exact membership with PID1. Procfs and
+every consumed init/helper proc path must have an unshadowed mount view. These
+are non-atomic readbacks, not a guarantee against
+undetected transient external mutation. A failed diagnostic remains unknown;
+required assertion failures still fail the native suite and ownership cleanup.
+
+Metadata reads are capped at 512 bytes for stat, 1 KiB for membership and 6 KiB
+for mountinfo, below the existing private 8 KiB CLI cap. Each snapshot/read has
+the existing one-second guest timer and three-second CLI bound. Controller
+reads reject symlinked path components and preserve newlines when enforcing
+their byte cap; no v1 or visible-root fallback follows a missing leaf.
+Independent synthetic fixtures distinguish ancestor and leaf values, namespace
+roots, bind mappings, split controllers, unsafe/ambiguous views, truncation and
+changed ownership/process/namespace identities. They establish no native
+compatibility, writable delegation or enforcement, and add no pins or catalogue
+admission. The strict memory/PID, START and zero-swap requirements remain in force.
+
+The failed-resource control matrix can additionally read these bounded, fixed
+memory/PID controller files inside a started, run-owned control container.
+Its private readout is limited to two records and 512 bytes at classification;
+each file read is capped at 65 bytes and rejects values exceeding 64 bytes,
+within the existing shared control budget. Closed
+`DOCKERLENS_NATIVE_RESOURCE_EFFECT_DIAG` records distinguish configured
+finite/unset/unlimited limits from observed matching, different or unlimited
+limit files and missing, denied, invalid-file, malformed, oversized or failed
+reads. Neither START 204, configured values, controller flags nor matching
+file values proves enforcement: every record retains `enforcement=unknown`.
+The wrapper admits at most five exact closed records on failure, never raw
+numbers or paths. The required native memory/PID effect assertions, failure
+propagation, cleanup and evidence schema are unchanged.
+
+The exact PR #73 run `37218370132` failed all four lanes. Rootful memory-only
+START rejection and absent visible subtree flags leave the cgroup fixture
+prerequisites unresolved, not a proven Engine incompatibility. Rootless
+renamed-device rejection remains an unadmitted exact-shape candidate;
+same-path `/dev/null` success is insufficient because that node already exists
+in an ordinary container. Debian rootless repeated-dynamic IPv4 START timeout
+and unverified cleanup are inconclusive, never an unsupported classification
+or permission to emit evidence. These diagnostics repair no host policy and
+do not resolve any of those blockers.
+
+`native-conformance.sh` remains the canonical caller for local lanes,
+`check.yml` main push, `native-validation.yml` reviewed dispatch, and
+`release-validation.yml` exact-main validation; all inherit this diagnostic.
+The other workspace products retain their independent harnesses. This uses
+runner Python's standard library and core utilities already provided by the
+digest-pinned Engine images, with no download or new software pin. Renovate's
+existing native-image manager still uniquely extracts the same five tag/digest
+pairs from the same script; managers, paths, grouping, and review ownership
+therefore remain unchanged.
+Resolver/logging now reports closed IPv4, IPv6, local-driver, and none-driver
+oracle/rendered substages for create, inspect, START, and relevant resolver,
+hosts, log, and body assertions. The ports failure path reports closed mutation,
+tracked cleanup, inventory cleanup, stable-absence readback, and decision
+phases. These markers expose neither native output nor resource names and do
+not retry an uncertain START or widen the exact task-owned cleanup scope.
+
+The manifest emitter requires both Debian API 1.41 start-interval negatives,
+accepts each of the two IPv6 fixture outcomes independently only on the
+Debian lanes, and preserves the observed positive or exact narrow negative in
+the sanitized manifest. It rejects reordered, unknown, duplicate, mismatched,
+or overlapping outcomes; an upstream negative is always rejected. The
+ephemeral UDP sender uses the outer namespace with a validated numeric port
+and a fixed canary.
+The disabled-health inheritance oracle now creates a run-owned CLI container
+with an explicit failing health check, commits it to a task-owned local image,
+and verifies the image's health test, timing, retry count, and ownership label
+before checking inherited unhealthy and disabled no-health behavior. This
+does not require image-build tooling. The derived image uses a fixed lowercase
+repository role and retains the exact case-sensitive run ID in its tag; it
+never uses the mixed-case run-owned container name as a Docker repository.
+Run `36517967971` failed in the prior image-build setup on both upstream modes
+with only an unknown closed CLI category, and run `36521163238` failed during
+the revised image setup with the same broad category. Neither record proves a
+builder or daemon root cause. A local audit found the generated mixed-case
+repository name and motivates exact source-create, source-inspect, commit,
+image-inspect, and source-cleanup markers plus value-free recognized stderr
+categories. Its Debian modes failed the original fixed-IPv6 CLI published HTTP
+positive: inner `all` and `lo` IPv6 were disabled while the pinned outer
+namespace could create, bind, and connect TCP6. The explicit host `::1`
+publication returned curl exit 7. This is a context-specific failure, not a
+general Docker 20.10 or rootless rule; no failed positive becomes an expected
+negative without an independently checked contract.
+Closed HTTP, IPv6 and health-disable subphase markers distinguish failures without
+publishing native output. A selected native test panic may expose only its
+allowlisted source basename and bounded numeric line and column, never its
+assertion text, path, or compared values. Exhaustion still fails the lane and
+cannot be classified as unsupported from the diagnostic alone.
+
+The five-second watchdog and final size check use one sampler. Before every
+attempt, a privileged, time-limited `stat` verifies the same run-owned volume
+directory device and inode, including rootless outer lanes whose Podman storage
+is inaccessible to the unprivileged harness. The sampler bounds `stat`, `df`
+and `du` output and execution time, and keeps command stderr in a private,
+size-limited file. Both `df` and `du` run on an attempt: an observed volume
+total above 4 GiB or free space below 2 GiB fails immediately, even if the
+other command failed. A partial `du` total can establish a breach but never
+establish success. Only an exact disappearing descendant beneath the unchanged
+owned root permits another complete sample, for at most three attempts.
+Root loss or replacement, permissions, timeout, malformed totals, persistent
+churn, and all other errors fail closed. The 30-minute deadline is enforced on
+every attempt. No raw paths or command errors are published.
+
+`ImageReference::new` rejects dollar-sign image references, including unresolved
+Compose interpolation such as `${IMAGE}`, before inert Engine create planning.
+This is a narrow native invalid-input boundary, not a complete Docker image
+reference grammar; tagged, digest and image-ID forms remain accepted.
+
+The runner selects the ignored library test by exact name after
+the other native probes. Only then does the emitter accept a bounded schema-1
+`container_probes` object with 57 unique, disjoint closed outcomes, the
+exact lane-specific start-interval boundary, and no additional fields or raw
+values. Missing, duplicate, overlapping, unexpected, or unexecuted results
+fail without a manifest; these outcomes do not expand `admitted_shapes`.
+
+`TmpfsMountOptions` additionally requires inside-fixture filesystem capacity
+and permission-mode readback on both `/scratch` and `/sealed`, independently
+for the CLI oracle and rendered fixture. Checked block-size/count arithmetic
+must yield the authored 4096 bytes, and each mode must be 0700 before recording
+a positive outcome. Offline wrong-size/mode and malformed-readback tests do
+not establish native conformance.
+
+The 57-shape draft adds explicit zero and false values, unlimited limits,
+IPv6 resolver entries, alternative IPv6 and ephemeral port combinations,
+capability addition, and local/none logging. These definitions are not native
+compatibility evidence until all four exact Engine lanes pass and their results
+are independently reviewed. This checkpoint still does not cover every finite
+field alternative required to admit aggregate capabilities; only the exact
+closed shapes actually asserted can support a future admission decision.
+Rootless or older-API limitations discovered by the probes require an
+independently reviewed negative outcome before the expected set may change.
+BoxFerry's six application routes and a coherent release gate remain separate.
+
 Run `./scripts/check-all.sh --check` for the complete offline gate: format,
 Clippy, a locked all-target check under the minimum Rust release declared by
 `Cargo.toml`, unit and documentation tests, policy tests, and documentation build.
@@ -253,7 +839,7 @@ runs it before manifest emission and reads its private, bounded
 `volume_label_probes` names: `VolumeCreateLabels`, `VolumeLabelInspect`,
 `VolumeLabelPersistence`, and `VolumeLabelOwnershipCleanup`. These are
 non-admission evidence; they do not add `VolumeLabels` or
-`VolumeCreateLabels` to the reviewed capability catalog or admitted shapes.
+`VolumeCreateLabels` to the reviewed capability catalog or its admitted shapes.
 Native compatibility still requires genuine passing lanes and independent
 review of the exact candidate evidence.
 
@@ -319,16 +905,13 @@ bind assertion therefore tests mount behavior independently of host ownership.
 Every image declares a Docker data-root VOLUME. The harness disables
 automatic image volumes and mounts exactly one task-labeled named volume at
 the declared data root. It checks the mounted volume after launch; an
-unexpected anonymous or extra volume fails the lane. A watchdog checks the
-owned volume and Podman storage every five seconds. It retries failed `du` or
-`df` measurements at most twice, one second apart, to tolerate disappearing
-overlay paths during traversal. Both measurements still run on each attempt,
-and any measured volume above 4 GiB, free space below 2 GiB, or elapsed time
-above 30 minutes terminates the lane immediately, even if that measurement's
-command also reported a traversal error. Persistent command errors
-and malformed measurements also terminate it with fixed reason markers;
-raw measurement paths and command errors are suppressed. The normal
-ownership-checked cleanup then runs. This isolated nesting setup does not
+unexpected anonymous or extra volume fails the lane. A watchdog samples the owned volume and Podman
+storage every five seconds with the same bounded sampler used for the final
+check. It retries only exact disappearing descendants beneath the unchanged
+owned root, at most twice after the first attempt. A volume above 4 GiB, free
+space below 2 GiB, or elapsed time above 30 minutes terminates the lane immediately;
+malformed or unverified measurements fail closed. The normal ownership-checked
+cleanup then runs. This isolated nesting setup does not
 demonstrate compatibility with restrictive data-root mount flags or an
 enforcing outer AppArmor profile. Failure diagnostics show the exact native test,
 exit status, numeric libtest summary, fixed native marker, and closed
@@ -511,7 +1094,7 @@ dependency or Renovate extraction path changes are introduced.
 ## Bounded container process identity proof (#74)
 
 The exact ignored `live_container_process_identity_matches_engine` test is a
-separate tenth mandatory native check; none of the existing nine checks is
+separate eleventh mandatory native check; none of the existing ten checks is
 removed, filtered, retried, or made optional. Its only authored setting shape
 is numeric container user `1000:1000` and the already-existing `/tmp` directory
 in the unchanged pinned BusyBox fixture. An independently authored Docker CLI
@@ -569,6 +1152,15 @@ image/fixture pins remain in `scripts/native-conformance.sh`, with unchanged
 Renovate ownership, extraction paths, grouping and approvals; no dependency,
 downloaded tool, or operational definition is added or moved.
 
+The #39 container checkpoint remains an additional required emitter input,
+with its exact schema, lane-specific API boundary and 57 closed outcomes.
+Its `container_probes` do not extend the raw capability groups or admit a
+production capability. The reconciled emitter preserves the nineteen source
+markers and validates every proof file, including container outcomes, before
+writing a manifest. All four synthetic lane regressions check these contracts
+together; duplicate network-proof keys at either object depth fail even when
+the final key would hide a failure. These offline tests do not establish that
+any native lane has run or passed.
 ## Reviewed target-profile records
 
 The compiled catalogue selects four reviewed records from native run
