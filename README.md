@@ -10,8 +10,9 @@ compatibility claim.
 
 The planned native work is tracked in [DockerLens #3](https://github.com/Strukturpiloten/docker-lens/issues/3).
 Typed multi-network target intent, external prerequisites and secondary
-connect requests are available as inert data. The four historical profiles
-do not admit these new shapes until independent native evidence is reviewed.
+connect requests are available as inert data. The four exact profiles admit
+external volume/network prerequisites and internal bridge creation through the
+reviewed #68 cohort. Other topology shapes still await native admission.
 Typed container intent also distinguishes host-IP scoped, repeated and
 ephemeral publications, exposed-only ports, command clearing, shell and
 disabled health checks, and protected runtime settings. These new branches
@@ -67,7 +68,7 @@ Compose compatibility and Swarm mode are separate discussion topics.
   typed publications and mounts, typed bridge-network resources and
   per-container attachments, protected environment and metadata, explicit
   command inheritance/clearing, health forms and timing, runtime settings,
-  and restart policy. New container and network shapes remain
+  and restart policy. Additional container-setting and remaining network shapes remain
   capability-unadmitted.
   Unsupported settings remain explicit.
   Target intent, operation graph, and rendered artifact are inert data. The

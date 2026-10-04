@@ -43,8 +43,9 @@
    from an exact Debian package revision, the reported Engine release,
    advertised maximum API, negotiated acquisition API, tested rendering API,
    and daemon mode. Catalog discovery returns its SHA-256 evidence key. The
-   public catalog contains four exact records from a reviewed historical native
-   run. Each changed candidate and release needs fresh complete and four-lane
+   public catalog contains four exact records from the reviewed #68 native
+   cohort, with the original historical evidence preserved separately. Each
+   changed candidate and release needs fresh complete and four-lane
    native gates before a compatibility claim. The operation graph
    retains the chosen context and
    checks standalone containers, named volumes, bridge networks, and each
@@ -76,8 +77,10 @@ resources remain explicit `RequireExisting` graph steps and protected
 artifact prerequisites; they emit no create request and do not claim
 existence. A container's first attachment is in its create request, while
 each later attachment has its own step ID and inert network-connect request.
-New network capability facts are absent from the four historical profiles
-until exact-lane native conformance and independent evidence review.
+The four exact profiles admit only the reviewed external-network prerequisite
+and internal-bridge singleton groups beyond baseline network capabilities.
+IPv6, IPAM, options, labels, aliases, static addresses and multiple attachments
+still await separate exact-lane native admission and consumer evidence.
 New container-setting facts are likewise absent. `StartInterval` is gated by
 an exact capability claim; no generic Engine API introduction version is
 assumed from Compose metadata. Port rendering groups host bindings under one
@@ -90,7 +93,10 @@ Created named volumes retain bounded protected authored labels and render a
 `Labels` object only when nonempty. The separate `VolumeLabels` capability
 gates that request branch; historical unlabelled volume evidence does not
 admit it. External-volume prerequisites have no label field and never emit a
-volume-create or relabel request. Neither branch applies requests or moves data.
+volume-create or relabel request. The external-volume prerequisite singleton
+is admitted by the #68 cohort; labelled creation remains unadmitted under
+ADR 0010's native and consumer gates. Neither branch applies requests or moves
+data.
 
 ## Decoder evidence boundary
 

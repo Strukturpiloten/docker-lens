@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Admit only the reviewed #68 external-volume, external-network and internal
+  bridge singleton groups on the four exact profiles, preserving historical
+  evidence. Volume labels and other topology/runtime groups remain unadmitted;
+  final-candidate native gates and consumer milestones remain separate.
 - Define three bounded prerequisite groups for future raw native evidence after
   complete validated volume, volume-label and network proofs. This does not
   admit reviewed catalogue capabilities; fresh four-lane runs, independent

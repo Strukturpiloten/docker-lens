@@ -12,14 +12,14 @@ use crate::version::{
     TargetProfileIdentity,
 };
 
-const SOURCE_CANDIDATE: &str = "d51d7dbfda5ee6f8fefe92605afe8baea3dc504e";
+const SOURCE_CANDIDATE: &str = "702910b003daae58babd540d7ba3de4998275feb";
 const SOURCE_RUN: &str =
-    "https://github.com/Strukturpiloten/docker-lens/actions/runs/36451790131/attempts/1";
+    "https://github.com/Strukturpiloten/docker-lens/actions/runs/37209363801/attempts/1";
 
 // This is the exact admission set for the currently compiled cohort. A later
 // reviewed cohort must explicitly replace the set for each lane; extending the
 // schema vocabulary or checking in a native probe never changes this list.
-const HISTORICAL_CAPABILITIES: &[Capability] = &[
+const REVIEWED_CAPABILITIES: &[Capability] = &[
     Capability::StandaloneContainer,
     Capability::NamedVolume,
     Capability::BridgeNetwork,
@@ -30,8 +30,11 @@ const HISTORICAL_CAPABILITIES: &[Capability] = &[
     Capability::Entrypoint,
     Capability::Healthcheck,
     Capability::RestartPolicy,
+    Capability::VolumeExternalReference,
+    Capability::NetworkExternalReference,
+    Capability::NetworkInternal,
 ];
-const HISTORICAL_SHAPES: &[NativeCapabilityShape] = &[
+const REVIEWED_SHAPES: &[NativeCapabilityShape] = &[
     NativeCapabilityShape::StandaloneCreate,
     NativeCapabilityShape::NamedVolumeCreate,
     NativeCapabilityShape::NamedVolumeMountReadWrite,
@@ -52,6 +55,9 @@ const HISTORICAL_SHAPES: &[NativeCapabilityShape] = &[
     NativeCapabilityShape::RestartUnlessStopped,
     NativeCapabilityShape::RestartOnFailureUnlimited,
     NativeCapabilityShape::RestartOnFailureLimited,
+    NativeCapabilityShape::ExternalVolumeReference,
+    NativeCapabilityShape::ExternalNetworkReference,
+    NativeCapabilityShape::InternalBridgeNetworkCreate,
 ];
 
 fn expected_admission(
@@ -61,37 +67,37 @@ fn expected_admission(
         NativeEvidenceLane::Debian11Rootful
         | NativeEvidenceLane::Debian11Rootless
         | NativeEvidenceLane::UpstreamRootful
-        | NativeEvidenceLane::UpstreamRootless => (HISTORICAL_CAPABILITIES, HISTORICAL_SHAPES),
+        | NativeEvidenceLane::UpstreamRootless => (REVIEWED_CAPABILITIES, REVIEWED_SHAPES),
     }
 }
 
 const RECORDS: [(NativeEvidenceLane, &str, &str); 4] = [
     (
         NativeEvidenceLane::Debian11Rootful,
-        "f4a68bec2605814b9ff9c3942adc60cee88255775f17c101cc0b72767fe03e0f",
+        "b9f3064cadfc2302678b9a334597907fd35eeb856464d4e6c81bf4465875d0e8",
         include_str!(
-            "../docs/evidence/reviewed/sha256/f4a68bec2605814b9ff9c3942adc60cee88255775f17c101cc0b72767fe03e0f.json"
+            "../docs/evidence/reviewed/sha256/b9f3064cadfc2302678b9a334597907fd35eeb856464d4e6c81bf4465875d0e8.json"
         ),
     ),
     (
         NativeEvidenceLane::Debian11Rootless,
-        "7445b521282ded2e1d07f2478a7d7812ed51b27a488861483fe228b85b114986",
+        "365e8a70e2e5a369912da47d2a510e45acd7cca3ac6e932e3536ad75f22c64b9",
         include_str!(
-            "../docs/evidence/reviewed/sha256/7445b521282ded2e1d07f2478a7d7812ed51b27a488861483fe228b85b114986.json"
+            "../docs/evidence/reviewed/sha256/365e8a70e2e5a369912da47d2a510e45acd7cca3ac6e932e3536ad75f22c64b9.json"
         ),
     ),
     (
         NativeEvidenceLane::UpstreamRootful,
-        "063d5ea178ff754d16fc3ce1db99855907a0b6a93b924f241fcf8b14c2811362",
+        "27c47307f4fdd523a22448415238a729e7a6458fddc554259f23ea99fff5ff76",
         include_str!(
-            "../docs/evidence/reviewed/sha256/063d5ea178ff754d16fc3ce1db99855907a0b6a93b924f241fcf8b14c2811362.json"
+            "../docs/evidence/reviewed/sha256/27c47307f4fdd523a22448415238a729e7a6458fddc554259f23ea99fff5ff76.json"
         ),
     ),
     (
         NativeEvidenceLane::UpstreamRootless,
-        "a9620c6a3b94c31e662e11b14de7688290eec8f2532dd5a061652ef01b2639ee",
+        "c0f8160bf8787e9490713595f58c1b4eeb9aeee3ff5f4739776a1010bdea6e1f",
         include_str!(
-            "../docs/evidence/reviewed/sha256/a9620c6a3b94c31e662e11b14de7688290eec8f2532dd5a061652ef01b2639ee.json"
+            "../docs/evidence/reviewed/sha256/c0f8160bf8787e9490713595f58c1b4eeb9aeee3ff5f4739776a1010bdea6e1f.json"
         ),
     ),
 ];
@@ -489,6 +495,39 @@ mod tests {
         rejected(|value| value["lane"] = "debian11-rootless".into());
         rejected(|value| {
             value["native_manifest_artifact_name"] = "dockerlens-native-debian11-rootless".into();
+        });
+    }
+
+    #[test]
+    fn rejects_partial_prerequisite_groups_and_unreviewed_volume_labels() {
+        for name in [
+            "VolumeExternalReference",
+            "NetworkExternalReference",
+            "NetworkInternal",
+        ] {
+            rejected(|value| {
+                let entry = value["capabilities"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|entry| entry["name"] == name)
+                    .unwrap();
+                entry["admitted_shapes"] = serde_json::json!([]);
+            });
+            rejected(|value| {
+                let entry = value["capabilities"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|entry| entry["name"] == name)
+                    .unwrap();
+                entry["state"] = "unknown".into();
+            });
+        }
+        rejected(|value| {
+            value["capabilities"].as_array_mut().unwrap().push(serde_json::json!({
+                "name": "VolumeLabels", "state": "available", "admitted_shapes": ["VolumeCreateLabels"]
+            }));
         });
     }
 

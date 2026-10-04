@@ -1627,7 +1627,8 @@ mod tests {
         for profile in catalog.profiles() {
             let capabilities = catalog.resolve(profile).unwrap();
             assert!(!capabilities.supports(Capability::NetworkMultipleAttachment));
-            assert!(!capabilities.supports(Capability::NetworkInternal));
+            assert!(capabilities.supports(Capability::NetworkInternal));
+            assert!(capabilities.supports(Capability::NetworkExternalReference));
         }
     }
 

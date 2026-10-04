@@ -56,6 +56,26 @@ EXPECTED_IDENTITIES = {
         "mode": "rootless",
     },
 }
+ADMISSION_CANDIDATE = "702910b003daae58babd540d7ba3de4998275feb"
+ADMISSION_RUN = "https://github.com/Strukturpiloten/docker-lens/actions/runs/37209363801/attempts/1"
+ADMISSION_SHAPES = {
+    **SHAPES,
+    "VolumeExternalReference": ["ExternalVolumeReference"],
+    "NetworkExternalReference": ["ExternalNetworkReference"],
+    "NetworkInternal": ["InternalBridgeNetworkCreate"],
+}
+ADMISSION_MANIFESTS = {
+    "debian11-rootful": "55d93a54dca1e60b8331611d7b5aa9a6e7b4f23513cf82bdb095f1d3b1ef2ed1",
+    "debian11-rootless": "c6d59cd2c40613a764eb5a6e5e31cf934a4c4deac5835aa6d7b4d8cc65da5200",
+    "upstream-rootful": "cff1c7eee2883671a28009e0c97d027f01d526039c8beb2ebcadeafe48d38ce0",
+    "upstream-rootless": "317b99075b795459a2b8d974f2a498448b83f260cb72b6e595d69e997970e392",
+}
+ADMISSION_REVIEWED = {
+    "debian11-rootful": "b9f3064cadfc2302678b9a334597907fd35eeb856464d4e6c81bf4465875d0e8",
+    "debian11-rootless": "365e8a70e2e5a369912da47d2a510e45acd7cca3ac6e932e3536ad75f22c64b9",
+    "upstream-rootful": "27c47307f4fdd523a22448415238a729e7a6458fddc554259f23ea99fff5ff76",
+    "upstream-rootless": "c0f8160bf8787e9490713595f58c1b4eeb9aeee3ff5f4739776a1010bdea6e1f",
+}
 # Every reviewed cohort must be deliberately added here with its exact run,
 # candidate, four identities, four envelope digests, four raw manifest digests,
 # and exact reviewed capability-to-shape admissions. A later new shape needs
@@ -64,6 +84,11 @@ COHORTS = {
     (CANDIDATE, RUN): {
         lane: (EXPECTED_REVIEWED[lane], EXPECTED_MANIFESTS[lane],
                EXPECTED_IDENTITIES[lane], SHAPES)
+        for lane in LANES
+    },
+    (ADMISSION_CANDIDATE, ADMISSION_RUN): {
+        lane: (ADMISSION_REVIEWED[lane], ADMISSION_MANIFESTS[lane],
+               EXPECTED_IDENTITIES[lane], ADMISSION_SHAPES)
         for lane in LANES
     },
 }
@@ -259,14 +284,14 @@ class ReviewedCatalogTests(unittest.TestCase):
         self.assertEqual(section.count("NativeEvidenceLane::"), 4)
         reviewed = {
             lane: path.stem
-            for lane, (path, _) in indexed_cohorts(hashed_json("reviewed"), COHORTS)[CANDIDATE, RUN].items()
+            for lane, (path, _) in indexed_cohorts(hashed_json("reviewed"), COHORTS)[ADMISSION_CANDIDATE, ADMISSION_RUN].items()
         }
         self.assertEqual({match["variant"] for match in tuples}, set(LANE_VARIANTS))
         for match in tuples:
             lane = LANE_VARIANTS[match["variant"]]
             self.assertEqual(match["digest"], reviewed[lane])
             self.assertEqual(match["path_digest"], reviewed[lane])
-            self.assertEqual(match["digest"], EXPECTED_REVIEWED[lane])
+            self.assertEqual(match["digest"], ADMISSION_REVIEWED[lane])
 
     def test_four_records_bind_exact_manifest_bytes_and_shapes(self) -> None:
         native_records = hashed_json("native")
@@ -318,6 +343,65 @@ class ReviewedCatalogTests(unittest.TestCase):
                     self.assertEqual(manifest["admitted_shapes"][name], shapes)
                 self.assertEqual(len(reviewed_path.stem), 64)
 
+    def test_new_admission_cohort_is_exact_and_excludes_raw_label_evidence(self) -> None:
+        native_records = hashed_json("native")
+        raw = indexed_native_manifests(native_records, COHORTS)
+        reviewed = bind_cohorts(hashed_json("reviewed"), native_records, COHORTS)
+        self.assertEqual(set(reviewed), {(CANDIDATE, RUN), (ADMISSION_CANDIDATE, ADMISSION_RUN)})
+        self.assertEqual(len(ADMISSION_SHAPES), 13)
+        self.assertEqual(sum(map(len, ADMISSION_SHAPES.values())), 23)
+        for lane, (path, record) in reviewed[ADMISSION_CANDIDATE, ADMISSION_RUN].items():
+            with self.subTest(lane=lane):
+                self.assertEqual(path.stem, ADMISSION_REVIEWED[lane])
+                self.assertEqual(record["native_manifest_sha256"], ADMISSION_MANIFESTS[lane])
+                self.assertEqual(record["identity"], EXPECTED_IDENTITIES[lane])
+                claims = {entry["name"]: entry["admitted_shapes"] for entry in record["capabilities"]}
+                self.assertEqual(claims, ADMISSION_SHAPES)
+                manifest = raw[record["native_manifest_sha256"]][1]
+                self.assertEqual(set(manifest["admitted_shapes"]) - set(claims), {"VolumeLabels"})
+                self.assertEqual(manifest["admitted_shapes"]["VolumeLabels"], ["VolumeCreateLabels"])
+                self.assertEqual(manifest["capability_outcome"]["VolumeLabels"], "available")
+                self.assertNotIn("VolumeLabels", claims)
+                self.assertEqual(len(manifest["source_probes"]), 19)
+                self.assertEqual(len(manifest["network_probes"]), 22)
+                self.assertEqual(len(manifest["volume_probes"]), 6)
+                self.assertEqual(len(manifest["volume_label_probes"]), 4)
+
+    def test_compiled_admission_has_only_thirteen_complete_capability_groups(self) -> None:
+        source = (ROOT / "src/reviewed_catalog.rs").read_text(encoding="utf-8")
+        self.assertIn(f'const SOURCE_CANDIDATE: &str = "{ADMISSION_CANDIDATE}";', source)
+        self.assertIn(f'"{ADMISSION_RUN}";', source)
+        capabilities = source.split("const REVIEWED_CAPABILITIES:", 1)[1].split("];", 1)[0]
+        shapes = source.split("const REVIEWED_SHAPES:", 1)[1].split("];", 1)[0]
+        capability_names = re.findall(r"Capability::(\w+)", capabilities)
+        shape_names = re.findall(r"NativeCapabilityShape::(\w+)", shapes)
+        self.assertEqual(len(capability_names), 13)
+        self.assertEqual(set(capability_names), set(ADMISSION_SHAPES))
+        self.assertEqual(len(shape_names), 23)
+        self.assertEqual(set(shape_names), {shape for group in ADMISSION_SHAPES.values() for shape in group})
+
+    def test_new_singleton_groups_require_positive_complete_linked_raw_evidence(self) -> None:
+        reviewed_records = hashed_json("reviewed")
+        native_records = hashed_json("native")
+        for lane in LANES:
+            for name in ("VolumeExternalReference", "NetworkExternalReference", "NetworkInternal"):
+                for fault in ("missing", "empty", "duplicate", "wrong_shape", "unavailable", "unknown"):
+                    altered = deepcopy(native_records)
+                    manifest = next(record for path, record in altered if path.stem == ADMISSION_MANIFESTS[lane])
+                    if fault == "missing":
+                        del manifest["admitted_shapes"][name]
+                    elif fault == "empty":
+                        manifest["admitted_shapes"][name] = []
+                    elif fault == "duplicate":
+                        manifest["admitted_shapes"][name] *= 2
+                    elif fault == "wrong_shape":
+                        manifest["admitted_shapes"][name] = ["VolumeCreateLabels"]
+                    else:
+                        manifest["capability_outcome"][name] = fault
+                    with self.subTest(lane=lane, group=name, fault=fault):
+                        with self.assertRaisesRegex(ValueError, "reviewed or raw shapes differ from closed admission"):
+                            bind_cohorts(reviewed_records, altered, COHORTS)
+
     def test_closed_cohorts_accept_second_known_complete_cohort_only(self) -> None:
         records = hashed_json("reviewed")
         second_candidate = "a" * 40
@@ -331,7 +415,8 @@ class ReviewedCatalogTests(unittest.TestCase):
         # Synthetic in-memory records exercise indexing only; these are not
         # checked-in evidence, production RECORDS, or positive capability facts.
         synthetic = []
-        for path, record in records:
+        historical = indexed_cohorts(records, COHORTS)[CANDIDATE, RUN]
+        for path, record in historical.values():
             forged = deepcopy(record)
             forged["candidate_sha"] = second_candidate
             forged["run_url"] = second_run
