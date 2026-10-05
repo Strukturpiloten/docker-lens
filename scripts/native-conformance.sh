@@ -588,7 +588,7 @@ deadline=$((SECONDS + 360))
 while (( SECONDS < deadline )); do
   if [[ -S $socket ]]; then
     if [[ $EUID == 0 ]]; then chmod 0666 "$socket"; else sudo -n chmod 0666 "$socket"; fi
-    if curl -fs --max-time 5 --unix-socket "$socket" http://localhost/_ping >/dev/null; then break; fi
+    if curl -q --noproxy '*' -fs --max-time 5 --unix-socket "$socket" http://localhost/_ping >/dev/null; then break; fi
   fi
   running=$("${podman_cmd[@]}" inspect --format '{{.State.Running}}' "$container" 2>/dev/null) || running=unknown
   if [[ $running != true ]]; then
@@ -598,7 +598,7 @@ while (( SECONDS < deadline )); do
   fi
   sleep 2
 done
-[[ -S $socket ]] && curl -fs --max-time 5 --unix-socket "$socket" http://localhost/_ping >/dev/null || {
+[[ -S $socket ]] && curl -q --noproxy '*' -fs --max-time 5 --unix-socket "$socket" http://localhost/_ping >/dev/null || {
   echo 'inner daemon did not become ready within six minutes' >&2
   diagnose_native_startup
   exit 1
@@ -616,7 +616,7 @@ fi
 api_get() {
   local path=$1 target=$2
   local status
-  status=$(timeout 20 curl -fsS --max-time 15 --unix-socket "$socket" \
+  status=$(timeout 20 curl -q --noproxy '*' -fsS --max-time 15 --unix-socket "$socket" \
     "http://localhost$path" -o "$target" -w '%{http_code}')
   [[ $status == 200 ]] || { echo "native GET did not return HTTP 200: $path" >&2; exit 1; }
   printf '%s\n' "$status" > "${target%.json}.status"

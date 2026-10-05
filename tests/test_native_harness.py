@@ -2016,6 +2016,108 @@ esac
                     if fault == "unexpected_mount":
                         self.assertIn("unexpected image or data-root volumes", result.stderr)
 
+    def test_native_curl_readiness_sites_keep_exact_argv_counts_and_final_fallback(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text()
+        self.assertEqual(len(re.findall(r"\bcurl\b", source)), 4)  # Preflight and three sites.
+        readiness = "deadline=$((SECONDS + 360))" + source.split(
+            "deadline=$((SECONDS + 360))", 1
+        )[1].split("\nif [[ $lane == debian11-rootless ]]; then", 1)[0]
+        cases = (
+            ("ready", [0, 0], False, True, 2, 0, 0),
+            ("poll-retry", [7, 0, 0], False, True, 3, 1, 0),
+            ("final-failure", [0, 7], False, True, 2, 0, 1),
+            ("deadline-fallback", [7, 7], True, True, 2, 1, 1),
+            ("outer-exited", [7], False, False, 1, 0, 1),
+        )
+        for case, exits, expire, running, expected_count, sleep_count, status in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                socket_path = directory / "docker.sock"
+                # Exercise the real -S guard without creating a transport or listener.
+                os.mknod(socket_path, stat.S_IFSOCK | 0o600)
+                calls, env = self._native_curl_client(directory, exits, "000")
+                sleeps = directory / "sleep-calls"
+                preface = f"""set -euo pipefail
+SECONDS=0
+socket=$1
+container=synthetic-owned-daemon
+podman_cmd=(podman)
+chmod() {{ :; }}
+sudo() {{ [[ $1 == -n ]]; shift; "$@"; }}
+podman() {{ printf '%s\\n' {'true' if running else 'false'}; }}
+sleep() {{ printf '%s\\n' "$*" >> {shlex.quote(str(sleeps))}; {'SECONDS=360' if expire else ':'}; }}
+diagnose_native_startup() {{ printf '%s\\n' startup-diagnostic >&2; }}
+"""
+                result = subprocess.run(
+                    ["bash", "-c", preface + readiness, "curl-readiness-test", str(socket_path)],
+                    cwd=directory, env=env, capture_output=True, text=True, timeout=10, check=False,
+                )
+                self.assertEqual(result.returncode, status, result.stderr)
+                self.assertTrue(calls.exists())
+                expected = ["-q", "--noproxy", "*", "-fs", "--max-time", "5", "--unix-socket",
+                            str(socket_path), "http://localhost/_ping"]
+                observed = [json.loads(line) for line in calls.read_text().splitlines()]
+                self.assertEqual(observed, [{"argv": expected, "canary": "synthetic-client-boundary"}]
+                                 * expected_count)
+                self.assertEqual(sleeps.read_text().splitlines() if sleeps.exists() else [], ["2"] * sleep_count)
+                self.assertEqual(result.stderr.count("startup-diagnostic"), status)
+                self.assertEqual(result.stdout, "")
+                self.assertNotIn("synthetic-client-boundary", result.stderr)
+
+    def test_native_curl_api_get_keeps_exact_argv_count_limits_and_failure_status(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text()
+        api_get = "api_get() {" + source.split("api_get() {", 1)[1].split("\njson_key() {", 1)[0]
+        self.assertIn("status=$(timeout 20 curl -q --noproxy '*' -fsS --max-time 15", api_get)
+        for http_status, native_exit, expected_exit in (("200", 0, 0), ("404", 0, 1),
+                                                       ("000", 7, 7), ("404", 22, 22)):
+            with self.subTest(http_status=http_status, native_exit=native_exit), \
+                    tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                socket_path = directory / "docker.sock"
+                target = directory / "container.json"
+                calls, env = self._native_curl_client(directory, [native_exit], http_status)
+                request = "/v1.41/containers/synthetic/json"
+                script = 'set -euo pipefail\nsocket=$1\n' + api_get + '\napi_get "$2" "$3"'
+                result = subprocess.run(
+                    ["bash", "-c", script, "curl-api-test", str(socket_path), request, str(target)],
+                    cwd=directory, env=env, capture_output=True, text=True, timeout=10, check=False,
+                )
+                self.assertEqual(result.returncode, expected_exit, result.stderr)
+                self.assertTrue(calls.exists())
+                expected = ["-q", "--noproxy", "*", "-fsS", "--max-time", "15", "--unix-socket",
+                            str(socket_path), "http://localhost" + request, "-o", str(target), "-w", "%{http_code}"]
+                self.assertEqual([json.loads(line) for line in calls.read_text().splitlines()],
+                                 [{"argv": expected, "canary": "synthetic-client-boundary"}])
+                status_path = target.with_suffix(".status")
+                if expected_exit == 0:
+                    self.assertEqual(status_path.read_text(), "200\n")
+                else:
+                    self.assertFalse(status_path.exists())
+                self.assertEqual(result.stdout, "")
+                self.assertNotIn("synthetic-client-boundary", result.stderr)
+
+    def _native_curl_client(self, directory: Path, exits: list[int], http_status: str) -> tuple[Path, dict[str, str]]:
+        calls = directory / "curl-argv.jsonl"
+        bin_dir = directory / "bin"
+        bin_dir.mkdir()
+        # A real glob match makes an unquoted --noproxy wildcard fail the argv check.
+        (directory / "wildcard-expansion-canary").touch()
+        self._tool(bin_dir, "curl", f"""#!{sys.executable}
+import json
+import os
+import sys
+from pathlib import Path
+
+calls = Path({str(calls)!r})
+previous = calls.read_text().splitlines() if calls.exists() else []
+with calls.open('a') as output:
+    output.write(json.dumps({{'argv': sys.argv[1:], 'canary': os.environ.get('DOCKERLENS_CURL_CANARY')}}) + '\\n')
+exits = {exits!r}
+sys.stdout.write({http_status!r})
+sys.exit(exits[min(len(previous), len(exits) - 1)])
+""")
+        return calls, {"PATH": f"{bin_dir}:/usr/bin:/bin", "DOCKERLENS_CURL_CANARY": "synthetic-client-boundary"}
+
     def test_published_image_and_fixture_contracts_are_static(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         self.assertIn("DEBIAN_DOCKER_PACKAGE='20.10.5+dfsg1-1+deb11u2'", source)
@@ -2024,7 +2126,7 @@ esac
         self.assertIn('--user 0:0 --workdir /tmp --hostname dockerlens-native', source)
         self.assertIn('--label io.dockerlens.fixture=synthetic', source)
         self.assertNotIn('/run/dockerlens', source)
-        self.assertIn('curl -fs --max-time 5 --unix-socket "$socket" http://localhost/_ping', source)
+        self.assertIn('curl -q --noproxy \'*\' -fs --max-time 5 --unix-socket "$socket" http://localhost/_ping', source)
         self.assertNotIn('apt-get', source)
         self.assertFalse((ROOT / "scripts/native-apt-install.sh").exists())
         self.assertFalse((ROOT / "scripts/native-debian-snapshot.sh").exists())
