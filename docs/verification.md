@@ -316,6 +316,24 @@ fixture is writable inside this task-private directory so the rootless mapped
 UID can exercise the rendered read-write bind mount. The separate read-only
 bind assertion therefore tests mount behavior independently of host ownership.
 
+All three harness curl sites (readiness polling, the final readiness check and
+the direct API GET helper) use first-option `-q` and literal `--noproxy '*'`.
+This disables default curl configuration and proxy routing for the existing
+explicit Unix-socket requests, without changing executable selection, inherited
+environment, URLs, request counts, limits, startup cadence, privileges or cleanup.
+Offline fake-client regressions check complete argv and nonzero invocation counts
+for each site, including the final readiness fallback and native/status failures.
+They neither diagnose historical failures nor establish native or release evidence.
+
+The canonical harness continues to serve local execution, `check.yml` main push,
+`native-validation.yml` reviewed dispatch and `release-validation.yml` exact-main
+dispatch. Renovate's original native-image manager still uniquely extracts the
+same five image/fixture tag-and-digest pairs; its paths, grouping and approvals
+need no edit. BoxFerry's frozen producer receipt and script-digest catalogue binding
+remain unchanged: adopting a revised harness source separately requires an explicit
+consumer contract or a new independently verified producer build and receipt, not a
+hash-only refresh.
+
 Every image declares a Docker data-root VOLUME. The harness disables
 automatic image volumes and mounts exactly one task-labeled named volume at
 the declared data root. It checks the mounted volume after launch; an
