@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Prepare the bounded #49 candidate label cohort from independently reviewed
+  #70 source evidence for pre-merge volume-only consumer rehearsal. ADR 0012
+  explicitly supersedes ADR 0010's sequencing only; production merge/main/release
+  still require fresh exact-final-candidate four-lane native proof, independently
+  reviewed six-authored-fixture consumer rehearsal and complete gates. No
+  labelled-volume release, application acceptance or full migration is claimed.
 - Keep Linux Unix-socket acquisition waiting on a full listener queue until
   its bounded deadline or caller cancellation, rather than misclassifying
   socket2 timeout polling's disconnected-socket hangup as terminal I/O failure.
@@ -12,7 +18,7 @@
   HTTP controls; these are not Engine compatibility or peer-authentication claims.
 - Admit only the reviewed #68 external-volume, external-network and internal
   bridge singleton groups on the four exact profiles, preserving historical
-  evidence. Volume labels and other topology/runtime groups remain unadmitted;
+  evidence. At that checkpoint volume labels and other topology/runtime groups remained unadmitted;
   final-candidate native gates and consumer milestones remain separate.
 - Define three bounded prerequisite groups for future raw native evidence after
   complete validated volume, volume-label and network proofs. This does not

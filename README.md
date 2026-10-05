@@ -18,8 +18,14 @@ ephemeral publications, exposed-only ports, command clearing, shell and
 disabled health checks, and protected runtime settings. These new branches
 likewise remain capability-unadmitted pending exact native evidence.
 Created named volumes can carry bounded protected labels in the inert target
-contract. Labelled creation has its own unadmitted capability; external-volume
-prerequisites cannot carry labels or mutate an existing volume.
+contract. This #49 candidate selects a separately reviewed #70 cohort with the
+complete `VolumeLabels` group for pre-merge consumer rehearsal only, under
+[ADR 0012](docs/decisions/0012-candidate-volume-label-admission.md).
+Production merge, main admission and release remain blocked until fresh exact-final-candidate
+four-lane native proof, independent review of all six actual authored fixtures'
+volume-only consumer rehearsal, and complete gates pass. No application or full
+migration acceptance is claimed. External-volume prerequisites cannot carry
+labels or mutate an existing volume.
 The [standalone migration ledger](docs/standalone-migration-ledger.md) records
 the finite remaining shapes, evidence, and implementation owners; the current
 0.1.0 surface is the foundation, not completion of that ledger.

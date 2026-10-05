@@ -66,9 +66,15 @@ checkpoint does not transfer data or close the migration issue.
 DockerLens #49 adds bounded protected labels to created named-volume intent,
 with a separate `VolumeLabels` capability and exact `Labels` create body.
 Unlabelled requests remain byte-identical and external-volume prerequisites
-cannot carry or mutate labels. All six BoxFerry fixtures author volume labels;
-their typed mapping, four-lane native proof and consumer rehearsal remain
-required before this shape can be admitted or handed off for one planned release.
+cannot carry or mutate labels. All six BoxFerry fixtures author volume labels.
+The #49 candidate selects the complete label group from independently reviewed
+#70 source evidence for pre-merge consumer rehearsal only. [ADR 0012](decisions/0012-candidate-volume-label-admission.md)
+supersedes ADR 0010's sequencing clause, not its protected-value or inert-target
+contract. Production merge/main/release remain blocked on fresh exact-final-candidate
+four-lane native proof, independent review of all six actual authored fixture
+volume-only mappings and consumer rehearsal, and complete gates. A volume-only
+rehearsal cannot establish six-application or full migration acceptance; wider
+#31/#343/#366 evidence remains open.
 
 | #30 target branch | Typed request contract | Remaining proof / owner |
 | --- | --- | --- |
@@ -148,6 +154,9 @@ Other setting variants that cannot be represented exactly still require
 explicit unsupported/loss outcomes; they cannot be counted as completed
 required core support. The four historical profiles admit only their existing
 twenty closed renderer shapes, not any row above merely because it is listed.
+The later #68 cohort adds three complete singleton groups; this #49 candidate
+adds only the fourth, `VolumeLabels` / `VolumeCreateLabels`, through the
+pre-merge-only #70 cohort. None of these rows is a full migration claim.
 
 ## File ownership for parallel implementation
 

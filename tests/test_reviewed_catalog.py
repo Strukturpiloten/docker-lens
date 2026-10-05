@@ -76,6 +76,21 @@ ADMISSION_REVIEWED = {
     "upstream-rootful": "27c47307f4fdd523a22448415238a729e7a6458fddc554259f23ea99fff5ff76",
     "upstream-rootless": "c0f8160bf8787e9490713595f58c1b4eeb9aeee3ff5f4739776a1010bdea6e1f",
 }
+LABEL_CANDIDATE = "0d8268155a5aacddaeb501adf7f8b2fe06a718ca"
+LABEL_RUN = "https://github.com/Strukturpiloten/docker-lens/actions/runs/37214738475/attempts/1"
+LABEL_SHAPES = {**ADMISSION_SHAPES, "VolumeLabels": ["VolumeCreateLabels"]}
+LABEL_MANIFESTS = {
+    "debian11-rootful": "4bf511a7753a522423286288fcdbed2eaf3325bf2edff44f9dea32ce02c731d5",
+    "debian11-rootless": "b6ae28b4f09b691c1e2490b7ca4c97e7ee479a038307721013c6b04343306f94",
+    "upstream-rootful": "0f3f540aa428c37ec09b37f436b15d3e98231fb7151dd21639cefb22dc073198",
+    "upstream-rootless": "c25e502010a660e96bda7244e7df95afab0a74fcc33c4cf1d613c46980b30ae8",
+}
+LABEL_REVIEWED = {
+    "debian11-rootful": "2306973726b1ecaeac9b26936cfe4df127a9f4927ae5f7bd41be99b528ee37fa",
+    "debian11-rootless": "f471fc1f6998bfdebb130734a11c484ff7bb7e42a406805ab269bd482347eac4",
+    "upstream-rootful": "dd2dec14ce75c1dfb672f018a8ade98334783edcd964758da6b4a432d22429a0",
+    "upstream-rootless": "280839c9f4d6cfd1adda9f25bbf17fdfbb3fab162e91c346a614c31e1e318c44",
+}
 # Every reviewed cohort must be deliberately added here with its exact run,
 # candidate, four identities, four envelope digests, four raw manifest digests,
 # and exact reviewed capability-to-shape admissions. A later new shape needs
@@ -89,6 +104,11 @@ COHORTS = {
     (ADMISSION_CANDIDATE, ADMISSION_RUN): {
         lane: (ADMISSION_REVIEWED[lane], ADMISSION_MANIFESTS[lane],
                EXPECTED_IDENTITIES[lane], ADMISSION_SHAPES)
+        for lane in LANES
+    },
+    (LABEL_CANDIDATE, LABEL_RUN): {
+        lane: (LABEL_REVIEWED[lane], LABEL_MANIFESTS[lane],
+               EXPECTED_IDENTITIES[lane], LABEL_SHAPES)
         for lane in LANES
     },
 }
@@ -284,14 +304,14 @@ class ReviewedCatalogTests(unittest.TestCase):
         self.assertEqual(section.count("NativeEvidenceLane::"), 4)
         reviewed = {
             lane: path.stem
-            for lane, (path, _) in indexed_cohorts(hashed_json("reviewed"), COHORTS)[ADMISSION_CANDIDATE, ADMISSION_RUN].items()
+            for lane, (path, _) in indexed_cohorts(hashed_json("reviewed"), COHORTS)[LABEL_CANDIDATE, LABEL_RUN].items()
         }
         self.assertEqual({match["variant"] for match in tuples}, set(LANE_VARIANTS))
         for match in tuples:
             lane = LANE_VARIANTS[match["variant"]]
             self.assertEqual(match["digest"], reviewed[lane])
             self.assertEqual(match["path_digest"], reviewed[lane])
-            self.assertEqual(match["digest"], ADMISSION_REVIEWED[lane])
+            self.assertEqual(match["digest"], LABEL_REVIEWED[lane])
 
     def test_four_records_bind_exact_manifest_bytes_and_shapes(self) -> None:
         native_records = hashed_json("native")
@@ -347,7 +367,7 @@ class ReviewedCatalogTests(unittest.TestCase):
         native_records = hashed_json("native")
         raw = indexed_native_manifests(native_records, COHORTS)
         reviewed = bind_cohorts(hashed_json("reviewed"), native_records, COHORTS)
-        self.assertEqual(set(reviewed), {(CANDIDATE, RUN), (ADMISSION_CANDIDATE, ADMISSION_RUN)})
+        self.assertEqual(set(reviewed), set(COHORTS))
         self.assertEqual(len(ADMISSION_SHAPES), 13)
         self.assertEqual(sum(map(len, ADMISSION_SHAPES.values())), 23)
         for lane, (path, record) in reviewed[ADMISSION_CANDIDATE, ADMISSION_RUN].items():
@@ -367,18 +387,79 @@ class ReviewedCatalogTests(unittest.TestCase):
                 self.assertEqual(len(manifest["volume_probes"]), 6)
                 self.assertEqual(len(manifest["volume_label_probes"]), 4)
 
-    def test_compiled_admission_has_only_thirteen_complete_capability_groups(self) -> None:
+    def test_label_candidate_binds_four_exact_complete_raw_groups(self) -> None:
+        native_records = hashed_json("native")
+        raw = indexed_native_manifests(native_records, COHORTS)
+        reviewed = bind_cohorts(hashed_json("reviewed"), native_records, COHORTS)
+        self.assertEqual(len(LABEL_SHAPES), 14)
+        self.assertEqual(sum(map(len, LABEL_SHAPES.values())), 24)
+        for lane, (path, record) in reviewed[LABEL_CANDIDATE, LABEL_RUN].items():
+            with self.subTest(lane=lane):
+                self.assertEqual(path.stem, LABEL_REVIEWED[lane])
+                self.assertEqual(record["native_manifest_sha256"], LABEL_MANIFESTS[lane])
+                self.assertEqual(record["identity"], EXPECTED_IDENTITIES[lane])
+                claims = {entry["name"]: entry["admitted_shapes"] for entry in record["capabilities"]}
+                manifest = raw[record["native_manifest_sha256"]][1]
+                self.assertEqual(claims, LABEL_SHAPES)
+                self.assertEqual(manifest["admitted_shapes"], LABEL_SHAPES)
+                self.assertEqual(manifest["capability_outcome"]["VolumeLabels"], "available")
+                self.assertEqual(manifest["volume_label_probes"], [
+                    "VolumeCreateLabels", "VolumeLabelInspect", "VolumeLabelPersistence",
+                    "VolumeLabelOwnershipCleanup",
+                ])
+                self.assertEqual(len(manifest["source_probes"]), 19)
+                self.assertEqual(len(manifest["network_probes"]), 22)
+                self.assertEqual(len(manifest["volume_probes"]), 6)
+
+    def test_compiled_candidate_has_only_fourteen_complete_capability_groups(self) -> None:
         source = (ROOT / "src/reviewed_catalog.rs").read_text(encoding="utf-8")
-        self.assertIn(f'const SOURCE_CANDIDATE: &str = "{ADMISSION_CANDIDATE}";', source)
-        self.assertIn(f'"{ADMISSION_RUN}";', source)
+        self.assertIn(f'const SOURCE_CANDIDATE: &str = "{LABEL_CANDIDATE}";', source)
+        self.assertIn(f'"{LABEL_RUN}";', source)
         capabilities = source.split("const REVIEWED_CAPABILITIES:", 1)[1].split("];", 1)[0]
         shapes = source.split("const REVIEWED_SHAPES:", 1)[1].split("];", 1)[0]
         capability_names = re.findall(r"Capability::(\w+)", capabilities)
         shape_names = re.findall(r"NativeCapabilityShape::(\w+)", shapes)
-        self.assertEqual(len(capability_names), 13)
-        self.assertEqual(set(capability_names), set(ADMISSION_SHAPES))
-        self.assertEqual(len(shape_names), 23)
-        self.assertEqual(set(shape_names), {shape for group in ADMISSION_SHAPES.values() for shape in group})
+        self.assertEqual(len(capability_names), 14)
+        self.assertEqual(set(capability_names), set(LABEL_SHAPES))
+        self.assertEqual(len(shape_names), 24)
+        self.assertEqual(set(shape_names), {shape for group in LABEL_SHAPES.values() for shape in group})
+
+    def test_label_candidate_requires_positive_complete_raw_and_reviewed_label_group(self) -> None:
+        reviewed_records = hashed_json("reviewed")
+        native_records = hashed_json("native")
+        for lane in LANES:
+            for side in ("raw", "reviewed"):
+                for fault in ("missing", "empty", "duplicate", "wrong_shape", "unavailable", "unknown"):
+                    reviewed = deepcopy(reviewed_records)
+                    native = deepcopy(native_records)
+                    if side == "raw":
+                        manifest = next(data for path, data in native if path.stem == LABEL_MANIFESTS[lane])
+                        if fault == "missing":
+                            del manifest["admitted_shapes"]["VolumeLabels"]
+                        elif fault == "empty":
+                            manifest["admitted_shapes"]["VolumeLabels"] = []
+                        elif fault == "duplicate":
+                            manifest["admitted_shapes"]["VolumeLabels"] *= 2
+                        elif fault == "wrong_shape":
+                            manifest["admitted_shapes"]["VolumeLabels"] = ["NamedVolumeCreate"]
+                        else:
+                            manifest["capability_outcome"]["VolumeLabels"] = fault
+                    else:
+                        record = next(data for path, data in reviewed if path.stem == LABEL_REVIEWED[lane])
+                        entry = next(entry for entry in record["capabilities"] if entry["name"] == "VolumeLabels")
+                        if fault == "missing":
+                            record["capabilities"].remove(entry)
+                        elif fault == "empty":
+                            entry["admitted_shapes"] = []
+                        elif fault == "duplicate":
+                            entry["admitted_shapes"] *= 2
+                        elif fault == "wrong_shape":
+                            entry["admitted_shapes"] = ["NamedVolumeCreate"]
+                        else:
+                            entry["state"] = fault
+                    with self.subTest(lane=lane, side=side, fault=fault):
+                        with self.assertRaises(ValueError):
+                            bind_cohorts(reviewed, native, COHORTS)
 
     def test_new_singleton_groups_require_positive_complete_linked_raw_evidence(self) -> None:
         reviewed_records = hashed_json("reviewed")
