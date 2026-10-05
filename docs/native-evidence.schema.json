@@ -144,7 +144,55 @@
     }
   },
   "$defs": {
-    "api_version": { "type": "string", "pattern": "^[1-9][0-9]*\\.[0-9]+$" }
+    "api_version": { "type": "string", "pattern": "^[1-9][0-9]*\\.[0-9]+$" },
+    "identity_probes": {
+      "description": "Closed raw-manifest process-identity group; not capability admission.",
+      "type": "array", "minItems": 5, "maxItems": 5,
+      "prefixItems": [
+        { "const": "ContainerUser" }, { "const": "ContainerWorkdir" },
+        { "const": "ContainerNumericUidGid" },
+        { "const": "ContainerProcessWorkingDirectory" },
+        { "const": "ContainerIdentityOwnershipCleanup" }
+      ],
+      "items": false
+    },
+    "identity_container_proof": {
+      "type": "object", "additionalProperties": false,
+      "required": ["role", "id", "name", "owner", "configured_user", "configured_workdir",
+                   "runtime_uid", "runtime_gid", "runtime_workdir", "cleanup"],
+      "properties": {
+        "role": { "enum": ["oracle", "rendered"] },
+        "id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "name": { "type": "string", "pattern": "^dl-identity-[a-zA-Z0-9]{8}-(oracle|rendered)$" },
+        "owner": { "type": "string", "pattern": "^[a-zA-Z0-9]{8}$" },
+        "configured_user": { "const": "passed" },
+        "configured_workdir": { "const": "passed" },
+        "runtime_uid": { "const": "passed" }, "runtime_gid": { "const": "passed" },
+        "runtime_workdir": { "const": "passed" }, "cleanup": { "const": "absent" }
+      }
+    },
+    "native_identity_proof": {
+      "description": "Private harness proof. The emitter additionally verifies filesystem privacy, distinct IDs and exact external candidate/run/lane/mode/API bindings; this is not cryptographic attestation.",
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "candidate_sha", "lane", "mode", "rendering_api", "run_id", "probes", "containers"],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "candidate_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "lane": { "enum": ["debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless"] },
+        "mode": { "enum": ["rootful", "rootless"] },
+        "rendering_api": { "$ref": "#/$defs/api_version" },
+        "run_id": { "type": "string", "pattern": "^[a-zA-Z0-9]{8}$" },
+        "probes": { "$ref": "#/$defs/identity_probes" },
+        "containers": {
+          "type": "array", "minItems": 2, "maxItems": 2,
+          "prefixItems": [
+            { "allOf": [{ "$ref": "#/$defs/identity_container_proof" }, { "properties": { "role": { "const": "oracle" } } }] },
+            { "allOf": [{ "$ref": "#/$defs/identity_container_proof" }, { "properties": { "role": { "const": "rendered" } } }] }
+          ],
+          "items": false
+        }
+      }
+    }
   },
   "allOf": [
     {

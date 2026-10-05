@@ -70,6 +70,7 @@ chmod 0644 "$socket_dir/native-bind/canary" "$socket_dir/native-bind/index.html"
 chmod 0700 "$run_dir"
 watchdog_pid=
 native_success_summary=
+preserve_run_dir=0
 cleanup_podman() {
   # The deadline must share root privileges with the Podman client; an
   # unprivileged timeout cannot reliably terminate children behind sudo.
@@ -78,6 +79,29 @@ cleanup_podman() {
   else
     timeout --signal=TERM --kill-after=2s 8s "${podman_cmd[@]}" "$@" 2>/dev/null
   fi
+}
+native_presence() {
+  local mode=$1 marker result=0
+  shift
+  # Both the helper and its process-group teardown need the client's privileges.
+  # Keep the root-owned GNU timeout even if Python cannot finish its own cleanup.
+  if [[ $1 == sudo ]]; then
+    shift 2
+    marker=$(query_status=0
+      sudo -n timeout --signal=TERM --kill-after=2s 8s \
+        python3 "$script_dir/native-presence.py" "$mode" "$run_dir" -- "$@" 2>/dev/null || query_status=$?
+      printf '\036'; exit "$query_status") || result=$?
+  else
+    marker=$(query_status=0
+      timeout --signal=TERM --kill-after=2s 8s \
+        python3 "$script_dir/native-presence.py" "$mode" "$run_dir" -- "$@" 2>/dev/null || query_status=$?
+      printf '\036'; exit "$query_status") || result=$?
+  fi
+  case "$result:$marker" in
+    $'0:present\n\036') return 0 ;;
+    $'1:absent\n\036') return 1 ;;
+    *) preserve_run_dir=1; return 2 ;;
+  esac
 }
 cleanup_remove() {
   local role=$1 result=0 category
@@ -104,7 +128,7 @@ cleanup() {
   cleanup_container "$container" container || status=1
   cleanup_container "$sidecar" sidecar || status=1
   network_state=0
-  cleanup_podman network exists "$outer_network" || network_state=$?
+  native_presence exists "${podman_cmd[@]}" network exists "$outer_network" || network_state=$?
   if (( network_state != 1 )); then
     if (( network_state != 0 )); then
       echo "could not verify whether owned network $outer_network exists (exit $network_state)" >&2
@@ -116,7 +140,7 @@ cleanup() {
     if (( owner_state == 0 )) && [[ $owner == "$run_id" ]]; then
       cleanup_remove network network rm "$outer_network" || status=1
       removed_state=0
-      cleanup_podman network exists "$outer_network" || removed_state=$?
+      native_presence exists "${podman_cmd[@]}" network exists "$outer_network" || removed_state=$?
       if (( removed_state != 1 )); then
         echo "owned network cleanup readback failed (exists exit $removed_state)" >&2
         status=1
@@ -127,7 +151,7 @@ cleanup() {
     fi
   fi
   volume_state=0
-  cleanup_podman volume exists "$volume" || volume_state=$?
+  native_presence exists "${podman_cmd[@]}" volume exists "$volume" || volume_state=$?
   if (( volume_state != 1 )); then
     if (( volume_state != 0 )); then
       echo "could not verify whether owned volume $volume exists (exit $volume_state)" >&2
@@ -139,7 +163,7 @@ cleanup() {
     if (( owner_state == 0 )) && [[ $owner == "$run_id" ]]; then
       cleanup_remove volume volume rm "$volume" || status=1
       removed_state=0
-      cleanup_podman volume exists "$volume" || removed_state=$?
+      native_presence exists "${podman_cmd[@]}" volume exists "$volume" || removed_state=$?
       if (( removed_state != 1 )); then
         echo "owned volume cleanup readback failed (exists exit $removed_state)" >&2
         status=1
@@ -149,7 +173,9 @@ cleanup() {
       status=1
     fi
   fi
-  if [[ $run_dir == "${TMPDIR:-/tmp}"/dockerlens-native.* && -d $run_dir ]]; then
+  if (( preserve_run_dir != 0 )); then
+    echo 'DOCKERLENS_NATIVE_CLEANUP: private presence evidence retained for review' >&2
+  elif [[ $run_dir == "${TMPDIR:-/tmp}"/dockerlens-native.* && -d $run_dir ]]; then
     rm -rf -- "$run_dir" || status=1
   fi
   if (( status != 0 )); then
@@ -162,7 +188,7 @@ cleanup() {
 cleanup_container() {
   local name=$1 role=$2 container_state owner owner_state removed_state
   container_state=0
-  cleanup_podman container exists "$name" || container_state=$?
+  native_presence exists "${podman_cmd[@]}" container exists "$name" || container_state=$?
   if (( container_state == 1 )); then return; fi
   if (( container_state != 0 )); then
     echo "could not verify whether owned $role $name exists (exit $container_state)" >&2
@@ -176,7 +202,7 @@ cleanup_container() {
     # bound. Only this exact label-verified task container gets immediate stop.
     cleanup_remove "$role" rm --force --time 0 "$name" || status=1
     removed_state=0
-    cleanup_podman container exists "$name" || removed_state=$?
+    native_presence exists "${podman_cmd[@]}" container exists "$name" || removed_state=$?
     if (( removed_state != 1 )); then
       echo "owned $role cleanup readback failed (exists exit $removed_state)" >&2
       status=1
@@ -242,7 +268,7 @@ for resource in container sidecar network volume; do
     volume) name=$volume; query=volume ;;
   esac
   resource_state=0
-  "${podman_cmd[@]}" "$query" exists "$name" || resource_state=$?
+  native_presence exists "${podman_cmd[@]}" "$query" exists "$name" || resource_state=$?
   case $resource_state in
     0) echo "generated native $resource name already exists" >&2; exit 1 ;;
     1) ;;
@@ -769,7 +795,7 @@ probe_failure_category() {
   fi
 }
 probe_cleanup() {
-  local name=$1 owner remaining
+  local name=$1 owner remaining_state=0
   if owner=$(timeout 10 "${inner_docker[@]}" container inspect \
     --format '{{index .Config.Labels "io.dockerlens.native-run"}}' "$name" 2>/dev/null); then
     [[ $owner == "$run_id" ]] || return 1
@@ -777,9 +803,9 @@ probe_cleanup() {
   fi
   # A failed inspect alone cannot prove absence. A bounded exact-name listing
   # verifies removal even when create failed after creating the container.
-  remaining=$(timeout 10 "${inner_docker[@]}" container ls -a \
-    --filter "name=^/${name}$" --format '{{.Names}}' 2>/dev/null) || return 1
-  [[ -z $remaining ]]
+  native_presence empty-success "${inner_docker[@]}" container ls -a \
+    --filter "name=^/${name}$" --format '{{.Names}}' || remaining_state=$?
+  (( remaining_state == 1 ))
 }
 run_inert_probe() {
   local network=$1 name="dl-${run_id}-probe-${1}" category=ok status state wait_code owner state_error_category daemon_category probe_started
@@ -905,6 +931,10 @@ export NATIVE_SOURCE_PROBES_PATH="$run_dir/source-probes.json"
 export NATIVE_NETWORK_PROBES_PATH="$run_dir/network-probes.json"
 export NATIVE_VOLUME_PROBES_PATH="$run_dir/volume-probes.json"
 export NATIVE_VOLUME_LABEL_PROBES_PATH="$run_dir/volume-label-probes.json"
+export NATIVE_IDENTITY_PROBES_PATH="$run_dir/identity-probes.json"
+export NATIVE_IDENTITY_CANDIDATE_SHA
+NATIVE_IDENTITY_CANDIDATE_SHA=$(git -C "$script_dir/.." rev-parse HEAD)
+[[ $NATIVE_IDENTITY_CANDIDATE_SHA =~ ^[0-9a-f]{40}$ ]] || { echo 'native identity requires exact candidate SHA' >&2; exit 1; }
 if [[ $EUID == 0 ]]; then export NATIVE_PODMAN_USE_SUDO=0; else export NATIVE_PODMAN_USE_SUDO=1; fi
 "$(dirname "$0")/run-exact-native-test.sh" native_capture live_engine_capture_decodes
 "$(dirname "$0")/run-exact-native-test.sh" acquisition live_read_only_acquisition_matches_oracle
@@ -915,6 +945,7 @@ if [[ $EUID == 0 ]]; then export NATIVE_PODMAN_USE_SUDO=0; else export NATIVE_PO
 "$(dirname "$0")/run-exact-native-test.sh" native_network live_internal_network_blocks_external_egress
 "$(dirname "$0")/run-exact-native-test.sh" native_volume live_existing_volume_prerequisite_matches_engine
 "$(dirname "$0")/run-exact-native-test.sh" native_volume_label live_created_volume_labels_match_engine
+"$(dirname "$0")/run-exact-native-test.sh" native_identity live_container_process_identity_matches_engine
 
 if [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]; then
   candidate_sha=$(git -C "$script_dir/.." rev-parse HEAD)
@@ -926,9 +957,9 @@ if [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]; then
     echo 'native evidence requires a clean candidate checkout' >&2
     exit 1
   }
-  python3 "$script_dir/native-evidence.py" "$run_dir/version.json" "$NATIVE_SHAPES_PATH" "$NATIVE_SOURCE_PROBES_PATH" "$NATIVE_NETWORK_PROBES_PATH" "$NATIVE_VOLUME_PROBES_PATH" "$NATIVE_VOLUME_LABEL_PROBES_PATH" \
+  python3 "$script_dir/native-evidence.py" "$run_dir/version.json" "$NATIVE_SHAPES_PATH" "$NATIVE_SOURCE_PROBES_PATH" "$NATIVE_NETWORK_PROBES_PATH" "$NATIVE_VOLUME_PROBES_PATH" "$NATIVE_VOLUME_LABEL_PROBES_PATH" "$NATIVE_IDENTITY_PROBES_PATH" \
     "$DOCKERLENS_NATIVE_EVIDENCE_DIR/$lane.json" "$lane" "$image" "$expected_mode" \
-    "$installed_docker_package" "$candidate_sha"
+    "$installed_docker_package" "$candidate_sha" "$run_id"
 fi
 
 native_success_summary="native conformance passed: $lane; Engine $server_version; API $api_version; mode $expected_mode; inner cgroup $inner_cgroup; outer $("${podman_cmd[@]}" --version); kernel $(uname -r); privileged $privileged; nested storage ${used_kib} KiB"

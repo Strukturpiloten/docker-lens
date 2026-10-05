@@ -7,7 +7,7 @@ if [[ $# != 2 || ! $1 =~ ^[a-z_]+$ || ! $2 =~ ^[a-z_]+$ ]]; then
 fi
 target=$1
 test_name=$2
-if [[ $target == native_target || $target == native_volume || $target == native_network || $target == native_volume_label ]]; then
+if [[ $target == native_target || $target == native_volume || $target == native_network || $target == native_volume_label || $target == native_identity ]]; then
   # Native target tests need crate-private, test-only capability claims.
   # It is a library unit test; no public constructor is exposed for the harness.
   cargo_target=(--lib)
@@ -50,6 +50,8 @@ dns_diag=$(grep -Eo '^DOCKERLENS_NATIVE_DNS_DIAG: peer=(ready|invalid|unavailabl
 collision_dns_diag=$(grep -Eo '^DOCKERLENS_NATIVE_COLLISION_DNS_DIAG: peer=(backend|edge) category=(output_limit|cli_(timeout|resolver|lookup|docker|exec|answer_present|unclassified)|answer_(missing|wrong_ip|malformed|inconsistent)|alias_missing) exit=(success|lookup|timeout|other) response=(nxdomain|servfail|refused|no_error_no_a|has_expected_a|other)$' <<<"$result" | tail -n 1 || true)
 volume_label_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: volume_labels_(create|persistence|ownership|cleanup_unverified)$' <<<"$result" | tail -n 1 || true)
 if [[ -n $volume_label_marker ]]; then marker=$volume_label_marker; fi
+identity_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: identity_(context|oracle|render|cleanup|cleanup_unverified|evidence)$' <<<"$result" | tail -n 1 || true)
+if [[ -n $identity_marker ]]; then marker=$identity_marker; fi
 reason_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: target_start_reason_(operation_not_permitted|permission_denied|invalid_argument|read_only_filesystem|not_found|timeout|unclassified)$' <<<"$result" | tail -n 1 || true)
 error_category=$(grep -Eo '^DOCKERLENS_NATIVE_ERROR: (endpoint|cancelled|deadline|io|protocol|status|version|shape|budget)$' <<<"$result" | tail -n 1 || true)
 selection_error=$(grep -Eo '^DOCKERLENS_NATIVE_ERROR: selection$' <<<"$result" | tail -n 1 || true)
@@ -60,7 +62,7 @@ internal_cleanup=$(grep -Eo '^DOCKERLENS_NATIVE_CLEANUP: internal_proof=(pass|fa
 # without disclosing its message, compared values, or an absolute build path.
 panic_site=
 case $target in
-  native_target | native_volume | native_network | native_volume_label | native_container)
+  native_target | native_volume | native_network | native_volume_label | native_container | native_identity)
     panic_site=$(sed -nE "s/^thread '.*'( \([0-9]{1,10}\))? panicked at src\/(${target}_tests)\.rs:([0-9]{1,6}):([0-9]{1,4}):$/DOCKERLENS_NATIVE_PANIC: source=\2 line=\3 column=\4/p" <<<"$result" | tail -n 1)
     ;;
 esac

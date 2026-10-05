@@ -16,6 +16,97 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class NativeHarnessTests(unittest.TestCase):
+    def test_identity_is_independent_tenth_mandatory_check_before_manifest(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text()
+        invocations = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$',
+                                 source, re.MULTILINE)
+        self.assertEqual(invocations, [
+            ("native_capture", "live_engine_capture_decodes"),
+            ("acquisition", "live_read_only_acquisition_matches_oracle"),
+            ("native_selection", "live_native_selection_and_source_observations"),
+            ("native_selection", "live_network_membership_matches_engine"),
+            ("native_target", "live_target_render_matches_engine"),
+            ("native_network", "live_network_render_matches_engine"),
+            ("native_network", "live_internal_network_blocks_external_egress"),
+            ("native_volume", "live_existing_volume_prerequisite_matches_engine"),
+            ("native_volume_label", "live_created_volume_labels_match_engine"),
+            ("native_identity", "live_container_process_identity_matches_engine"),
+        ])
+        self.assertLess(source.index('native_identity live_container_process_identity_matches_engine'),
+                        source.index('python3 "$script_dir/native-evidence.py"'))
+        self.assertIn('export NATIVE_IDENTITY_PROBES_PATH="$run_dir/identity-probes.json"', source)
+
+    def test_identity_source_requires_pid1_owned_id_cleanup_and_positive_absence(self) -> None:
+        source = (ROOT / "src/native_identity_tests.rs").read_text()
+        self.assertIn('set -eu; id -u; id -g; pwd -P', source)
+        self.assertIn('--user=1000:1000', source)
+        self.assertIn('--workdir=/tmp', source)
+        self.assertNotIn('exec --user', source)
+        self.assertIn('"State"]["ExitCode"], 0', source)
+        self.assertIn('"State"]["Status"], "exited"', source)
+        self.assertIn('"State"]["Running"], false', source)
+        self.assertIn('if !self.attempted[index]', source)
+        bind = source.split('fn bind(', 1)[1].split('fn cleanup(', 1)[0]
+        self.assertLess(bind.index('self.inspect(&self.names[index]'), bind.index('self.ids[index] ='))
+        self.assertIn('registered != id', bind)
+        cleanup = source.split('fn cleanup(', 1)[1].split('fn facts(', 1)[0]
+        self.assertIn('owned(&before, Some(&id), &name, &self.run)', cleanup)
+        self.assertIn('containers/{id}?force=1', cleanup)
+        self.assertNotIn('containers/{name}?force=1', cleanup)
+        self.assertIn('!= 204', cleanup)
+        self.assertIn('for _ in 0..2', cleanup)
+        self.assertIn('self.inspect(&self.names[index], true).0 != 404', cleanup)
+        self.assertIn('self.inspect(id, true).0 != 404', cleanup)
+        self.assertLess(source.index('assert!(passed && cleaned'), source.index('create_new(true)'))
+        self.assertIn('mode(0o600)', source)
+
+    def test_identity_exact_selection_and_closed_failure_privacy(self) -> None:
+        selected = "native_identity_tests::live_container_process_identity_matches_engine"
+        for mode in ("pass", "absent", "duplicate", "zero", "fail"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self._tool(root, "cargo", '''#!/usr/bin/env bash
+set -eu
+printf '%s\\n' "$*" >> "$FAKE_NATIVE_INVOCATIONS"
+if [[ $* == *--list* ]]; then
+  [[ $FAKE_MODE != absent ]] || exit 0
+  echo 'native_identity_tests::live_container_process_identity_matches_engine: test'
+  if [[ $FAKE_MODE == duplicate ]]; then
+    echo 'native_identity_tests::live_container_process_identity_matches_engine: test'
+  fi
+elif [[ $FAKE_MODE == fail ]]; then
+  echo 'DOCKERLENS_NATIVE_CHECK: identity_render protected-secret'
+  echo 'DOCKERLENS_NATIVE_CHECK: identity_private'
+  echo 'DOCKERLENS_NATIVE_CHECK: identity_cleanup_unverified'
+  echo "thread 'protected-secret' panicked at src/native_identity_tests.rs:123:4:"
+  echo 'protected-secret raw-native-ID'
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 42
+elif [[ $FAKE_MODE == zero ]]; then
+  echo 'test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;'
+else
+  echo 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;'
+fi
+''')
+                calls = root / "calls"
+                env = os.environ.copy()
+                env.update(PATH=f"{root}:{env['PATH']}", FAKE_MODE=mode,
+                           FAKE_NATIVE_INVOCATIONS=str(calls))
+                result = subprocess.run([str(ROOT / "scripts/run-exact-native-test.sh"),
+                                         "native_identity", "live_container_process_identity_matches_engine"],
+                                        env=env, capture_output=True, text=True, timeout=10, check=False)
+                self.assertEqual(result.returncode == 0, mode == "pass")
+                invocations = calls.read_text().splitlines()
+                self.assertTrue(all('--lib' in call and '--test' not in call for call in invocations))
+                if mode not in ("absent", "duplicate"):
+                    self.assertIn(f'--ignored --exact {selected}', invocations[1])
+                self.assertNotIn('protected-secret', result.stdout + result.stderr)
+                self.assertNotIn('identity_private', result.stderr)
+                self.assertNotIn('identity_render', result.stderr)
+                if mode == "fail":
+                    self.assertIn('DOCKERLENS_NATIVE_CHECK: identity_cleanup_unverified', result.stderr)
+                    self.assertIn('DOCKERLENS_NATIVE_PANIC: source=native_identity_tests line=123 column=4', result.stderr)
+
     def test_cleanup_timeout_runs_with_the_podman_clients_privileges(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
         helpers = "cleanup_podman() {" + source.split("cleanup_podman() {", 1)[1].split(
@@ -66,11 +157,11 @@ class NativeHarnessTests(unittest.TestCase):
         )[0]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            self._tool(root, "timeout", '#!/bin/sh\n[ "$3" = 8s ] || exit 43\n'
+            self._tool(root, "timeout", '#!/bin/sh\n[ "$3" = 8s ] || [ "$3" = 6.0s ] || exit 43\n'
                        'export FAKE_CLIENT_BOUND=8\nshift 3\nexec "$@"\n')
             self._tool(root, "podman", '''#!/usr/bin/env bash
 set -eu
-echo 'private-canary resource-id' >&2
+[[ $1 == container ]] || echo 'private-canary resource-id' >&2
 case "$1" in
   container)
     if [[ $FAKE_MODE == query_error || ($FAKE_MODE == readback_error && ! -e $FAKE_RESOURCE) ]]; then
@@ -112,7 +203,9 @@ esac
                         if original else container_helper
                     result = subprocess.run(
                         ["bash", "-c", "set -euo pipefail\npodman_cmd=(podman)\n"
-                         "run_id=owned-run\nstatus=0\n" + helpers + selected
+                         "run_id=owned-run\nstatus=0\npreserve_run_dir=0\n"
+                         f"script_dir={shlex.quote(str(ROOT / 'scripts'))}\nrun_dir={shlex.quote(str(root))}\n"
+                         + helpers + selected
                          + '\ncleanup_container dl-native-synthetic container\nexit "$status"\n'],
                         env=env, capture_output=True, text=True, timeout=5, check=False,
                     )
@@ -136,6 +229,25 @@ esac
                         self.assertIn("owned container cleanup readback failed", result.stderr)
 
     def test_cleanup_success_summary_requires_dependency_cleanup(self) -> None:
+        self._assert_cleanup_success_summary_requires_dependency_cleanup()
+
+    def test_cleanup_success_summary_honors_custom_tmpdir(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="custom-temp-root.") as directory:
+            self._assert_cleanup_success_summary_requires_dependency_cleanup(
+                temp_root=directory, modes=("success",),
+            )
+
+    def test_cleanup_retains_run_directory_outside_configured_tmpdir(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="custom-temp-root.") as directory:
+            self._assert_cleanup_success_summary_requires_dependency_cleanup(
+                temp_root=directory, modes=("success",), mismatched_parent=True,
+            )
+
+    def _assert_cleanup_success_summary_requires_dependency_cleanup(
+        self, *, temp_root: str | None = None,
+        modes: tuple[str, ...] = ("success", "container_leftover", "network_error"),
+        mismatched_parent: bool = False,
+    ) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
         helpers = "cleanup_podman() {" + source.split("cleanup_podman() {", 1)[1].split(
             "\ntrap cleanup EXIT", 1
@@ -143,7 +255,7 @@ esac
         self.assertIn('native_success_summary="native conformance passed:', source)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            self._tool(root, "timeout", '#!/bin/sh\n[ "$3" = 8s ] || exit 43\nshift 3\nexec "$@"\n')
+            self._tool(root, "timeout", '#!/bin/sh\n[ "$3" = 8s ] || [ "$3" = 6.0s ] || exit 43\nshift 3\nexec "$@"\n')
             self._tool(root, "podman", '''#!/usr/bin/env bash
 set -eu
 for name; do :; done
@@ -154,7 +266,7 @@ case "$name" in
   dl-native-data-synthetic) role=volume ;;
   *) exit 44 ;;
 esac
-echo 'private-canary native-resource-id' >&2
+[[ ${2:-} == exists ]] || echo 'private-canary native-resource-id' >&2
 if [[ $1 == inspect || ${2:-} == inspect ]]; then echo synthetic; exit 0; fi
 if [[ ${2:-} == exists ]]; then [[ -e $FAKE_STATE/$role ]]; exit; fi
 if [[ $1 == rm || ${2:-} == rm ]]; then
@@ -176,10 +288,20 @@ else exit 50; fi
 ''')
             env = os.environ.copy()
             env.update(PATH=f"{root}:{env['PATH']}", FAKE_STATE=str(root))
-            for mode in ("success", "container_leftover", "network_error"):
+            if temp_root is not None:
+                env["TMPDIR"] = temp_root
+            # Match the child's shell fallback, not tempfile's cached default.
+            # A deliberately different parent must never pass the deletion guard.
+            configured_parent = env.get("TMPDIR") or "/tmp"
+            fixture_parent = str(root) if mismatched_parent else configured_parent
+            for mode in modes:
                 with self.subTest(mode=mode), tempfile.TemporaryDirectory(
-                    prefix="dockerlens-native.", dir="/tmp",
+                    prefix="dockerlens-native.", dir=fixture_parent,
                 ) as temporary:
+                    self.assertEqual(
+                        Path(temporary).parent == Path(configured_parent),
+                        not mismatched_parent,
+                    )
                     for role in ("container", "sidecar", "network", "volume"):
                         (root / role).touch()
                     (root / "removals").unlink(missing_ok=True)
@@ -189,7 +311,8 @@ else exit 50; fi
                         "run_id=synthetic\nlane=debian11-rootful\n"
                         "container=dl-native-synthetic\nsidecar=dl-native-egress-synthetic\n"
                         "outer_network=dl-native-net-synthetic\nvolume=dl-native-data-synthetic\n"
-                        "native_success_summary='native conformance passed: synthetic'\n"
+                        "native_success_summary='native conformance passed: synthetic'\npreserve_run_dir=0\n"
+                        f"script_dir={shlex.quote(str(ROOT / 'scripts'))}\n"
                         f"run_dir={shlex.quote(temporary)}\n"
                         + helpers + "cleanup\n"
                     )
@@ -209,7 +332,7 @@ else exit 50; fi
                     )
                     self.assertNotIn("private-canary", result.stdout + result.stderr)
                     self.assertNotIn("native-resource-id", result.stdout + result.stderr)
-                    self.assertFalse(Path(temporary).exists())
+                    self.assertEqual(Path(temporary).exists(), mismatched_parent)
                     if mode == "network_error":
                         self.assertIn("role=network operation=remove category=error", result.stderr)
                     if mode == "container_leftover":

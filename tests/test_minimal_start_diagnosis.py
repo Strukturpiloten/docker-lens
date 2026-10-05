@@ -1,6 +1,7 @@
 """Bounded, private diagnostics for the inert native Docker start probes."""
 
 import os
+import shlex
 import subprocess
 import tempfile
 import time
@@ -13,6 +14,8 @@ NATIVE_SCRIPT = (ROOT / "scripts/native-conformance.sh").read_text()
 START = NATIVE_SCRIPT.index("# Docker CLI errors may contain authored values.")
 END = NATIVE_SCRIPT.index("network_id=$(timeout 30", START)
 PROBE = NATIVE_SCRIPT[START:END]
+PRESENCE_HELPER = NATIVE_SCRIPT[NATIVE_SCRIPT.index("native_presence() {"):
+                               NATIVE_SCRIPT.index("cleanup_remove() {")]
 
 
 class MinimalStartDiagnosisTests(unittest.TestCase):
@@ -161,7 +164,9 @@ esac
                 f'podman_cmd=("{podman}")\n'
                 f'lane={lane}\ncontainer=dl-outer-abc\n'
                 'run_id=abc\nFIXTURE_IMAGE=synthetic-image\n'
-            )
+                f'script_dir={shlex.quote(str(ROOT / "scripts"))}\n'
+                f'run_dir={shlex.quote(str(fixture))}\npreserve_run_dir=0\n'
+            ) + PRESENCE_HELPER
             probe = PROBE.replace("44s bash -c", "1s bash -c").replace(
                 "12s bash -c", "1s bash -c"
             ) if short_deadline else PROBE
