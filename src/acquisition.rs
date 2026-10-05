@@ -472,17 +472,40 @@ fn connect(
         let timeout = remaining(started, limit, cancelled)?.min(IO_POLL_INTERVAL);
         let socket =
             Socket::new(Domain::UNIX, Type::STREAM, None).map_err(|_| AcquisitionError::Io)?;
-        match socket.connect_timeout(&address, timeout) {
+        // Linux AF_UNIX reports a full listener queue as WouldBlock, without
+        // establishing a pending connection. Polling that disconnected socket
+        // through connect_timeout can instead report a terminal hangup error.
+        #[cfg(target_os = "linux")]
+        let outcome = {
+            socket
+                .set_nonblocking(true)
+                .map_err(|_| AcquisitionError::Io)?;
+            socket.connect(&address)
+        };
+        #[cfg(not(target_os = "linux"))]
+        let outcome = socket.connect_timeout(&address, timeout);
+        match outcome {
             Ok(()) => {
+                #[cfg(target_os = "linux")]
+                {
+                    socket
+                        .set_nonblocking(false)
+                        .map_err(|_| AcquisitionError::Io)?;
+                    remaining(started, limit, cancelled)?;
+                }
                 let fd: OwnedFd = socket.into();
                 return Ok(UnixStream::from(fd));
             }
             Err(error)
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
-                ) =>
+                if error.kind() == io::ErrorKind::WouldBlock
+                    || (cfg!(not(target_os = "linux"))
+                        && error.kind() == io::ErrorKind::TimedOut) =>
             {
+                // Each retry owns a fresh socket; never reconnect an uncertain
+                // descriptor or spin while the independently owned queue is full.
+                drop(socket);
+                #[cfg(target_os = "linux")]
+                std::thread::sleep(remaining(started, limit, cancelled)?.min(timeout));
                 remaining(started, limit, cancelled)?;
             }
             Err(_) => return Err(AcquisitionError::Io),

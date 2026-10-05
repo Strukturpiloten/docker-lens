@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Keep Linux Unix-socket acquisition waiting on a full listener queue until
+  its bounded deadline or caller cancellation, rather than misclassifying
+  socket2 timeout polling's disconnected-socket hangup as terminal I/O failure.
+  Retry with fresh nonblocking sockets and bounded backoff; restore blocking
+  only after successful connection. Preserve other Unix transport behavior,
+  terminal I/O failures, HTTP framing, privacy, budgets and the public API.
+  Add independent saturated-queue, cancellation, refusal and delayed-drain
+  HTTP controls; these are not Engine compatibility or peer-authentication claims.
 - Admit only the reviewed #68 external-volume, external-network and internal
   bridge singleton groups on the four exact profiles, preserving historical
   evidence. Volume labels and other topology/runtime groups remain unadmitted;
