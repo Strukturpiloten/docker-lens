@@ -634,6 +634,12 @@ The original combined resource-oracle START response is recorded immediately,
 before the failure-only controls, as `RESOURCE_START_HTTP` with `control=oracle`,
 a bounded numeric status (or unknown), and its closed status category. A rejection
 retains `resource_oracle_start`/`http_status` as that group's first checkpoint.
+The rejected response also has one dedicated
+`DOCKERLENS_NATIVE_RESOURCE_ORACLE_START_BODY_DIAG` record, with fixed `role=oracle`
+and the same bounded original status. It applies the existing byte-bounded lexical
+classifier directly to that original body before any inspect or control probe.
+Generic later `START_BODY_DIAG` observations remain supplemental and cannot replace
+this original-bound context. No raw body, identifier or path is emitted.
 Neither these checkpoints nor lexical error-body mentions establish kernel,
 controller, swap, delegation, or enforcement causes. Existing last observations
 remain supplemental, and the first selected-source numeric panic location is
@@ -643,7 +649,11 @@ The exact-test runner validates the new records as a bounded set: at most one
 checkpoint per known group and one original resource START response, exact fields,
 consistent status/category and failed-group bindings, and no duplicates or
 private suffixes. Malformed or inconsistent records fail closed without printing
-their payload. A successful test emits no failure diagnostics. This is trusted
+their payload. A rejected original START requires its unique body record between
+the original status and group checkpoint and before inspect/control observations;
+shape/lexical fields, status and resource-group binding must agree. Missing,
+misordered, duplicate or success-forged body records reject the capture. A
+successful test emits no failure diagnostics. This is trusted
 harness provenance, not authentication against a writer able to forge an entire
 consistent private capture. The existing 180-second invocation, capture byte cap,
 eleven mandatory tests, proof inputs and capability-admission boundaries do not

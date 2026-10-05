@@ -63,15 +63,22 @@ groups = (b"resources_security", b"ports", b"identity_health_clear",
           b"storage_lifecycle", b"resolver_logging")
 first_prefix = b"DOCKERLENS_NATIVE_GROUP_FIRST_FAILURE:"
 oracle_prefix = b"DOCKERLENS_NATIVE_RESOURCE_START_HTTP: control=oracle"
+body_prefix = b"DOCKERLENS_NATIVE_RESOURCE_ORACLE_START_BODY_DIAG:"
 failure_prefix = b"DOCKERLENS_NATIVE_GROUP_FAILURE:"
 first_pattern = rb"DOCKERLENS_NATIVE_GROUP_FIRST_FAILURE: group=(\w+) checkpoint=(\w+) outcome=(\w+)"
 oracle_pattern = rb"DOCKERLENS_NATIVE_RESOURCE_START_HTTP: control=oracle status=([1-5][0-9]{2}|unknown) category=(success|invalid_request|not_found|conflict|server|other|unknown)"
+body_fields = (b"cgroup_mention", b"device_mention", b"sysctl_mention", b"ulimit_mention",
+               b"apparmor_mention", b"permission_phrase", b"errno_mention",
+               b"controller_mention", b"bpf_mention")
+body_pattern = (body_prefix + rb" role=oracle status=([1-5][0-9]{2}|unknown) shape=(message|missing|malformed|oversize)"
+                + b"".join(b" " + field + rb"=(present|absent|unknown)" for field in body_fields))
 pairs = {(b"resource_oracle_start", b"http_status"),
          *((checkpoint, outcome) for checkpoint in (b"api", b"cli")
            for outcome in (b"timeout", b"unknown")),
          *((checkpoint, b"unknown") for checkpoint in (b"probe", b"preflight", b"cleanup"))}
 first = {}
 oracle = None
+body = None
 records = []
 for index, line in enumerate(lines):
     if line.lstrip().startswith(first_prefix.removesuffix(b":")):
@@ -101,6 +108,16 @@ for index, line in enumerate(lines):
             raise ValueError
         oracle = (status, index)
         records.append(line)
+    elif line.lstrip().startswith(body_prefix.removesuffix(b":")):
+        match = re.fullmatch(body_pattern, line)
+        if match is None or body is not None:
+            raise ValueError
+        status, shape, *flags = match.groups()
+        if (shape == b"message" and any(flag == b"unknown" for flag in flags)
+                or shape != b"message" and any(flag != b"unknown" for flag in flags)):
+            raise ValueError
+        body = (status, index)
+        records.append(line)
 failures = {}
 for index, line in enumerate(lines):
     if not line.lstrip().startswith(failure_prefix.removesuffix(b":")):
@@ -125,8 +142,22 @@ if failures or records:
         raise ValueError
     resource = first.get(b"resources_security")
     if oracle is not None and oracle[0] != b"204":
-        if resource is None or resource[:2] != (b"resource_oracle_start", b"http_status"):
+        if (resource is None or resource[:2] != (b"resource_oracle_start", b"http_status")
+                or body is None):
             raise ValueError
+    if body is not None:
+        if (oracle is None or oracle[0] == b"204" or body[0] != oracle[0]
+                or resource is None or not oracle[1] < body[1] < resource[2]):
+            raise ValueError
+        # The original classifier must precede the original inspect result and
+        # every failure-only control, not merely precede the aggregate panic.
+        for index, line in enumerate(lines):
+            if (line.startswith((b"DOCKERLENS_NATIVE_ORACLE_START_STATE:",
+                                 b"DOCKERLENS_NATIVE_RESOURCE_CONTROL:"))
+                    or line.startswith(b"DOCKERLENS_NATIVE_RESOURCE_START_HTTP:")
+                    and not line.startswith(oracle_prefix)):
+                if index <= body[1]:
+                    raise ValueError
     if resource is not None and resource[0] == b"resource_oracle_start":
         if oracle is None or oracle[0] == b"204" or oracle[1] >= resource[2]:
             raise ValueError

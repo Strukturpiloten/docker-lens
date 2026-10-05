@@ -2329,15 +2329,33 @@ fi
             env=env, capture_output=True, text=True, timeout=10, check=False,
         )
 
+    @staticmethod
+    def _oracle_start_body_fixture(status: str = "500", shape: str = "message",
+                                   fields: dict[str, str] | None = None) -> str:
+        flags = dict.fromkeys(("cgroup_mention", "device_mention", "sysctl_mention", "ulimit_mention",
+                               "apparmor_mention", "permission_phrase", "errno_mention",
+                               "controller_mention", "bpf_mention"),
+                              "absent" if shape == "message" else "unknown")
+        flags.update(fields or {})
+        return (f"DOCKERLENS_NATIVE_RESOURCE_ORACLE_START_BODY_DIAG: role=oracle status={status} shape={shape} "
+                + " ".join(f"{field}={value}" for field, value in flags.items()))
+
     def test_first_failure_original_resource_start_survives_controls_and_port_timeout(self) -> None:
         original = "DOCKERLENS_NATIVE_RESOURCE_START_HTTP: control=oracle status=400 category=invalid_request"
+        original_body = self._oracle_start_body_fixture("400", fields={"cgroup_mention": "present",
+                                                                      "controller_mention": "present"})
+        later_body = ("DOCKERLENS_NATIVE_START_BODY_DIAG: shape="
+                      + self._oracle_start_body_fixture(fields={"device_mention": "present",
+                                                               "bpf_mention": "present"}).split(" shape=", 1)[1])
         resource = "DOCKERLENS_NATIVE_GROUP_FIRST_FAILURE: group=resources_security checkpoint=resource_oracle_start outcome=http_status"
         port = "DOCKERLENS_NATIVE_GROUP_FIRST_FAILURE: group=ports checkpoint=api outcome=timeout"
         result = self._run_first_failure_fixture([
             original,
+            original_body,
             "thread 'protected-first-name' panicked at src/native_container_tests.rs:73:4:",
             "protected-original-body and private/native-path",
             "DOCKERLENS_NATIVE_RESOURCE_START_HTTP: control=memory status=500",
+            later_body,
             "DOCKERLENS_NATIVE_API_DIAG: operation=start status=server",
             "DOCKERLENS_NATIVE_GROUP_CLEANUP: group=resources_security outcome=verified",
             resource,
@@ -2349,7 +2367,7 @@ fi
             "thread 'protected-aggregate-name' panicked at src/native_container_tests.rs:999:6:",
         ])
         self.assertNotEqual(result.returncode, 0)
-        for record in (original, resource, port):
+        for record in (original, original_body, resource, port, later_body):
             self.assertEqual(result.stderr.count(record), 1)
         self.assertLess(result.stderr.index(resource), result.stderr.index(port))
         self.assertIn("observation=last transport=timeout", result.stderr)
@@ -2437,6 +2455,11 @@ fi
              "DOCKERLENS_NATIVE_GROUP_FAILURE: group=ports reason=probe", *good],
         ]
         for index, records in enumerate(cases):
+            # Keep the new body requirement satisfied while exercising the
+            # independent pre-existing status/checkpoint/group rejection cases.
+            if original in records:
+                records = records.copy()
+                records.insert(records.index(original) + 1, self._oracle_start_body_fixture())
             with self.subTest(case=index):
                 result = self._run_first_failure_fixture(records)
                 self.assertNotEqual(result.returncode, 0)
@@ -2448,12 +2471,76 @@ fi
             self.assertNotEqual(success_forgery.returncode, 0)
             self.assertNotIn("required native test passed", success_forgery.stdout)
         unknown = self._run_first_failure_fixture([
-            original.replace("status=500 category=server", "status=unknown category=unknown"), first,
+            original.replace("status=500 category=server", "status=unknown category=unknown"),
+            self._oracle_start_body_fixture("unknown", "malformed"), first,
             failed.replace("reason=probe", "reason=mutation_uncertain"),
         ])
         self.assertNotEqual(unknown.returncode, 0)
         self.assertIn("control=oracle status=unknown category=unknown", unknown.stderr)
         self.assertNotIn("rejected malformed", unknown.stderr)
+
+    def test_first_failure_original_body_requires_exact_original_status_order_and_group(self) -> None:
+        original = "DOCKERLENS_NATIVE_RESOURCE_START_HTTP: control=oracle status=500 category=server"
+        body = self._oracle_start_body_fixture(fields={"cgroup_mention": "present",
+                                                      "controller_mention": "present"})
+        first = "DOCKERLENS_NATIVE_GROUP_FIRST_FAILURE: group=resources_security checkpoint=resource_oracle_start outcome=http_status"
+        failed = "DOCKERLENS_NATIVE_GROUP_FAILURE: group=resources_security reason=probe"
+        good = [original, body, first, failed]
+        accepted = self._run_first_failure_fixture(good)
+        self.assertNotEqual(accepted.returncode, 0)
+        self.assertIn(body, accepted.stderr)
+        self.assertNotIn("rejected malformed", accepted.stderr)
+        invalid = [
+            [original, first, failed],  # No generic later body may substitute.
+            [original, "DOCKERLENS_NATIVE_START_BODY_DIAG: shape=" + body.split(" shape=", 1)[1], first, failed],
+            [original, body, body, first, failed],
+            [body, original, first, failed], [original, first, body, failed],
+            [original, first, failed, body],
+            [original, "DOCKERLENS_NATIVE_RESOURCE_CONTROL: control=baseline phase=create outcome=begin", body, first, failed],
+            [original, "DOCKERLENS_NATIVE_ORACLE_START_STATE: state=created", body, first, failed],
+            [original, "DOCKERLENS_NATIVE_RESOURCE_START_HTTP: control=memory status=500", body, first, failed],
+            [body], [body, first, failed],
+            [original, body, first.replace("resources_security", "ports"), failed.replace("resources_security", "ports")],
+            [original, body, first.replace("resource_oracle_start", "probe").replace("http_status", "unknown"), failed],
+        ]
+        for malformed in (body + " raw=protected-secret", body + "\rprotected-secret",
+                          body + "\x00protected-secret", " " + body,
+                          body.replace("BODY_DIAG:", "BODY_DIAG"),
+                          body.replace("role=oracle ", ""), body.replace("role=oracle", "role=control"),
+                          body.replace("status=500", "status=501"),
+                          body.replace("status=500", "status=unknown"),
+                          body.replace("status=500", "status=600"),
+                          body.replace("shape=message", "shape=protected-secret"),
+                          body.replace("cgroup_mention=present", "cgroup_mention=unknown"),
+                          body.replace("cgroup_mention=present", "cgroup_mention=protected-secret"),
+                          body.replace("device_mention=absent", "device_mention=absent device_mention=present"),
+                          body.replace(" device_mention=absent", ""),
+                          body.replace("shape=message", "shape=missing")):
+            invalid.append([original, malformed, first, failed])
+        invalid.append([original, self._oracle_start_body_fixture("500", "missing",
+                                                                 {"cgroup_mention": "present"}), first, failed])
+        for index, records in enumerate(invalid):
+            with self.subTest(case=index):
+                rejected = self._run_first_failure_fixture(records)
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertEqual(rejected.stderr.strip(), "required native test rejected malformed first-failure diagnostics")
+                self.assertNotIn("protected-secret", rejected.stdout + rejected.stderr)
+        for shape in ("missing", "malformed", "oversize"):
+            with self.subTest(shape=shape):
+                bounded = self._run_first_failure_fixture([original, self._oracle_start_body_fixture("500", shape), first, failed])
+                self.assertNotIn("rejected malformed", bounded.stderr)
+                self.assertIn(f"role=oracle status=500 shape={shape}", bounded.stderr)
+        success = "DOCKERLENS_NATIVE_RESOURCE_START_HTTP: control=oracle status=204 category=success"
+        port = "DOCKERLENS_NATIVE_GROUP_FIRST_FAILURE: group=ports checkpoint=probe outcome=unknown"
+        for records, exit_status in ((good, 0), ([body], 0),
+                                     ([success, self._oracle_start_body_fixture("204")], 0),
+                                     ([success, self._oracle_start_body_fixture("204"), port,
+                                       "DOCKERLENS_NATIVE_GROUP_FAILURE: group=ports reason=probe"], 101)):
+            with self.subTest(success_forgery=records, exit_status=exit_status):
+                rejected = self._run_first_failure_fixture(records, exit_status=exit_status)
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertEqual(rejected.stderr.strip(), "required native test rejected malformed first-failure diagnostics")
+                self.assertNotIn("required native test passed", rejected.stdout)
 
     def test_first_failure_group_records_require_checkpoints_even_when_new_records_absent(self) -> None:
         failed = "DOCKERLENS_NATIVE_GROUP_FAILURE: group=ports reason=probe"
@@ -2495,10 +2582,17 @@ fi
             "let mut container = bare_container", 1
         )[0]
         capture = oracle.index("resource_oracle_start_diagnostic(oracle_start_status)")
+        body_match = re.search(r'resource_oracle_start_body_diagnostic\(\s*oracle_start_status,\s*&oracle_start_body,?\s*\)', oracle)
+        self.assertIsNotNone(body_match)
+        body_capture = body_match.start()
         store_match = re.search(r'run\.first_failure\s*\.record\(\s*"resource_oracle_start",\s*"http_status"\)', oracle)
         self.assertIsNotNone(store_match)
         store = store_match.start()
         self.assertLess(capture, oracle.index("resource_start_control_matrix(run)"))
+        self.assertLess(capture, body_capture)
+        self.assertLess(body_capture, oracle.index("start_failure_body_diagnostic(&oracle_start_body)"))
+        self.assertLess(body_capture, oracle.index('let oracle_state = std::panic::catch_unwind'))
+        self.assertLess(body_capture, oracle.index("resource_start_control_matrix(run)"))
         self.assertLess(store, oracle.index("resource_start_control_matrix(run)"))
         self.assertLess(store, oracle.index("assert_native_api_status("))
         first = source.split("impl FirstGroupFailure", 1)[1].split("fn resource_oracle_start_diagnostic", 1)[0]

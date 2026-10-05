@@ -2008,6 +2008,51 @@ fn resource_oracle_start_diagnostic(status: u16) -> String {
     )
 }
 
+fn resource_oracle_start_body_diagnostic(status: u16, body: &[u8]) -> String {
+    assert!(
+        status != 204,
+        "only rejected original START has a failure body record"
+    );
+    let status = if (100..=599).contains(&status) {
+        status.to_string()
+    } else {
+        "unknown".to_owned()
+    };
+    let classified = start_failure_body_diagnostic(body);
+    let fields = classified
+        .strip_prefix("DOCKERLENS_NATIVE_START_BODY_DIAG: ")
+        .expect("closed bounded START body classifier");
+    format!(
+        "DOCKERLENS_NATIVE_RESOURCE_ORACLE_START_BODY_DIAG: role=oracle status={status} {fields}"
+    )
+}
+
+#[test]
+fn original_resource_start_body_is_bounded_lexical_context_not_private_text() {
+    let diagnostic = resource_oracle_start_body_diagnostic(
+        500,
+        br#"{"message":"/protected-secret/cgroup/controller/token"}"#,
+    );
+    assert!(diagnostic.starts_with(
+        "DOCKERLENS_NATIVE_RESOURCE_ORACLE_START_BODY_DIAG: role=oracle status=500 shape=message "
+    ));
+    assert!(diagnostic.contains("cgroup_mention=present"));
+    assert!(diagnostic.contains("controller_mention=present"));
+    assert!(!diagnostic.contains("protected-secret"));
+    assert!(!diagnostic.contains("token"));
+    for (body, shape) in [
+        (b"not JSON".as_slice(), "malformed"),
+        (b"{}".as_slice(), "missing"),
+    ] {
+        let diagnostic = resource_oracle_start_body_diagnostic(0, body);
+        assert!(diagnostic.contains(&format!("role=oracle status=unknown shape={shape}")));
+        assert_eq!(diagnostic.matches("=unknown").count(), 10);
+    }
+    let oversized = resource_oracle_start_body_diagnostic(500, &vec![b'x'; 8193]);
+    assert!(oversized.contains("shape=oversize"));
+    assert_eq!(oversized.matches("=unknown").count(), 9);
+}
+
 #[test]
 fn first_group_failure_retains_original_checkpoint_and_closed_start_status() {
     let first = FirstGroupFailure::default();
@@ -6054,6 +6099,10 @@ fn probe_resources_and_security(run: &mut NativeRun, evidence: &mut ProbeEvidenc
     if oracle_start_status != 204 {
         run.first_failure
             .record("resource_oracle_start", "http_status");
+        eprintln!(
+            "{}",
+            resource_oracle_start_body_diagnostic(oracle_start_status, &oracle_start_body)
+        );
         eprintln!("{}", start_failure_body_diagnostic(&oracle_start_body));
         let oracle_state = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let (status, body) = run.api(
