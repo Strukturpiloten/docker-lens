@@ -470,8 +470,31 @@ The intended client platform is Linux. Mac client compatibility is not
 validated by this scaffold. There is no macOS or Windows runner requirement.
 
 The fake Unix-socket acquisition tests verify request framing, privacy,
-deadlines, cancellation, and budget failures without a Docker daemon. The
-ignored `live_read_only_acquisition_matches_oracle` test is invoked only by the
+deadlines, cancellation, and budget failures without a Docker daemon.
+`tests/acquisition_backlog.rs` adds Linux-only full-listener-queue controls:
+retained real filler connections and a separate fresh nonblocking admission
+prove saturation before deadline and pre/pending-cancellation assertions.
+An unlistened bound socket remains a terminal I/O failure. Successful HTTP
+controls cover both immediate admission and eventual admission after a delayed
+drain of the counted fillers. Each fixture uses an exclusively created private
+directory, owns its descriptors and threads, bounds completion and joins only
+finished threads, and checks recorded directory/socket identities before exact,
+nonrecursive cleanup, including on assertion failure. Unverified worker
+termination or replaced resources preserve the fixture and fail cleanup.
+
+Linux AF_UNIX queue saturation is retried using fresh nonblocking sockets with
+backoff bounded by the remaining deadline and the existing 100 ms cancellation
+interval. Blocking mode is restored only after successful admission. Other Unix
+platforms retain their existing timeout-connect path; this is not new macOS
+validation. These controls neither contact nor authenticate an Engine, and do
+not replace the complete and exact-candidate four-lane native gates.
+
+The existing Renovate native `cargo` manager owns the unchanged `Cargo.toml`
+socket2 `=0.6.5` declaration and its lockfile resolution. This transport change
+adds no dependency, software pin, extraction path, shared gate definition, or
+manager; no Renovate or lockfile edit is needed. Rust 1.85 remains the MSRV.
+
+The ignored `live_read_only_acquisition_matches_oracle` test is invoked only by the
 isolated native Engine harness. It reads that harness's explicit socket and
 private direct-API oracle files to compare selected container, network, volume,
 version, and mode semantics. A fake-socket pass is not rootful or rootless
