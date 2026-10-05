@@ -625,6 +625,30 @@ changed ownership/process/namespace identities. They establish no native
 compatibility, writable delegation or enforcement, and add no pins or catalogue
 admission. The strict memory/PID, START and zero-swap requirements remain in force.
 
+Each failed one of the five container groups retains one closed
+`DOCKERLENS_NATIVE_GROUP_FIRST_FAILURE` checkpoint independently of later
+cleanup-verified groups. Observed API/CLI timeouts remain timeout observations;
+an otherwise caught probe assertion remains `probe`/`unknown`, never an inferred
+cause. Cleanup and preflight failures likewise retain closed unknown context.
+The original combined resource-oracle START response is recorded immediately,
+before the failure-only controls, as `RESOURCE_START_HTTP` with `control=oracle`,
+a bounded numeric status (or unknown), and its closed status category. A rejection
+retains `resource_oracle_start`/`http_status` as that group's first checkpoint.
+Neither these checkpoints nor lexical error-body mentions establish kernel,
+controller, swap, delegation, or enforcement causes. Existing last observations
+remain supplemental, and the first selected-source numeric panic location is
+preserved. All strict START, memory/PID, device and cleanup assertions stay intact.
+
+The exact-test runner validates the new records as a bounded set: at most one
+checkpoint per known group and one original resource START response, exact fields,
+consistent status/category and failed-group bindings, and no duplicates or
+private suffixes. Malformed or inconsistent records fail closed without printing
+their payload. A successful test emits no failure diagnostics. This is trusted
+harness provenance, not authentication against a writer able to forge an entire
+consistent private capture. The existing 180-second invocation, capture byte cap,
+eleven mandatory tests, proof inputs and capability-admission boundaries do not
+change. Offline diagnostic regressions establish no native compatibility.
+
 The failed-resource control matrix can additionally read these bounded, fixed
 memory/PID controller files inside a started, run-owned control container.
 Its private readout is limited to two records and 512 bytes at classification;

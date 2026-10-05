@@ -50,6 +50,94 @@ run_status=0
 run_deadline_epoch=$(( $(date +%s) + 180 ))
 export NATIVE_NETWORK_TEST_DEADLINE_EPOCH=$run_deadline_epoch
 capture_test_output timeout 180 cargo test --locked "${cargo_target[@]}" -- --ignored --exact "$selected" || run_status=$?
+# Validate the new group-scoped records as a set, never by taking a matching
+# substring or choosing one duplicate. The existing private capture is bounded.
+first_failure_diag=
+if ! first_failure_diag=$(python3 - "$capture_path" "$run_status" "$target" 2>/dev/null <<'PY'
+import re
+import sys
+from pathlib import Path
+
+lines = Path(sys.argv[1]).read_bytes().split(b"\n")
+groups = (b"resources_security", b"ports", b"identity_health_clear",
+          b"storage_lifecycle", b"resolver_logging")
+first_prefix = b"DOCKERLENS_NATIVE_GROUP_FIRST_FAILURE:"
+oracle_prefix = b"DOCKERLENS_NATIVE_RESOURCE_START_HTTP: control=oracle"
+failure_prefix = b"DOCKERLENS_NATIVE_GROUP_FAILURE:"
+first_pattern = rb"DOCKERLENS_NATIVE_GROUP_FIRST_FAILURE: group=(\w+) checkpoint=(\w+) outcome=(\w+)"
+oracle_pattern = rb"DOCKERLENS_NATIVE_RESOURCE_START_HTTP: control=oracle status=([1-5][0-9]{2}|unknown) category=(success|invalid_request|not_found|conflict|server|other|unknown)"
+pairs = {(b"resource_oracle_start", b"http_status"),
+         *((checkpoint, outcome) for checkpoint in (b"api", b"cli")
+           for outcome in (b"timeout", b"unknown")),
+         *((checkpoint, b"unknown") for checkpoint in (b"probe", b"preflight", b"cleanup"))}
+first = {}
+oracle = None
+records = []
+for index, line in enumerate(lines):
+    if line.lstrip().startswith(first_prefix.removesuffix(b":")):
+        match = re.fullmatch(first_pattern, line)
+        if match is None:
+            raise ValueError
+        group, checkpoint, outcome = match.groups()
+        if group not in groups or group in first or (checkpoint, outcome) not in pairs:
+            raise ValueError
+        if checkpoint == b"resource_oracle_start" and group != b"resources_security":
+            raise ValueError
+        first[group] = (checkpoint, outcome, index)
+        records.append(line)
+    elif line.lstrip().startswith(oracle_prefix):
+        match = re.fullmatch(oracle_pattern, line)
+        if match is None or oracle is not None:
+            raise ValueError
+        status, category = match.groups()
+        if status == b"unknown":
+            expected = b"unknown"
+        else:
+            numeric = int(status)
+            expected = (b"success" if numeric == 204 else b"invalid_request" if numeric in (400, 422)
+                        else b"not_found" if numeric == 404 else b"conflict" if numeric == 409
+                        else b"server" if numeric >= 500 else b"other")
+        if category != expected:
+            raise ValueError
+        oracle = (status, index)
+        records.append(line)
+failures = {}
+for index, line in enumerate(lines):
+    if not line.lstrip().startswith(failure_prefix.removesuffix(b":")):
+        continue
+    match = re.fullmatch(rb"DOCKERLENS_NATIVE_GROUP_FAILURE: group=(\w+) reason=(preflight|probe|cleanup_unverified|mutation_uncertain)", line)
+    if match is None or match[1] not in groups or match[1] in failures:
+        raise ValueError
+    failures[match[1]] = index
+if failures or records:
+    if sys.argv[3] != "native_container":
+        raise ValueError
+    if set(first) != set(failures) or list(first) != sorted(first, key=groups.index):
+        raise ValueError
+    if any(index >= failures[group] for group, (_, _, index) in first.items()):
+        raise ValueError
+    for group, (checkpoint, _, _) in first.items():
+        reason = lines[failures[group]].rsplit(b"=", 1)[1]
+        if (checkpoint == b"preflight" and reason != b"preflight"
+                or checkpoint == b"cleanup" and reason not in (b"cleanup_unverified", b"mutation_uncertain")):
+            raise ValueError
+    if first and int(sys.argv[2]) == 0:
+        raise ValueError
+    resource = first.get(b"resources_security")
+    if oracle is not None and oracle[0] != b"204":
+        if resource is None or resource[:2] != (b"resource_oracle_start", b"http_status"):
+            raise ValueError
+    if resource is not None and resource[0] == b"resource_oracle_start":
+        if oracle is None or oracle[0] == b"204" or oracle[1] >= resource[2]:
+            raise ValueError
+    if int(sys.argv[2]) != 0:
+        for record in records:
+            print(record.decode("ascii"))
+PY
+); then
+  echo 'required native test rejected malformed first-failure diagnostics' >&2
+  exit 1
+fi
 # Only libtest's numeric summary is safe to print. Test and compiler output can
 # contain protected native values, socket payloads, or authored secrets.
 summary=$(grep -Eo '^test result: (ok|FAILED)\. [0-9]+ passed; [0-9]+ failed; [0-9]+ ignored; [0-9]+ measured; [0-9]+ filtered out;' "$capture_path" | tail -n 1 || true)
@@ -115,6 +203,7 @@ case $target in
 esac
 if (( run_status != 0 )); then
   echo "required native test $target::$test_name failed (exit $run_status)" >&2
+  if [[ -n $first_failure_diag ]]; then printf '%s\n' "$first_failure_diag" >&2; fi
   if [[ -n $marker ]]; then echo "$marker" >&2; fi
   if [[ -n $cli_diag ]]; then echo "$cli_diag" >&2; fi
   if [[ -n $http_diag ]]; then echo "$http_diag" >&2; fi

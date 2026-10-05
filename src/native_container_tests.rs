@@ -1961,6 +1961,110 @@ fn native_container_run_id_requires_exact_prefix_and_bounded_safe_suffix() {
     }
 }
 
+#[derive(Default)]
+struct FirstGroupFailure {
+    checkpoint: Cell<Option<(&'static str, &'static str)>>,
+}
+
+impl FirstGroupFailure {
+    fn record(&self, checkpoint: &'static str, outcome: &'static str) {
+        assert!(matches!(
+            (checkpoint, outcome),
+            ("resource_oracle_start", "http_status")
+                | ("api" | "cli", "timeout" | "unknown")
+                | ("probe" | "preflight" | "cleanup", "unknown")
+        ));
+        if self.checkpoint.get().is_none() {
+            self.checkpoint.set(Some((checkpoint, outcome)));
+        }
+    }
+
+    fn diagnostic(&self, group: &'static str) -> Option<String> {
+        assert!(GROUPS.iter().any(|(name, _)| *name == group));
+        self.checkpoint.get().map(|(checkpoint, outcome)| {
+            assert!(checkpoint != "resource_oracle_start" || group == "resources_security");
+            format!(
+                "DOCKERLENS_NATIVE_GROUP_FIRST_FAILURE: group={group} checkpoint={checkpoint} outcome={outcome}"
+            )
+        })
+    }
+}
+
+fn resource_oracle_start_diagnostic(status: u16) -> String {
+    let (status, category) = if (100..=599).contains(&status) {
+        (
+            status.to_string(),
+            if status == 204 {
+                "success"
+            } else {
+                api_status_category(status)
+            },
+        )
+    } else {
+        ("unknown".to_owned(), "unknown")
+    };
+    format!(
+        "DOCKERLENS_NATIVE_RESOURCE_START_HTTP: control=oracle status={status} category={category}"
+    )
+}
+
+#[test]
+fn first_group_failure_retains_original_checkpoint_and_closed_start_status() {
+    let first = FirstGroupFailure::default();
+    assert!(first.diagnostic("resources_security").is_none());
+    first.record("resource_oracle_start", "http_status");
+    first.record("api", "timeout");
+    first.record("cleanup", "unknown");
+    assert_eq!(
+        first.diagnostic("resources_security").as_deref(),
+        Some(
+            "DOCKERLENS_NATIVE_GROUP_FIRST_FAILURE: group=resources_security checkpoint=resource_oracle_start outcome=http_status"
+        )
+    );
+    for (status, category) in [(204, "success"), (400, "invalid_request"), (500, "server")] {
+        assert_eq!(
+            resource_oracle_start_diagnostic(status),
+            format!(
+                "DOCKERLENS_NATIVE_RESOURCE_START_HTTP: control=oracle status={status} category={category}"
+            )
+        );
+    }
+    for status in [0, 99, 600, u16::MAX] {
+        assert_eq!(
+            resource_oracle_start_diagnostic(status),
+            "DOCKERLENS_NATIVE_RESOURCE_START_HTTP: control=oracle status=unknown category=unknown"
+        );
+    }
+    for (group, _) in GROUPS {
+        let first = FirstGroupFailure::default();
+        first.record("cli", "timeout");
+        assert!(
+            first
+                .diagnostic(group)
+                .unwrap()
+                .ends_with("checkpoint=cli outcome=timeout")
+        );
+    }
+}
+
+#[test]
+fn first_group_failure_rejects_nonclosed_context_without_private_values() {
+    for (checkpoint, outcome) in [("protected-secret", "unknown"), ("api", "protected-secret")] {
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                FirstGroupFailure::default().record(checkpoint, outcome);
+            }))
+            .is_err()
+        );
+    }
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = FirstGroupFailure::default().diagnostic("protected-secret");
+        }))
+        .is_err()
+    );
+}
+
 struct NativeRun {
     api_version: String,
     image: String,
@@ -1970,6 +2074,7 @@ struct NativeRun {
     created: Vec<(String, String)>,
     images: Vec<String>,
     uncertain_mutation: Cell<bool>,
+    first_failure: FirstGroupFailure,
 }
 
 #[derive(Default)]
@@ -2276,6 +2381,7 @@ impl NativeRun {
             created: Vec::new(),
             images: Vec::new(),
             uncertain_mutation: Cell::new(false),
+            first_failure: FirstGroupFailure::default(),
         }
     }
 
@@ -2342,6 +2448,14 @@ impl NativeRun {
             } else {
                 "other"
             };
+            self.first_failure.record(
+                "api",
+                if category == "timeout" {
+                    "timeout"
+                } else {
+                    "unknown"
+                },
+            );
             eprintln!("DOCKERLENS_NATIVE_API_DIAG: transport={category}");
             if method == "POST" && category == "timeout" && path.ends_with("/start") {
                 let (state, reason) = self.read_only_start_timeout_state(path);
@@ -2478,6 +2592,14 @@ impl NativeRun {
                     "DOCKERLENS_NATIVE_RESOLVER_LOGS_DIAG: operation=logs outcome=cli_failure"
                 );
             }
+            self.first_failure.record(
+                "cli",
+                if output.status.code() == Some(124) {
+                    "timeout"
+                } else {
+                    "unknown"
+                },
+            );
             eprintln!(
                 "DOCKERLENS_NATIVE_CLI_DIAG: exit={} stderr={}",
                 cli_failure_exit(output.status),
@@ -5926,7 +6048,12 @@ fn probe_resources_and_security(run: &mut NativeRun, evidence: &mut ProbeEvidenc
         &format!("/v{}/containers/{oracle_id}/start", run.api_version),
         None,
     );
+    // Capture this response before the failure-only controls can overwrite
+    // supplemental last API observations. No native body or identity escapes.
+    eprintln!("{}", resource_oracle_start_diagnostic(oracle_start_status));
     if oracle_start_status != 204 {
+        run.first_failure
+            .record("resource_oracle_start", "http_status");
         eprintln!("{}", start_failure_body_diagnostic(&oracle_start_body));
         let oracle_state = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let (status, body) = run.api(
@@ -6691,6 +6818,8 @@ fn live_container_settings_match_engine() {
             run.owned_inventory(false).is_empty()
         }));
         if !matches!(initial, Ok(true)) {
+            run.first_failure.record("preflight", "unknown");
+            eprintln!("{}", run.first_failure.diagnostic(name).unwrap());
             eprintln!("DOCKERLENS_NATIVE_GROUP_FAILURE: group={name} reason=preflight");
             failed = true;
             break;
@@ -6700,6 +6829,11 @@ fn live_container_settings_match_engine() {
             probe(&mut run, &mut group_evidence);
         }))
         .is_ok();
+        if !probe_ok {
+            // A caught assertion with no closed transport/status observation
+            // is unknown; panic text and payloads are never diagnostic fields.
+            run.first_failure.record("probe", "unknown");
+        }
         eprintln!("DOCKERLENS_NATIVE_GROUP_CLEANUP: group={name} outcome=begin");
         let cleaned = run.cleanup_verified(name);
         eprintln!(
@@ -6708,6 +6842,10 @@ fn live_container_settings_match_engine() {
         );
         let uncertain = run.uncertain_mutation.get();
         let decision = group_decision(probe_ok, cleaned, uncertain);
+        if decision != GroupDecision::Merge {
+            run.first_failure.record("cleanup", "unknown");
+            eprintln!("{}", run.first_failure.diagnostic(name).unwrap());
+        }
         mark_container_flow("decision", group_decision_outcome(decision));
         match decision {
             GroupDecision::Merge => evidence.merge(group_evidence),

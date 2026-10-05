@@ -2272,6 +2272,7 @@ else
   echo 'DOCKERLENS_NATIVE_RESOURCE_START_HTTP: control=device-same-path status=204' >&2
   echo 'DOCKERLENS_NATIVE_RESOURCE_START_STATE: control=device-same-path state=running' >&2
   echo "DOCKERLENS_NATIVE_CONTAINER_FLOW: phase=decision outcome=$TEST_FLOW_DECISION" >&2
+  echo 'DOCKERLENS_NATIVE_GROUP_FIRST_FAILURE: group=resources_security checkpoint=probe outcome=unknown' >&2
   echo 'DOCKERLENS_NATIVE_GROUP_FAILURE: group=resources_security reason=probe' >&2
   echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
   exit 23
@@ -2299,6 +2300,214 @@ fi
                     self.assertNotIn("protected-secret", result.stdout + result.stderr)
                     self.assertNotIn("required native test passed", result.stdout + result.stderr)
 
+    def _run_first_failure_fixture(self, records: list[str], exit_status: int = 101):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        self._tool(root, "cargo", """#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo 'native_container_tests::live_container_settings_match_engine: test'
+else
+  cat "$TEST_FIRST_FAILURE_CAPTURE"
+  if [[ $TEST_FIRST_FAILURE_EXIT == 0 ]]; then
+    echo 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;'
+  else
+    echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  fi
+  exit "$TEST_FIRST_FAILURE_EXIT"
+fi
+""")
+        capture = root / "private-capture"
+        capture.write_text("\n".join(records) + "\n")
+        env = os.environ.copy()
+        env.update(PATH=f"{root}:{env['PATH']}", TEST_FIRST_FAILURE_CAPTURE=str(capture),
+                   TEST_FIRST_FAILURE_EXIT=str(exit_status))
+        return subprocess.run(
+            [str(ROOT / "scripts/run-exact-native-test.sh"), "native_container",
+             "live_container_settings_match_engine"],
+            env=env, capture_output=True, text=True, timeout=10, check=False,
+        )
+
+    def test_first_failure_original_resource_start_survives_controls_and_port_timeout(self) -> None:
+        original = "DOCKERLENS_NATIVE_RESOURCE_START_HTTP: control=oracle status=400 category=invalid_request"
+        resource = "DOCKERLENS_NATIVE_GROUP_FIRST_FAILURE: group=resources_security checkpoint=resource_oracle_start outcome=http_status"
+        port = "DOCKERLENS_NATIVE_GROUP_FIRST_FAILURE: group=ports checkpoint=api outcome=timeout"
+        result = self._run_first_failure_fixture([
+            original,
+            "thread 'protected-first-name' panicked at src/native_container_tests.rs:73:4:",
+            "protected-original-body and private/native-path",
+            "DOCKERLENS_NATIVE_RESOURCE_START_HTTP: control=memory status=500",
+            "DOCKERLENS_NATIVE_API_DIAG: operation=start status=server",
+            "DOCKERLENS_NATIVE_GROUP_CLEANUP: group=resources_security outcome=verified",
+            resource,
+            "DOCKERLENS_NATIVE_GROUP_FAILURE: group=resources_security reason=probe",
+            "DOCKERLENS_NATIVE_API_DIAG: transport=timeout",
+            "thread 'protected-later-name' panicked at src/native_container_tests.rs:900:5:",
+            port,
+            "DOCKERLENS_NATIVE_GROUP_FAILURE: group=ports reason=mutation_uncertain",
+            "thread 'protected-aggregate-name' panicked at src/native_container_tests.rs:999:6:",
+        ])
+        self.assertNotEqual(result.returncode, 0)
+        for record in (original, resource, port):
+            self.assertEqual(result.stderr.count(record), 1)
+        self.assertLess(result.stderr.index(resource), result.stderr.index(port))
+        self.assertIn("observation=last transport=timeout", result.stderr)
+        self.assertIn("control=memory status=500", result.stderr)
+        self.assertIn("source=native_container_tests line=73 column=4", result.stderr)
+        self.assertNotIn("line=900", result.stderr)
+        self.assertNotIn("line=999", result.stderr)
+        self.assertNotIn("protected-", result.stdout + result.stderr)
+        self.assertNotIn("private/native-path", result.stdout + result.stderr)
+
+    def test_first_failure_two_groups_keep_unknown_context_and_cleanup_failure(self) -> None:
+        first = "DOCKERLENS_NATIVE_GROUP_FIRST_FAILURE: group=resources_security checkpoint=probe outcome=unknown"
+        for checkpoint, reason in (("probe", "probe"), ("cleanup", "cleanup_unverified")):
+            second = f"DOCKERLENS_NATIVE_GROUP_FIRST_FAILURE: group=ports checkpoint={checkpoint} outcome=unknown"
+            with self.subTest(reason=reason):
+                result = self._run_first_failure_fixture([
+                    "thread 'protected-name' panicked at src/native_container_tests.rs:91:2:",
+                    first,
+                    "DOCKERLENS_NATIVE_GROUP_FAILURE: group=resources_security reason=probe",
+                    second,
+                    f"DOCKERLENS_NATIVE_GROUP_FAILURE: group=ports reason={reason}",
+                ])
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stderr.count("DOCKERLENS_NATIVE_GROUP_FIRST_FAILURE:"), 2)
+                self.assertIn(second, result.stderr)
+                self.assertIn(f"group=ports reason={reason}", result.stderr)
+                self.assertIn("source=native_container_tests line=91 column=2", result.stderr)
+                self.assertNotIn("protected-name", result.stdout + result.stderr)
+
+    def test_first_failure_timeout_unknown_and_success_emit_no_inferred_cause(self) -> None:
+        for checkpoint, outcome in (("api", "timeout"), ("cli", "timeout"), ("cli", "unknown"),
+                                    ("probe", "unknown"), ("preflight", "unknown")):
+            record = f"DOCKERLENS_NATIVE_GROUP_FIRST_FAILURE: group=ports checkpoint={checkpoint} outcome={outcome}"
+            reason = "preflight" if checkpoint == "preflight" else "probe"
+            with self.subTest(checkpoint=checkpoint, outcome=outcome):
+                result = self._run_first_failure_fixture([
+                    record, f"DOCKERLENS_NATIVE_GROUP_FAILURE: group=ports reason={reason}",
+                ])
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(record, result.stderr)
+                self.assertNotIn("cause=", result.stderr)
+        success = self._run_first_failure_fixture([
+            "DOCKERLENS_NATIVE_RESOURCE_START_HTTP: control=oracle status=204 category=success",
+            "protected-private-success-output",
+        ], exit_status=0)
+        self.assertEqual(success.returncode, 0, success.stderr)
+        self.assertEqual(success.stderr, "")
+        self.assertNotIn("RESOURCE_START_HTTP", success.stdout)
+        self.assertNotIn("FIRST_FAILURE", success.stdout)
+        self.assertNotIn("protected-", success.stdout)
+
+    def test_first_failure_records_reject_malformed_forged_duplicate_and_private_fields(self) -> None:
+        original = "DOCKERLENS_NATIVE_RESOURCE_START_HTTP: control=oracle status=500 category=server"
+        first = "DOCKERLENS_NATIVE_GROUP_FIRST_FAILURE: group=resources_security checkpoint=resource_oracle_start outcome=http_status"
+        failed = "DOCKERLENS_NATIVE_GROUP_FAILURE: group=resources_security reason=probe"
+        good = [original, first, failed]
+        cases = [
+            [*good, first], [*good, original], [*good, failed],
+            [original, first + " raw=protected-secret", failed],
+            [original, first + "\rprotected-secret", failed],
+            [original, first + "\x00protected-secret", failed],
+            [original, first.replace("resources_security", "protected-secret"), failed],
+            [original, first.replace("http_status", "protected-secret"), failed],
+            [original, first.replace("resource_oracle_start", "protected-secret"), failed],
+            [original, " " + first, failed],
+            [original, first.replace("FIRST_FAILURE:", "FIRST_FAILURE"), failed],
+            [original + " raw=protected-secret", first, failed],
+            [original.replace("status=500", "status=600"), first, failed],
+            [original.replace("category=server", "category=success"), first, failed],
+            [original.replace("control=oracle", "control=oracle-protected-secret"), first, failed],
+            [original, first, failed.replace("resources_security", "ports")],
+            [original, first, failed.replace("reason=probe", "reason=protected-secret")],
+            [original, first], [first, failed], [original, failed],
+            [first, original, failed], [original, failed, first],
+            [original, first.replace("resources_security", "ports"),
+             failed.replace("resources_security", "ports")],
+            [original, first.replace("resource_oracle_start", "probe").replace("http_status", "unknown"), failed],
+            ["DOCKERLENS_NATIVE_GROUP_FIRST_FAILURE: group=ports checkpoint=api outcome=server",
+             "DOCKERLENS_NATIVE_GROUP_FAILURE: group=ports reason=probe"],
+            ["DOCKERLENS_NATIVE_GROUP_FIRST_FAILURE: group=ports checkpoint=cleanup outcome=unknown",
+             "DOCKERLENS_NATIVE_GROUP_FAILURE: group=ports reason=probe"],
+            ["DOCKERLENS_NATIVE_GROUP_FIRST_FAILURE: group=ports checkpoint=preflight outcome=unknown",
+             "DOCKERLENS_NATIVE_GROUP_FAILURE: group=ports reason=probe"],
+            ["DOCKERLENS_NATIVE_GROUP_FIRST_FAILURE: group=ports checkpoint=probe outcome=unknown",
+             "DOCKERLENS_NATIVE_GROUP_FAILURE: group=ports reason=probe", *good],
+        ]
+        for index, records in enumerate(cases):
+            with self.subTest(case=index):
+                result = self._run_first_failure_fixture(records)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stderr.strip(), "required native test rejected malformed first-failure diagnostics")
+                self.assertNotIn("protected-secret", result.stdout + result.stderr)
+                self.assertNotIn("required native test passed", result.stdout + result.stderr)
+        for records in (good, [original.replace("status=500", "status=204").replace("server", "success"), first, failed]):
+            success_forgery = self._run_first_failure_fixture(records, exit_status=0)
+            self.assertNotEqual(success_forgery.returncode, 0)
+            self.assertNotIn("required native test passed", success_forgery.stdout)
+        unknown = self._run_first_failure_fixture([
+            original.replace("status=500 category=server", "status=unknown category=unknown"), first,
+            failed.replace("reason=probe", "reason=mutation_uncertain"),
+        ])
+        self.assertNotEqual(unknown.returncode, 0)
+        self.assertIn("control=oracle status=unknown category=unknown", unknown.stderr)
+        self.assertNotIn("rejected malformed", unknown.stderr)
+
+    def test_first_failure_group_records_require_checkpoints_even_when_new_records_absent(self) -> None:
+        failed = "DOCKERLENS_NATIVE_GROUP_FAILURE: group=ports reason=probe"
+        first = "DOCKERLENS_NATIVE_GROUP_FIRST_FAILURE: group=ports checkpoint=probe outcome=unknown"
+        for records, exit_status in (([failed], 101), ([failed, failed], 101),
+                                     ([failed], 0), ([first, failed], 0),
+                                     ([failed + " raw=protected-secret"], 101),
+                                     ([failed.replace("GROUP_FAILURE:", "GROUP_FAILURE")], 0),
+                                     ([failed.replace("ports", "protected-secret")], 101)):
+            with self.subTest(records=records, exit_status=exit_status):
+                result = self._run_first_failure_fixture(records, exit_status=exit_status)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stderr.strip(), "required native test rejected malformed first-failure diagnostics")
+                self.assertNotIn("required native test passed", result.stdout)
+                self.assertNotIn("protected-secret", result.stdout + result.stderr)
+        for exit_status in (101, 124):
+            abrupt = self._run_first_failure_fixture(["protected-private-compiler-or-abrupt-failure"],
+                                                     exit_status=exit_status)
+            self.assertNotEqual(abrupt.returncode, 0)
+            self.assertNotIn("rejected malformed", abrupt.stderr)
+            self.assertNotIn("protected-private", abrupt.stdout + abrupt.stderr)
+
+    def test_first_failure_successful_resource_start_is_supplemental_to_later_group_failure(self) -> None:
+        original = "DOCKERLENS_NATIVE_RESOURCE_START_HTTP: control=oracle status=204 category=success"
+        port = "DOCKERLENS_NATIVE_GROUP_FIRST_FAILURE: group=ports checkpoint=api outcome=timeout"
+        result = self._run_first_failure_fixture([
+            original, "DOCKERLENS_NATIVE_API_DIAG: transport=timeout", port,
+            "DOCKERLENS_NATIVE_GROUP_FAILURE: group=ports reason=mutation_uncertain",
+        ])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(original, result.stderr)
+        self.assertIn(port, result.stderr)
+        self.assertIn("observation=last transport=timeout", result.stderr)
+        self.assertNotIn("rejected malformed", result.stderr)
+
+    def test_first_failure_source_captures_resource_status_before_controls_and_cleanup(self) -> None:
+        source = (ROOT / "src/native_container_tests.rs").read_text()
+        oracle = source.split("fn probe_resources_and_security(", 1)[1].split(
+            "let mut container = bare_container", 1
+        )[0]
+        capture = oracle.index("resource_oracle_start_diagnostic(oracle_start_status)")
+        store_match = re.search(r'run\.first_failure\s*\.record\(\s*"resource_oracle_start",\s*"http_status"\)', oracle)
+        self.assertIsNotNone(store_match)
+        store = store_match.start()
+        self.assertLess(capture, oracle.index("resource_start_control_matrix(run)"))
+        self.assertLess(store, oracle.index("resource_start_control_matrix(run)"))
+        self.assertLess(store, oracle.index("assert_native_api_status("))
+        first = source.split("impl FirstGroupFailure", 1)[1].split("fn resource_oracle_start_diagnostic", 1)[0]
+        self.assertIn("if self.checkpoint.get().is_none()", first)
+        group = source.split("fn live_container_settings_match_engine()", 1)[1].split("type GroupProbe", 1)[0]
+        self.assertLess(group.index('run.first_failure.record("probe", "unknown")'), group.index("run.cleanup_verified(name)"))
+        self.assertIn("if decision != GroupDecision::Merge", group)
+        self.assertIn('GroupDecision::Merge => evidence.merge(group_evidence)', group)
+
     def test_group_failures_are_closed_bounded_and_do_not_print_panic_text(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             bin_dir = Path(directory)
@@ -2307,10 +2516,10 @@ set -eu
 if [[ $* == *--list* ]]; then
   echo 'native_container_tests::live_container_settings_match_engine: test'
 else
-  for _ in 1 2 3 4 5 6; do
-    echo 'DOCKERLENS_NATIVE_GROUP_FAILURE: group=ports reason=probe' >&2
+  for group in resources_security ports identity_health_clear storage_lifecycle resolver_logging; do
+    echo "DOCKERLENS_NATIVE_GROUP_FIRST_FAILURE: group=$group checkpoint=probe outcome=unknown" >&2
+    echo "DOCKERLENS_NATIVE_GROUP_FAILURE: group=$group reason=probe" >&2
   done
-  echo 'DOCKERLENS_NATIVE_GROUP_FAILURE: group=protected-secret reason=probe' >&2
   echo 'thread protected-secret panicked at secret path and value' >&2
   echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
   exit 23
@@ -2466,6 +2675,7 @@ else
   echo "DOCKERLENS_NATIVE_CONTAINER_FLOW: phase=decision outcome=$TEST_FLOW_DECISION" >&2
   echo 'DOCKERLENS_NATIVE_CONTAINER_FLOW: phase=decision outcome=pass' >&2
   echo 'DOCKERLENS_NATIVE_CONTAINER_FLOW: phase=cleanup_private outcome=pass' >&2
+  echo 'DOCKERLENS_NATIVE_GROUP_FIRST_FAILURE: group=ports checkpoint=probe outcome=unknown' >&2
   echo "DOCKERLENS_NATIVE_GROUP_FAILURE: group=ports reason=$TEST_GROUP_REASON" >&2
   echo 'protected-secret raw native output' >&2
   echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
@@ -2553,6 +2763,7 @@ else
   echo 'DOCKERLENS_NATIVE_RESOLVER_LOG_CANARY: side=oracle outcome=missing' >&2
   echo 'DOCKERLENS_NATIVE_RESOLVER_LOG_CANARY: side=private outcome=missing' >&2
   echo 'DOCKERLENS_NATIVE_RESOLVER_LOGS_DIAG: operation=private outcome=cli_failure' >&2
+  echo 'DOCKERLENS_NATIVE_GROUP_FIRST_FAILURE: group=resolver_logging checkpoint=cli outcome=unknown' >&2
   echo 'DOCKERLENS_NATIVE_GROUP_FAILURE: group=resolver_logging reason=probe' >&2
   echo 'DOCKERLENS_NATIVE_CHECK: container_resolver_logging_local_rendered_create' >&2
   echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
