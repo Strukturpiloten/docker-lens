@@ -32,6 +32,22 @@ case "$lane" in
   *) usage ;;
 esac
 
+# Launcher identity belongs to the selected fixture, not image labels or a
+# caller-controlled account rename. Pins/releases above remain canonical.
+launcher_kind=start-dockerd
+native_config=native-launcher-default
+case "$lane" in
+  debian11-rootful | upstream-rootful)
+    daemon_account=root; daemon_home=/root; daemon_data_root=/var/lib/docker ;;
+  debian11-rootless)
+    daemon_account=dockertest; daemon_home=/home/docker; daemon_data_root=/home/docker/.local/share/docker ;;
+  upstream-rootless)
+    daemon_account=docker; daemon_home=/home/docker; daemon_data_root=/home/docker/.local/share/docker ;;
+esac
+python3 "$script_dir/native-fixture-launch.py" --declaration "$lane" "$image" \
+  "$launcher_kind" "$daemon_account" "$daemon_home" "$expected_mode" \
+  "$expected_release" "$daemon_data_root" "$native_config"
+
 for tool in podman curl python3 timeout df du mktemp; do
   command -v "$tool" >/dev/null || { echo "missing native test tool: $tool" >&2; exit 1; }
 done
@@ -277,53 +293,109 @@ for resource in container sidecar network volume; do
 done
 "${podman_cmd[@]}" volume create --label "io.dockerlens.native-run=$run_id" "$volume" >/dev/null
 volume_path=$("${podman_cmd[@]}" volume inspect --format '{{.Mountpoint}}' "$volume")
-main_pid=$$
-watchdog_measure() {
-  local attempt used free used_status free_status
-  local -a du_cmd df_cmd
+if [[ $EUID == 0 ]]; then stat_cmd=(stat); else stat_cmd=(sudo -n stat); fi
+storage_root_identity=$(timeout --kill-after=1 10 "${stat_cmd[@]}" -c '%F|%d:%i' -- "$volume_path" 2>/dev/null) || {
+  echo 'owned native storage root is unavailable' >&2
+  exit 1
+}
+[[ $volume_path == /* && $storage_root_identity =~ ^directory\|[0-9]+:[0-9]+$ ]] || {
+  echo 'owned native storage root is unavailable' >&2
+  exit 1
+}
+
+# A disappearing containerd snapshot is the only retriable storage error. Every
+# sample uses the same run-owned root identity and bounded native measurements.
+sample_storage_kib() {
+  local attempt current_root df_output df_status df_error du_output du_status
+  local error_file free_kib used_kib reported_path line descendant seen
+  local prefix="du: cannot access '${volume_path}/"
+  local suffix="': No such file or directory"
+  local -a df_cmd du_cmd
   if [[ $EUID == 0 ]]; then
-    du_cmd=(du)
-    df_cmd=(df)
+    df_cmd=(df); du_cmd=(du)
   else
-    du_cmd=(sudo -n du)
-    df_cmd=(sudo -n df)
+    df_cmd=(sudo -n df); du_cmd=(sudo -n du)
   fi
-  for (( attempt = 1; attempt <= 3; attempt++ )); do
+  error_file=$(mktemp "${run_dir}/storage-measure.XXXXXXXX") || {
+    echo 'native lane storage measurement failed' >&2
+    return 1
+  }
+  for attempt in 1 2 3; do
     if (( SECONDS > 1800 )); then
-      echo "native lane exceeded its storage, free-space, or 30-minute budget" >&2
+      rm -f -- "$error_file"
+      echo 'native lane exceeded its storage, free-space, or 30-minute budget' >&2
       return 1
     fi
-    used_status=0
-    free_status=0
-    used=$("${du_cmd[@]}" -sk "$volume_path" 2>/dev/null | awk '{print $1}') || used_status=$?
-    free=$("${df_cmd[@]}" -Pk "$graph_root" 2>/dev/null | awk 'END {print $4}') || free_status=$?
-    if (( SECONDS > 1800 )); then
-      echo "native lane exceeded its storage, free-space, or 30-minute budget" >&2
+    current_root=$(timeout --kill-after=1 10 "${stat_cmd[@]}" -c '%F|%d:%i' -- "$volume_path" 2>/dev/null | head -c 128) || break
+    [[ $current_root == "$storage_root_identity" ]] || break
+
+    : >"$error_file"
+    df_status=0
+    df_output=$( (ulimit -f 4; LC_ALL=C timeout --kill-after=1 10 "${df_cmd[@]}" -Pk -- "$graph_root") 2>"$error_file" | head -c 4097) || df_status=$?
+    df_error=$(wc -c <"$error_file")
+    free_kib=$(awk 'NR == 2 { print $4 } END { if (NR != 2) exit 1 }' <<<"$df_output") || free_kib=
+    [[ $free_kib =~ ^[0-9]{1,15}$ ]] || free_kib=
+
+    : >"$error_file"
+    du_status=0
+    du_output=$( (ulimit -f 4; LC_ALL=C timeout --kill-after=1 10 "${du_cmd[@]}" -sk -- "$volume_path") 2>"$error_file" | head -c 4097) || du_status=$?
+    used_kib=
+    reported_path=
+    if [[ $du_output == *$'\t'* ]]; then
+      used_kib=${du_output%%$'\t'*}
+      reported_path=${du_output#*$'\t'}
+      if [[ ! $used_kib =~ ^[0-9]{1,15}$ || $reported_path != "$volume_path" ]]; then
+        used_kib=
+      fi
+    fi
+
+    # A partial du total is a lower bound. An observed breach is conclusive,
+    # even when the other command failed or the scan lost a descendant.
+    if { [[ -n $used_kib ]] && (( 10#$used_kib > 4 * 1024 * 1024 )); } ||
+      { [[ -n $free_kib ]] && (( 10#$free_kib < 2 * 1024 * 1024 )); } ||
+      (( SECONDS > 1800 )); then
+      rm -f -- "$error_file"
+      echo 'native lane exceeded its storage, free-space, or 30-minute budget' >&2
       return 1
     fi
-    if { (( used_status == 0 )) && [[ ! $used =~ ^[0-9]{1,15}$ ]]; } ||
-      { (( free_status == 0 )) && [[ ! $free =~ ^[0-9]{1,15}$ ]]; }; then
-      echo 'native lane watchdog invalid measurement' >&2
-      return 1
+    if (( df_status != 0 || df_error != 0 || ${#df_output} > 4096 || ${#du_output} > 4096 )) ||
+      [[ -z $free_kib ]] || { [[ -n $du_output && -z $used_kib ]]; }; then
+      break
     fi
-    # GNU du can print a partial total before reporting a vanished child.
-    # Such a total is a lower bound, so an observed breach is conclusive.
-    if { [[ $used =~ ^[0-9]{1,15}$ ]] && (( 10#$used > 4 * 1024 * 1024 )); } ||
-      { [[ $free =~ ^[0-9]{1,15}$ ]] && (( 10#$free < 2 * 1024 * 1024 )); }; then
-      echo "native lane exceeded its storage, free-space, or 30-minute budget" >&2
-      return 1
+    if (( du_status == 0 )); then
+      [[ -n $used_kib && ! -s $error_file ]] || break
+      SAMPLED_STORAGE_KIB=$used_kib
+      SAMPLED_FREE_KIB=$free_kib
+      rm -f -- "$error_file"
+      return 0
     fi
-    if (( used_status == 0 && free_status == 0 )); then return 0; fi
-    if (( attempt < 3 )); then sleep 1 || break; fi
+    # Only exit 1 with bounded, exact descendant ENOENT is retryable.
+    (( du_status == 1 && $(wc -c <"$error_file") <= 4096 )) || break
+    [[ -s $error_file ]] || break
+    current_root=$(timeout --kill-after=1 10 "${stat_cmd[@]}" -c '%F|%d:%i' -- "$volume_path" 2>/dev/null | head -c 128) || break
+    [[ $current_root == "$storage_root_identity" ]] || break
+    seen=0
+    while IFS= read -r line || [[ -n $line ]]; do
+      [[ $line == "$prefix"*"$suffix" ]] || { seen=0; break; }
+      descendant=${line#"$prefix"}
+      descendant=${descendant%"$suffix"}
+      [[ -n $descendant && $descendant != /* && $descendant != .. &&
+        $descendant != ../* && $descendant != */../* && $descendant != */.. ]] || { seen=0; break; }
+      seen=1
+    done <"$error_file"
+    (( seen == 1 )) || break
+    if (( attempt < 3 )); then sleep 0.2 || break; fi
   done
-  echo 'native lane watchdog measurement failed' >&2
+  rm -f -- "$error_file"
+  echo 'native lane storage measurement failed' >&2
   return 1
 }
+main_pid=$$
 watchdog() {
   trap - EXIT HUP INT TERM
   while :; do
     sleep 5
-    if ! watchdog_measure; then
+    if ! sample_storage_kib; then
       kill -TERM "$main_pid"
       return
     fi
@@ -603,6 +675,18 @@ done
   diagnose_native_startup
   exit 1
 }
+# Mandatory read-only fixture context. A caller-owned timer cannot terminate
+# root children behind sudo: the collector adds root and guest timers plus an
+# anonymous stdin lifeline. Pass BOOTTIME before Python/sudo startup so delayed
+# startup cannot begin a fresh acquisition window. No raw guest output escapes.
+IFS=' ' read -r fixture_uptime _ </proc/uptime
+[[ $fixture_uptime =~ ^[0-9]{1,12}\.[0-9]{2}$ ]] || exit 1
+fixture_end_ms=$((10#${fixture_uptime%.*} * 1000 + 10#${fixture_uptime#*.} * 10 + 9000))
+printf -v fixture_deadline '%d.%03d' "$((fixture_end_ms / 1000))" "$((fixture_end_ms % 1000))"
+fixture_sudo=0
+if [[ ${podman_cmd[0]} == sudo ]]; then fixture_sudo=1; fi
+timeout --signal=TERM --kill-after=0.2 10s python3 "$script_dir/native-fixture-launch.py" \
+  --collect "$lane" "$container" "$run_id" "$fixture_sudo" "$fixture_deadline" || exit 1
 if [[ $lane == debian11-rootless ]]; then
   # Linux mountinfo reports suid/dev by absence of nosuid/nodev. Check the
   # effective mount, not merely the requested Podman volume options.
@@ -664,6 +748,42 @@ native_package_version() {
   printf '%s' "$version"
 }
 echo "DOCKERLENS_NATIVE_ENV: cgroup_driver=$inner_cgroup_driver cgroup_version=$inner_cgroup runc=$(native_package_version runc) containerd=$(native_package_version containerd) libseccomp2=$(native_package_version libseccomp2)"
+# One five-second context phase, not five seconds per helper. The device helper
+# owns the root-timed batch, <=2s slices, capped private pipes and closed parser.
+# Startup and teardown count inside that bound and the existing outer budget;
+# neither context record can pass an assertion or establish remote termination.
+diagnostic_use_sudo=0
+if [[ ${podman_cmd[0]} == sudo ]]; then diagnostic_use_sudo=1; fi
+diagnostic_status=0
+diagnostic_output=
+# /proc/uptime is CLOCK_BOOTTIME, truncated to hundredths. This conservative
+# timestamp includes interpreter/sudo startup; no wall-clock timestamp is used.
+if (( SECONDS <= 1795 )) && read -r diagnostic_uptime _ 2>/dev/null </proc/uptime &&
+  [[ $diagnostic_uptime =~ ^[0-9]{1,12}\.[0-9]{2}$ ]]; then
+  diagnostic_end_ms=$((10#${diagnostic_uptime%.*} * 1000 + 10#${diagnostic_uptime#*.} * 10 + 5000))
+  printf -v diagnostic_deadline '%d.%03d' "$((diagnostic_end_ms / 1000))" "$((diagnostic_end_ms % 1000))"
+  diagnostic_output=$(timeout --signal=TERM --kill-after=0.2 4.8 bash -c '
+    set -o pipefail
+    # Keep the direct timer child alive through TERM until its local pipeline
+    # finishes, or KILL fires; otherwise a TERM-ignoring child could outlive it.
+    trap "" TERM INT
+    python3 "$1" --context "$2" "$3" "$4" "$5" "$6" "$7" 2>/dev/null |
+      python3 "$1" --validate-context "$6" 2>/dev/null
+  ' diagnostic "$script_dir/native-device-source.py" "$container" "$run_id" \
+    "$expected_mode" "$diagnostic_use_sudo" "$diagnostic_deadline" "$lane" 2>/dev/null) || diagnostic_status=$?
+else
+  diagnostic_status=1
+fi
+if (( diagnostic_status == 0 )); then
+  printf '%s\n' "$diagnostic_output"
+else
+  for cgroup_scope in outer daemon; do
+    echo "DOCKERLENS_NATIVE_CGROUP_DIAG: scope=$cgroup_scope outcome=unavailable memory_controller=unknown pids_controller=unknown memory_delegated=unknown pids_delegated=unknown memory_max=unknown swap_max=unknown"
+  done
+  for device_role in host-null renamed-null; do
+    echo "DOCKERLENS_NATIVE_DEVICE_SOURCE: role=$device_role scope=daemon-view view=unknown node=unknown uncertainty=budget runtime_source=unknown permissions=unknown"
+  done
+fi
 if [[ $expected_mode == rootless ]]; then
   [[ $docker_root == /home/docker/.local/share/docker ]] || { echo 'rootless daemon store is outside owned volume' >&2; exit 1; }
 else
@@ -909,12 +1029,8 @@ api_get "/v$api_version/containers/json?all=1" "$run_dir/list.json"
 api_get "/v$api_version/networks/$network_id" "$run_dir/network.json"
 api_get "/v$api_version/volumes/$volume_name" "$run_dir/volume.json"
 
-if [[ $EUID == 0 ]]; then
-  used_kib=$(du -sk "$volume_path" | awk '{print $1}')
-else
-  used_kib=$(sudo -n du -sk "$volume_path" | awk '{print $1}')
-fi
-(( used_kib <= 4 * 1024 * 1024 )) || { echo 'nested daemon exceeded 4 GiB storage budget' >&2; exit 1; }
+sample_storage_kib || { echo 'nested daemon storage budget could not be verified' >&2; exit 1; }
+used_kib=$SAMPLED_STORAGE_KIB
 
 export NATIVE_ENGINE_SOCKET="$socket" NATIVE_CAPTURE_DIR="$run_dir" NATIVE_CONTAINER_ID="$container_id"
 export NATIVE_NETWORK_ID="$network_id" NATIVE_VOLUME_NAME="$volume_name"
@@ -930,6 +1046,7 @@ export NATIVE_SHAPES_PATH="$run_dir/target-shapes.json"
 export NATIVE_SOURCE_PROBES_PATH="$run_dir/source-probes.json"
 export NATIVE_NETWORK_PROBES_PATH="$run_dir/network-probes.json"
 export NATIVE_VOLUME_PROBES_PATH="$run_dir/volume-probes.json"
+export NATIVE_CONTAINER_PROBES_PATH="$run_dir/container-probes.json"
 export NATIVE_VOLUME_LABEL_PROBES_PATH="$run_dir/volume-label-probes.json"
 export NATIVE_IDENTITY_PROBES_PATH="$run_dir/identity-probes.json"
 export NATIVE_IDENTITY_CANDIDATE_SHA
@@ -944,6 +1061,7 @@ if [[ $EUID == 0 ]]; then export NATIVE_PODMAN_USE_SUDO=0; else export NATIVE_PO
 "$(dirname "$0")/run-exact-native-test.sh" native_network live_network_render_matches_engine
 "$(dirname "$0")/run-exact-native-test.sh" native_network live_internal_network_blocks_external_egress
 "$(dirname "$0")/run-exact-native-test.sh" native_volume live_existing_volume_prerequisite_matches_engine
+"$(dirname "$0")/run-exact-native-test.sh" native_container live_container_settings_match_engine
 "$(dirname "$0")/run-exact-native-test.sh" native_volume_label live_created_volume_labels_match_engine
 "$(dirname "$0")/run-exact-native-test.sh" native_identity live_container_process_identity_matches_engine
 
@@ -957,7 +1075,7 @@ if [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]; then
     echo 'native evidence requires a clean candidate checkout' >&2
     exit 1
   }
-  python3 "$script_dir/native-evidence.py" "$run_dir/version.json" "$NATIVE_SHAPES_PATH" "$NATIVE_SOURCE_PROBES_PATH" "$NATIVE_NETWORK_PROBES_PATH" "$NATIVE_VOLUME_PROBES_PATH" "$NATIVE_VOLUME_LABEL_PROBES_PATH" "$NATIVE_IDENTITY_PROBES_PATH" \
+  python3 "$script_dir/native-evidence.py" "$run_dir/version.json" "$NATIVE_SHAPES_PATH" "$NATIVE_SOURCE_PROBES_PATH" "$NATIVE_NETWORK_PROBES_PATH" "$NATIVE_VOLUME_PROBES_PATH" "$NATIVE_CONTAINER_PROBES_PATH" "$NATIVE_VOLUME_LABEL_PROBES_PATH" "$NATIVE_IDENTITY_PROBES_PATH" \
     "$DOCKERLENS_NATIVE_EVIDENCE_DIR/$lane.json" "$lane" "$image" "$expected_mode" \
     "$installed_docker_package" "$candidate_sha" "$run_id"
 fi

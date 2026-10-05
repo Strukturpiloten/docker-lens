@@ -32,6 +32,19 @@ inferred generic API floor: only an exact profile with independently reviewed
 native evidence can admit that branch. All new command and health branches
 likewise remain unadmitted by the historical profiles.
 
+The native `ClearCommand` oracle is conditional. An isolated Engine request
+with `Cmd:[]` and inherited entrypoint must retain the image command and its
+exit-7 behavior; no generic clear claim follows from that JSON field. The
+positive native shape instead pairs `Cmd:[]` with an explicitly authored,
+nonempty `/bin/sh` entrypoint and requires an empty effective command, exact
+runtime no-argument path, and exit 0 from both literal and rendered requests.
+A separate explicit-entrypoint request omitting `Cmd` distinguishes the
+entrypoint override's default effect, so the paired result is not attributed
+to `Cmd:[]` alone. Intent validation rejects that intent with inherited or
+cleared entrypoint; before production `CommandClear` admission an independent
+review must accept exact passing native evidence. This does not alter or admit
+the separate `EntrypointClear` shape.
+
 For target commands, `Inherit` omits the native `Cmd` field and leaves the
 effective result to Engine merging; it does not promise that an image's default
 command survives an explicit entrypoint override. A requested command `Clear`
@@ -71,3 +84,42 @@ repeated and ephemeral bindings, command clear behavior, shell/disabled
 health, timing, mount access, and resource/security outcomes. BoxFerry owns
 promotion of authored intent and structured loss decisions. Offline tests
 establish only local request and rejection behavior.
+
+The native Debian 11 nested default-bridge fixture may report a test-only
+`nested_default_bridge_ipv6_unavailable` outcome for fixed or ephemeral `::1`
+publication only after independently checking CLI and rendered configured and
+runtime bindings, running state, same-container local and published IPv4
+canaries, pinned outer TCP6 availability, inner IPv6-disabled state, and exact
+kernel `ECONNREFUSED` at the requested or assigned host port across five
+250 ms-spaced probes and one final post-control probe. Before a negative, the
+running/default-bridge state, bindings, IPv4 canaries, and outer TCP6 control
+are rechecked; a later connection is a positive candidate, never a negative.
+Both fixtures
+must agree. A connection requires successful IPv6 HTTP instead; all other
+outcomes fail. Upstream lanes retain positive IPv6 assertions. This scoped
+native fixture outcome does not admit or reject a production capability for
+Engine 20.10, API 1.41, or any general daemon mode.
+
+A distinct Debian-only `nested_default_bridge_ipv6_runtime_binding_absent`
+outcome applies when the exact dual configured request is present but runtime
+inspect repeatedly contains only the exact numeric IPv4 control binding. It
+requires five 250 ms-spaced inspect snapshots, final post-control inspect,
+running/default-bridge and inner IPv6-disabled checks, positive local and
+published IPv4 canaries, and pinned outer TCP6 availability. Fixed requests
+must additionally refuse at their known requested IPv6 port throughout;
+ephemeral requests have no observed IPv6 port and must never infer or probe
+one. Transitions or mismatched CLI/rendered outcomes fail. This finding says
+only that the runtime binding record is absent, not that no hidden allocation
+exists or that IPv6 is generally unsupported. It cannot admit `PortHostIpv6`.
+
+Docker's published [container run reference](https://github.com/docker/docs/blob/main/_vendor/github.com/docker/cli/docs/reference/run.md)
+permits capability names with or
+without the `CAP_` prefix. The native `SYS_ADMIN` drop oracle therefore
+accepts only a singleton inspected `SYS_ADMIN` or `CAP_SYS_ADMIN`; the inert
+rendered request remains exactly authored as `SYS_ADMIN`, and the independent
+runtime capability-bound check remains mandatory. Because the default set
+already omits `SYS_ADMIN`, this proves observed absence, not causal removal,
+and does not independently authorize production admission of `CapDropSysAdmin`.
+Other names, casing, or
+additional drops still fail. This alias observation does not widen the
+authored target value domain.
