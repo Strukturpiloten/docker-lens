@@ -666,6 +666,29 @@ failures, untested/partial results, cancellation, uncertain mutation or cleanup
 cannot publish a proof. Rootless low-port, missing-capability and API-floor checks are
 pure pre-I/O boundaries, not native reachability evidence.
 
+On a failed port invocation, the exact-test wrapper preserves the last closed
+port progress stage before cleanup separately from the cleanup/unverified marker.
+It projects the first selected-thread panic outside the optional IPv6 follow-up
+scope from the port test's fixed source basename to bounded numeric line/column
+only. Constant internal begin/end markers bracket the existing caught follow-up
+checks; their panics cannot replace the subsequent HTTP assertion's location.
+The projection waits for the complete scope stream: nested, unmatched,
+malformed or unfinished scopes suppress every source site and report only a
+fixed invalid-scope diagnostic. A later wrapper or Drop panic cannot replace
+the first eligible location. This location and the pre-cleanup stage narrow the
+failure; retained diagnostic families are observations, not universal root-cause
+claims. Strict full-line finite grammars retain at most one
+diagnostic per API transport/status, CLI, HTTP, namespace, IPv6 state/boundary,
+isolation and runtime-binding family. Unknown fields/enums, raw values, secret
+suffixes and other test targets cannot pass this port diagnostic boundary.
+Primary and Drop cleanup attempts separately report only `pass`, `fail` or
+`panic`, remaining reserve (`exhausted`: at most one whole second; `low`: two
+through forty; `reserved`: more than forty), and mutation `clear`/`uncertain`.
+These are observations after each existing cleanup attempt, not new allocations,
+retries, evidence or proof of remaining resources. Deadlines, exact ownership,
+repeated genuine absence checks, assertion outcomes and admission stay unchanged;
+raw test, controller and runtime output remains private.
+
 The existing main, reviewed-PR native dispatcher and Release validation workflows
 all consume `scripts/native-conformance.sh`; that canonical definition now
 requires the port proof in every exact lane. No new workflow, dependency,

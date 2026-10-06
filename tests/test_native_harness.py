@@ -2459,6 +2459,204 @@ fi
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual((f"DOCKERLENS_NATIVE_CHECK: {marker}" in result.stderr), accepted)
 
+    def _port_wrapper(self, output: str, status: int = 101, target: str = "native_port") -> subprocess.CompletedProcess[str]:
+        test_name = "live_port_publications_match_engine"
+        selected = f"{target}_tests::{test_name}"
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+printf '%s\\n' "$*" >> "$FAKE_NATIVE_INVOCATIONS"
+if [[ $* == *--list* ]]; then
+  printf '%s: test\\n' "$FAKE_NATIVE_SELECTED"
+else
+  printf '%s\\n' "$FAKE_NATIVE_OUTPUT"
+  exit "$FAKE_NATIVE_STATUS"
+fi
+""")
+            invocation = bin_dir / "invocations"
+            env = os.environ.copy()
+            env.update(PATH=f"{bin_dir}:{env['PATH']}", FAKE_NATIVE_INVOCATIONS=str(invocation),
+                       FAKE_NATIVE_SELECTED=selected, FAKE_NATIVE_OUTPUT=output,
+                       FAKE_NATIVE_STATUS=str(status))
+            result = subprocess.run([str(ROOT / "scripts/run-exact-native-test.sh"), target, test_name],
+                                    env=env, capture_output=True, text=True, timeout=15, check=False)
+            calls = invocation.read_text().splitlines()
+            self.assertEqual(len(calls), 2)
+            self.assertIn(f"--ignored --exact {selected}", calls[1])
+            return result
+
+    def test_port_failure_preserves_pre_cleanup_stage_and_first_selected_panic(self) -> None:
+        selected = "native_port_tests::live_port_publications_match_engine"
+        for suffix in ("", " (123)"):
+            for cleanup_outcome in ("pass", "fail", "panic"):
+                with self.subTest(suffix=suffix, cleanup_outcome=cleanup_outcome):
+                    result = self._port_wrapper("\n".join([
+                        "DOCKERLENS_NATIVE_CHECK: port_fixed_ipv6_oracle_tcp6_boundary",
+                        "DOCKERLENS_NATIVE_API_DIAG: transport=timeout",
+                        "thread 'protected-secret' panicked at src/native_port_tests.rs:1:2:",
+                        f"thread '{selected}'{suffix} panicked at src/native_port_tests.rs:205:9:",
+                        "protected-secret compared runtime values",
+                        "DOCKERLENS_NATIVE_CHECK: port_cleanup",
+                        "DOCKERLENS_NATIVE_API_DIAG: transport=other",
+                        f"DOCKERLENS_NATIVE_PORT_CLEANUP_DIAG: attempt=primary outcome={cleanup_outcome} reserve=low mutation=clear",
+                        f"thread '{selected}' panicked at src/native_port_tests.rs:2883:5:",
+                        "DOCKERLENS_NATIVE_CHECK: port_fixed_ipv4_rendered_cli_http",
+                        "DOCKERLENS_NATIVE_PORT_CLEANUP_DIAG: attempt=drop outcome=panic reserve=exhausted mutation=uncertain",
+                        "DOCKERLENS_NATIVE_CHECK: port_cleanup_unverified",
+                        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 130 filtered out;",
+                    ]))
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn("DOCKERLENS_NATIVE_CHECK: port_fixed_ipv6_oracle_tcp6_boundary", result.stderr)
+                    self.assertIn("DOCKERLENS_NATIVE_CHECK: port_cleanup_unverified", result.stderr)
+                    self.assertIn("DOCKERLENS_NATIVE_PANIC: source=native_port_tests line=205 column=9", result.stderr)
+                    self.assertNotIn("line=2883", result.stderr)
+                    self.assertNotIn("line=1 column=2", result.stderr)
+                    self.assertNotIn("port_fixed_ipv4_rendered_cli_http", result.stderr)
+                    self.assertNotIn("protected-secret", result.stdout + result.stderr)
+                    self.assertIn(f"attempt=primary outcome={cleanup_outcome}", result.stderr)
+                    self.assertIn("attempt=drop outcome=panic", result.stderr)
+                    self.assertIn("DOCKERLENS_NATIVE_API_DIAG: transport=timeout", result.stderr)
+                    self.assertNotIn("DOCKERLENS_NATIVE_API_DIAG: transport=other", result.stderr)
+
+    def test_port_diagnostic_families_are_closed_and_target_scoped(self) -> None:
+        valid = [
+            "DOCKERLENS_NATIVE_API_DIAG: transport=timeout",
+            "DOCKERLENS_NATIVE_API_DIAG: operation=start status=server",
+            "DOCKERLENS_NATIVE_HTTP_DIAG: exit=other category=connection_refused",
+            "DOCKERLENS_NATIVE_CLI_DIAG: exit=timeout stderr=permission",
+            "DOCKERLENS_NATIVE_NAMESPACE_DIAG: category=identity",
+            "DOCKERLENS_NATIVE_IPV6_DIAG: local_service=pass inner_all=disabled inner_lo=disabled outer_tcp6=available curl_exit=7",
+            "DOCKERLENS_NATIVE_IPV6_BOUNDARY_DIAG: result=refused",
+            "DOCKERLENS_NATIVE_ISOLATION_DIAG: result=other",
+            "DOCKERLENS_NATIVE_PORT_BINDINGS_DIAG: key=array count=two ipv4=one ipv6=zero other=one v4_port=nonzero v6_port=absent",
+            "DOCKERLENS_NATIVE_PORT_CLEANUP_DIAG: attempt=primary outcome=fail reserve=low mutation=clear",
+            "DOCKERLENS_NATIVE_PORT_CLEANUP_DIAG: attempt=drop outcome=panic reserve=exhausted mutation=uncertain",
+        ]
+        summary = "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 130 filtered out;"
+        result = self._port_wrapper("\n".join(valid + [summary]))
+        self.assertEqual(result.returncode, 1)
+        for line in valid:
+            self.assertEqual(result.stderr.splitlines().count(line), 1)
+        non_port = self._port_wrapper("\n".join(valid + [summary]), target="native_identity")
+        for line in valid:
+            self.assertNotIn(line, non_port.stderr)
+        malformed = []
+        for line in valid:
+            malformed.extend((line + " protected-secret", "protected-secret " + line,
+                              line + "\r", line.replace("=", "=protected-secret", 1)))
+            # Replace every individual enum independently, including bounded
+            # numerical HTTP categories. A known field cannot rescue an unknown.
+            for field in line.split()[1:]:
+                key, value = field.split("=", 1)
+                malformed.extend((line.replace(field, f"{key}=unknown_enum", 1),
+                                  line.replace(field, f"{key}=protected\nsecret", 1)))
+        rejected = self._port_wrapper("\n".join(malformed + [summary]))
+        self.assertEqual(rejected.returncode, 1)
+        self.assertNotIn("_DIAG:", rejected.stderr)
+        self.assertNotIn("protected", rejected.stdout + rejected.stderr)
+        self.assertNotIn("unknown_enum", rejected.stderr)
+
+    def test_port_panic_projection_excludes_caught_ipv6_followups(self) -> None:
+        selected = "native_port_tests::live_port_publications_match_engine"
+        begin = "DOCKERLENS_NATIVE_PORT_DIAGNOSTIC_SCOPE: begin"
+        end = "DOCKERLENS_NATIVE_PORT_DIAGNOSTIC_SCOPE: end"
+        optional = f"thread '{selected}' panicked at src/native_port_tests.rs:1054:9:"
+        primary = f"thread '{selected}' panicked at src/native_port_tests.rs:1080:9:"
+        for count in (1, 2):
+            with self.subTest(scopes=count):
+                events = ["DOCKERLENS_NATIVE_CHECK: port_fixed_ipv6_rendered_cli_http",
+                          "DOCKERLENS_NATIVE_HTTP_DIAG: exit=other category=no_route"]
+                for _ in range(count):
+                    events.extend([begin, optional, "protected-secret compared values", end])
+                events.extend([primary, "DOCKERLENS_NATIVE_CHECK: port_cleanup",
+                               f"thread '{selected}' panicked at src/native_port_tests.rs:3000:5:",
+                               "DOCKERLENS_NATIVE_CHECK: port_cleanup_unverified"])
+                result = self._port_wrapper("\n".join(events))
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("DOCKERLENS_NATIVE_PANIC: source=native_port_tests line=1080 column=9", result.stderr)
+                self.assertNotIn("line=1054", result.stderr)
+                self.assertNotIn("line=3000", result.stderr)
+                self.assertIn("DOCKERLENS_NATIVE_HTTP_DIAG: exit=other category=no_route", result.stderr)
+                self.assertNotIn("DIAGNOSTIC_SCOPE", result.stdout + result.stderr)
+                self.assertNotIn("PORT_SCOPE_DIAG", result.stderr)
+                self.assertNotIn("protected-secret", result.stdout + result.stderr)
+        # A timed-out stream with only caught follow-up panics has no eligible
+        # source site even when its observed scope happened to finish.
+        timeout = self._port_wrapper("\n".join([begin, optional, end]), status=124)
+        self.assertEqual(timeout.returncode, 1)
+        self.assertIn("failed (exit 124)", timeout.stderr)
+        self.assertNotIn("DOCKERLENS_NATIVE_PANIC:", timeout.stderr)
+        source = (ROOT / "src/native_port_tests.rs").read_text()
+        invocation = source.split('if let Some((id, local_ipv6)) = local_ipv6 {', 1)[1].split(
+            'panic!("closed published endpoint HTTP assertion failed")', 1)[0]
+        self.assertLess(invocation.index(begin), invocation.index("best_effort_ipv6_diagnostics("))
+        self.assertLess(invocation.index("best_effort_ipv6_diagnostics("), invocation.index(end))
+        helper = source.split("fn best_effort_ipv6_diagnostics(", 1)[1].split("#[test]", 1)[0]
+        self.assertNotIn("DIAGNOSTIC_SCOPE", helper)
+
+    def test_port_panic_projection_invalid_scope_suppresses_all_sites(self) -> None:
+        selected = "native_port_tests::live_port_publications_match_engine"
+        begin = "DOCKERLENS_NATIVE_PORT_DIAGNOSTIC_SCOPE: begin"
+        end = "DOCKERLENS_NATIVE_PORT_DIAGNOSTIC_SCOPE: end"
+        optional = f"thread '{selected}' panicked at src/native_port_tests.rs:1054:9:"
+        primary = f"thread '{selected}' panicked at src/native_port_tests.rs:1080:9:"
+        malformed = [
+            [begin, begin, optional, end, end, primary],
+            [end, primary],
+            [begin, optional, primary],
+            [begin, optional, end + " protected-secret", primary],
+            [begin, "DOCKERLENS_NATIVE_PORT_DIAGNOSTIC_SCOPE: unknown_enum", end, primary],
+            [begin, "DOCKERLENS_NATIVE_PORT_DIAGNOSTIC_SCOPE: be\ngin", end, primary],
+            [primary, begin, optional],
+            [primary, end],
+            [primary, " " + begin, end],
+            [primary, begin + " protected-secret", end],
+            [primary, begin + "\r", end],
+        ]
+        for index, events in enumerate(malformed):
+            for status in (101, 124):
+                with self.subTest(case=index, status=status):
+                    result = self._port_wrapper("\n".join(events), status=status)
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn(f"failed (exit {status})", result.stderr)
+                    self.assertIn("DOCKERLENS_NATIVE_PORT_SCOPE_DIAG: state=invalid", result.stderr)
+                    self.assertNotIn("DOCKERLENS_NATIVE_PANIC:", result.stderr)
+                    self.assertNotIn("DIAGNOSTIC_SCOPE", result.stdout + result.stderr)
+                    self.assertNotIn("unknown_enum", result.stderr)
+                    self.assertNotIn("protected-secret", result.stdout + result.stderr)
+
+    def test_port_panic_projection_rejects_other_sources_and_injected_locations(self) -> None:
+        selected = "native_port_tests::live_port_publications_match_engine"
+        invalid = [
+            f"thread '{selected}' panicked at src/native_identity_tests.rs:205:9:",
+            f"thread '{selected}' panicked at /protected-secret/src/native_port_tests.rs:205:9:",
+            f"thread '{selected}' panicked at src/native_port_tests.rs:1234567:9:",
+            f"thread '{selected}' panicked at src/native_port_tests.rs:205:12345:",
+            f"thread '{selected}' panicked at src/native_port_tests.rs:205:9: protected-secret",
+            f"thread '{selected}' panicked at src/native_port_tests.rs:205:protected-secret:",
+            "thread 'other_test' panicked at src/native_port_tests.rs:205:9:",
+        ]
+        result = self._port_wrapper("\n".join(invalid))
+        self.assertEqual(result.returncode, 1)
+        self.assertNotIn("DOCKERLENS_NATIVE_PANIC:", result.stderr)
+        self.assertNotIn("protected-secret", result.stdout + result.stderr)
+
+    def test_port_diagnostics_never_turn_failure_timeout_or_zero_tests_into_success(self) -> None:
+        diagnostic = "DOCKERLENS_NATIVE_API_DIAG: transport=timeout"
+        for status, passed, failed, success in ((0, 1, 0, True), (0, 0, 0, False),
+                                               (0, 2, 0, False), (101, 1, 0, False),
+                                               (124, 0, 1, False), (137, 0, 1, False)):
+            with self.subTest(status=status, passed=passed, failed=failed):
+                summary = f"test result: {'ok' if failed == 0 else 'FAILED'}. {passed} passed; {failed} failed; 0 ignored; 0 measured; 130 filtered out;"
+                result = self._port_wrapper(f"{diagnostic}\n{summary}", status=status)
+                self.assertEqual(result.returncode == 0, success)
+                if status != 0:
+                    self.assertIn(f"failed (exit {status})", result.stderr)
+                    self.assertIn(diagnostic, result.stderr)
+                else:
+                    self.assertNotIn(diagnostic, result.stdout + result.stderr)
+
     @staticmethod
     def _tool(directory: Path, name: str, content: str) -> None:
         path = directory / name

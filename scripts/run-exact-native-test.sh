@@ -54,6 +54,39 @@ identity_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: identity_(context|oracle|r
 if [[ -n $identity_marker ]]; then marker=$identity_marker; fi
 port_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: (port_(context|cleanup|cleanup_unverified|evidence|ipv4|ipv6|outer_identity|host_curl_preflight|host_bash_preflight)|(port_(fixed_ipv4_oracle|fixed_ipv4_rendered|fixed_ipv6_oracle|fixed_ipv6_rendered|dynamic_ipv6_oracle|dynamic_ipv6_rendered|repeated_dynamic_ipv4_oracle|repeated_dynamic_ipv4_rendered)_(cli_create|cli_inspect|oracle_bindings|oracle_cleanup|oracle_start|cli_http|cli_http_secondary|local_service|http_assert|http_assert_secondary|render|render_body|api_create|api_inspect|rendered_bindings|api_start|dynamic_binding|dynamic_binding_secondary|isolated_http|isolated_assert|udp_assignment|udp_send|udp_receive|udp_assert|tcp6_boundary|negative_recheck|runtime_absence)))$' <<<"$result" | tail -n 1 || true)
 if [[ -n $port_marker ]]; then marker=$port_marker; fi
+# Port cleanup runs after a caught assertion and can mask its last causal stage.
+# Select only the existing closed marker grammar, stopping at the first cleanup.
+port_causal_marker=
+port_diagnostics=
+if [[ $target == native_port ]]; then
+  port_causal_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: (port_(context|cleanup|cleanup_unverified|evidence|ipv4|ipv6|outer_identity|host_curl_preflight|host_bash_preflight)|port_(fixed_ipv4_oracle|fixed_ipv4_rendered|fixed_ipv6_oracle|fixed_ipv6_rendered|dynamic_ipv6_oracle|dynamic_ipv6_rendered|repeated_dynamic_ipv4_oracle|repeated_dynamic_ipv4_rendered)_(cli_create|cli_inspect|oracle_bindings|oracle_cleanup|oracle_start|cli_http|cli_http_secondary|local_service|http_assert|http_assert_secondary|render|render_body|api_create|api_inspect|rendered_bindings|api_start|dynamic_binding|dynamic_binding_secondary|isolated_http|isolated_assert|udp_assignment|udp_send|udp_receive|udp_assert|tcp6_boundary|negative_recheck|runtime_absence))$' <<<"$result" | awk '/^DOCKERLENS_NATIVE_CHECK: port_cleanup(_unverified)?$/ { exit } { last=$0 } END { if (last != "") print last }' || true)
+  port_cleanup_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: port_cleanup(_unverified)?$' <<<"$result" | tail -n 1 || true)
+  marker=${port_cleanup_marker:-$port_causal_marker}
+  # Full-line, finite grammars only. Keep at most one line per family (and one
+  # per cleanup attempt); never export native values, messages or suffixes.
+  port_patterns=(
+    '^DOCKERLENS_NATIVE_API_DIAG: transport=(timeout|other)$'
+    '^DOCKERLENS_NATIVE_API_DIAG: operation=(inspect|create|start) status=(invalid_request|not_found|conflict|server|other)$'
+    '^DOCKERLENS_NATIVE_HTTP_DIAG: exit=(timeout|signal|other|success) category=(connection_refused|missing_tool|address_family|invalid_address|no_route|permission|storage_exhausted|invalid_reference|missing_resource|image_storage|unknown|body_mismatch)$'
+    '^DOCKERLENS_NATIVE_CLI_DIAG: exit=(timeout|signal|other) stderr=(connection_refused|missing_tool|address_family|invalid_address|no_route|permission|storage_exhausted|invalid_reference|missing_resource|image_storage|unknown)$'
+    '^DOCKERLENS_NATIVE_NAMESPACE_DIAG: category=(input|inspect|identity|changed|process|missing_tool|probe)$'
+    '^DOCKERLENS_NATIVE_IPV6_DIAG: local_service=(pass|fail) inner_all=(enabled|disabled|unavailable) inner_lo=(enabled|disabled|unavailable) outer_tcp6=(available|tcp6_unavailable|bind_unavailable|loopback_unavailable|probe_failed) curl_exit=(0|6|7|22|28|35|52|56|60|124|137|other)$'
+    '^DOCKERLENS_NATIVE_IPV6_BOUNDARY_DIAG: result=(refused|connected|timeout|other|malformed)$'
+    '^DOCKERLENS_NATIVE_ISOLATION_DIAG: result=(refused|connected|timeout|other)$'
+    '^DOCKERLENS_NATIVE_PORT_BINDINGS_DIAG: key=(missing|null|array|other) count=(zero|one|two|many) ipv4=(zero|one|two|many) ipv6=(zero|one|two|many) other=(zero|one|two|many) v4_port=(absent|empty|zero|nonzero|malformed|multiple) v6_port=(absent|empty|zero|nonzero|malformed|multiple)$'
+    '^DOCKERLENS_NATIVE_PORT_CLEANUP_DIAG: attempt=primary outcome=(pass|fail|panic) reserve=(exhausted|low|reserved) mutation=(clear|uncertain)$'
+    '^DOCKERLENS_NATIVE_PORT_CLEANUP_DIAG: attempt=drop outcome=(pass|fail|panic) reserve=(exhausted|low|reserved) mutation=(clear|uncertain)$'
+  )
+  for port_pattern in "${port_patterns[@]}"; do
+    if [[ $port_pattern == '^DOCKERLENS_NATIVE_API_DIAG: transport=(timeout|other)$' ]]; then
+      # Later cleanup transport failures must not replace the original failure.
+      port_diagnostic=$(grep -Eo "$port_pattern" <<<"$result" | sed -n '1p' || true)
+    else
+      port_diagnostic=$(grep -Eo "$port_pattern" <<<"$result" | tail -n 1 || true)
+    fi
+    if [[ -n $port_diagnostic ]]; then port_diagnostics+="$port_diagnostic"$'\n'; fi
+  done
+fi
 reason_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: target_start_reason_(operation_not_permitted|permission_denied|invalid_argument|read_only_filesystem|not_found|timeout|unclassified)$' <<<"$result" | tail -n 1 || true)
 error_category=$(grep -Eo '^DOCKERLENS_NATIVE_ERROR: (endpoint|cancelled|deadline|io|protocol|status|version|shape|budget)$' <<<"$result" | tail -n 1 || true)
 selection_error=$(grep -Eo '^DOCKERLENS_NATIVE_ERROR: selection$' <<<"$result" | tail -n 1 || true)
@@ -64,13 +97,43 @@ internal_cleanup=$(grep -Eo '^DOCKERLENS_NATIVE_CLEANUP: internal_proof=(pass|fa
 # without disclosing its message, compared values, or an absolute build path.
 panic_site=
 case $target in
+  native_port)
+    # Optional IPv6 follow-ups catch panics before the original HTTP assertion.
+    # Project only the first selected panic outside valid diagnostic scopes;
+    # buffer it until the whole event stream proves balanced and well-formed.
+    # Malformed scopes yield a constant uncertainty result, never a source site.
+    panic_site=$(sed -nE \
+      -e "s/^thread '${selected}'( \([0-9]{1,10}\))? panicked at src\/(native_port_tests)\.rs:([0-9]{1,6}):([0-9]{1,4}):$/DOCKERLENS_NATIVE_PANIC: source=\2 line=\3 column=\4/p" \
+      -e '/^[[:space:]]*DOCKERLENS_NATIVE_PORT_DIAGNOSTIC_SCOPE/p' <<<"$result" | awk '
+        $0 == "DOCKERLENS_NATIVE_PORT_DIAGNOSTIC_SCOPE: begin" {
+          if (active) invalid=1
+          active=1
+          next
+        }
+        $0 == "DOCKERLENS_NATIVE_PORT_DIAGNOSTIC_SCOPE: end" {
+          if (!active) invalid=1
+          active=0
+          next
+        }
+        /^DOCKERLENS_NATIVE_PANIC:/ {
+          if (!active && first == "") first=$0
+          next
+        }
+        { invalid=1 }
+        END {
+          if (invalid || active) print "DOCKERLENS_NATIVE_PORT_SCOPE_DIAG: state=invalid"
+          else if (first != "") print first
+        }')
+    ;;
   native_target | native_volume | native_network | native_volume_label | native_container | native_identity)
     panic_site=$(sed -nE "s/^thread '.*'( \([0-9]{1,10}\))? panicked at src\/(${target}_tests)\.rs:([0-9]{1,6}):([0-9]{1,4}):$/DOCKERLENS_NATIVE_PANIC: source=\2 line=\3 column=\4/p" <<<"$result" | tail -n 1)
     ;;
 esac
 if (( run_status != 0 )); then
   echo "required native test $target::$test_name failed (exit $run_status)" >&2
+  if [[ -n $port_causal_marker && $port_causal_marker != "$marker" ]]; then echo "$port_causal_marker" >&2; fi
   if [[ -n $marker ]]; then echo "$marker" >&2; fi
+  if [[ -n $port_diagnostics ]]; then printf '%s' "$port_diagnostics" >&2; fi
   if [[ -n $dns_diag ]]; then echo "$dns_diag" >&2; fi
   if [[ -n $collision_dns_diag ]]; then echo "$collision_dns_diag" >&2; fi
   if [[ -n $reason_marker ]]; then echo "$reason_marker" >&2; fi

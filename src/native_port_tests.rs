@@ -641,14 +641,98 @@ impl NativeRun {
         self.cleaned = true;
         true
     }
+
+    fn cleanup_attempt(&mut self, attempt: &'static str) -> bool {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.cleanup()));
+        let outcome = match &result {
+            Ok(true) => "pass",
+            Ok(false) => "fail",
+            Err(_) => "panic",
+        };
+        eprintln!(
+            "{}",
+            closed_cleanup_diagnostic(
+                attempt,
+                outcome,
+                self.remaining(),
+                self.uncertain_mutation.get(),
+            )
+        );
+        result.unwrap_or(false)
+    }
+}
+
+fn closed_cleanup_diagnostic(
+    attempt: &'static str,
+    outcome: &'static str,
+    remaining: Duration,
+    uncertain: bool,
+) -> String {
+    assert!(matches!(attempt, "primary" | "drop"));
+    assert!(matches!(outcome, "pass" | "fail" | "panic"));
+    let reserve = match remaining.as_secs() {
+        0..=1 => "exhausted",
+        2..=40 => "low",
+        _ => "reserved",
+    };
+    let mutation = if uncertain { "uncertain" } else { "clear" };
+    format!(
+        "DOCKERLENS_NATIVE_PORT_CLEANUP_DIAG: attempt={attempt} outcome={outcome} reserve={reserve} mutation={mutation}"
+    )
+}
+
+#[test]
+fn port_cleanup_summary_is_closed_and_uses_the_existing_reserve_thresholds() {
+    for (seconds, reserve) in [
+        (0, "exhausted"),
+        (1, "exhausted"),
+        (2, "low"),
+        (40, "low"),
+        (41, "reserved"),
+    ] {
+        for attempt in ["primary", "drop"] {
+            for outcome in ["pass", "fail", "panic"] {
+                for uncertain in [false, true] {
+                    let diagnostic = closed_cleanup_diagnostic(
+                        attempt,
+                        outcome,
+                        Duration::from_secs(seconds),
+                        uncertain,
+                    );
+                    let mutation = if uncertain { "uncertain" } else { "clear" };
+                    assert_eq!(
+                        diagnostic,
+                        format!(
+                            "DOCKERLENS_NATIVE_PORT_CLEANUP_DIAG: attempt={attempt} outcome={outcome} reserve={reserve} mutation={mutation}"
+                        )
+                    );
+                }
+            }
+        }
+    }
+    assert!(
+        std::panic::catch_unwind(|| closed_cleanup_diagnostic(
+            "protected-secret",
+            "pass",
+            Duration::ZERO,
+            false
+        ))
+        .is_err()
+    );
+    assert!(
+        std::panic::catch_unwind(|| closed_cleanup_diagnostic(
+            "primary",
+            "protected-secret",
+            Duration::ZERO,
+            false
+        ))
+        .is_err()
+    );
 }
 
 impl Drop for NativeRun {
     fn drop(&mut self) {
-        if !self.cleaned
-            && !std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.cleanup()))
-                .unwrap_or(false)
-        {
+        if !self.cleaned && !self.cleanup_attempt("drop") {
             eprintln!("DOCKERLENS_NATIVE_CHECK: port_cleanup_unverified");
         }
     }
@@ -965,6 +1049,7 @@ printf '%s:%s\n' "$count" "$effective""#,
             outcome.0, outcome.1
         );
         if let Some((id, local_ipv6)) = local_ipv6 {
+            eprintln!("DOCKERLENS_NATIVE_PORT_DIAGNOSTIC_SCOPE: begin");
             let ((inner_all, inner_lo), outer_tcp6) = best_effort_ipv6_diagnostics(
                 || self.inner_ipv6_state(id),
                 || {
@@ -982,6 +1067,7 @@ printf '%s:%s\n' "$count" "$effective""#,
                     }
                 },
             );
+            eprintln!("DOCKERLENS_NATIVE_PORT_DIAGNOSTIC_SCOPE: end");
             eprintln!(
                 "DOCKERLENS_NATIVE_IPV6_DIAG: local_service={} inner_all={inner_all} inner_lo={inner_lo} outer_tcp6={outer_tcp6} curl_exit={}",
                 if local_ipv6 { "pass" } else { "fail" },
@@ -2877,8 +2963,7 @@ fn live_port_publications_match_engine() {
     }))
     .is_ok();
     eprintln!("DOCKERLENS_NATIVE_CHECK: port_cleanup");
-    let cleaned =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run.cleanup())).unwrap_or(false);
+    let cleaned = run.cleanup_attempt("primary");
     assert!(
         passed && cleaned && !run.uncertain_mutation.get(),
         "closed native port assertions/cleanup failed"
