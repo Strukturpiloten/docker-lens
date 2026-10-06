@@ -1,3 +1,4 @@
+use super::container::valid_user_principal;
 use super::volume::{MAX_VOLUME_LABEL_COUNT, MAX_VOLUME_LABEL_TOTAL_BYTES};
 use super::{
     BridgeOption, ContainerIntent, ContainerSettings, ImageCommand, LogDriver, MemoryLimit,
@@ -515,6 +516,13 @@ fn validate_container_settings(settings: &ContainerSettings) -> Result<(), Inten
         .all(|item| unique.insert(item.bytes()))
     {
         return Err(IntentError::DuplicateContainerSetting);
+    }
+    if settings
+        .group_add
+        .iter()
+        .any(|item| !valid_user_principal(item.bytes()))
+    {
+        return Err(IntentError::InvalidContainerSetting);
     }
     let mut unique = HashSet::new();
     if !settings

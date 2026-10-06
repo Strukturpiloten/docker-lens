@@ -350,11 +350,20 @@ fn valid_text(value: &[u8]) -> bool {
     !value.contains(&0) && std::str::from_utf8(value).is_ok()
 }
 
+/// A protected authored `user` or `user:group`, with one principal per component.
+///
+/// A principal is either a canonical decimal ID from zero through `i32::MAX`,
+/// or an ASCII name matching `[A-Za-z_][A-Za-z0-9_.-]{0,31}`. Validation checks
+/// syntax only; it does not establish image account existence, namespace
+/// representability, or native Engine support.
 pub struct ContainerUser(ProtectedValue);
 
 impl ContainerUser {
     pub fn new(bytes: Vec<u8>) -> Result<Self, IntentError> {
-        if bytes.is_empty() || !valid_text(&bytes) {
+        let mut components = bytes.split(|byte| *byte == b':');
+        let valid_user = components.next().is_some_and(valid_user_principal);
+        let valid_group = components.next().is_none_or(valid_user_principal);
+        if !valid_user || !valid_group || components.next().is_some() {
             return Err(IntentError::InvalidContainerUser);
         }
         Ok(Self(ProtectedValue::new(bytes)))
@@ -364,6 +373,26 @@ impl ContainerUser {
     pub fn bytes(&self) -> &[u8] {
         self.0.as_bytes()
     }
+}
+
+pub(super) fn valid_user_principal(bytes: &[u8]) -> bool {
+    let Some(first) = bytes.first() else {
+        return false;
+    };
+    if first.is_ascii_digit() {
+        return bytes.len() <= 10
+            && (bytes.len() == 1 || *first != b'0')
+            && bytes.iter().all(u8::is_ascii_digit)
+            && std::str::from_utf8(bytes)
+                .ok()
+                .and_then(|value| value.parse::<i32>().ok())
+                .is_some();
+    }
+    bytes.len() <= 32
+        && (first.is_ascii_alphabetic() || *first == b'_')
+        && bytes[1..]
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'_' | b'.' | b'-'))
 }
 
 impl std::fmt::Debug for ContainerUser {
@@ -551,6 +580,8 @@ pub struct ContainerSettings {
     pub cap_drop: Vec<ContainerToken>,
     pub security_options: Vec<SecurityOption>,
     pub sysctls: Vec<ContainerLabel>,
+    /// Supplementary groups accept one principal each, never `user:group`.
+    /// Account existence and native support require separate evidence.
     pub group_add: Vec<ContainerUser>,
     pub dns: Vec<IpAddr>,
     pub extra_hosts: Vec<ExtraHost>,
@@ -708,3 +739,7 @@ pub struct ContainerIntent {
     pub restart: Option<RestartPolicy>,
     pub settings: ContainerSettings,
 }
+
+#[cfg(test)]
+#[path = "container_user_tests.rs"]
+mod user_tests;

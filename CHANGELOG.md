@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Reject malformed authored user/group selectors using canonical bounded IDs
+  and portable ASCII names, and require single principals for supplementary
+  groups. Preserve protected errors and shared absolute-path behavior. This
+  intentional syntax tightening does not admit any new native capability;
+  expanded parameterized proof and exact-profile admission remain pending.
 - Prepare the bounded #49 candidate label cohort from independently reviewed
   #70 source evidence for pre-merge volume-only consumer rehearsal. ADR 0012
   explicitly supersedes ADR 0010's sequencing only; production merge/main/release
