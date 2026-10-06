@@ -2524,7 +2524,7 @@ fi
             "DOCKERLENS_NATIVE_API_DIAG: transport=timeout",
             "DOCKERLENS_NATIVE_PORT_API_DIAG: action=start phase=probe exit=curl_timeout",
             "DOCKERLENS_NATIVE_PORT_API_DIAG: action=inspect_name phase=cleanup exit=outer_timeout",
-            "DOCKERLENS_NATIVE_PORT_START_DIAG: outcome=observed version=responsive object=timeout identity=unknown state=unknown primary=unknown secondary=unknown mutation=uncertain",
+            "DOCKERLENS_NATIVE_PORT_START_DIAG: outcome=observed version=responsive object=timeout identity=unknown state=unknown primary=unknown secondary=unknown allocation_relation=unknown mutation=uncertain",
             "DOCKERLENS_NATIVE_API_DIAG: operation=start status=server",
             "DOCKERLENS_NATIVE_HTTP_DIAG: exit=other category=connection_refused",
             "DOCKERLENS_NATIVE_CLI_DIAG: exit=timeout stderr=permission",
@@ -2563,11 +2563,12 @@ fi
     def test_port_start_followup_observations_never_replace_failure_or_reveal_values(self) -> None:
         selected = "native_port_tests::live_port_publications_match_engine"
         observations = [
-            "outcome=observed version=responsive object=timeout identity=unknown state=unknown primary=unknown secondary=unknown mutation=uncertain",
-            "outcome=observed version=timeout object=timeout identity=unknown state=unknown primary=unknown secondary=unknown mutation=uncertain",
-            "outcome=observed version=responsive object=responsive identity=same state=running primary=one secondary=one mutation=uncertain",
-            "outcome=observed version=responsive object=responsive identity=mismatch state=unknown primary=unknown secondary=unknown mutation=uncertain",
-            "outcome=skipped version=unknown object=unknown identity=unknown state=unknown primary=unknown secondary=unknown mutation=uncertain",
+            "outcome=observed version=responsive object=timeout identity=unknown state=unknown primary=unknown secondary=unknown allocation_relation=unknown mutation=uncertain",
+            "outcome=observed version=timeout object=timeout identity=unknown state=unknown primary=unknown secondary=unknown allocation_relation=unknown mutation=uncertain",
+            "outcome=observed version=responsive object=responsive identity=same state=running primary=one secondary=one allocation_relation=same mutation=uncertain",
+            "outcome=observed version=responsive object=responsive identity=same state=running primary=one secondary=one allocation_relation=different mutation=uncertain",
+            "outcome=observed version=responsive object=responsive identity=mismatch state=unknown primary=unknown secondary=unknown allocation_relation=unknown mutation=uncertain",
+            "outcome=skipped version=unknown object=unknown identity=unknown state=unknown primary=unknown secondary=unknown allocation_relation=unknown mutation=uncertain",
         ]
         for observation in observations:
             with self.subTest(observation=observation):
@@ -2594,6 +2595,31 @@ fi
                 self.assertIn("action=delete phase=cleanup exit=outer_timeout", result.stderr)
                 for secret in ("private-native-ID", "protected-secret", "32000"):
                     self.assertNotIn(secret, result.stdout + result.stderr)
+
+    def test_port_start_allocation_relation_requires_exact_finite_field(self) -> None:
+        prefix = ("DOCKERLENS_NATIVE_PORT_START_DIAG: outcome=observed version=responsive "
+                  "object=responsive identity=same state=created primary=one secondary=one ")
+        summary = "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 130 filtered out;"
+        for relation in ("same", "different", "unknown"):
+            line = f"{prefix}allocation_relation={relation} mutation=uncertain"
+            result = self._port_wrapper("\n".join([line, summary]))
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.stderr.splitlines().count(line), 1)
+        invalid = [
+            prefix + "mutation=uncertain",
+            prefix + "allocation_relation=32000 mutation=uncertain",
+            prefix + "allocation_relation=protected-secret mutation=uncertain",
+            prefix + "allocation_relation=unknown_enum mutation=uncertain",
+            prefix + "allocation_relation=same allocation_relation=different mutation=uncertain",
+            prefix + "allocation_relation=same mutation=uncertain protected-secret",
+            prefix + "allocation_relation=same mutation=uncertain\r",
+            prefix + "allocation_relation=same extra=protected-secret mutation=uncertain",
+        ]
+        result = self._port_wrapper("\n".join(invalid + [summary]))
+        self.assertEqual(result.returncode, 1)
+        self.assertNotIn("DOCKERLENS_NATIVE_PORT_START_DIAG", result.stderr)
+        for secret in ("32000", "protected-secret", "unknown_enum"):
+            self.assertNotIn(secret, result.stdout + result.stderr)
 
     def test_port_start_followup_reuses_only_test_scoped_canonical_gets(self) -> None:
         source = (ROOT / "src/native_port_tests.rs").read_text()

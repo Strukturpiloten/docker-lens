@@ -712,7 +712,14 @@ time checks cover complete framing and JSON classification; no child, drain,
 kill-grace or reap budget is introduced. An optional caught panic stays inside
 the same closed diagnostic scope and cannot replace the original failed API
 assertion. Only fixed responsiveness, exact identity, container state and
-primary/secondary allocation cardinalities are emitted. A foreign or partial
+primary/secondary allocation cardinalities and `allocation_relation` are emitted.
+That relation is `same` or `different` only when the already-read, owned
+`8085/tcp` response has exactly two bindings: one canonical nonzero decimal
+allocation for each of `127.0.0.1` and `127.0.0.2`. Missing, malformed, foreign-address or
+duplicate or zero-padded entries retain `unknown`; no further I/O or time allowance
+is added.
+This compares observed numerical allocations, not effective RootlessKit/proxy
+behavior or the cause of a failed start. A foreign or partial
 identity cannot authorize further observations; malformed/late results remain
 unknown. The same numerical port on different host addresses is valid and is
 never rejected by this diagnostic. No readback clears mutation uncertainty,

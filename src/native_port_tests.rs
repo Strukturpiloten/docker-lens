@@ -1439,6 +1439,7 @@ struct StartDiagnostic {
     state: &'static str,
     primary: &'static str,
     secondary: &'static str,
+    allocation_relation: &'static str,
 }
 
 impl StartDiagnostic {
@@ -1450,10 +1451,12 @@ impl StartDiagnostic {
             state: "unknown",
             primary: "unknown",
             secondary: "unknown",
+            allocation_relation: "unknown",
         }
     }
 
     fn observe_container(&mut self, value: &Value, id: &str, name: &str, run: &str, image: &str) {
+        self.allocation_relation = "unknown";
         if !value.is_object() {
             return;
         }
@@ -1494,6 +1497,7 @@ impl StartDiagnostic {
             _ => return,
         };
         let (mut primary, mut secondary) = (0, 0);
+        let (mut primary_port, mut secondary_port) = (None, None);
         for binding in bindings {
             let ip = binding["HostIp"].as_str();
             let Some(port) = binding["HostPort"].as_str() else {
@@ -1504,22 +1508,57 @@ impl StartDiagnostic {
                 value if value.parse::<u16>().is_ok_and(|port| port > 0) => true,
                 _ => return,
             };
+            let numeric_port = if port
+                .bytes()
+                .next()
+                .is_some_and(|byte| (b'1'..=b'9').contains(&byte))
+                && port.bytes().all(|byte| byte.is_ascii_digit())
+            {
+                port.parse::<u16>().ok().filter(|port| *port > 0)
+            } else {
+                None
+            };
             match ip {
-                Some("127.0.0.1") => primary += usize::from(assigned),
-                Some("127.0.0.2") => secondary += usize::from(assigned),
+                Some("127.0.0.1") => {
+                    primary += usize::from(assigned);
+                    primary_port = numeric_port;
+                }
+                Some("127.0.0.2") => {
+                    secondary += usize::from(assigned);
+                    secondary_port = numeric_port;
+                }
                 _ => return,
             }
         }
         self.primary = binding_cardinality(primary);
         self.secondary = binding_cardinality(secondary);
+        // Equality on different host addresses is valid. This observation
+        // neither requires distinct ports nor establishes a proxy collision.
+        self.allocation_relation = match (
+            bindings.len(),
+            primary,
+            secondary,
+            primary_port,
+            secondary_port,
+        ) {
+            (2, 1, 1, Some(primary), Some(secondary)) if primary == secondary => "same",
+            (2, 1, 1, Some(_), Some(_)) => "different",
+            _ => "unknown",
+        };
     }
 
     fn summary(&self, outcome: &'static str, uncertain: bool) -> String {
         assert!(matches!(outcome, "observed" | "skipped" | "panic"));
         let mutation = if uncertain { "uncertain" } else { "clear" };
         format!(
-            "DOCKERLENS_NATIVE_PORT_START_DIAG: outcome={outcome} version={} object={} identity={} state={} primary={} secondary={} mutation={mutation}",
-            self.version, self.object, self.identity, self.state, self.primary, self.secondary
+            "DOCKERLENS_NATIVE_PORT_START_DIAG: outcome={outcome} version={} object={} identity={} state={} primary={} secondary={} allocation_relation={} mutation={mutation}",
+            self.version,
+            self.object,
+            self.identity,
+            self.state,
+            self.primary,
+            self.secondary,
+            self.allocation_relation
         )
     }
 }
@@ -1639,6 +1678,7 @@ fn late_start_snapshot_retains_uncertainty_and_never_authorizes_foreign_identity
     assert_eq!(diagnostic.identity, "same");
     assert_eq!(diagnostic.primary, "one");
     assert_eq!(diagnostic.secondary, "one");
+    assert_eq!(diagnostic.allocation_relation, "same");
     assert!(summary.contains("mutation=uncertain"));
     for secret in [
         id.as_str(),
@@ -1656,17 +1696,154 @@ fn late_start_snapshot_retains_uncertainty_and_never_authorizes_foreign_identity
     assert_eq!(foreign.identity, "mismatch");
     assert_eq!(foreign.state, "unknown");
     assert_eq!(foreign.primary, "unknown");
+    assert_eq!(foreign.allocation_relation, "unknown");
     value["Id"] = Value::String(id.clone());
     value["NetworkSettings"]["Ports"]["8085/tcp"][0]["HostPort"] =
         Value::String("protected-secret".into());
     let mut malformed = StartDiagnostic::unknown();
     malformed.observe_container(&value, &id, "owned-name", "private-run", "private-image");
     assert_eq!(malformed.primary, "unknown");
+    assert_eq!(malformed.allocation_relation, "unknown");
     assert!(
         !malformed
             .summary("observed", true)
             .contains("protected-secret")
     );
+}
+
+#[test]
+fn start_allocation_relation_observes_equal_and_different_ports_without_revealing_values() {
+    let id = "a".repeat(64);
+    for (secondary_port, relation) in [
+        ("32000", "same"),
+        ("32001", "different"),
+        ("1", "different"),
+        ("65535", "different"),
+    ] {
+        for reversed in [false, true] {
+            let mut bindings = vec![
+                json!({"HostIp":"127.0.0.1","HostPort":"32000"}),
+                json!({"HostIp":"127.0.0.2","HostPort":secondary_port}),
+            ];
+            if reversed {
+                bindings.reverse();
+            }
+            let value = json!({"Id":id,"Name":"/owned-name",
+                "Config":{"Labels":{"io.dockerlens.native-run":"private-run"},"Image":"private-image"},
+                "State":{"Status":"created"},"NetworkSettings":{"Ports":{"8085/tcp":bindings}}});
+            let mut diagnostic = StartDiagnostic::unknown();
+            diagnostic.observe_container(&value, &id, "owned-name", "private-run", "private-image");
+            assert_eq!(diagnostic.allocation_relation, relation);
+            assert_eq!(diagnostic.primary, "one");
+            assert_eq!(diagnostic.secondary, "one");
+            let summary = diagnostic.summary("observed", true);
+            assert!(summary.contains(&format!("allocation_relation={relation}")));
+            assert!(summary.contains("mutation=uncertain"));
+            for secret in [
+                id.as_str(),
+                "owned-name",
+                "private-run",
+                "private-image",
+                "32000",
+                "32001",
+                "65535",
+            ] {
+                assert!(!summary.contains(secret));
+            }
+            let mut foreign = value.clone();
+            foreign["Id"] = Value::String("b".repeat(64));
+            diagnostic.observe_container(
+                &foreign,
+                &id,
+                "owned-name",
+                "private-run",
+                "private-image",
+            );
+            assert_eq!(diagnostic.allocation_relation, "unknown");
+        }
+    }
+}
+
+#[test]
+fn start_allocation_relation_keeps_partial_foreign_duplicate_and_malformed_data_unknown() {
+    let id = "a".repeat(64);
+    let primary = json!({"HostIp":"127.0.0.1","HostPort":"32000"});
+    let secondary = json!({"HostIp":"127.0.0.2","HostPort":"32001"});
+    let invalid = [
+        Value::Null,
+        json!({}),
+        json!([]),
+        json!([primary]),
+        json!([secondary]),
+        json!([primary, primary]),
+        json!([secondary, secondary]),
+        json!([primary, secondary, primary]),
+        json!([primary, secondary, {"HostIp":"127.0.0.1","HostPort":""}]),
+        json!([primary, {"HostIp":"127.0.0.3","HostPort":"32001"}]),
+        json!([primary, {"HostIp":"127.0.0.2","HostPort":""}]),
+        json!([primary, {"HostIp":"127.0.0.2","HostPort":"0"}]),
+        json!([primary, {"HostIp":"127.0.0.2","HostPort":"65536"}]),
+        json!([primary, {"HostIp":"127.0.0.2","HostPort":"+32001"}]),
+        json!([primary, {"HostIp":"127.0.0.2","HostPort":32001}]),
+        json!([primary, {"HostIp":"127.0.0.2"}]),
+        json!([primary, {"HostPort":"32001"}]),
+        json!([primary, {"HostIp":"protected-secret","HostPort":"protected-secret"}]),
+    ];
+    for bindings in invalid {
+        let value = json!({"Id":id,"Name":"/owned-name",
+            "Config":{"Labels":{"io.dockerlens.native-run":"private-run"},"Image":"private-image"},
+            "State":{"Status":"created"},"NetworkSettings":{"Ports":{"8085/tcp":bindings}}});
+        let mut diagnostic = StartDiagnostic::unknown();
+        diagnostic.observe_container(&value, &id, "owned-name", "private-run", "private-image");
+        assert_eq!(diagnostic.allocation_relation, "unknown");
+        assert!(
+            !diagnostic
+                .summary("observed", true)
+                .contains("protected-secret")
+        );
+    }
+    let value = json!({"Id":id,"Name":"/owned-name",
+        "Config":{"Labels":{"io.dockerlens.native-run":"private-run"},"Image":"private-image"},
+        "State":{"Status":"created"},"NetworkSettings":{"Ports":{"8085/udp":[primary, secondary]}}});
+    let mut diagnostic = StartDiagnostic::unknown();
+    diagnostic.observe_container(&value, &id, "owned-name", "private-run", "private-image");
+    assert_eq!(diagnostic.allocation_relation, "unknown");
+}
+
+#[test]
+fn start_allocation_relation_rejects_zero_padding_and_resets_reused_observations() {
+    let id = "a".repeat(64);
+    let valid = json!({"Id":id,"Name":"/owned-name",
+        "Config":{"Labels":{"io.dockerlens.native-run":"private-run"},"Image":"private-image"},
+        "State":{"Status":"created"},"NetworkSettings":{"Ports":{"8085/tcp":[
+            {"HostIp":"127.0.0.1","HostPort":"32000"},
+            {"HostIp":"127.0.0.2","HostPort":"32001"}]}}});
+    let mut diagnostic = StartDiagnostic::unknown();
+    for index in [0, 1] {
+        for padded in ["032000", "00032000"] {
+            diagnostic.observe_container(&valid, &id, "owned-name", "private-run", "private-image");
+            assert_eq!(diagnostic.allocation_relation, "different");
+            let mut value = valid.clone();
+            value["NetworkSettings"]["Ports"]["8085/tcp"][index]["HostPort"] =
+                Value::String(padded.into());
+            diagnostic.observe_container(&value, &id, "owned-name", "private-run", "private-image");
+            assert_eq!(diagnostic.allocation_relation, "unknown");
+            // The pre-existing cardinalities retain their original parsing.
+            assert_eq!(diagnostic.primary, "one");
+            assert_eq!(diagnostic.secondary, "one");
+            assert!(!diagnostic.summary("observed", true).contains(padded));
+        }
+    }
+    diagnostic.observe_container(&valid, &id, "owned-name", "private-run", "private-image");
+    assert_eq!(diagnostic.allocation_relation, "different");
+    diagnostic.observe_container(
+        &Value::Null,
+        &id,
+        "owned-name",
+        "private-run",
+        "private-image",
+    );
+    assert_eq!(diagnostic.allocation_relation, "unknown");
 }
 
 fn closed_api_failure_diagnostic(action: &'static str, cleanup: bool, code: Option<i32>) -> String {
