@@ -554,6 +554,11 @@ dependency or Renovate extraction path changes are introduced.
 
 ## Bounded container process identity proof (#74)
 
+[ADR 0013](decisions/0013-parameterized-container-identity.md) bounds authored
+user/group syntax and defines the expanded parameterized proof required before
+identity capability admission. The historical proof described below remains
+numeric-only non-admission evidence; expanded ten-pair proof is tracked in #86.
+
 The exact ignored `live_container_process_identity_matches_engine` test is a
 separate tenth mandatory native check; none of the existing nine checks is
 removed, filtered, retried, or made optional. Its only authored setting shape
