@@ -145,6 +145,92 @@
   },
   "$defs": {
     "api_version": { "type": "string", "pattern": "^[1-9][0-9]*\\.[0-9]+$" },
+    "identity_container_v2": {
+      "type": "object", "additionalProperties": false,
+      "required": ["role", "id", "name", "owner", "configured", "outcome", "rejection_phase",
+                   "runtime_uid", "runtime_gid", "runtime_workdir", "cleanup"],
+      "properties": {
+        "role": { "enum": ["oracle", "rendered"] },
+        "id": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
+        "name": { "type": "string", "pattern": "^dl-identity-[a-zA-Z0-9]{8}-(inherit|numeric_uid_gid|numeric_uid|named_user|named_user_group|named_user_numeric_group|numeric_user_named_group|missing_user|missing_group|nondirectory_workdir)-(oracle|rendered)$" },
+        "owner": { "type": "string", "pattern": "^[a-zA-Z0-9]{8}$" },
+        "configured": { "enum": ["passed", "not_created"] },
+        "outcome": { "enum": ["exited_zero", "missing_user", "missing_group", "workdir_not_directory"] },
+        "rejection_phase": { "enum": [null, "create", "start"] },
+        "runtime_uid": { "enum": ["passed", "not_started"] },
+        "runtime_gid": { "enum": ["passed", "not_started"] },
+        "runtime_workdir": { "enum": ["passed", "not_started"] },
+        "cleanup": { "const": "absent" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "rejection_phase": { "const": "create" } } },
+          "then": { "properties": { "id": { "type": "null" }, "configured": { "const": "not_created" } } }
+        },
+        {
+          "if": { "properties": { "outcome": { "const": "exited_zero" } } },
+          "then": { "properties": { "id": { "type": "string" }, "configured": { "const": "passed" },
+                    "rejection_phase": { "const": null }, "runtime_uid": { "const": "passed" },
+                    "runtime_gid": { "const": "passed" }, "runtime_workdir": { "const": "passed" } } },
+          "else": { "properties": { "rejection_phase": { "enum": ["create", "start"] },
+                    "runtime_uid": { "const": "not_started" }, "runtime_gid": { "const": "not_started" },
+                    "runtime_workdir": { "const": "not_started" } } }
+        },
+        {
+          "if": { "properties": { "id": { "type": "null" } } },
+          "then": { "properties": { "configured": { "const": "not_created" }, "rejection_phase": { "const": "create" } } },
+          "else": { "properties": { "configured": { "const": "passed" } } }
+        }
+      ]
+    },
+    "identity_case_v2": {
+      "type": "object", "additionalProperties": false,
+      "required": ["case", "expected_outcome", "wire", "containers"],
+      "properties": {
+        "case": { "type": "string" }, "expected_outcome": { "type": "string" }, "wire": { "const": "passed" },
+        "containers": {
+          "type": "array", "minItems": 2, "maxItems": 2, "items": false,
+          "prefixItems": [
+            { "allOf": [{ "$ref": "#/$defs/identity_container_v2" }, { "properties": { "role": { "const": "oracle" } } }] },
+            { "allOf": [{ "$ref": "#/$defs/identity_container_v2" }, { "properties": { "role": { "const": "rendered" } } }] }
+          ]
+        }
+      },
+      "allOf": [
+        { "if": { "properties": { "expected_outcome": { "const": "exited_zero" } } }, "then": { "properties": { "containers": { "items": { "properties": { "outcome": { "const": "exited_zero" } } } } } } },
+        { "if": { "properties": { "expected_outcome": { "const": "missing_user" } } }, "then": { "properties": { "containers": { "items": { "properties": { "outcome": { "const": "missing_user" } } } } } } },
+        { "if": { "properties": { "expected_outcome": { "const": "missing_group" } } }, "then": { "properties": { "containers": { "items": { "properties": { "outcome": { "const": "missing_group" } } } } } } },
+        { "if": { "properties": { "expected_outcome": { "const": "workdir_not_directory" } } }, "then": { "properties": { "containers": { "items": { "properties": { "outcome": { "const": "workdir_not_directory" } } } } } } }
+      ]
+    },
+    "native_identity_proof_v2": {
+      "description": "Private parameterized identity proof. The emitter additionally verifies file privacy/stability, globally distinct IDs, exact case/role/name/owner and candidate/lane/mode/API/run bindings, and matching rejection phases. Raw evidence only, not reviewed-catalogue admission.",
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "candidate_sha", "lane", "mode", "rendering_api", "run_id", "identity_contract", "cases", "probes"],
+      "properties": {
+        "schema_version": { "const": 2 }, "identity_contract": { "const": "container-identity-v1" },
+        "candidate_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "lane": { "enum": ["debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless"] },
+        "mode": { "enum": ["rootful", "rootless"] }, "rendering_api": { "$ref": "#/$defs/api_version" },
+        "run_id": { "type": "string", "pattern": "^[a-zA-Z0-9]{8}$" },
+        "probes": { "$ref": "#/$defs/identity_probes" },
+        "cases": {
+          "type": "array", "minItems": 10, "maxItems": 10, "items": false,
+          "prefixItems": [
+            { "allOf": [{ "$ref": "#/$defs/identity_case_v2" }, { "properties": { "case": { "const": "inherit" }, "expected_outcome": { "const": "exited_zero" } } }] },
+            { "allOf": [{ "$ref": "#/$defs/identity_case_v2" }, { "properties": { "case": { "const": "numeric_uid_gid" }, "expected_outcome": { "const": "exited_zero" } } }] },
+            { "allOf": [{ "$ref": "#/$defs/identity_case_v2" }, { "properties": { "case": { "const": "numeric_uid" }, "expected_outcome": { "const": "exited_zero" } } }] },
+            { "allOf": [{ "$ref": "#/$defs/identity_case_v2" }, { "properties": { "case": { "const": "named_user" }, "expected_outcome": { "const": "exited_zero" } } }] },
+            { "allOf": [{ "$ref": "#/$defs/identity_case_v2" }, { "properties": { "case": { "const": "named_user_group" }, "expected_outcome": { "const": "exited_zero" } } }] },
+            { "allOf": [{ "$ref": "#/$defs/identity_case_v2" }, { "properties": { "case": { "const": "named_user_numeric_group" }, "expected_outcome": { "const": "exited_zero" } } }] },
+            { "allOf": [{ "$ref": "#/$defs/identity_case_v2" }, { "properties": { "case": { "const": "numeric_user_named_group" }, "expected_outcome": { "const": "exited_zero" } } }] },
+            { "allOf": [{ "$ref": "#/$defs/identity_case_v2" }, { "properties": { "case": { "const": "missing_user" }, "expected_outcome": { "const": "missing_user" } } }] },
+            { "allOf": [{ "$ref": "#/$defs/identity_case_v2" }, { "properties": { "case": { "const": "missing_group" }, "expected_outcome": { "const": "missing_group" } } }] },
+            { "allOf": [{ "$ref": "#/$defs/identity_case_v2" }, { "properties": { "case": { "const": "nondirectory_workdir" }, "expected_outcome": { "const": "workdir_not_directory" } } }] }
+          ]
+        }
+      }
+    },
     "identity_probes": {
       "description": "Closed raw-manifest process-identity group; not capability admission.",
       "type": "array", "minItems": 5, "maxItems": 5,

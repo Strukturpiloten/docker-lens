@@ -8,6 +8,8 @@ import stat
 import sys
 from pathlib import Path
 
+from native_identity_proof import CASES as IDENTITY_CASES, CONTRACT as IDENTITY_CONTRACT, validate_identity_v2
+
 
 CAPABILITIES = (
     "StandaloneContainer", "NamedVolume", "BridgeNetwork", "PortPublish",
@@ -86,23 +88,33 @@ def identity_object(pairs):
 
 
 def read_identity_proof(path: Path, lane: str, mode: str, api: str,
-                        candidate: str, run_id: str) -> list[str]:
+                        candidate: str, run_id: str) -> tuple[list[str], bool]:
     # Trusted harness provenance, not an attestation against a privileged writer.
     descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
     with os.fdopen(descriptor, "rb") as source:
         before = os.fstat(source.fileno())
-        if (not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= 4096
+        if (not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= 16384
                 or before.st_uid != os.geteuid() or before.st_mode & 0o077
                 or before.st_nlink != 1):
             raise ValueError("invalid private identity proof")
-        payload = source.read(4097)
+        payload = source.read(16385)
         after = os.fstat(source.fileno())
-    if len(payload) != before.st_size or (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+    if (len(payload) != before.st_size
+            or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns,
+                before.st_ctime_ns, before.st_mode, before.st_uid, before.st_nlink)
+            != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns,
+                after.st_ctime_ns, after.st_mode, after.st_uid, after.st_nlink)):
         raise ValueError("identity proof changed")
     proof = json.loads(payload, object_pairs_hook=identity_object)
+    if isinstance(proof, dict) and type(proof.get("schema_version")) is int and proof["schema_version"] == 2:
+        if stat.S_IMODE(before.st_mode) != 0o600:
+            raise ValueError("invalid v2 identity proof mode")
+        validate_identity_v2(proof, lane, mode, api, candidate, run_id, IDENTITY_PROBES)
+        return list(IDENTITY_PROBES), True
     if (not isinstance(proof, dict) or set(proof) != {
             "schema_version", "candidate_sha", "lane", "mode", "rendering_api",
             "run_id", "probes", "containers"}
+            or len(payload) > 4096
             or type(proof["schema_version"]) is not int or proof["schema_version"] != 1
             or proof["candidate_sha"] != candidate or proof["lane"] != lane
             or proof["mode"] != mode or proof["rendering_api"] != api
@@ -124,7 +136,7 @@ def read_identity_proof(path: Path, lane: str, mode: str, api: str,
         ids.append(record["id"])
     if len(set(ids)) != 2:
         raise ValueError("identity containers must be distinct")
-    return list(IDENTITY_PROBES)
+    return list(IDENTITY_PROBES), False
 
 
 def read_volume_probes(path: Path) -> list[str]:
@@ -412,7 +424,8 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         raise ValueError("native source probe set is incomplete")
     volume_probes = read_volume_probes(volume_path)
     volume_label_probes = read_volume_label_probes(volume_label_path)
-    identity_probes = read_identity_proof(identity_path, lane, mode, maximum, candidate_sha, run_id)
+    identity_probes, parameterized_identity = read_identity_proof(
+        identity_path, lane, mode, maximum, candidate_sha, run_id)
     port_probes = read_port_proof(port_path, capture_dir, lane, engine,
                                   maximum, mode, candidate_sha, run_id)
 
@@ -427,6 +440,9 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         "VolumeLabels": ["VolumeCreateLabels"],
         "NetworkExternalReference": ["ExternalNetworkReference"],
     }
+    if parameterized_identity:
+        proof_shapes.update({"ContainerUser": ["ContainerUser"],
+                             "ContainerWorkdir": ["ContainerWorkdir"]})
 
     record = {
         "schema_version": 1,
@@ -453,6 +469,9 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         "identity_probes": identity_probes,
         "port_probes": port_probes,
     }
+    if parameterized_identity:
+        record["identity_contract"] = IDENTITY_CONTRACT
+        record["identity_cases"] = list(IDENTITY_CASES)
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(record, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 

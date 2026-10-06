@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Extend the separate native identity proof to ten independent CLI/renderer
+  pairs, non-default named principals, new-directory creation and attributed
+  account/path failures. Validate a bounded private v2 contract before mapping
+  the two singleton raw identity groups; preserve historical v1 non-admission
+  evidence and the reviewed catalogue. Fresh exact-source four-lane proof and
+  independently reviewed capability admission remain pending.
 - Reject malformed authored user/group selectors using canonical bounded IDs
   and portable ASCII names, and require single principals for supplementary
   groups. Preserve protected errors and shared absolute-path behavior. This
