@@ -3,9 +3,9 @@
 
 use docker_lens::observation::ResourceRef;
 use docker_lens::target::{
-    DockerApiRenderer, DockerPlanner, NetworkCreate, NetworkDriver, NetworkIntent, NetworkRole,
-    NetworkSource, Planner, PlanningContext, Renderer, TargetIdentity, TargetIntent,
-    TargetResource,
+    DockerApiRenderer, DockerPlanner, IntentError, NetworkCreate, NetworkDriver, NetworkIntent,
+    NetworkRole, NetworkSource, Planner, PlanningContext, Renderer, TargetIdentity, TargetIntent,
+    TargetResource, VolumeLabel,
 };
 use docker_lens::version::{
     ApiVersion, Capability, CapabilityError, CapabilityEvidenceKey, DaemonMode,
@@ -26,21 +26,21 @@ fn exact_profiles_admit_reviewed_prerequisites_but_keep_other_groups_closed() {
         let resolved = catalog.resolve(profile).unwrap();
         assert_eq!(
             resolved.evidence().candidate_sha(),
-            "702910b003daae58babd540d7ba3de4998275feb"
+            "0d8268155a5aacddaeb501adf7f8b2fe06a718ca"
         );
         assert_eq!(
             resolved.evidence().run_url(),
-            "https://github.com/Strukturpiloten/docker-lens/actions/runs/37209363801/attempts/1"
+            "https://github.com/Strukturpiloten/docker-lens/actions/runs/37214738475/attempts/1"
         );
         for capability in [
             Capability::VolumeExternalReference,
             Capability::NetworkExternalReference,
             Capability::NetworkInternal,
+            Capability::VolumeLabels,
         ] {
             assert!(resolved.supports(capability));
         }
         for capability in [
-            Capability::VolumeLabels,
             Capability::NetworkIpv6,
             Capability::NetworkIpam,
             Capability::NetworkOptions,
@@ -75,16 +75,16 @@ fn reviewed_prerequisite_context(profile: &TargetProfile) -> serde_json::Value {
                 "20.10.5+dfsg1",
                 "1.41",
                 "1.41",
-                "b9f3064cadfc2302678b9a334597907fd35eeb856464d4e6c81bf4465875d0e8",
-                "365e8a70e2e5a369912da47d2a510e45acd7cca3ac6e932e3536ad75f22c64b9",
+                "2306973726b1ecaeac9b26936cfe4df127a9f4927ae5f7bd41be99b528ee37fa",
+                "f471fc1f6998bfdebb130734a11c484ff7bb7e42a406805ab269bd482347eac4",
             ),
             EngineBuild::Upstream => (
                 serde_json::json!({"kind": "upstream"}),
                 "29.8.1",
                 "1.56",
                 "1.49",
-                "27c47307f4fdd523a22448415238a729e7a6458fddc554259f23ea99fff5ff76",
-                "c0f8160bf8787e9490713595f58c1b4eeb9aeee3ff5f4739776a1010bdea6e1f",
+                "dd2dec14ce75c1dfb672f018a8ade98334783edcd964758da6b4a432d22429a0",
+                "280839c9f4d6cfd1adda9f25bbf17fdfbb3fab162e91c346a614c31e1e318c44",
             ),
         };
     let (mode, evidence_key) = match profile.mode() {
@@ -180,13 +180,223 @@ fn reviewed_profiles_plan_and_render_exact_prerequisites_and_internal_bridge() {
     }
 }
 
+fn literal_label_artifact(profile: &TargetProfile) -> &'static str {
+    // Independently authored wire expectations, not bytes obtained from the renderer.
+    match (profile.identity().build(), profile.mode()) {
+        (EngineBuild::DebianPackage(_), DaemonMode::Rootful) => {
+            "{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"debian_package\",\"revision\":\"20.10.5+dfsg1-1+deb11u2\"},\"engine_release\":\"20.10.5+dfsg1\",\"advertised_api_version\":\"1.41\",\"acquisition_api_version\":\"1.41\",\"rendering_api_version\":\"1.41\",\"daemon_mode\":\"rootful\",\"evidence_sha256\":\"2306973726b1ecaeac9b26936cfe4df127a9f4927ae5f7bd41be99b528ee37fa\"},\"requests\":[{\"method\":\"POST\",\"path\":\"/v1.41/volumes/create\",\"body\":{\"Name\":\"candidate-volume\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"empty\":\"\",\"private-key\":\"Grüße\\\"\\\\\\n\"}}}],\"prerequisites\":[]}\n"
+        }
+        (EngineBuild::Upstream, DaemonMode::Rootful) => {
+            "{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"upstream\"},\"engine_release\":\"29.8.1\",\"advertised_api_version\":\"1.56\",\"acquisition_api_version\":\"1.49\",\"rendering_api_version\":\"1.56\",\"daemon_mode\":\"rootful\",\"evidence_sha256\":\"dd2dec14ce75c1dfb672f018a8ade98334783edcd964758da6b4a432d22429a0\"},\"requests\":[{\"method\":\"POST\",\"path\":\"/v1.56/volumes/create\",\"body\":{\"Name\":\"candidate-volume\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"empty\":\"\",\"private-key\":\"Grüße\\\"\\\\\\n\"}}}],\"prerequisites\":[]}\n"
+        }
+        (EngineBuild::DebianPackage(_), DaemonMode::Rootless) => {
+            "{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"debian_package\",\"revision\":\"20.10.5+dfsg1-1+deb11u2\"},\"engine_release\":\"20.10.5+dfsg1\",\"advertised_api_version\":\"1.41\",\"acquisition_api_version\":\"1.41\",\"rendering_api_version\":\"1.41\",\"daemon_mode\":\"rootless\",\"evidence_sha256\":\"f471fc1f6998bfdebb130734a11c484ff7bb7e42a406805ab269bd482347eac4\"},\"requests\":[{\"method\":\"POST\",\"path\":\"/v1.41/volumes/create\",\"body\":{\"Name\":\"candidate-volume\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"empty\":\"\",\"private-key\":\"Grüße\\\"\\\\\\n\"}}}],\"prerequisites\":[]}\n"
+        }
+        (EngineBuild::Upstream, DaemonMode::Rootless) => {
+            "{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"upstream\"},\"engine_release\":\"29.8.1\",\"advertised_api_version\":\"1.56\",\"acquisition_api_version\":\"1.49\",\"rendering_api_version\":\"1.56\",\"daemon_mode\":\"rootless\",\"evidence_sha256\":\"280839c9f4d6cfd1adda9f25bbf17fdfbb3fab162e91c346a614c31e1e318c44\"},\"requests\":[{\"method\":\"POST\",\"path\":\"/v1.56/volumes/create\",\"body\":{\"Name\":\"candidate-volume\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"empty\":\"\",\"private-key\":\"Grüße\\\"\\\\\\n\"}}}],\"prerequisites\":[]}\n"
+        }
+        (_, DaemonMode::Unknown) => panic!("reviewed profiles must bind a daemon mode"),
+    }
+}
+
+#[test]
+fn candidate_label_profiles_render_literal_complete_artifacts_and_protect_debug() {
+    let label =
+        VolumeLabel::new(b"private-key".to_vec(), "Grüße\"\\\n".as_bytes().to_vec()).unwrap();
+    assert!(!format!("{label:?}").contains("private-key"));
+    let intent = TargetIntent::new(vec![labelled_volume(vec![
+        VolumeLabel::new(b"io.boxferry.owner".to_vec(), b"fixture".to_vec()).unwrap(),
+        VolumeLabel::new(b"empty".to_vec(), vec![]).unwrap(),
+        label,
+    ])])
+    .unwrap();
+    let catalog = TargetCapabilityCatalog::reviewed();
+    assert_eq!(catalog.profiles().len(), 4);
+    for profile in catalog.profiles() {
+        let admitted = catalog.resolve(profile).unwrap();
+        let graph = DockerPlanner.plan(&intent, &admitted).unwrap();
+        assert_eq!(graph.context(), &PlanningContext::Target(profile.clone()));
+        let artifact = DockerApiRenderer.render(&graph).unwrap();
+        assert_eq!(artifact.context(), Some(graph.context()));
+        assert!(artifact.volume_prerequisites().is_empty());
+        assert!(artifact.network_prerequisites().is_empty());
+        let expected = literal_label_artifact(profile);
+        assert_eq!(artifact.complete_bytes().unwrap(), expected.as_bytes());
+        let expected: serde_json::Value = serde_json::from_str(expected).unwrap();
+        let request: serde_json::Value = serde_json::from_slice(artifact.bytes()).unwrap();
+        assert_eq!(request, expected["requests"][0]);
+        for debug in [
+            format!("{intent:?}"),
+            format!("{graph:?}"),
+            format!("{artifact:?}"),
+        ] {
+            for protected in [
+                "candidate-volume",
+                "io.boxferry.owner",
+                "private-key",
+                "Grüße",
+                "fixture",
+            ] {
+                assert!(!debug.contains(protected));
+            }
+        }
+    }
+}
+
+fn labelled_volume(labels: Vec<VolumeLabel>) -> TargetResource {
+    TargetResource::Volume {
+        reference: ResourceRef::new(1),
+        identity: TargetIdentity::new(b"candidate-volume".to_vec()).unwrap(),
+        labels,
+    }
+}
+
+#[test]
+fn public_volume_label_invalid_duplicate_and_oversized_values_fail_closed() {
+    assert!(VolumeLabel::new(vec![b'k'; 128], vec![b'v'; 4096]).is_ok());
+    for (key, value) in [
+        (vec![], vec![]),
+        (vec![b'k'; 129], vec![]),
+        (b"private-key".to_vec(), vec![b'v'; 4097]),
+        (b"private\0key".to_vec(), vec![]),
+        (b"private-key".to_vec(), b"private\0value".to_vec()),
+        (vec![0xff], vec![]),
+        (b"private-key".to_vec(), vec![0xff]),
+    ] {
+        let error = VolumeLabel::new(key, value).unwrap_err();
+        assert_eq!(error, IntentError::InvalidVolumeLabel);
+        assert!(!format!("{error:?}").contains("private"));
+    }
+    let duplicate = (0..2)
+        .map(|_| VolumeLabel::new(b"private-key".to_vec(), b"private-value".to_vec()).unwrap())
+        .collect();
+    let error = TargetIntent::new(vec![labelled_volume(duplicate)]).unwrap_err();
+    assert_eq!(error, IntentError::DuplicateVolumeLabel);
+    assert!(!format!("{error:?}").contains("private"));
+    for count in [64, 65] {
+        let labels = (0..count)
+            .map(|index| VolumeLabel::new(format!("key-{index}").into_bytes(), vec![]).unwrap())
+            .collect();
+        let result = TargetIntent::new(vec![labelled_volume(labels)]);
+        if count == 64 {
+            assert!(result.is_ok());
+        } else {
+            assert_eq!(result.unwrap_err(), IntentError::InvalidVolumeLabel);
+        }
+    }
+    for value_bytes in [4095, 4096] {
+        let labels = (0..4)
+            .map(|index| {
+                VolumeLabel::new(format!("{index}").into_bytes(), vec![b'v'; value_bytes]).unwrap()
+            })
+            .collect();
+        let result = TargetIntent::new(vec![labelled_volume(labels)]);
+        if value_bytes == 4095 {
+            assert!(result.is_ok());
+        } else {
+            assert_eq!(result.unwrap_err(), IntentError::InvalidVolumeLabel);
+        }
+    }
+}
+
+#[test]
+fn public_external_volume_cannot_be_relabelled_by_a_conflicting_created_volume() {
+    let error = TargetIntent::new(vec![
+        labelled_volume(vec![
+            VolumeLabel::new(b"private-key".to_vec(), b"private-value".to_vec()).unwrap(),
+        ]),
+        TargetResource::ExternalVolume {
+            reference: ResourceRef::new(2),
+            identity: TargetIdentity::new(b"candidate-volume".to_vec()).unwrap(),
+        },
+    ])
+    .unwrap_err();
+    assert_eq!(error, IntentError::DuplicateResource);
+    let intent = TargetIntent::new(vec![TargetResource::ExternalVolume {
+        reference: ResourceRef::new(2),
+        identity: TargetIdentity::new(b"existing-private-data".to_vec()).unwrap(),
+    }])
+    .unwrap();
+    let catalog = TargetCapabilityCatalog::reviewed();
+    for profile in catalog.profiles() {
+        let admitted = catalog.resolve(profile).unwrap();
+        let graph = DockerPlanner.plan(&intent, &admitted).unwrap();
+        let artifact = DockerApiRenderer.render(&graph).unwrap();
+        assert!(artifact.bytes().is_empty());
+        let complete: serde_json::Value =
+            serde_json::from_slice(&artifact.complete_bytes().unwrap()).unwrap();
+        assert_eq!(complete["requests"], serde_json::json!([]));
+        assert_eq!(
+            complete["prerequisites"],
+            serde_json::json!([
+                {"kind":"volume", "reference":"2", "identity":"existing-private-data"},
+            ])
+        );
+    }
+}
+
+#[test]
+fn label_candidates_reject_wrong_mode_evidence_and_api_before_planning() {
+    let intent = TargetIntent::new(vec![labelled_volume(vec![
+        VolumeLabel::new(b"private-key".to_vec(), b"private-value".to_vec()).unwrap(),
+    ])])
+    .unwrap();
+    let catalog = TargetCapabilityCatalog::reviewed();
+    for profile in catalog.profiles() {
+        let wrong_mode = if profile.mode() == DaemonMode::Rootful {
+            DaemonMode::Rootless
+        } else {
+            DaemonMode::Rootful
+        };
+        let identity = profile.identity();
+        let mismatches = [
+            TargetProfile::new(
+                identity.clone(),
+                CapabilityEvidenceKey::sha256([7; 32]).unwrap(),
+            ),
+            TargetProfile::new(
+                TargetProfileIdentity::new(
+                    identity.build().clone(),
+                    profile.release().clone(),
+                    identity.advertised_api_version(),
+                    identity.acquisition_api_version(),
+                    profile.rendering_api_version(),
+                    wrong_mode,
+                )
+                .unwrap(),
+                profile.evidence_key().clone(),
+            ),
+            TargetProfile::new(
+                TargetProfileIdentity::new(
+                    identity.build().clone(),
+                    profile.release().clone(),
+                    api(identity.advertised_api_version().minor + 1),
+                    identity.acquisition_api_version(),
+                    api(profile.rendering_api_version().minor + 1),
+                    profile.mode(),
+                )
+                .unwrap(),
+                profile.evidence_key().clone(),
+            ),
+        ];
+        for mismatch in mismatches {
+            assert!(matches!(
+                catalog.resolve(&mismatch),
+                Err(CapabilityError::ProfileNotReviewed)
+            ));
+        }
+        let admitted = catalog.resolve(profile).unwrap();
+        assert!(DockerPlanner.plan(&intent, &admitted).is_ok());
+    }
+}
+
 #[test]
 fn public_catalog_resolves_four_exact_profiles_and_renders_inert_requests() {
     let catalog = TargetCapabilityCatalog::reviewed();
     assert_eq!(catalog.profiles().len(), 4);
     for profile in catalog.profiles() {
         let admitted = catalog.resolve(profile).unwrap();
-        assert!(!admitted.supports(Capability::VolumeLabels));
+        assert!(admitted.supports(Capability::VolumeLabels));
         assert_eq!(admitted.profile(), profile);
         assert_eq!(admitted.evidence_key(), profile.evidence_key());
         let opposite_mode = if profile.mode() == DaemonMode::Rootful {
