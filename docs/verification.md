@@ -689,6 +689,36 @@ retries, evidence or proof of remaining resources. Deadlines, exact ownership,
 repeated genuine absence checks, assertion outcomes and admission stay unchanged;
 raw test, controller and runtime output remains private.
 
+Failed API diagnostics separately retain the first closed action/phase/exit for
+probe and cleanup, distinguishing curl's request timeout from the outer command
+timeout and signals without printing a route, ID or response. Only a transport
+failure starting the exact registered repeated-ephemeral IPv4 CLI oracle enables
+an optional version GET and that same immutable ID's inspect GET. This uses a
+test-only guarded seam into the existing acquisition transport, not subprocess
+capture or another HTTP client; product acquisition behavior is unchanged.
+The two reads share one monotonic window of at most four seconds, each clipped
+to at most two seconds and the remaining original deadline before its forty-second
+cleanup reserve. Insufficient time reserve skips the observations without new
+I/O. The original 512-command/8-MiB retained-output counters are untouched on
+every diagnostic path; this failure-only allowance separately admits at most
+two GETs and charges a conservative whole-wire bound before each read. That
+bound derives from the canonical 16-KiB header/body and 64-byte chunk-line caps,
+bounded trailers and the longest 163-byte allowed request. The aggregate
+envelope is the original budgets plus this separate two-read allowance,
+not a claim that every budget is unchanged. This avoids spending cleanup
+counter space: its conservative known-resource byte envelope would not fit in
+the original 8 MiB even without diagnostics. Canonical framing, cancellation and terminal
+time checks cover complete framing and JSON classification; no child, drain,
+kill-grace or reap budget is introduced. An optional caught panic stays inside
+the same closed diagnostic scope and cannot replace the original failed API
+assertion. Only fixed responsiveness, exact identity, container state and
+primary/secondary allocation cardinalities are emitted. A foreign or partial
+identity cannot authorize further observations; malformed/late results remain
+unknown. The same numerical port on different host addresses is valid and is
+never rejected by this diagnostic. No readback clears mutation uncertainty,
+retries start/delete, changes existing timeouts/assertions, creates an unsupported
+outcome or permits a proof after the original failure.
+
 The existing main, reviewed-PR native dispatcher and Release validation workflows
 all consume `scripts/native-conformance.sh`; that canonical definition now
 requires the port proof in every exact lane. No new workflow, dependency,

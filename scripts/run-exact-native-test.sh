@@ -66,6 +66,9 @@ if [[ $target == native_port ]]; then
   # per cleanup attempt); never export native values, messages or suffixes.
   port_patterns=(
     '^DOCKERLENS_NATIVE_API_DIAG: transport=(timeout|other)$'
+    '^DOCKERLENS_NATIVE_PORT_API_DIAG: action=(version|info|create|start|inspect_name|inspect_id|delete) phase=probe exit=(curl_timeout|outer_timeout|signal|other)$'
+    '^DOCKERLENS_NATIVE_PORT_API_DIAG: action=(version|info|create|start|inspect_name|inspect_id|delete) phase=cleanup exit=(curl_timeout|outer_timeout|signal|other)$'
+    '^DOCKERLENS_NATIVE_PORT_START_DIAG: outcome=(observed|skipped|panic) version=(responsive|timeout|other|unknown) object=(responsive|timeout|other|unknown) identity=(same|mismatch|unknown) state=(created|running|restarting|paused|exited|dead|removing|unknown) primary=(zero|one|two|many|unknown) secondary=(zero|one|two|many|unknown) mutation=(clear|uncertain)$'
     '^DOCKERLENS_NATIVE_API_DIAG: operation=(inspect|create|start) status=(invalid_request|not_found|conflict|server|other)$'
     '^DOCKERLENS_NATIVE_HTTP_DIAG: exit=(timeout|signal|other|success) category=(connection_refused|missing_tool|address_family|invalid_address|no_route|permission|storage_exhausted|invalid_reference|missing_resource|image_storage|unknown|body_mismatch)$'
     '^DOCKERLENS_NATIVE_CLI_DIAG: exit=(timeout|signal|other) stderr=(connection_refused|missing_tool|address_family|invalid_address|no_route|permission|storage_exhausted|invalid_reference|missing_resource|image_storage|unknown)$'
@@ -78,7 +81,7 @@ if [[ $target == native_port ]]; then
     '^DOCKERLENS_NATIVE_PORT_CLEANUP_DIAG: attempt=drop outcome=(pass|fail|panic) reserve=(exhausted|low|reserved) mutation=(clear|uncertain)$'
   )
   for port_pattern in "${port_patterns[@]}"; do
-    if [[ $port_pattern == '^DOCKERLENS_NATIVE_API_DIAG: transport=(timeout|other)$' ]]; then
+    if [[ $port_pattern == '^DOCKERLENS_NATIVE_API_DIAG: transport=(timeout|other)$' || $port_pattern == '^DOCKERLENS_NATIVE_PORT_API_DIAG:'* ]]; then
       # Later cleanup transport failures must not replace the original failure.
       port_diagnostic=$(grep -Eo "$port_pattern" <<<"$result" | sed -n '1p' || true)
     else

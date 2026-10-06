@@ -2,7 +2,10 @@
 //! Ignored live assertions do not admit a catalogue capability or run in product builds.
 //! Rootful/rootless and every address-family shape require independent evidence.
 
-use crate::acquisition::{Endpoint, Limits, NativeId, Selector, acquire};
+use crate::acquisition::{
+    AcquisitionError, DIAGNOSTIC_GET_BODY_LIMIT, DIAGNOSTIC_GET_WIRE_LIMIT, DiagnosticGetBudget,
+    Endpoint, LimitError, Limits, NativeId, ReadRequest, Selector, acquire, diagnostic_get,
+};
 use crate::decoder::decode_capture;
 use crate::evidence::CaptureRoute;
 use crate::observation::ResourceRef;
@@ -356,6 +359,29 @@ impl NativeRun {
         command.args(["-w", "\n%{http_code}", &format!("http://localhost{path}")]);
         let output = self.capture(&mut command, input.as_deref(), 131080);
         if !output.status.success() {
+            let action = if method == "GET" && path == "/version" {
+                "version"
+            } else if method == "GET" && path == format!("{prefix}/info") {
+                "info"
+            } else if method == "GET"
+                && names
+                    .iter()
+                    .any(|name| path == format!("{prefix}/containers/{name}/json"))
+            {
+                "inspect_name"
+            } else if method == "GET" {
+                "inspect_id"
+            } else if method == "DELETE" {
+                "delete"
+            } else if create {
+                "create"
+            } else {
+                "start"
+            };
+            eprintln!(
+                "{}",
+                closed_api_failure_diagnostic(action, cleanup, output.status.code())
+            );
             eprintln!(
                 "DOCKERLENS_NATIVE_API_DIAG: transport={}",
                 if output.status.code() == Some(28) || output.status.code() == Some(124) {
@@ -364,6 +390,26 @@ impl NativeRun {
                     "other"
                 }
             );
+            if !cleanup && method == "POST" && start {
+                if let Some((name, id)) = self.created.iter().find(|(name, id)| {
+                    *name == self.name("multi-dynamic-oracle")
+                        && path == format!("{prefix}/containers/{id}/start")
+                }) {
+                    eprintln!("DOCKERLENS_NATIVE_PORT_DIAGNOSTIC_SCOPE: begin");
+                    let observed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        self.repeated_start_diagnostics(name, id)
+                    }));
+                    eprintln!("DOCKERLENS_NATIVE_PORT_DIAGNOSTIC_SCOPE: end");
+                    let (outcome, diagnostic) = match observed {
+                        Ok(value) => value,
+                        Err(_) => ("panic", StartDiagnostic::unknown()),
+                    };
+                    eprintln!(
+                        "{}",
+                        diagnostic.summary(outcome, self.uncertain_mutation.get())
+                    );
+                }
+            }
         }
         assert!(
             output.status.success(),
@@ -383,6 +429,127 @@ impl NativeRun {
             self.uncertain_mutation.set(previous);
         }
         (status, output.stdout[..split].to_vec())
+    }
+
+    fn repeated_start_diagnostics(&self, name: &str, id: &str) -> (&'static str, StartDiagnostic) {
+        let started = Instant::now();
+        let Some(total) = start_diagnostic_budget(self.remaining()) else {
+            return ("skipped", StartDiagnostic::unknown());
+        };
+        if !canonical_id(id)
+            || self.known_id(id) != Some(name)
+            || name != self.name("multi-dynamic-oracle")
+        {
+            return ("skipped", StartDiagnostic::unknown());
+        }
+        let api_minor = match self.api_version.as_str() {
+            "1.41" => 41,
+            "1.56" => 56,
+            _ => return ("skipped", StartDiagnostic::unknown()),
+        };
+        let allowance = StartReadAllowance::new();
+        let mut diagnostic = StartDiagnostic::unknown();
+        diagnostic.version = match self.start_diagnostic_read(
+            ReadRequest::DaemonVersion,
+            None,
+            started,
+            total,
+            &allowance,
+        ) {
+            Ok((value, limit))
+                if value["Version"] == self.engine_release
+                    && value["ApiVersion"] == self.api_version
+                    && started.elapsed() < limit
+                    && self.remaining() > Duration::from_secs(40) =>
+            {
+                "responsive"
+            }
+            Ok(_) => "unknown",
+            Err(error) => diagnostic_read_outcome(error),
+        };
+        let api = ApiVersion::new(NonZeroU16::new(1).unwrap(), api_minor);
+        match self.start_diagnostic_read(
+            ReadRequest::InspectContainer(NativeId::new(id.to_owned()).unwrap()),
+            Some(api),
+            started,
+            total,
+            &allowance,
+        ) {
+            Ok((value, limit)) => {
+                diagnostic.observe_container(&value, id, name, &self.run_id, &self.image);
+                if started.elapsed() >= limit || self.remaining() <= Duration::from_secs(40) {
+                    let version = diagnostic.version;
+                    diagnostic = StartDiagnostic::unknown();
+                    diagnostic.version = version;
+                }
+            }
+            Err(error) => diagnostic.object = diagnostic_read_outcome(error),
+        }
+        if started.elapsed() >= total || self.remaining() <= Duration::from_secs(40) {
+            // Preserve already completed version/error observations, but never
+            // project a container classified after its shared window as live.
+            if diagnostic.object == "responsive" {
+                let version = diagnostic.version;
+                diagnostic = StartDiagnostic::unknown();
+                diagnostic.version = version;
+            }
+        }
+        ("observed", diagnostic)
+    }
+
+    fn start_diagnostic_read(
+        &self,
+        request: ReadRequest,
+        api: Option<ApiVersion>,
+        started: Instant,
+        total: Duration,
+        allowance: &StartReadAllowance,
+    ) -> Result<(Value, Duration), AcquisitionError> {
+        let elapsed = started.elapsed();
+        let reserve = self
+            .remaining()
+            .checked_sub(Duration::from_secs(40))
+            .unwrap_or_default();
+        let limit = total
+            .min(elapsed.saturating_add(reserve))
+            .min(elapsed.saturating_add(Duration::from_secs(2)));
+        if allowance
+            .cancelled
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(AcquisitionError::Cancelled);
+        }
+        if reserve.is_zero() || limit <= elapsed {
+            return Err(AcquisitionError::Deadline);
+        }
+        // Never spend the existing mutation/probe/cleanup counters.
+        allowance.charge()?;
+        let result = diagnostic_get(
+            &Endpoint::unix_socket(PathBuf::from(&self.socket)),
+            &request,
+            api,
+            DiagnosticGetBudget {
+                started,
+                total: limit,
+                per_read: Duration::from_secs(2),
+                max_body: DIAGNOSTIC_GET_BODY_LIMIT,
+            },
+            &allowance.cancelled,
+        );
+        if matches!(result, Err(AcquisitionError::Budget(_))) {
+            allowance
+                .cancelled
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        let (status, bytes) = result?;
+        if status.code() != 200 {
+            return Err(AcquisitionError::Status);
+        }
+        let value = serde_json::from_slice(&bytes).map_err(|_| AcquisitionError::Protocol)?;
+        if started.elapsed() >= limit || self.remaining() <= Duration::from_secs(40) {
+            return Err(AcquisitionError::Deadline);
+        }
+        Ok((value, limit))
     }
 
     fn api(&self, method: &str, path: &str, body: Option<&Value>) -> (u16, Vec<u8>) {
@@ -1214,6 +1381,347 @@ fn every_static_namespace_probe_mode_is_allowed() {
     for invalid in ["", "private", "tcp6_refusal; private"] {
         assert!(std::panic::catch_unwind(|| require_namespace_probe_mode(invalid)).is_err());
     }
+}
+
+struct StartReadAllowance {
+    requests: Cell<usize>,
+    wire_bytes: Cell<usize>,
+    cancelled: AtomicBool,
+}
+
+impl StartReadAllowance {
+    fn new() -> Self {
+        Self {
+            requests: Cell::new(0),
+            wire_bytes: Cell::new(0),
+            cancelled: AtomicBool::new(false),
+        }
+    }
+
+    fn charge(&self) -> Result<(), AcquisitionError> {
+        if self.cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(AcquisitionError::Cancelled);
+        }
+        if self.requests.get() >= 2 {
+            self.cancelled
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            return Err(AcquisitionError::Budget(LimitError::Requests));
+        }
+        if self.wire_bytes.get() > DIAGNOSTIC_GET_WIRE_LIMIT {
+            self.cancelled
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            return Err(AcquisitionError::Budget(LimitError::Bytes));
+        }
+        self.requests.set(self.requests.get() + 1);
+        self.wire_bytes
+            .set(self.wire_bytes.get() + DIAGNOSTIC_GET_WIRE_LIMIT);
+        Ok(())
+    }
+}
+
+fn start_diagnostic_budget(remaining: Duration) -> Option<Duration> {
+    let available = remaining.checked_sub(Duration::from_secs(40))?;
+    (available >= Duration::from_secs(4)).then_some(available.min(Duration::from_secs(4)))
+}
+
+fn diagnostic_read_outcome(error: AcquisitionError) -> &'static str {
+    match error {
+        AcquisitionError::Deadline => "timeout",
+        AcquisitionError::Io | AcquisitionError::Status => "other",
+        _ => "unknown",
+    }
+}
+
+struct StartDiagnostic {
+    version: &'static str,
+    object: &'static str,
+    identity: &'static str,
+    state: &'static str,
+    primary: &'static str,
+    secondary: &'static str,
+}
+
+impl StartDiagnostic {
+    fn unknown() -> Self {
+        Self {
+            version: "unknown",
+            object: "unknown",
+            identity: "unknown",
+            state: "unknown",
+            primary: "unknown",
+            secondary: "unknown",
+        }
+    }
+
+    fn observe_container(&mut self, value: &Value, id: &str, name: &str, run: &str, image: &str) {
+        if !value.is_object() {
+            return;
+        }
+        self.object = "responsive";
+        if !value["Id"].as_str().is_some_and(canonical_id)
+            || !value["Name"].is_string()
+            || !value["Config"]["Labels"][OWNER].is_string()
+            || !value["Config"]["Image"].is_string()
+        {
+            return;
+        }
+        if !owned(value, Some(id), name, run, image) {
+            self.identity = "mismatch";
+            return;
+        }
+        self.identity = "same";
+        self.state = match value["State"]["Status"].as_str() {
+            Some("created") => "created",
+            Some("running") => "running",
+            Some("restarting") => "restarting",
+            Some("paused") => "paused",
+            Some("exited") => "exited",
+            Some("dead") => "dead",
+            Some("removing") => "removing",
+            _ => "unknown",
+        };
+        let Some(ports) = value["NetworkSettings"]["Ports"].as_object() else {
+            return;
+        };
+        let binding = ports.get("8085/tcp");
+        let bindings = match binding {
+            None | Some(Value::Null) => {
+                self.primary = "zero";
+                self.secondary = "zero";
+                return;
+            }
+            Some(Value::Array(values)) => values,
+            _ => return,
+        };
+        let (mut primary, mut secondary) = (0, 0);
+        for binding in bindings {
+            let ip = binding["HostIp"].as_str();
+            let Some(port) = binding["HostPort"].as_str() else {
+                return;
+            };
+            let assigned = match port {
+                "" | "0" => false,
+                value if value.parse::<u16>().is_ok_and(|port| port > 0) => true,
+                _ => return,
+            };
+            match ip {
+                Some("127.0.0.1") => primary += usize::from(assigned),
+                Some("127.0.0.2") => secondary += usize::from(assigned),
+                _ => return,
+            }
+        }
+        self.primary = binding_cardinality(primary);
+        self.secondary = binding_cardinality(secondary);
+    }
+
+    fn summary(&self, outcome: &'static str, uncertain: bool) -> String {
+        assert!(matches!(outcome, "observed" | "skipped" | "panic"));
+        let mutation = if uncertain { "uncertain" } else { "clear" };
+        format!(
+            "DOCKERLENS_NATIVE_PORT_START_DIAG: outcome={outcome} version={} object={} identity={} state={} primary={} secondary={} mutation={mutation}",
+            self.version, self.object, self.identity, self.state, self.primary, self.secondary
+        )
+    }
+}
+
+#[test]
+fn start_diagnostic_budget_never_borrows_cleanup_or_adds_unbounded_io() {
+    for seconds in [0, 1, 39, 40, 41, 43] {
+        assert!(start_diagnostic_budget(Duration::from_secs(seconds)).is_none());
+    }
+    assert_eq!(
+        start_diagnostic_budget(Duration::from_secs(44)),
+        Some(Duration::from_secs(4))
+    );
+    assert_eq!(
+        start_diagnostic_budget(Duration::from_secs(180)),
+        Some(Duration::from_secs(4))
+    );
+    assert!(start_diagnostic_budget(Duration::from_secs(44) - Duration::from_nanos(1)).is_none());
+}
+
+#[test]
+fn insufficient_start_followup_reserve_skips_both_reads_without_clearing_uncertainty() {
+    let id = "a".repeat(64);
+    let name = "dl-port-Test0001-multi-dynamic-oracle".to_owned();
+    let mut run = NativeRun {
+        api_version: "1.41".into(),
+        image: "private-image".into(),
+        run_id: "Test0001".into(),
+        lane: "debian11-rootless".into(),
+        candidate: "b".repeat(40),
+        mode: DaemonMode::Rootless,
+        engine_release: "20.10.5".into(),
+        socket: "/nonexistent-port-diagnostic.sock".into(),
+        outer_identity: None,
+        attempted: BTreeSet::new(),
+        created: vec![(name.clone(), id.clone())],
+        fact_source: None,
+        deadline: Instant::now() + Duration::from_secs(43),
+        epoch_deadline: SystemTime::now() + Duration::from_secs(43),
+        calls: Cell::new(0),
+        bytes: Cell::new(0),
+        uncertain_mutation: Cell::new(true),
+        cleaned: true,
+    };
+    let (outcome, diagnostic) = run.repeated_start_diagnostics(&name, &id);
+    assert_eq!(outcome, "skipped");
+    assert_eq!(run.calls.get(), 0);
+    assert_eq!(run.bytes.get(), 0);
+    assert!(run.uncertain_mutation.get());
+    assert!(
+        diagnostic
+            .summary(outcome, run.uncertain_mutation.get())
+            .contains("mutation=uncertain")
+    );
+    // Even with the original counters at their boundaries, a diagnostic error
+    // uses only its dedicated allowance and cannot spend cleanup counter room.
+    run.deadline = Instant::now() + Duration::from_secs(60);
+    run.epoch_deadline = SystemTime::now() + Duration::from_secs(60);
+    run.calls.set(512);
+    run.bytes.set(8 * 1024 * 1024);
+    let allowance = StartReadAllowance::new();
+    assert!(
+        run.start_diagnostic_read(
+            ReadRequest::DaemonVersion,
+            None,
+            Instant::now(),
+            Duration::from_secs(4),
+            &allowance
+        )
+        .is_err()
+    );
+    assert_eq!(allowance.requests.get(), 1);
+    assert_eq!(allowance.wire_bytes.get(), DIAGNOSTIC_GET_WIRE_LIMIT);
+    assert_eq!(run.calls.get(), 512);
+    assert_eq!(run.bytes.get(), 8 * 1024 * 1024);
+    assert!(run.uncertain_mutation.get());
+}
+
+#[test]
+fn dedicated_start_allowance_has_exact_request_wire_and_cancellation_boundaries() {
+    let allowance = StartReadAllowance::new();
+    assert!(allowance.charge().is_ok());
+    assert_eq!(allowance.requests.get(), 1);
+    assert!(allowance.charge().is_ok());
+    assert_eq!(allowance.requests.get(), 2);
+    assert_eq!(allowance.wire_bytes.get(), 2 * DIAGNOSTIC_GET_WIRE_LIMIT);
+    assert_eq!(
+        allowance.charge().err(),
+        Some(AcquisitionError::Budget(LimitError::Requests))
+    );
+    assert_eq!(allowance.requests.get(), 2);
+    assert_eq!(allowance.charge().err(), Some(AcquisitionError::Cancelled));
+    let full = StartReadAllowance::new();
+    full.wire_bytes.set(DIAGNOSTIC_GET_WIRE_LIMIT + 1);
+    assert_eq!(
+        full.charge().err(),
+        Some(AcquisitionError::Budget(LimitError::Bytes))
+    );
+    assert_eq!(full.requests.get(), 0);
+    let exact = StartReadAllowance::new();
+    exact.wire_bytes.set(DIAGNOSTIC_GET_WIRE_LIMIT);
+    assert!(exact.charge().is_ok());
+    assert_eq!(exact.wire_bytes.get(), 2 * DIAGNOSTIC_GET_WIRE_LIMIT);
+}
+
+#[test]
+fn late_start_snapshot_retains_uncertainty_and_never_authorizes_foreign_identity() {
+    let id = "a".repeat(64);
+    let mut value = json!({"Id":id.clone(),"Name":"/owned-name","Config":{"Labels":{"io.dockerlens.native-run":"private-run"},"Image":"private-image"},
+        "State":{"Status":"running"},"NetworkSettings":{"Ports":{"8085/tcp":[
+            {"HostIp":"127.0.0.1","HostPort":"32000"},{"HostIp":"127.0.0.2","HostPort":"32000"}]}}});
+    let mut diagnostic = StartDiagnostic::unknown();
+    diagnostic.version = "responsive";
+    diagnostic.observe_container(&value, &id, "owned-name", "private-run", "private-image");
+    let uncertainty = Cell::new(true);
+    let summary = diagnostic.summary("observed", uncertainty.get());
+    assert_eq!(diagnostic.identity, "same");
+    assert_eq!(diagnostic.primary, "one");
+    assert_eq!(diagnostic.secondary, "one");
+    assert!(summary.contains("mutation=uncertain"));
+    for secret in [
+        id.as_str(),
+        "private-run",
+        "private-image",
+        "owned-name",
+        "32000",
+    ] {
+        assert!(!summary.contains(secret));
+    }
+    assert!(uncertainty.get());
+    value["Id"] = Value::String("b".repeat(64));
+    let mut foreign = StartDiagnostic::unknown();
+    foreign.observe_container(&value, &id, "owned-name", "private-run", "private-image");
+    assert_eq!(foreign.identity, "mismatch");
+    assert_eq!(foreign.state, "unknown");
+    assert_eq!(foreign.primary, "unknown");
+    value["Id"] = Value::String(id.clone());
+    value["NetworkSettings"]["Ports"]["8085/tcp"][0]["HostPort"] =
+        Value::String("protected-secret".into());
+    let mut malformed = StartDiagnostic::unknown();
+    malformed.observe_container(&value, &id, "owned-name", "private-run", "private-image");
+    assert_eq!(malformed.primary, "unknown");
+    assert!(
+        !malformed
+            .summary("observed", true)
+            .contains("protected-secret")
+    );
+}
+
+fn closed_api_failure_diagnostic(action: &'static str, cleanup: bool, code: Option<i32>) -> String {
+    assert!(matches!(
+        action,
+        "version" | "info" | "create" | "start" | "inspect_name" | "inspect_id" | "delete"
+    ));
+    let phase = if cleanup { "cleanup" } else { "probe" };
+    let exit = match code {
+        Some(28) => "curl_timeout",
+        Some(124) => "outer_timeout",
+        Some(137 | 143) | None => "signal",
+        _ => "other",
+    };
+    format!("DOCKERLENS_NATIVE_PORT_API_DIAG: action={action} phase={phase} exit={exit}")
+}
+
+#[test]
+fn failed_api_diagnostic_closes_routes_phases_and_timeout_sources() {
+    for action in [
+        "version",
+        "info",
+        "create",
+        "start",
+        "inspect_name",
+        "inspect_id",
+        "delete",
+    ] {
+        for (cleanup, phase) in [(false, "probe"), (true, "cleanup")] {
+            for (code, exit) in [
+                (Some(28), "curl_timeout"),
+                (Some(124), "outer_timeout"),
+                (Some(137), "signal"),
+                (Some(143), "signal"),
+                (None, "signal"),
+                (Some(7), "other"),
+                (Some(0), "other"),
+            ] {
+                assert_eq!(
+                    closed_api_failure_diagnostic(action, cleanup, code),
+                    format!(
+                        "DOCKERLENS_NATIVE_PORT_API_DIAG: action={action} phase={phase} exit={exit}"
+                    )
+                );
+            }
+        }
+    }
+    assert!(
+        std::panic::catch_unwind(|| closed_api_failure_diagnostic(
+            "protected-secret",
+            false,
+            Some(28)
+        ))
+        .is_err()
+    );
 }
 
 fn cli_failure_exit(status: std::process::ExitStatus) -> &'static str {

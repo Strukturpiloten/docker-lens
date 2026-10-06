@@ -743,6 +743,85 @@ fn request_path(
     Ok(prefix + &path)
 }
 
+// Native-test diagnostics reuse the canonical bounded transport, without
+// exposing a product API or performing acquisition/expansion requests.
+#[cfg(test)]
+pub(crate) const DIAGNOSTIC_GET_BODY_LIMIT: usize = MAX_HEADER_BYTES;
+#[cfg(test)]
+const DIAGNOSTIC_GET_REQUEST_LIMIT: usize = 163;
+// Maximal bounded response headers/payload/chunks/trailer plus the longest
+// exact allowed GET request (canonical 64-byte ID, API 1.41 or 1.56).
+#[cfg(test)]
+pub(crate) const DIAGNOSTIC_GET_WIRE_LIMIT: usize = MAX_HEADER_BYTES
+    + DIAGNOSTIC_GET_BODY_LIMIT
+    + (DIAGNOSTIC_GET_BODY_LIMIT + 1) * (64 + 2)
+    + MAX_HEADER_BYTES
+    + DIAGNOSTIC_GET_REQUEST_LIMIT;
+
+#[cfg(test)]
+pub(crate) struct DiagnosticGetBudget {
+    pub started: Instant,
+    pub total: Duration,
+    pub per_read: Duration,
+    pub max_body: usize,
+}
+
+#[cfg(test)]
+fn diagnostic_request_allowed(request: &ReadRequest, api: Option<ApiVersion>) -> bool {
+    match request {
+        ReadRequest::DaemonVersion => api.is_none(),
+        ReadRequest::InspectContainer(id) => {
+            id.as_str().len() == 64
+                && id
+                    .as_str()
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                && api.is_some_and(|api| api.major.get() == 1 && matches!(api.minor, 41 | 56))
+        }
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn diagnostic_get(
+    endpoint: &Endpoint,
+    request: &ReadRequest,
+    api: Option<ApiVersion>,
+    budget: DiagnosticGetBudget,
+    cancelled: &AtomicBool,
+) -> Result<(HttpStatus, Vec<u8>), AcquisitionError> {
+    if !diagnostic_request_allowed(request, api) {
+        return Err(AcquisitionError::Selection);
+    }
+    if budget.total.is_zero()
+        || budget.total > Duration::from_secs(4)
+        || budget.per_read.is_zero()
+        || budget.per_read > Duration::from_secs(2)
+    {
+        return Err(AcquisitionError::Budget(LimitError::Elapsed));
+    }
+    if budget.max_body == 0 || budget.max_body > DIAGNOSTIC_GET_BODY_LIMIT {
+        return Err(AcquisitionError::Budget(LimitError::Bytes));
+    }
+    remaining(budget.started, budget.total, cancelled)?;
+    let limit = budget
+        .total
+        .min(budget.started.elapsed().saturating_add(budget.per_read));
+    let path = request_path(request, api)?;
+    let result = http_get(
+        endpoint,
+        &path,
+        budget.started,
+        limit,
+        cancelled,
+        budget.max_body,
+    )?;
+    // Successful final reads do not themselves call remaining(). Never turn a
+    // response that completed outside either deadline into responsive evidence.
+    remaining(budget.started, limit, cancelled)?;
+    Ok(result)
+}
+
 fn exchange<'a>(
     budget: &'a mut Budget,
     endpoint: &Endpoint,
@@ -1260,6 +1339,302 @@ pub fn acquire(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diagnostic_read_request_guard_is_closed_before_io() {
+        let canonical = NativeId::new("a".repeat(64)).unwrap();
+        assert!(diagnostic_request_allowed(
+            &ReadRequest::DaemonVersion,
+            None
+        ));
+        assert!(diagnostic_request_allowed(
+            &ReadRequest::InspectContainer(canonical.clone()),
+            Some(api())
+        ));
+        assert!(diagnostic_request_allowed(
+            &ReadRequest::InspectContainer(canonical.clone()),
+            Some(ApiVersion::new(NonZeroU16::new(1).unwrap(), 56))
+        ));
+        assert!(!diagnostic_request_allowed(
+            &ReadRequest::DaemonVersion,
+            Some(api())
+        ));
+        for request in [
+            ReadRequest::DaemonInfo,
+            ReadRequest::ListContainers,
+            ReadRequest::ListNetworks,
+            ReadRequest::ListVolumes,
+            ReadRequest::InspectNetwork(canonical.clone()),
+            ReadRequest::InspectVolume(canonical),
+        ] {
+            assert!(!diagnostic_request_allowed(&request, Some(api())));
+        }
+        for id in [
+            "protected-secret".to_owned(),
+            "a".repeat(63),
+            "A".repeat(64),
+            "a/".repeat(32),
+        ] {
+            assert!(!diagnostic_request_allowed(
+                &ReadRequest::InspectContainer(NativeId::new(id).unwrap()),
+                Some(api())
+            ));
+        }
+        let request = ReadRequest::InspectContainer(NativeId::new("a".repeat(64)).unwrap());
+        for candidate in [
+            None,
+            Some(ApiVersion::new(NonZeroU16::new(2).unwrap(), 41)),
+            Some(ApiVersion::new(NonZeroU16::new(1).unwrap(), 40)),
+        ] {
+            assert!(!diagnostic_request_allowed(&request, candidate));
+        }
+        let endpoint = Endpoint::unix_socket(std::path::PathBuf::from(
+            "/nonexistent-diagnostic-test.sock",
+        ));
+        let cancelled = AtomicBool::new(false);
+        for (total, per_read, max_body, expected) in [
+            (
+                Duration::ZERO,
+                Duration::from_secs(1),
+                16,
+                AcquisitionError::Budget(LimitError::Elapsed),
+            ),
+            (
+                Duration::from_secs(5),
+                Duration::from_secs(1),
+                16,
+                AcquisitionError::Budget(LimitError::Elapsed),
+            ),
+            (
+                Duration::from_secs(4),
+                Duration::from_secs(3),
+                16,
+                AcquisitionError::Budget(LimitError::Elapsed),
+            ),
+            (
+                Duration::from_secs(4),
+                Duration::from_secs(1),
+                MAX_HEADER_BYTES + 1,
+                AcquisitionError::Budget(LimitError::Bytes),
+            ),
+        ] {
+            assert_eq!(
+                diagnostic_get(
+                    &endpoint,
+                    &ReadRequest::DaemonVersion,
+                    None,
+                    DiagnosticGetBudget {
+                        started: Instant::now(),
+                        total,
+                        per_read,
+                        max_body
+                    },
+                    &cancelled
+                )
+                .err(),
+                Some(expected)
+            );
+        }
+        assert_eq!(
+            diagnostic_get(
+                &endpoint,
+                &ReadRequest::DaemonVersion,
+                None,
+                DiagnosticGetBudget {
+                    started: Instant::now() - Duration::from_secs(4),
+                    total: Duration::from_secs(4),
+                    per_read: Duration::from_secs(2),
+                    max_body: 16
+                },
+                &cancelled
+            )
+            .err(),
+            Some(AcquisitionError::Deadline)
+        );
+    }
+
+    fn diagnostic_socket_response(
+        response: &[u8],
+        delay: Duration,
+        started: Instant,
+        total: Duration,
+        per_read: Duration,
+    ) -> Result<(HttpStatus, Vec<u8>), AcquisitionError> {
+        diagnostic_socket_response_for(
+            &ReadRequest::DaemonVersion,
+            None,
+            response,
+            delay,
+            started,
+            total,
+            per_read,
+        )
+    }
+
+    fn diagnostic_socket_response_for(
+        request: &ReadRequest,
+        api: Option<ApiVersion>,
+        response: &[u8],
+        delay: Duration,
+        started: Instant,
+        total: Duration,
+        per_read: Duration,
+    ) -> Result<(HttpStatus, Vec<u8>), AcquisitionError> {
+        use std::os::unix::net::UnixListener;
+        let request_path = request_path(request, api).unwrap();
+        let expected_request = format!(
+            "GET {request_path} HTTP/1.1\r\nHost: docker\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
+        );
+        let expected_length = if matches!(request, ReadRequest::DaemonVersion) {
+            84
+        } else {
+            163
+        };
+        assert_eq!(expected_request.len(), expected_length);
+        assert!(expected_request.len() <= DIAGNOSTIC_GET_REQUEST_LIMIT);
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let directory = std::env::temp_dir().join(format!(
+            "docker-lens-diagnostic-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("engine.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let response = response.to_vec();
+        let server = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_millis(300);
+            loop {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream
+                            .set_read_timeout(Some(Duration::from_millis(100)))
+                            .unwrap();
+                        let mut request = Vec::new();
+                        let mut buffer = [0; 1024];
+                        while request.len() < 4096 && !request.ends_with(b"\r\n\r\n") {
+                            match stream.read(&mut buffer) {
+                                Ok(0) | Err(_) => return,
+                                Ok(count) => request.extend_from_slice(&buffer[..count]),
+                            }
+                        }
+                        assert!(request == expected_request.as_bytes());
+                        assert!(request.len() <= DIAGNOSTIC_GET_REQUEST_LIMIT);
+                        std::thread::sleep(delay);
+                        let _ = stream.write_all(&response);
+                        return;
+                    }
+                    Err(error)
+                        if error.kind() == io::ErrorKind::WouldBlock
+                            && Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(Duration::from_millis(1))
+                    }
+                    Err(_) => return,
+                }
+            }
+        });
+        let result = diagnostic_get(
+            &Endpoint::unix_socket(path.clone()),
+            request,
+            api,
+            DiagnosticGetBudget {
+                started,
+                total,
+                per_read,
+                max_body: MAX_HEADER_BYTES,
+            },
+            &AtomicBool::new(false),
+        );
+        server.join().unwrap();
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+        result
+    }
+
+    #[test]
+    fn diagnostic_wire_allowance_includes_the_longest_allowed_get_requests() {
+        assert_eq!(
+            DIAGNOSTIC_GET_WIRE_LIMIT,
+            69 * DIAGNOSTIC_GET_BODY_LIMIT + 66 + DIAGNOSTIC_GET_REQUEST_LIMIT
+        );
+        let request = ReadRequest::InspectContainer(NativeId::new("a".repeat(64)).unwrap());
+        for minor in [41, 56] {
+            let result = diagnostic_socket_response_for(
+                &request,
+                Some(ApiVersion::new(NonZeroU16::new(1).unwrap(), minor)),
+                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}",
+                Duration::ZERO,
+                Instant::now(),
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+            )
+            .unwrap();
+            assert_eq!(result.0.code(), 200);
+        }
+    }
+
+    #[test]
+    fn diagnostic_get_reuses_complete_bounded_framing_and_shared_deadlines() {
+        for response in [
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}".as_slice(),
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}\r\n0\r\n\r\n",
+        ] {
+            let result = diagnostic_socket_response(
+                response,
+                Duration::ZERO,
+                Instant::now(),
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+            )
+            .unwrap();
+            assert_eq!(result.0.code(), 200);
+            assert_eq!(result.1, b"{}");
+        }
+        for response in [
+            b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n{}".as_slice(),
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nContent-Length: 2\r\n\r\n{}",
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 2\r\n\r\n{}",
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\n{}",
+        ] {
+            assert_eq!(
+                diagnostic_socket_response(
+                    response,
+                    Duration::ZERO,
+                    Instant::now(),
+                    Duration::from_secs(1),
+                    Duration::from_secs(1)
+                )
+                .err(),
+                Some(AcquisitionError::Protocol)
+            );
+        }
+        // Each read gets at most its own clipped slice of the SAME started/total.
+        // A first request's elapsed time cannot reset the second request budget.
+        assert_eq!(
+            diagnostic_socket_response(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}",
+                Duration::from_millis(100),
+                Instant::now(),
+                Duration::from_secs(1),
+                Duration::from_millis(20)
+            )
+            .err(),
+            Some(AcquisitionError::Deadline)
+        );
+        assert_eq!(
+            diagnostic_socket_response(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}",
+                Duration::from_millis(100),
+                Instant::now() - Duration::from_millis(80),
+                Duration::from_millis(100),
+                Duration::from_secs(1)
+            )
+            .err(),
+            Some(AcquisitionError::Deadline)
+        );
+    }
 
     fn limits() -> Limits {
         Limits {

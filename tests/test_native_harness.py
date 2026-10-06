@@ -2522,6 +2522,9 @@ fi
     def test_port_diagnostic_families_are_closed_and_target_scoped(self) -> None:
         valid = [
             "DOCKERLENS_NATIVE_API_DIAG: transport=timeout",
+            "DOCKERLENS_NATIVE_PORT_API_DIAG: action=start phase=probe exit=curl_timeout",
+            "DOCKERLENS_NATIVE_PORT_API_DIAG: action=inspect_name phase=cleanup exit=outer_timeout",
+            "DOCKERLENS_NATIVE_PORT_START_DIAG: outcome=observed version=responsive object=timeout identity=unknown state=unknown primary=unknown secondary=unknown mutation=uncertain",
             "DOCKERLENS_NATIVE_API_DIAG: operation=start status=server",
             "DOCKERLENS_NATIVE_HTTP_DIAG: exit=other category=connection_refused",
             "DOCKERLENS_NATIVE_CLI_DIAG: exit=timeout stderr=permission",
@@ -2556,6 +2559,66 @@ fi
         self.assertNotIn("_DIAG:", rejected.stderr)
         self.assertNotIn("protected", rejected.stdout + rejected.stderr)
         self.assertNotIn("unknown_enum", rejected.stderr)
+
+    def test_port_start_followup_observations_never_replace_failure_or_reveal_values(self) -> None:
+        selected = "native_port_tests::live_port_publications_match_engine"
+        observations = [
+            "outcome=observed version=responsive object=timeout identity=unknown state=unknown primary=unknown secondary=unknown mutation=uncertain",
+            "outcome=observed version=timeout object=timeout identity=unknown state=unknown primary=unknown secondary=unknown mutation=uncertain",
+            "outcome=observed version=responsive object=responsive identity=same state=running primary=one secondary=one mutation=uncertain",
+            "outcome=observed version=responsive object=responsive identity=mismatch state=unknown primary=unknown secondary=unknown mutation=uncertain",
+            "outcome=skipped version=unknown object=unknown identity=unknown state=unknown primary=unknown secondary=unknown mutation=uncertain",
+        ]
+        for observation in observations:
+            with self.subTest(observation=observation):
+                result = self._port_wrapper("\n".join([
+                    "DOCKERLENS_NATIVE_CHECK: port_repeated_dynamic_ipv4_oracle_oracle_start",
+                    "DOCKERLENS_NATIVE_API_DIAG: transport=timeout",
+                    "DOCKERLENS_NATIVE_PORT_API_DIAG: action=start phase=probe exit=curl_timeout",
+                    "DOCKERLENS_NATIVE_PORT_DIAGNOSTIC_SCOPE: begin",
+                    f"thread '{selected}' panicked at src/native_port_tests.rs:505:9:",
+                    "private-native-ID protected-secret 32000",
+                    "DOCKERLENS_NATIVE_PORT_DIAGNOSTIC_SCOPE: end",
+                    f"DOCKERLENS_NATIVE_PORT_START_DIAG: {observation}",
+                    f"thread '{selected}' panicked at src/native_port_tests.rs:415:9:",
+                    "DOCKERLENS_NATIVE_CHECK: port_cleanup",
+                    "DOCKERLENS_NATIVE_PORT_API_DIAG: action=delete phase=cleanup exit=outer_timeout",
+                    "DOCKERLENS_NATIVE_CHECK: port_cleanup_unverified",
+                    "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 130 filtered out;",
+                ]))
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("line=415 column=9", result.stderr)
+                self.assertNotIn("line=505", result.stderr)
+                self.assertIn(f"DOCKERLENS_NATIVE_PORT_START_DIAG: {observation}", result.stderr)
+                self.assertIn("action=start phase=probe exit=curl_timeout", result.stderr)
+                self.assertIn("action=delete phase=cleanup exit=outer_timeout", result.stderr)
+                for secret in ("private-native-ID", "protected-secret", "32000"):
+                    self.assertNotIn(secret, result.stdout + result.stderr)
+
+    def test_port_start_followup_reuses_only_test_scoped_canonical_gets(self) -> None:
+        source = (ROOT / "src/native_port_tests.rs").read_text()
+        failure = source.split('let output = self.capture(&mut command, input.as_deref(), 131080);', 1)[1].split('let split = output', 1)[0]
+        self.assertIn('if !cleanup && method == "POST" && start', failure)
+        self.assertIn('self.name("multi-dynamic-oracle")', failure)
+        self.assertIn('path == format!("{prefix}/containers/{id}/start")', failure)
+        self.assertLess(failure.index('DIAGNOSTIC_SCOPE: begin'), failure.index('self.repeated_start_diagnostics('))
+        self.assertLess(failure.index('self.repeated_start_diagnostics('), failure.index('DIAGNOSTIC_SCOPE: end'))
+        followup = source.split('fn repeated_start_diagnostics(', 1)[1].split('fn api(', 1)[0]
+        self.assertIn('self.known_id(id) != Some(name)', followup)
+        self.assertLess(followup.index('start_diagnostic_budget('), followup.index('ReadRequest::DaemonVersion'))
+        self.assertEqual(followup.count('ReadRequest::DaemonVersion'), 1)
+        self.assertEqual(followup.count('ReadRequest::InspectContainer('), 1)
+        for forbidden in ('self.capture(', 'self.api(', 'self.cleanup(', 'Command::new(',
+                          'uncertain_mutation.set', 'thread::spawn', 'ReadRequest::List',
+                          'self.calls.set', 'self.bytes.set'):
+            self.assertNotIn(forbidden, followup)
+        canonical = (ROOT / 'src/acquisition.rs').read_text()
+        seam = canonical.split('pub(crate) fn diagnostic_get(', 1)[1].split('fn exchange', 1)[0]
+        self.assertIn('diagnostic_request_allowed(request, api)', seam)
+        self.assertEqual(seam.count('http_get('), 1)
+        self.assertIn('remaining(budget.started, limit, cancelled)?', seam)
+        self.assertNotIn('acquire(', seam)
+        self.assertIn('#[cfg(test)]\npub(crate) fn diagnostic_get', canonical)
 
     def test_port_panic_projection_excludes_caught_ipv6_followups(self) -> None:
         selected = "native_port_tests::live_port_publications_match_engine"
