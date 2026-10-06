@@ -64,6 +64,16 @@ IDENTITY_PROBES = (
     "ContainerUser", "ContainerWorkdir", "ContainerNumericUidGid",
     "ContainerProcessWorkingDirectory", "ContainerIdentityOwnershipCleanup",
 )
+PORT_SHAPES = (
+    "FixedIpv4HostPort", "EphemeralIpv4HostPort", "FixedIpv6HostPort",
+    "EphemeralIpv6HostPort", "MultipleFixedPortBindings",
+    "MultipleEphemeralPortBindings", "ExposedOnlyPort", "EphemeralHostPort",
+)
+IPV6_PORT_SHAPES = frozenset(("FixedIpv6HostPort", "EphemeralIpv6HostPort"))
+PORT_NEGATIVE_REASONS = frozenset((
+    "nested_default_bridge_ipv6_unavailable",
+    "nested_default_bridge_ipv6_runtime_binding_absent",
+))
 
 
 def identity_object(pairs):
@@ -185,7 +195,153 @@ def read_network_proof(path: Path) -> list[str]:
     return list(NETWORK_PROBES)
 
 
-def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path: Path, volume_path: Path, volume_label_path: Path, identity_path: Path, destination: Path, lane: str, image: str,
+def read_port_proof(path: Path, capture_dir: Path, lane: str, engine: str,
+                    api: str, mode: str, candidate: str, run_id: str) -> list[dict[str, str]]:
+    # The proof is private harness input. Hold the capture directory and read
+    # its one exact child through openat so path replacement cannot redirect it.
+    capture_abs = Path(os.path.abspath(capture_dir))
+    capture_real = capture_abs.resolve(strict=True)
+    if capture_abs != capture_real or path.name != "port-probes.json":
+        raise ValueError("invalid native port proof location")
+    parent_info = os.lstat(capture_abs)
+    if not stat.S_ISDIR(parent_info.st_mode) or stat.S_ISLNK(parent_info.st_mode):
+        raise ValueError("invalid native port proof directory")
+    ancestor_fd = os.open(capture_abs.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        directory_fd = os.open(capture_abs, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        os.close(ancestor_fd)
+        raise
+    try:
+        directory_before = os.fstat(directory_fd)
+        if (not stat.S_ISDIR(directory_before.st_mode)
+                or directory_before.st_uid != os.geteuid()
+                or directory_before.st_mode & 0o077
+                or (directory_before.st_dev, directory_before.st_ino) !=
+                   (parent_info.st_dev, parent_info.st_ino)):
+            raise ValueError("invalid private native port proof directory")
+        ancestor_before = os.fstat(ancestor_fd)
+        named_parent_before = os.stat(capture_abs.name, dir_fd=ancestor_fd,
+                                      follow_symlinks=False)
+        if ((directory_before.st_dev, directory_before.st_ino) !=
+                (named_parent_before.st_dev, named_parent_before.st_ino)
+                or not stat.S_ISDIR(named_parent_before.st_mode)):
+            raise ValueError("native port capture directory changed")
+        expected_path = capture_abs / "port-probes.json"
+        if path != expected_path and Path(os.path.abspath(path)) != expected_path:
+            raise ValueError("native port proof is not a direct capture child")
+        descriptor = os.open("port-probes.json", os.O_RDONLY | os.O_NONBLOCK |
+                             os.O_NOFOLLOW, dir_fd=directory_fd)
+        with os.fdopen(descriptor, "rb") as source:
+            before = os.fstat(source.fileno())
+            if (not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= 4096
+                    or before.st_uid != os.geteuid() or stat.S_IMODE(before.st_mode) != 0o600
+                    or before.st_nlink != 1):
+                raise ValueError("invalid private native port proof")
+            payload = source.read(4097)
+            source.seek(0)
+            repeated_payload = source.read(4097)
+            after = os.fstat(source.fileno())
+        current_parent = os.fstat(directory_fd)
+        current_ancestor = os.fstat(ancestor_fd)
+        current_path_parent = os.lstat(capture_abs)
+        current_named_parent = os.stat(capture_abs.name, dir_fd=ancestor_fd,
+                                       follow_symlinks=False)
+        current_leaf = os.stat("port-probes.json", dir_fd=directory_fd,
+                               follow_symlinks=False)
+        if ((before.st_dev, before.st_ino, before.st_mode, before.st_uid,
+             before.st_nlink, before.st_size, before.st_mtime_ns, before.st_ctime_ns) !=
+            (after.st_dev, after.st_ino, after.st_mode, after.st_uid,
+             after.st_nlink, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+                or len(payload) != before.st_size
+                or repeated_payload != payload
+                or (before.st_dev, before.st_ino) !=
+                   (current_leaf.st_dev, current_leaf.st_ino)
+                or not stat.S_ISREG(current_leaf.st_mode)
+                or (before.st_dev, before.st_ino, before.st_mode, before.st_uid,
+                    before.st_nlink, before.st_size, before.st_mtime_ns, before.st_ctime_ns) !=
+                   (current_leaf.st_dev, current_leaf.st_ino, current_leaf.st_mode,
+                    current_leaf.st_uid, current_leaf.st_nlink, current_leaf.st_size,
+                    current_leaf.st_mtime_ns, current_leaf.st_ctime_ns)
+                or (directory_before.st_dev, directory_before.st_ino) !=
+                   (current_parent.st_dev, current_parent.st_ino)
+                or (directory_before.st_dev, directory_before.st_ino,
+                    directory_before.st_mode, directory_before.st_uid,
+                    directory_before.st_nlink, directory_before.st_mtime_ns,
+                    directory_before.st_ctime_ns) !=
+                   (current_parent.st_dev, current_parent.st_ino,
+                    current_parent.st_mode, current_parent.st_uid,
+                    current_parent.st_nlink, current_parent.st_mtime_ns,
+                    current_parent.st_ctime_ns)
+                or current_parent.st_uid != os.geteuid()
+                or current_parent.st_mode & 0o077
+                or (directory_before.st_dev, directory_before.st_ino) !=
+                   (current_named_parent.st_dev, current_named_parent.st_ino)
+                or not stat.S_ISDIR(current_named_parent.st_mode)
+                or (directory_before.st_dev, directory_before.st_ino) !=
+                   (current_path_parent.st_dev, current_path_parent.st_ino)
+                or not stat.S_ISDIR(current_path_parent.st_mode)
+                or current_path_parent.st_uid != os.geteuid()
+                or current_path_parent.st_mode & 0o077
+                or capture_abs.resolve(strict=True) != capture_abs
+                or (ancestor_before.st_dev, ancestor_before.st_ino) !=
+                   (current_ancestor.st_dev, current_ancestor.st_ino)):
+            raise ValueError("native port proof changed")
+    finally:
+        os.close(directory_fd)
+        os.close(ancestor_fd)
+
+    proof = json.loads(payload, object_pairs_hook=unique_proof_object)
+    if (not isinstance(proof, dict) or set(proof) != {
+            "schema_version", "kind", "candidate_sha", "lane", "engine_release",
+            "rendering_api", "daemon_mode", "run_id", "cleanup", "probes"}
+            or type(proof["schema_version"]) is not int or proof["schema_version"] != 1
+            or proof["kind"] != "dockerlens-native-port-probes"
+            or proof["candidate_sha"] != candidate or proof["lane"] != lane
+            or proof["engine_release"] != engine or proof["rendering_api"] != api
+            or proof["daemon_mode"] != mode or proof["run_id"] != run_id
+            or proof["cleanup"] != "absent"):
+        raise ValueError("native port proof binding mismatch")
+    probes = proof["probes"]
+    if (not isinstance(probes, dict) or set(probes) !=
+            {"schema_version", "positive", "expected_negative"}
+            or type(probes["schema_version"]) is not int or probes["schema_version"] != 1):
+        raise ValueError("native port probe schema mismatch")
+    positive = probes["positive"]
+    negative = probes["expected_negative"]
+    if not isinstance(positive, list) or not isinstance(negative, list):
+        raise ValueError("native port outcomes are incomplete")
+    positive_set = set()
+    for shape in positive:
+        if not isinstance(shape, str) or shape not in PORT_SHAPES or shape in positive_set:
+            raise ValueError("invalid native positive port outcome")
+        positive_set.add(shape)
+    negative_by_shape = {}
+    for outcome in negative:
+        if not isinstance(outcome, dict) or set(outcome) != {"shape", "reason"}:
+            raise ValueError("invalid native negative port outcome")
+        shape, reason = outcome["shape"], outcome["reason"]
+        if (not isinstance(shape, str) or shape not in PORT_SHAPES
+                or shape in negative_by_shape or shape in positive_set
+                or not isinstance(reason, str) or reason not in PORT_NEGATIVE_REASONS
+                or not lane.startswith("debian11-") or shape not in IPV6_PORT_SHAPES):
+            raise ValueError("unsupported native negative port outcome")
+        negative_by_shape[shape] = reason
+    if positive_set | set(negative_by_shape) != set(PORT_SHAPES) or \
+            positive_set & set(negative_by_shape):
+        raise ValueError("native port outcome coverage is incomplete")
+    if positive != [shape for shape in PORT_SHAPES if shape in positive_set] or \
+            [entry["shape"] for entry in negative] != [
+                shape for shape in PORT_SHAPES if shape in negative_by_shape]:
+        raise ValueError("native port outcomes are not canonical")
+    return [
+        ({"shape": shape, "outcome": "observed"} if shape in positive_set else
+         {"shape": shape, "outcome": "expected_negative", "reason": negative_by_shape[shape]})
+        for shape in PORT_SHAPES
+    ]
+
+
+def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path: Path, volume_path: Path, volume_label_path: Path, identity_path: Path, port_path: Path, capture_dir: Path, destination: Path, lane: str, image: str,
          mode: str, package: str, candidate_sha: str, run_id: str) -> None:
     if lane not in LANES or mode != lane.rsplit("-", 1)[1]:
         raise ValueError("invalid native lane or mode")
@@ -257,6 +413,8 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
     volume_probes = read_volume_probes(volume_path)
     volume_label_probes = read_volume_label_probes(volume_label_path)
     identity_probes = read_identity_proof(identity_path, lane, mode, maximum, candidate_sha, run_id)
+    port_probes = read_port_proof(port_path, capture_dir, lane, engine,
+                                  maximum, mode, candidate_sha, run_id)
 
     network_probes = read_network_proof(network_path)
 
@@ -293,16 +451,18 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         "volume_probes": volume_probes,
         "volume_label_probes": volume_label_probes,
         "identity_probes": identity_probes,
+        "port_probes": port_probes,
     }
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(record, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 15:
-        raise SystemExit("usage: native-evidence.py VERSION_JSON SHAPES_JSON SOURCE_JSON NETWORK_JSON VOLUME_JSON VOLUME_LABEL_JSON IDENTITY_JSON DESTINATION LANE IMAGE MODE PACKAGE SHA RUN_ID")
+    if len(sys.argv) != 17:
+        raise SystemExit("usage: native-evidence.py VERSION_JSON SHAPES_JSON SOURCE_JSON NETWORK_JSON VOLUME_JSON VOLUME_LABEL_JSON IDENTITY_JSON PORT_JSON CAPTURE_DIR DESTINATION LANE IMAGE MODE PACKAGE SHA RUN_ID")
     try:
         emit(Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]), Path(sys.argv[4]),
-             Path(sys.argv[5]), Path(sys.argv[6]), Path(sys.argv[7]), Path(sys.argv[8]), *sys.argv[9:])
+             Path(sys.argv[5]), Path(sys.argv[6]), Path(sys.argv[7]), Path(sys.argv[8]),
+             Path(sys.argv[9]), Path(sys.argv[10]), *sys.argv[11:])
     except (ValueError, OSError, json.JSONDecodeError, RecursionError):
         raise SystemExit("native evidence rejected") from None

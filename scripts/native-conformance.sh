@@ -932,9 +932,11 @@ export NATIVE_NETWORK_PROBES_PATH="$run_dir/network-probes.json"
 export NATIVE_VOLUME_PROBES_PATH="$run_dir/volume-probes.json"
 export NATIVE_VOLUME_LABEL_PROBES_PATH="$run_dir/volume-label-probes.json"
 export NATIVE_IDENTITY_PROBES_PATH="$run_dir/identity-probes.json"
+export NATIVE_PORT_PROBES_PATH="$run_dir/port-probes.json"
 export NATIVE_IDENTITY_CANDIDATE_SHA
 NATIVE_IDENTITY_CANDIDATE_SHA=$(git -C "$script_dir/.." rev-parse HEAD)
 [[ $NATIVE_IDENTITY_CANDIDATE_SHA =~ ^[0-9a-f]{40}$ ]] || { echo 'native identity requires exact candidate SHA' >&2; exit 1; }
+export NATIVE_PORT_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 if [[ $EUID == 0 ]]; then export NATIVE_PODMAN_USE_SUDO=0; else export NATIVE_PODMAN_USE_SUDO=1; fi
 "$(dirname "$0")/run-exact-native-test.sh" native_capture live_engine_capture_decodes
 "$(dirname "$0")/run-exact-native-test.sh" acquisition live_read_only_acquisition_matches_oracle
@@ -946,6 +948,7 @@ if [[ $EUID == 0 ]]; then export NATIVE_PODMAN_USE_SUDO=0; else export NATIVE_PO
 "$(dirname "$0")/run-exact-native-test.sh" native_volume live_existing_volume_prerequisite_matches_engine
 "$(dirname "$0")/run-exact-native-test.sh" native_volume_label live_created_volume_labels_match_engine
 "$(dirname "$0")/run-exact-native-test.sh" native_identity live_container_process_identity_matches_engine
+"$(dirname "$0")/run-exact-native-test.sh" native_port live_port_publications_match_engine
 
 if [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]; then
   candidate_sha=$(git -C "$script_dir/.." rev-parse HEAD)
@@ -957,7 +960,7 @@ if [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]; then
     echo 'native evidence requires a clean candidate checkout' >&2
     exit 1
   }
-  python3 "$script_dir/native-evidence.py" "$run_dir/version.json" "$NATIVE_SHAPES_PATH" "$NATIVE_SOURCE_PROBES_PATH" "$NATIVE_NETWORK_PROBES_PATH" "$NATIVE_VOLUME_PROBES_PATH" "$NATIVE_VOLUME_LABEL_PROBES_PATH" "$NATIVE_IDENTITY_PROBES_PATH" \
+  python3 "$script_dir/native-evidence.py" "$run_dir/version.json" "$NATIVE_SHAPES_PATH" "$NATIVE_SOURCE_PROBES_PATH" "$NATIVE_NETWORK_PROBES_PATH" "$NATIVE_VOLUME_PROBES_PATH" "$NATIVE_VOLUME_LABEL_PROBES_PATH" "$NATIVE_IDENTITY_PROBES_PATH" "$NATIVE_PORT_PROBES_PATH" "$run_dir" \
     "$DOCKERLENS_NATIVE_EVIDENCE_DIR/$lane.json" "$lane" "$image" "$expected_mode" \
     "$installed_docker_package" "$candidate_sha" "$run_id"
 fi

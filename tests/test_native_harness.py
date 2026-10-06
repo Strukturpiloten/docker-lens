@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class NativeHarnessTests(unittest.TestCase):
-    def test_identity_is_independent_tenth_mandatory_check_before_manifest(self) -> None:
+    def test_port_publication_is_independent_eleventh_mandatory_check_before_manifest(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         invocations = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$',
                                  source, re.MULTILINE)
@@ -31,10 +31,13 @@ class NativeHarnessTests(unittest.TestCase):
             ("native_volume", "live_existing_volume_prerequisite_matches_engine"),
             ("native_volume_label", "live_created_volume_labels_match_engine"),
             ("native_identity", "live_container_process_identity_matches_engine"),
+            ("native_port", "live_port_publications_match_engine"),
         ])
-        self.assertLess(source.index('native_identity live_container_process_identity_matches_engine'),
+        self.assertLess(source.index('native_port live_port_publications_match_engine'),
                         source.index('python3 "$script_dir/native-evidence.py"'))
         self.assertIn('export NATIVE_IDENTITY_PROBES_PATH="$run_dir/identity-probes.json"', source)
+        self.assertIn('export NATIVE_PORT_PROBES_PATH="$run_dir/port-probes.json"', source)
+        self.assertIn('export NATIVE_PORT_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA', source)
 
     def test_identity_source_requires_pid1_owned_id_cleanup_and_positive_absence(self) -> None:
         source = (ROOT / "src/native_identity_tests.rs").read_text()
@@ -2394,6 +2397,67 @@ fi
             self.assertEqual(len(calls), 2)
             self.assertTrue(all("--lib" in call and "--test" not in call for call in calls))
             self.assertIn(f"--ignored --exact {selected}", calls[1])
+
+    def test_native_port_uses_private_library_test_by_exact_name(self) -> None:
+        selected = "native_port_tests::live_port_publications_match_engine"
+        for listed, expected_success in ((0, False), (1, True), (2, False)):
+            with self.subTest(listed=listed), tempfile.TemporaryDirectory() as directory:
+                bin_dir = Path(directory)
+                self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+printf '%s\\n' "$*" >> "$FAKE_NATIVE_INVOCATIONS"
+if [[ $* == *--list* ]]; then
+  for ((i=0; i<FAKE_NATIVE_LISTED; i++)); do
+    echo 'native_port_tests::live_port_publications_match_engine: test'
+  done
+else
+  echo 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;'
+fi
+""")
+                invocation = bin_dir / "invocations"
+                env = os.environ.copy()
+                env.update(PATH=f"{bin_dir}:{env['PATH']}",
+                           FAKE_NATIVE_INVOCATIONS=str(invocation),
+                           FAKE_NATIVE_LISTED=str(listed))
+                result = subprocess.run(
+                    [str(ROOT / "scripts/run-exact-native-test.sh"), "native_port",
+                     "live_port_publications_match_engine"],
+                    env=env, capture_output=True, text=True, timeout=15, check=False,
+                )
+                self.assertEqual(result.returncode == 0, expected_success)
+                calls = invocation.read_text().splitlines()
+                self.assertEqual(len(calls), 2 if expected_success else 1)
+                self.assertTrue(all("--lib" in call and "--test" not in call for call in calls))
+                if expected_success:
+                    self.assertIn(f"--ignored --exact {selected}", calls[1])
+
+    def test_native_port_failure_markers_are_closed(self) -> None:
+        selected = "native_port_tests::live_port_publications_match_engine"
+        for marker, accepted in (("port_fixed_ipv4_oracle_cli_create", True),
+                                 ("port_context", True),
+                                 ("container_port_fixed_ipv4_oracle_cli_create", False),
+                                 ("port_private_canary", False)):
+            with self.subTest(marker=marker), tempfile.TemporaryDirectory() as directory:
+                bin_dir = Path(directory)
+                self._tool(bin_dir, "cargo", f"""#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo '{selected}: test'
+else
+  echo 'DOCKERLENS_NATIVE_CHECK: {marker}'
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 101
+fi
+""")
+                env = os.environ.copy()
+                env["PATH"] = f"{bin_dir}:{env['PATH']}"
+                result = subprocess.run(
+                    [str(ROOT / "scripts/run-exact-native-test.sh"), "native_port",
+                     "live_port_publications_match_engine"],
+                    env=env, capture_output=True, text=True, timeout=15, check=False,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual((f"DOCKERLENS_NATIVE_CHECK: {marker}" in result.stderr), accepted)
 
     @staticmethod
     def _tool(directory: Path, name: str, content: str) -> None:

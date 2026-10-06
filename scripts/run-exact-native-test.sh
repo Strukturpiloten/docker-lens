@@ -7,7 +7,7 @@ if [[ $# != 2 || ! $1 =~ ^[a-z_]+$ || ! $2 =~ ^[a-z_]+$ ]]; then
 fi
 target=$1
 test_name=$2
-if [[ $target == native_target || $target == native_volume || $target == native_network || $target == native_volume_label || $target == native_identity ]]; then
+if [[ $target == native_target || $target == native_volume || $target == native_network || $target == native_volume_label || $target == native_identity || $target == native_port ]]; then
   # Native target tests need crate-private, test-only capability claims.
   # It is a library unit test; no public constructor is exposed for the harness.
   cargo_target=(--lib)
@@ -52,6 +52,8 @@ volume_label_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: volume_labels_(create|
 if [[ -n $volume_label_marker ]]; then marker=$volume_label_marker; fi
 identity_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: identity_(context|oracle|render|cleanup|cleanup_unverified|evidence)$' <<<"$result" | tail -n 1 || true)
 if [[ -n $identity_marker ]]; then marker=$identity_marker; fi
+port_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: (port_(context|cleanup|cleanup_unverified|evidence|ipv4|ipv6|outer_identity|host_curl_preflight|host_bash_preflight)|(port_(fixed_ipv4_oracle|fixed_ipv4_rendered|fixed_ipv6_oracle|fixed_ipv6_rendered|dynamic_ipv6_oracle|dynamic_ipv6_rendered|repeated_dynamic_ipv4_oracle|repeated_dynamic_ipv4_rendered)_(cli_create|cli_inspect|oracle_bindings|oracle_cleanup|oracle_start|cli_http|cli_http_secondary|local_service|http_assert|http_assert_secondary|render|render_body|api_create|api_inspect|rendered_bindings|api_start|dynamic_binding|dynamic_binding_secondary|isolated_http|isolated_assert|udp_assignment|udp_send|udp_receive|udp_assert|tcp6_boundary|negative_recheck|runtime_absence)))$' <<<"$result" | tail -n 1 || true)
+if [[ -n $port_marker ]]; then marker=$port_marker; fi
 reason_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: target_start_reason_(operation_not_permitted|permission_denied|invalid_argument|read_only_filesystem|not_found|timeout|unclassified)$' <<<"$result" | tail -n 1 || true)
 error_category=$(grep -Eo '^DOCKERLENS_NATIVE_ERROR: (endpoint|cancelled|deadline|io|protocol|status|version|shape|budget)$' <<<"$result" | tail -n 1 || true)
 selection_error=$(grep -Eo '^DOCKERLENS_NATIVE_ERROR: selection$' <<<"$result" | tail -n 1 || true)

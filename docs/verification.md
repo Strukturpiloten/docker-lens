@@ -618,6 +618,65 @@ image/fixture pins remain in `scripts/native-conformance.sh`, with unchanged
 Renovate ownership, extraction paths, grouping and approvals; no dependency,
 downloaded tool, or operational definition is added or moved.
 
+## Ports-only native proof preparation (#39)
+
+`native_port_tests::live_port_publications_match_engine` is a new ignored,
+test-only extraction of the repository-authored `7345ea3` port assertions, not
+the unrelated broad container-settings suite. Separate IPv4, fixed IPv6,
+ephemeral IPv6 and repeated-ephemeral functions retain all eight port markers,
+independent CLI creates, literal request comparisons, ordinary sealed planning,
+configured/runtime inspections, TCP and UDP canaries, and exact kernel-refusal
+loopback isolation. UDP controls exercise both oracle and rendered fixtures.
+Context uses genuine bounded acquisition/decode scope, direct and CLI Engine
+facts, and exactly one inner dockerd's effective UID; an environment assertion
+alone is not mode, version or capability evidence. The reused outer-namespace
+helper retains immutable outer identity and its held namespace FD. Before
+identity publication or namespace entry, that exact FD's kernel device/inode
+must differ from the helper's host/self network namespace. A name, label or
+bridge intent is not a substitute; unavailable/equal identities fail closed.
+The approved first-option `curl -q` keeps default client configuration disabled.
+
+The initial `NATIVE_PORT_PROBES_PATH` contract is a fresh, exclusive,
+owner-private regular file directly under validated `NATIVE_CAPTURE_DIR`.
+Its bounded schema-1 `dockerlens-native-port-probes` record binds candidate,
+lane, actual `engine_release`, rendering API and mode, plus the private exact
+run token and `cleanup: absent`. Its nested schema-1 `probes` contains ordered
+`positive` and `expected_negative` collections whose mutually exclusive union
+is exactly all eight shapes. Only fixed/ephemeral IPv6 in the two exact Debian
+lanes may retain the existing independently controlled
+`nested_default_bridge_ipv6_unavailable` or
+`nested_default_bridge_ipv6_runtime_binding_absent` reasons. These are observed
+boundaries, not passes or availability claims; upstream negatives, unknown
+reasons, duplicates, missing shapes and overlaps reject the entire proof.
+Independent IPv4, repeated-binding, exposed-only and ephemeral positives remain
+positive without promoting the negative IPv6 group. Every other requested group
+still needs every required shape positive before capability admission.
+
+The file is written only after all actual assertions and ID/name/label-verified
+cleanup with genuine name/ID absence readbacks. The canonical runner requires
+this eleventh ignored test by exact name before manifest emission, preserving
+the exact-one execution check and 180-second deadline. The emitter validates
+the private direct-child file, directory identity, owner/mode, stable bounded
+bytes, full context and complete outcomes before writing any lane manifest.
+Only ordered `port_probes` shape/outcome/reason entries survive sanitization;
+private run and cleanup context is stripped. Capability admission remains
+separate and pending; neither an explicit boundary nor a missing file is a
+positive capability or IPv4-unavailable result. The shared deadline reserves cleanup time; unknown
+failures, untested/partial results, cancellation, uncertain mutation or cleanup
+cannot publish a proof. Rootless low-port, missing-capability and API-floor checks are
+pure pre-I/O boundaries, not native reachability evidence.
+
+The existing main, reviewed-PR native dispatcher and Release validation workflows
+all consume `scripts/native-conformance.sh`; that canonical definition now
+requires the port proof in every exact lane. No new workflow, dependency,
+downloaded tool, image/version/digest pin, extraction path or manager is added
+or moved. Existing native script pins retain their Renovate ownership, grouping
+and approvals; historical records and catalogue admission stay unchanged.
+Genuine exact-candidate native evidence remains integrator-owned and pending.
+Offline helper, emitter, harness and Rust controls do not establish native compatibility,
+BoxFerry application acceptance, #39 completion or a release. Historical
+evidence and all earlier worktrees remain unchanged.
+
 ## Reviewed target-profile records
 
 This #49 candidate catalogue selects four reviewed records from native run

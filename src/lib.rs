@@ -59,6 +59,8 @@ mod native_identity_tests;
 #[cfg(test)]
 mod native_network_tests;
 #[cfg(test)]
+mod native_port_tests;
+#[cfg(test)]
 mod native_target_tests;
 #[cfg(test)]
 mod native_volume_label_tests;
