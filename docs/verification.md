@@ -559,7 +559,16 @@ user/group syntax and defines the expanded parameterized proof required before
 identity capability admission. The historical proof described below remains
 numeric-only non-admission evidence; expanded ten-pair proof is tracked in #86.
 
-The exact ignored `live_container_process_identity_matches_engine` test is a
+The version-2 producer/consumer seam is documented in
+[parameterized identity proof](native-identity-contract.md). The canonical check
+now contains the ten pairs, while the historical numeric-only v1 record below
+retains its original meaning. Only complete validated v2 proof can map the two
+singleton raw identity groups; this does not change sealed catalogue admission
+or establish a passing native run.
+
+### Historical v1 proof (retained non-admission contract)
+
+At the #74 checkpoint, the exact ignored `live_container_process_identity_matches_engine` test was a
 separate tenth mandatory native check; none of the existing nine checks is
 removed, filtered, retried, or made optional. Its only authored setting shape
 is numeric container user `1000:1000` and the already-existing `/tmp` directory

@@ -105,9 +105,11 @@ class NativeEvidenceTests(unittest.TestCase):
         self.assertNotIn("identity_probes", schema["properties"])
         self.assertNotIn("identity_probes", schema["required"])
         self.assertEqual(set(defs), {"api_version", "identity_probes",
-                                     "identity_container_proof", "native_identity_proof"})
+                                     "identity_container_proof", "native_identity_proof",
+                                     "identity_container_v2", "identity_case_v2", "native_identity_proof_v2"})
         unchanged = copy.deepcopy(schema)
-        for name in ("identity_probes", "identity_container_proof", "native_identity_proof"):
+        for name in ("identity_probes", "identity_container_proof", "native_identity_proof",
+                     "identity_container_v2", "identity_case_v2", "native_identity_proof_v2"):
             del unchanged["$defs"][name]
         # Canonical reviewed-record contract from the #74 clean base 946abb3;
         # adding disconnected definitions cannot rewrite historical admission.
