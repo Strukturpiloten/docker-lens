@@ -76,6 +76,15 @@ volume-only mappings and consumer rehearsal, and complete gates. A volume-only
 rehearsal cannot establish six-application or full migration acceptance; wider
 #31/#343/#366 evidence remains open.
 
+The #89 candidate selects the separately reviewed #88 source cohort and adds
+only parameterized user and working-directory singleton groups to the #70
+fourteen/twenty-four set. [ADR 0014](decisions/0014-reviewed-identity-cohort.md)
+requires fresh exact-final-candidate native and complete gates and retains
+the six-fixture volume-only rehearsal before merge/main/release. This is not
+arbitrary-image startup, host UID mapping or full application acceptance.
+Historical evidence stays immutable; the port and remaining runtime/network
+groups below remain separate unfinished work.
+
 | #30 target branch | Typed request contract | Remaining proof / owner |
 | --- | --- | --- |
 | Publication | `PortPublication` has exposed-only or ordered `HostBinding` values; each binding distinguishes omitted/explicit IPv4 or IPv6 `HostIp` and fixed/ephemeral `HostPort`. Duplicate or wildcard-overlapping fixed bindings fail before planning. | #31 must inspect resulting fixed/repeated/dynamic bindings, loopback isolation and IPv6 behavior per exact lane; #343 must retain authored address versus observed assigned port. |
@@ -155,8 +164,10 @@ explicit unsupported/loss outcomes; they cannot be counted as completed
 required core support. The four historical profiles admit only their existing
 twenty closed renderer shapes, not any row above merely because it is listed.
 The later #68 cohort adds three complete singleton groups; this #49 candidate
-adds only the fourth, `VolumeLabels` / `VolumeCreateLabels`, through the
-pre-merge-only #70 cohort. None of these rows is a full migration claim.
+added the fourth, `VolumeLabels` / `VolumeCreateLabels`, through the
+pre-merge-only #70 cohort. The #89 candidate additionally selects only the
+two parameterized identity singleton groups from #88, under ADR 0014.
+None of these rows is a full migration claim.
 
 ## File ownership for parallel implementation
 

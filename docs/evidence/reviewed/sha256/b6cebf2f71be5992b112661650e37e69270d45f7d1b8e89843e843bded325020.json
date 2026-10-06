@@ -1,0 +1,142 @@
+{
+  "schema_version": 1,
+  "lane": "upstream-rootful",
+  "candidate_sha": "032b1510524f391f08a795dab4da73f6fa8f7213",
+  "run_url": "https://github.com/Strukturpiloten/docker-lens/actions/runs/37439627551/attempts/1",
+  "native_manifest_artifact_name": "dockerlens-native-upstream-rootful",
+  "native_manifest_sha256": "497c461ea3463cfbf82ff5256c0ec442132d9bfd32060913d0ef5a0e8f90c0f5",
+  "identity": {
+    "build": {
+      "kind": "upstream"
+    },
+    "engine_release": "29.8.1",
+    "advertised_api": "1.56",
+    "acquisition_api": "1.49",
+    "rendering_api": "1.56",
+    "mode": "rootful"
+  },
+  "capabilities": [
+    {
+      "name": "BindMount",
+      "state": "available",
+      "admitted_shapes": [
+        "BindMountReadWrite",
+        "BindMountReadOnly"
+      ]
+    },
+    {
+      "name": "BridgeNetwork",
+      "state": "available",
+      "admitted_shapes": [
+        "BridgeNetworkCreate",
+        "BridgeNetworkAttach"
+      ]
+    },
+    {
+      "name": "Command",
+      "state": "available",
+      "admitted_shapes": [
+        "ExecCommand"
+      ]
+    },
+    {
+      "name": "ContainerUser",
+      "state": "available",
+      "admitted_shapes": [
+        "ContainerUser"
+      ]
+    },
+    {
+      "name": "ContainerWorkdir",
+      "state": "available",
+      "admitted_shapes": [
+        "ContainerWorkdir"
+      ]
+    },
+    {
+      "name": "Entrypoint",
+      "state": "available",
+      "admitted_shapes": [
+        "ExecEntrypoint"
+      ]
+    },
+    {
+      "name": "EnvironmentAssignment",
+      "state": "available",
+      "admitted_shapes": [
+        "EnvironmentValue",
+        "EnvironmentEmptyValue"
+      ]
+    },
+    {
+      "name": "Healthcheck",
+      "state": "available",
+      "admitted_shapes": [
+        "ExecHealthcheck"
+      ]
+    },
+    {
+      "name": "NamedVolume",
+      "state": "available",
+      "admitted_shapes": [
+        "NamedVolumeCreate",
+        "NamedVolumeMountReadWrite",
+        "NamedVolumeMountReadOnly"
+      ]
+    },
+    {
+      "name": "NetworkExternalReference",
+      "state": "available",
+      "admitted_shapes": [
+        "ExternalNetworkReference"
+      ]
+    },
+    {
+      "name": "NetworkInternal",
+      "state": "available",
+      "admitted_shapes": [
+        "InternalBridgeNetworkCreate"
+      ]
+    },
+    {
+      "name": "PortPublish",
+      "state": "available",
+      "admitted_shapes": [
+        "FixedTcpPort",
+        "FixedUdpPort"
+      ]
+    },
+    {
+      "name": "RestartPolicy",
+      "state": "available",
+      "admitted_shapes": [
+        "RestartNo",
+        "RestartAlways",
+        "RestartUnlessStopped",
+        "RestartOnFailureUnlimited",
+        "RestartOnFailureLimited"
+      ]
+    },
+    {
+      "name": "StandaloneContainer",
+      "state": "available",
+      "admitted_shapes": [
+        "StandaloneCreate"
+      ]
+    },
+    {
+      "name": "VolumeExternalReference",
+      "state": "available",
+      "admitted_shapes": [
+        "ExternalVolumeReference"
+      ]
+    },
+    {
+      "name": "VolumeLabels",
+      "state": "available",
+      "admitted_shapes": [
+        "VolumeCreateLabels"
+      ]
+    }
+  ]
+}
