@@ -13,3 +13,6 @@ include = ["Cargo.toml", "Cargo.lock", "LICENSE", "README.md", "src/**", "docs/*
 [dependencies]
 serde_json = "=1.0.151"
 socket2 = "=0.6.5"
+
+[dev-dependencies]
+libc = "=0.2.189"

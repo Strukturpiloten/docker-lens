@@ -224,11 +224,11 @@ class ParameterizedIdentityTests(unittest.TestCase):
                 path.write_text(content)
             command = ["python3", str(SCRIPT), *[str(root / name) for name in (
                 "version.json", "shapes.json", "source.json", "network.json", "volume.json", "volume-label.json", "identity.json")],
-                str(root / "port-probes.json"), str(root),
+                str(root / "port-probes.json"), str(root / "health-metadata.json"), str(root),
                 str(destination), "upstream-rootful",
                 "ghcr.io/strukturpiloten/docker-29-rootful:v29.8.1@sha256:" + "b" * 64,
                 "rootful", "", SHA, RUN_ID]
-            rejected = subprocess.run(command, capture_output=True, text=True, timeout=5)
+            rejected = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": legacy.HEALTH_FIXTURE_IMAGE}, capture_output=True, text=True, timeout=5)
             self.assertNotEqual(rejected.returncode, 0)
             self.assertFalse(destination.exists())
             self.assertEqual(rejected.stderr.strip(), "native evidence rejected")
