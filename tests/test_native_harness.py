@@ -33,6 +33,7 @@ class NativeHarnessTests(unittest.TestCase):
             ("native_identity", "live_container_process_identity_matches_engine"),
             ("native_port", "live_port_publications_match_engine"),
             ("native_health_metadata", "live_health_metadata_matches_engine"),
+            ("native_network_attachment", "live_network_attachments_match_engine"),
         ])
         self.assertLess(source.index('native_port live_port_publications_match_engine'),
                         source.index('python3 "$script_dir/native-evidence.py"'))

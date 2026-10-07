@@ -59,6 +59,8 @@ mod native_health_metadata_tests;
 #[cfg(test)]
 mod native_identity_tests;
 #[cfg(test)]
+mod native_network_attachment_tests;
+#[cfg(test)]
 mod native_network_tests;
 #[cfg(test)]
 mod native_port_tests;

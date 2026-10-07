@@ -11,6 +11,7 @@ import unittest
 from pathlib import Path
 
 from test_native_health_metadata_proof import IMAGE as HEALTH_FIXTURE_IMAGE, proof as health_metadata_proof
+from test_native_network_attachment_proof import fixture as network_attachment_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/native-evidence.py"
@@ -42,6 +43,9 @@ EXPECTED_RAW_SHAPES = {
     "ContainerLabels": ["ContainerCreateLabels"],
     "HealthShell": ["ShellHealthcheck"],
     "HealthStartPeriod": ["HealthStartPeriodZero", "HealthStartPeriodPositive"],
+    "NetworkLabels": ["NetworkCreateLabels"],
+    "NetworkAliases": ["NetworkPrimaryAliases", "NetworkSecondaryAliases"],
+    "NetworkMultipleAttachment": ["NetworkSecondaryConnect"],
 }
 EXPECTED_PORT_CAPABILITY_SHAPES = {
     "PortHostIpv4": ["FixedIpv4HostPort", "EphemeralIpv4HostPort"],
@@ -232,9 +236,9 @@ class NativeEvidenceTests(unittest.TestCase):
                     proof.write_text(invalid[failure])
                 command = ["python3", str(SCRIPT), *[str(root / name) for name in
                            ("version.json", "shapes.json", "source.json", "network.json",
-                            "volume.json", "volume-label.json", "identity.json", "port-probes.json", "health-metadata.json")],
+                            "volume.json", "volume-label.json", "identity.json", "port-probes.json", "health-metadata.json", "network-attachments-v1.json")],
                            str(root), str(destination), "upstream-rootful", IMAGE, "rootful", "", SHA, RUN_ID]
-                rejected = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE}, capture_output=True, text=True,
+                rejected = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64}, capture_output=True, text=True,
                                           timeout=5, check=False)
                 self.assertNotEqual(rejected.returncode, 0)
                 self.assertFalse(destination.exists())
@@ -278,6 +282,8 @@ class NativeEvidenceTests(unittest.TestCase):
                  port_probes: object = None,
                  health_metadata: object = None,
                  health_metadata_missing: bool = False,
+                 network_attachment: object = None,
+                 network_attachment_missing: bool = False,
                  port_proof_override: object = None) -> tuple[subprocess.CompletedProcess[str], Path]:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -291,6 +297,7 @@ class NativeEvidenceTests(unittest.TestCase):
         identity_path = root / "identity.json"
         port_path = root / "port-probes.json"
         health_metadata_path = root / "health-metadata.json"
+        network_attachment_path = root / "network-attachments-v1.json"
         destination = root / "out" / f"{lane}.json"
         version_path.write_text(json.dumps(version), encoding="utf-8")
         shapes_path.write_text(json.dumps(SHAPES if shapes is None else shapes), encoding="utf-8")
@@ -314,12 +321,23 @@ class NativeEvidenceTests(unittest.TestCase):
         if not health_metadata_missing:
             health_metadata_path.write_text(json.dumps(health if health_metadata is None else health_metadata), encoding="utf-8")
             health_metadata_path.chmod(0o600)
+        network = network_attachment_fixture(lane)
+        network["context"].update({"candidate_sha": sha, "engine_release": version.get("Version"),
+                                   "rendering_api": version.get("ApiVersion"), "fixture_image": HEALTH_FIXTURE_IMAGE})
+        network["context"]["outer"].update({"image": image, "socket_source": str(root / "socket")})
+        for role in network["roles"]:
+            for resource in role["resources"]:
+                if resource["kind"] == "container":
+                    resource["image"] = HEALTH_FIXTURE_IMAGE
+        if not network_attachment_missing:
+            network_attachment_path.write_text(json.dumps(network if network_attachment is None else network_attachment), encoding="utf-8")
+            network_attachment_path.chmod(0o600)
         result = subprocess.run(
             ["python3", str(SCRIPT), str(version_path), str(shapes_path), str(source_path),
              str(network_path), str(volume_path), str(volume_label_path), str(identity_path),
-             str(port_path), str(health_metadata_path), str(root), str(destination), lane, image, mode, package, sha, RUN_ID],
+             str(port_path), str(health_metadata_path), str(network_attachment_path), str(root), str(destination), lane, image, mode, package, sha, RUN_ID],
             capture_output=True, text=True, check=False,
-            env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE},
+            env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64},
         )
         return result, destination
 
@@ -337,14 +355,21 @@ class NativeEvidenceTests(unittest.TestCase):
         self.assertEqual(evidence["acquisition_api"], "1.49")
         self.assertEqual(evidence["rendering_api"], "1.56")
         self.assertEqual(evidence["runtime_components"], {"containerd": "2.3.5", "runc": "1.5.1"})
-        self.assertEqual(len(evidence["capability_outcome"]), 22)
+        self.assertEqual(len(evidence["capability_outcome"]), 25)
         self.assertEqual(set(evidence["capability_outcome"].values()), {"available"})
         self.assertEqual(evidence["admitted_shapes"], EXPECTED_FUTURE_RAW_SHAPES)
         self.assertEqual(evidence["source_probes"], SOURCE_PROBES)
         self.assertEqual(evidence["network_probes"], NETWORK_PROBES)
         self.assertEqual(evidence["capability_outcome"]["NetworkInternal"], "available")
-        self.assertTrue((set(NETWORK_PROBES) - {"InternalBridgeNetworkCreate", "ExternalNetworkReference"}).isdisjoint(
-            shape for values in evidence["admitted_shapes"].values() for shape in values))
+        self.assertEqual(set(NETWORK_PROBES).intersection(
+            shape for values in evidence["admitted_shapes"].values() for shape in values), {
+                "InternalBridgeNetworkCreate", "ExternalNetworkReference", "NetworkCreateLabels",
+                "NetworkPrimaryAliases", "NetworkSecondaryAliases", "NetworkSecondaryConnect",
+            })
+        self.assertEqual(evidence["network_attachment_contract"], "network-attachments-v1")
+        self.assertEqual(evidence["network_attachment_probes"], [
+            "NetworkCreateLabels", "NetworkPrimaryAliases", "NetworkSecondaryAliases", "NetworkSecondaryConnect",
+        ])
         self.assertEqual(evidence["volume_probes"], VOLUME_PROBES)
         self.assertEqual(evidence["volume_label_probes"], VOLUME_LABEL_PROBES)
         self.assertEqual(evidence["identity_probes"], IDENTITY_PROBES)
@@ -447,8 +472,8 @@ class NativeEvidenceTests(unittest.TestCase):
             shape for shapes in evidence["admitted_shapes"].values() for shape in shapes))
 
     def test_prerequisite_raw_groups_are_exact_on_all_four_lane_identities(self) -> None:
-        self.assertEqual(len(EXPECTED_RAW_SHAPES), 17)
-        self.assertEqual(sum(map(len, EXPECTED_RAW_SHAPES.values())), 28)
+        self.assertEqual(len(EXPECTED_RAW_SHAPES), 20)
+        self.assertEqual(sum(map(len, EXPECTED_RAW_SHAPES.values())), 32)
         for family, release, api, minimum, package in (
             ("upstream", "29.8.1", "1.56", "1.44", ""),
             ("debian11", "20.10.5+dfsg1", "1.41", "1.12", "20.10.5+dfsg1-1+deb11u2"),
@@ -524,9 +549,9 @@ class NativeEvidenceTests(unittest.TestCase):
                                str(root / "shapes.json"), str(root / "source.json"),
                                str(root / "network.json"), str(root / "volume.json"),
                                str(root / "volume-label.json"), str(root / "identity.json"),
-                               str(root / "port-probes.json"), str(root / "health-metadata.json"), str(root), str(destination),
+                               str(root / "port-probes.json"), str(root / "health-metadata.json"), str(root / "network-attachments-v1.json"), str(root), str(destination),
                                "upstream-rootful", IMAGE, "rootful", "", SHA, RUN_ID]
-                    rejected = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE}, capture_output=True, text=True, check=False)
+                    rejected = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64}, capture_output=True, text=True, check=False)
                     self.assertNotEqual(rejected.returncode, 0)
                     self.assertFalse(destination.exists())
                     self.assertEqual(rejected.stderr.strip(), "native evidence rejected")
@@ -576,16 +601,16 @@ class NativeEvidenceTests(unittest.TestCase):
         command = ["python3", str(SCRIPT), str(root / "version.json"), str(root / "shapes.json"),
                    str(root / "source.json"), str(probe_path), str(root / "volume.json"),
                    str(root / "volume-label.json"), str(root / "identity.json"),
-                   str(root / "port-probes.json"), str(root / "health-metadata.json"), str(root), str(destination),
+                   str(root / "port-probes.json"), str(root / "health-metadata.json"), str(root / "network-attachments-v1.json"), str(root), str(destination),
                    "upstream-rootful", IMAGE, "rootful", "", SHA, RUN_ID]
         destination.unlink()
         probe_path.write_bytes(b"[" + b"x" * 4096 + b"]")
-        oversized = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE}, capture_output=True, text=True, check=False)
+        oversized = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64}, capture_output=True, text=True, check=False)
         self.assertNotEqual(oversized.returncode, 0)
         self.assertFalse(destination.exists())
         probe_path.unlink()
         probe_path.symlink_to(root / "source.json")
-        symlink = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE}, capture_output=True, text=True, check=False)
+        symlink = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64}, capture_output=True, text=True, check=False)
         self.assertNotEqual(symlink.returncode, 0)
         self.assertFalse(destination.exists())
         self.assertNotIn("private", oversized.stdout + oversized.stderr + symlink.stdout + symlink.stderr)
@@ -679,7 +704,7 @@ class NativeEvidenceTests(unittest.TestCase):
         destination.unlink()
         command = ["python3", str(SCRIPT), *[str(root / name) for name in
                    ("version.json", "shapes.json", "source.json", "network.json", "volume.json",
-                    "volume-label.json", "identity.json", "port-probes.json", "health-metadata.json")], str(root),
+                    "volume-label.json", "identity.json", "port-probes.json", "health-metadata.json", "network-attachments-v1.json")], str(root),
                    str(destination), "upstream-rootful", IMAGE, "rootful", "", SHA, RUN_ID]
         for failure in ("missing", "symlink", "hardlink", "public", "oversized", "notchild", "duplicate"):
             with self.subTest(failure=failure):
@@ -710,7 +735,7 @@ class NativeEvidenceTests(unittest.TestCase):
                     content = proof.read_text()
                     proof.write_text(content.replace('"schema_version": 1',
                                                      '"schema_version": 0, "schema_version": 1'))
-                rejected = subprocess.run(args, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE}, capture_output=True, text=True, timeout=5, check=False)
+                rejected = subprocess.run(args, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64}, capture_output=True, text=True, timeout=5, check=False)
                 self.assertNotEqual(rejected.returncode, 0)
                 self.assertFalse(destination.exists())
                 self.assertEqual(rejected.stderr.strip(), "native evidence rejected")
@@ -760,18 +785,18 @@ class NativeEvidenceTests(unittest.TestCase):
         command = ["python3", str(SCRIPT), str(root / "version.json"), str(root / "shapes.json"),
                    str(root / "source.json"), str(root / "network.json"),
                    str(probe_path), str(root / "volume-label.json"), str(root / "identity.json"),
-                   str(root / "port-probes.json"), str(root / "health-metadata.json"), str(root), str(destination),
+                   str(root / "port-probes.json"), str(root / "health-metadata.json"), str(root / "network-attachments-v1.json"), str(root), str(destination),
                    "upstream-rootful", IMAGE, "rootful", "", SHA, RUN_ID]
-        valid = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE}, capture_output=True, text=True, check=False)
+        valid = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64}, capture_output=True, text=True, check=False)
         self.assertEqual(valid.returncode, 0, valid.stderr)
         destination.unlink()
         probe_path.write_bytes(b"[" + b"x" * 4096 + b"]")
-        oversized = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE}, capture_output=True, text=True, check=False)
+        oversized = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64}, capture_output=True, text=True, check=False)
         self.assertNotEqual(oversized.returncode, 0)
         self.assertFalse(destination.exists())
         probe_path.unlink()
         probe_path.symlink_to(root / "source.json")
-        symlink = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE}, capture_output=True, text=True, check=False)
+        symlink = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64}, capture_output=True, text=True, check=False)
         self.assertNotEqual(symlink.returncode, 0)
         self.assertFalse(destination.exists())
         self.assertNotIn("private", oversized.stdout + oversized.stderr + symlink.stdout + symlink.stderr)
@@ -796,18 +821,18 @@ class NativeEvidenceTests(unittest.TestCase):
         command = ["python3", str(SCRIPT), str(root / "version.json"), str(root / "shapes.json"),
                    str(root / "source.json"), str(root / "network.json"),
                    str(root / "volume.json"), str(probe_path), str(root / "identity.json"),
-                   str(root / "port-probes.json"), str(root / "health-metadata.json"), str(root), str(destination),
+                   str(root / "port-probes.json"), str(root / "health-metadata.json"), str(root / "network-attachments-v1.json"), str(root), str(destination),
                    "upstream-rootful", IMAGE, "rootful", "", SHA, RUN_ID]
-        valid = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE}, capture_output=True, text=True, check=False)
+        valid = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64}, capture_output=True, text=True, check=False)
         self.assertEqual(valid.returncode, 0, valid.stderr)
         destination.unlink()
         probe_path.write_bytes(b"[" + b"x" * 4096 + b"]")
-        oversized = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE}, capture_output=True, text=True, check=False)
+        oversized = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64}, capture_output=True, text=True, check=False)
         self.assertNotEqual(oversized.returncode, 0)
         self.assertFalse(destination.exists())
         probe_path.unlink()
         probe_path.symlink_to(root / "volume.json")
-        symlink = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE}, capture_output=True, text=True, check=False)
+        symlink = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64}, capture_output=True, text=True, check=False)
         self.assertNotEqual(symlink.returncode, 0)
         self.assertFalse(destination.exists())
         self.assertNotIn("private", oversized.stdout + oversized.stderr + symlink.stdout + symlink.stderr)
