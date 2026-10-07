@@ -1,5 +1,48 @@
 # Verification
 
+## Mandatory health and metadata source proof
+
+The canonical native harness now additionally requires
+`native_health_metadata_tests::live_health_metadata_matches_engine` in every
+exact Debian/upstream rootful/rootless lane. See the independently specified
+[health-metadata-v1 contract](native-health-metadata-contract.md). This is a new
+source producer, not admission of the shapes into the sealed catalogue.
+
+Independent CLI/rendered pairs prove direct container-label retention, shell
+health execution, actual failed checks during positive grace, explicit zero
+without inherited positive grace, early-success termination of grace,
+recovery/regression, and inherited/disabled controls. Positive regression
+requires both failed completions and the observed unhealthy state before the
+same actual StartedAt + 20-second boundary. Late-only failures cannot qualify.
+Time, request and response-byte caps reserve cleanup capacity inside the same
+aggregate budgets; work exhaustion never resets the ledger. Derived images,
+the seed and every owned container need exact identity/ownership and two final
+absence rounds before exclusive private proof publication.
+
+The emitter reads that complete owner-private bound proof and projects only
+`health-metadata-v1` plus the four closed source-shape names. Only the complete
+`ContainerLabels`, `HealthShell` and `HealthStartPeriod` groups are emitted;
+inherited/disabled controls grant no additional groups. Historical manifests,
+reviewed-record schema root and current 16/26 sealed catalogue stay unchanged.
+With parameterized identity and the currently prescribed Debian IPv6
+boundaries, future raw manifests contain Debian 23 groups/36 shapes and
+upstream 24/38. Counts are expectations, not substitutes for authentic proof.
+
+Local execution, main Check, reviewed-PR native dispatch and Release validation
+share the unchanged canonical `scripts/native-conformance.sh` entrypoint.
+BoxFerry consumes sealed admission and runs its own consumer/application gates;
+other Lens products and the website do not consume this private Docker proof.
+There is no Lens product dependency on BoxFerry. No image/action/toolchain pin
+or extraction location is added or moved. The new dev-only libc 0.2.189 pin
+uses the already locked version/checksum and Renovate's enabled Cargo manager;
+see [dependency policy](dependency-policy.md). Existing ownership covers the
+unchanged five native image references, Cargo/toolchain and Action pins;
+historical evidence remains outside operational managers.
+
+The new producer is unqualified until complete gates, fresh exact-head native
+execution and authenticated independent review pass. It does not establish
+application readiness, SELinux effects, release or deployment approval.
+
 The complete inert review artifact has offline exact-byte, schema, order,
 privacy, context-binding, and fail-closed opaque-artifact tests. These verify
 serialization, not destination existence, data migration, or native Engine

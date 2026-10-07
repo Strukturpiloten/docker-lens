@@ -7,7 +7,7 @@ if [[ $# != 2 || ! $1 =~ ^[a-z_]+$ || ! $2 =~ ^[a-z_]+$ ]]; then
 fi
 target=$1
 test_name=$2
-if [[ $target == native_target || $target == native_volume || $target == native_network || $target == native_volume_label || $target == native_identity || $target == native_port ]]; then
+if [[ $target == native_target || $target == native_volume || $target == native_network || $target == native_volume_label || $target == native_identity || $target == native_port || $target == native_health_metadata ]]; then
   # Native target tests need crate-private, test-only capability claims.
   # It is a library unit test; no public constructor is exposed for the harness.
   cargo_target=(--lib)
@@ -33,7 +33,7 @@ run_status=0
 # Bind optional failure diagnostics to this invocation's existing hard timeout.
 # The native test reserves its own cleanup and reporting margin before this time.
 run_deadline_epoch=$(( $(date +%s) + 180 ))
-result=$(NATIVE_NETWORK_TEST_DEADLINE_EPOCH=$run_deadline_epoch timeout 180 cargo test --locked "${cargo_target[@]}" -- --ignored --exact "$selected" 2>&1) || run_status=$?
+result=$(NATIVE_NETWORK_TEST_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_HEALTH_METADATA_DEADLINE_EPOCH=$run_deadline_epoch timeout 180 cargo test --locked "${cargo_target[@]}" -- --ignored --exact "$selected" 2>&1) || run_status=$?
 # Only libtest's numeric summary is safe to print. Test and compiler output can
 # contain protected native values, socket payloads, or authored secrets.
 summary=$(grep -Eo '^test result: (ok|FAILED)\. [0-9]+ passed; [0-9]+ failed; [0-9]+ ignored; [0-9]+ measured; [0-9]+ filtered out;' <<<"$result" | tail -n 1 || true)
@@ -52,6 +52,12 @@ volume_label_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: volume_labels_(create|
 if [[ -n $volume_label_marker ]]; then marker=$volume_label_marker; fi
 identity_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: identity_(context|oracle|render|cleanup|cleanup_unverified|evidence)$' <<<"$result" | tail -n 1 || true)
 if [[ -n $identity_marker ]]; then marker=$identity_marker; fi
+health_metadata_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: health_metadata_(context|derive|grace_positive|period_zero|inherited_failure|disabled|cleanup|cleanup_unverified|evidence)$' <<<"$result" | tail -n 1 || true)
+if [[ -n $health_metadata_marker ]]; then marker=$health_metadata_marker; fi
+health_metadata_causal_marker=
+if [[ $target == native_health_metadata ]]; then
+  health_metadata_causal_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: health_metadata_(context|derive|grace_positive|period_zero|inherited_failure|disabled|cleanup|cleanup_unverified|evidence)$' <<<"$result" | awk '/^DOCKERLENS_NATIVE_CHECK: health_metadata_cleanup(_unverified)?$/ { exit } { last=$0 } END { if (last != "") print last }' || true)
+fi
 port_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: (port_(context|cleanup|cleanup_unverified|evidence|ipv4|ipv6|outer_identity|host_curl_preflight|host_bash_preflight)|(port_(fixed_ipv4_oracle|fixed_ipv4_rendered|fixed_ipv6_oracle|fixed_ipv6_rendered|dynamic_ipv6_oracle|dynamic_ipv6_rendered|repeated_dynamic_ipv4_oracle|repeated_dynamic_ipv4_rendered)_(cli_create|cli_inspect|oracle_bindings|oracle_cleanup|oracle_start|cli_http|cli_http_secondary|local_service|http_assert|http_assert_secondary|render|render_body|api_create|api_inspect|rendered_bindings|api_start|dynamic_binding|dynamic_binding_secondary|isolated_http|isolated_assert|udp_assignment|udp_send|udp_receive|udp_assert|tcp6_boundary|negative_recheck|runtime_absence)))$' <<<"$result" | tail -n 1 || true)
 if [[ -n $port_marker ]]; then marker=$port_marker; fi
 # Port cleanup runs after a caught assertion and can mask its last causal stage.
@@ -136,6 +142,7 @@ if (( run_status != 0 )); then
   echo "required native test $target::$test_name failed (exit $run_status)" >&2
   if [[ -n $port_causal_marker && $port_causal_marker != "$marker" ]]; then echo "$port_causal_marker" >&2; fi
   if [[ -n $marker ]]; then echo "$marker" >&2; fi
+  if [[ -n $health_metadata_causal_marker && $health_metadata_causal_marker != "$marker" ]]; then echo "$health_metadata_causal_marker" >&2; fi
   if [[ -n $port_diagnostics ]]; then printf '%s' "$port_diagnostics" >&2; fi
   if [[ -n $dns_diag ]]; then echo "$dns_diag" >&2; fi
   if [[ -n $collision_dns_diag ]]; then echo "$collision_dns_diag" >&2; fi

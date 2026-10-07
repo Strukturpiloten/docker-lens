@@ -12,6 +12,15 @@ rustup to install its verified distribution before checking all targets. The
 serde_json pin remains owned by Renovate's existing Cargo manager; no regex
 manager, manager path, grouping rule, or additional dependency is needed.
 
+The ignored health-metadata proof uses the dev-only exact `libc = 0.2.189`
+declaration for platform-correct no-follow/directory open flags. That version
+and its registry checksum already existed in the locked socket2 graph; no
+package version or checksum was invented or changed. Product dependencies
+remain serde_json/socket2. Renovate's enabled Cargo manager owns this new
+`Cargo.toml` dev pin and the existing lockfile; no custom manager/path/grouping
+or approval rule is added. The policy regression checks its unique native Cargo
+ownership. The crate's Linux-only native validation is unchanged.
+
 GitHub Actions use full commit SHAs with exact release-tag comments on
 ubuntu-24.04. Renovate owns Cargo, GitHub Actions, and the pinned Rust toolchain.
 One native-image regex manager extracts the five distinct version-tag plus

@@ -958,11 +958,13 @@ export NATIVE_VOLUME_PROBES_PATH="$run_dir/volume-probes.json"
 export NATIVE_VOLUME_LABEL_PROBES_PATH="$run_dir/volume-label-probes.json"
 export NATIVE_IDENTITY_PROBES_PATH="$run_dir/identity-probes.json"
 export NATIVE_PORT_PROBES_PATH="$run_dir/port-probes.json"
+export NATIVE_HEALTH_METADATA_PROOF_PATH="$run_dir/health-metadata.json"
 export NATIVE_PORT_START_DIAGNOSTIC_PATH="$run_dir/diagnostics/port-start-window.json"
 export NATIVE_IDENTITY_CANDIDATE_SHA
 NATIVE_IDENTITY_CANDIDATE_SHA=$(git -C "$script_dir/.." rev-parse HEAD)
 [[ $NATIVE_IDENTITY_CANDIDATE_SHA =~ ^[0-9a-f]{40}$ ]] || { echo 'native identity requires exact candidate SHA' >&2; exit 1; }
 export NATIVE_PORT_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
+export NATIVE_HEALTH_METADATA_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 if [[ $EUID == 0 ]]; then export NATIVE_PODMAN_USE_SUDO=0; else export NATIVE_PODMAN_USE_SUDO=1; fi
 
 port_start_failure_diagnostic() {
@@ -1020,6 +1022,7 @@ if (( port_status != 0 )); then
   port_start_failure_diagnostic || true
   exit "$port_status"
 fi
+"$(dirname "$0")/run-exact-native-test.sh" native_health_metadata live_health_metadata_matches_engine
 
 if [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]; then
   candidate_sha=$(git -C "$script_dir/.." rev-parse HEAD)
@@ -1031,7 +1034,7 @@ if [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]; then
     echo 'native evidence requires a clean candidate checkout' >&2
     exit 1
   }
-  python3 "$script_dir/native-evidence.py" "$run_dir/version.json" "$NATIVE_SHAPES_PATH" "$NATIVE_SOURCE_PROBES_PATH" "$NATIVE_NETWORK_PROBES_PATH" "$NATIVE_VOLUME_PROBES_PATH" "$NATIVE_VOLUME_LABEL_PROBES_PATH" "$NATIVE_IDENTITY_PROBES_PATH" "$NATIVE_PORT_PROBES_PATH" "$run_dir" \
+  python3 "$script_dir/native-evidence.py" "$run_dir/version.json" "$NATIVE_SHAPES_PATH" "$NATIVE_SOURCE_PROBES_PATH" "$NATIVE_NETWORK_PROBES_PATH" "$NATIVE_VOLUME_PROBES_PATH" "$NATIVE_VOLUME_LABEL_PROBES_PATH" "$NATIVE_IDENTITY_PROBES_PATH" "$NATIVE_PORT_PROBES_PATH" "$NATIVE_HEALTH_METADATA_PROOF_PATH" "$run_dir" \
     "$DOCKERLENS_NATIVE_EVIDENCE_DIR/$lane.json" "$lane" "$image" "$expected_mode" \
     "$installed_docker_package" "$candidate_sha" "$run_id"
 fi
