@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Select the separately reviewed #88 parameterized identity source cohort:
+  exactly sixteen capabilities and twenty-six shapes on four exact profiles,
+  adding only user and working-directory singleton groups. Preserve all prior
+  evidence bytes, unsupported groups and protected diagnostics. ADR 0014
+  requires fresh final-candidate native/complete gates and the retained six
+  authored-fixture volume-only consumer rehearsal before merge/main/release;
+  source evidence is not arbitrary-image startup or application acceptance.
 - Extend the separate native identity proof to ten independent CLI/renderer
   pairs, non-default named principals, new-directory creation and attributed
   account/path failures. Validate a bounded private v2 contract before mapping

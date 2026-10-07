@@ -43,9 +43,11 @@
    from an exact Debian package revision, the reported Engine release,
    advertised maximum API, negotiated acquisition API, tested rendering API,
    and daemon mode. Catalog discovery returns its SHA-256 evidence key. The
-   candidate catalog contains four exact records from the reviewed #70 native
-   cohort for pre-merge label consumer rehearsal only, under ADR 0012. Both the
-   original historical and #68 evidence cohorts are preserved separately. Each
+   candidate catalog contains four exact records from the reviewed #88 native
+   source cohort under ADR 0014: sixteen capabilities and twenty-six shapes,
+   including parameterized user and working-directory fields. The original,
+   #68 and #70 evidence cohorts are preserved separately. ADR 0012's six-fixture
+   volume-only consumer gate remains effective. Each
    changed candidate and release needs fresh complete and four-lane
    native gates before a compatibility claim. The operation graph
    retains the chosen context and
@@ -95,8 +97,9 @@ Created named volumes retain bounded protected authored labels and render a
 gates that request branch; historical unlabelled volume evidence does not
 admit it. External-volume prerequisites have no label field and never emit a
 volume-create or relabel request. The external-volume prerequisite singleton
-is admitted by the #68 cohort. This candidate adds the complete labelled-create
-group from #70 without widening any other group. [ADR 0012](decisions/0012-candidate-volume-label-admission.md)
+is admitted by the #68 cohort. The #70 cohort added the complete labelled-create
+group; the #89 candidate retains it and adds only the independently proved
+parameterized identity groups from #88. [ADR 0012](decisions/0012-candidate-volume-label-admission.md)
 explicitly supersedes only ADR 0010's admission sequencing: sealed positive
 candidate records enable pre-merge consumer rehearsal, not production
 admission. Merge/main/release remain blocked until fresh exact-final-candidate

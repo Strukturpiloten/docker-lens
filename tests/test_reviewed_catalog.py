@@ -91,6 +91,34 @@ LABEL_REVIEWED = {
     "upstream-rootful": "dd2dec14ce75c1dfb672f018a8ade98334783edcd964758da6b4a432d22429a0",
     "upstream-rootless": "280839c9f4d6cfd1adda9f25bbf17fdfbb3fab162e91c346a614c31e1e318c44",
 }
+IDENTITY_CANDIDATE = "032b1510524f391f08a795dab4da73f6fa8f7213"
+IDENTITY_RUN = "https://github.com/Strukturpiloten/docker-lens/actions/runs/37439627551/attempts/1"
+IDENTITY_SHAPES = {
+    **LABEL_SHAPES,
+    "ContainerUser": ["ContainerUser"],
+    "ContainerWorkdir": ["ContainerWorkdir"],
+}
+IDENTITY_PROBES = [
+    "ContainerUser", "ContainerWorkdir", "ContainerNumericUidGid",
+    "ContainerProcessWorkingDirectory", "ContainerIdentityOwnershipCleanup",
+]
+IDENTITY_CASES = [
+    "inherit", "numeric_uid_gid", "numeric_uid", "named_user",
+    "named_user_group", "named_user_numeric_group", "numeric_user_named_group",
+    "missing_user", "missing_group", "nondirectory_workdir",
+]
+IDENTITY_MANIFESTS = {
+    "debian11-rootful": "4972a2d7557e55b5aa44ab85534055239c18684928d7357f9a9d214d0f08aabc",
+    "debian11-rootless": "8895f2267ddd005e8574e364048e9c4aa3220b887db66473016b51a0a2a2c31b",
+    "upstream-rootful": "497c461ea3463cfbf82ff5256c0ec442132d9bfd32060913d0ef5a0e8f90c0f5",
+    "upstream-rootless": "648f64f9d751dd5cf52ac7504a8af12267c397e395177772e10afe25f7f5d673",
+}
+IDENTITY_REVIEWED = {
+    "debian11-rootful": "24313f10b84b8a3410906d5ad4721d3ef389ad2e09be5b59416929ef57e86b78",
+    "debian11-rootless": "c9800d722f1b505f5b1e5a54d9c60e68502fceaa0779f690c5504623ec473333",
+    "upstream-rootful": "b6cebf2f71be5992b112661650e37e69270d45f7d1b8e89843e843bded325020",
+    "upstream-rootless": "81a1ee33c3a02d83fe6cd0f1683e1bb9b6c8774dc8aa192b2160c6ee44ba0943",
+}
 # Every reviewed cohort must be deliberately added here with its exact run,
 # candidate, four identities, four envelope digests, four raw manifest digests,
 # and exact reviewed capability-to-shape admissions. A later new shape needs
@@ -109,6 +137,11 @@ COHORTS = {
     (LABEL_CANDIDATE, LABEL_RUN): {
         lane: (LABEL_REVIEWED[lane], LABEL_MANIFESTS[lane],
                EXPECTED_IDENTITIES[lane], LABEL_SHAPES)
+        for lane in LANES
+    },
+    (IDENTITY_CANDIDATE, IDENTITY_RUN): {
+        lane: (IDENTITY_REVIEWED[lane], IDENTITY_MANIFESTS[lane],
+               EXPECTED_IDENTITIES[lane], IDENTITY_SHAPES)
         for lane in LANES
     },
 }
@@ -253,6 +286,11 @@ def bind_cohorts(
             manifest = raw[record["native_manifest_sha256"]][1]
             identity = record["identity"]
             expected_admission = cohorts[cohort_key][lane][3]
+            if {"ContainerUser", "ContainerWorkdir"} & set(expected_admission):
+                if (manifest.get("identity_contract") != "container-identity-v1"
+                        or manifest.get("identity_cases") != IDENTITY_CASES
+                        or manifest.get("identity_probes") != IDENTITY_PROBES):
+                    raise ValueError("identity admission requires complete parameterized proof markers")
             if record["schema_version"] != 1 or record["native_manifest_artifact_name"] != f"dockerlens-native-{lane}":
                 raise ValueError("reviewed record schema or lane artifact differs")
             fields = (
@@ -304,14 +342,14 @@ class ReviewedCatalogTests(unittest.TestCase):
         self.assertEqual(section.count("NativeEvidenceLane::"), 4)
         reviewed = {
             lane: path.stem
-            for lane, (path, _) in indexed_cohorts(hashed_json("reviewed"), COHORTS)[LABEL_CANDIDATE, LABEL_RUN].items()
+            for lane, (path, _) in indexed_cohorts(hashed_json("reviewed"), COHORTS)[IDENTITY_CANDIDATE, IDENTITY_RUN].items()
         }
         self.assertEqual({match["variant"] for match in tuples}, set(LANE_VARIANTS))
         for match in tuples:
             lane = LANE_VARIANTS[match["variant"]]
             self.assertEqual(match["digest"], reviewed[lane])
             self.assertEqual(match["path_digest"], reviewed[lane])
-            self.assertEqual(match["digest"], LABEL_REVIEWED[lane])
+            self.assertEqual(match["digest"], IDENTITY_REVIEWED[lane])
 
     def test_four_records_bind_exact_manifest_bytes_and_shapes(self) -> None:
         native_records = hashed_json("native")
@@ -411,18 +449,113 @@ class ReviewedCatalogTests(unittest.TestCase):
                 self.assertEqual(len(manifest["network_probes"]), 22)
                 self.assertEqual(len(manifest["volume_probes"]), 6)
 
-    def test_compiled_candidate_has_only_fourteen_complete_capability_groups(self) -> None:
+    def test_compiled_candidate_has_only_sixteen_complete_capability_groups(self) -> None:
         source = (ROOT / "src/reviewed_catalog.rs").read_text(encoding="utf-8")
-        self.assertIn(f'const SOURCE_CANDIDATE: &str = "{LABEL_CANDIDATE}";', source)
-        self.assertIn(f'"{LABEL_RUN}";', source)
+        self.assertIn(f'const SOURCE_CANDIDATE: &str = "{IDENTITY_CANDIDATE}";', source)
+        self.assertIn(f'"{IDENTITY_RUN}";', source)
         capabilities = source.split("const REVIEWED_CAPABILITIES:", 1)[1].split("];", 1)[0]
         shapes = source.split("const REVIEWED_SHAPES:", 1)[1].split("];", 1)[0]
         capability_names = re.findall(r"Capability::(\w+)", capabilities)
         shape_names = re.findall(r"NativeCapabilityShape::(\w+)", shapes)
-        self.assertEqual(len(capability_names), 14)
-        self.assertEqual(set(capability_names), set(LABEL_SHAPES))
-        self.assertEqual(len(shape_names), 24)
-        self.assertEqual(set(shape_names), {shape for group in LABEL_SHAPES.values() for shape in group})
+        self.assertEqual(len(capability_names), 16)
+        self.assertEqual(set(capability_names), set(IDENTITY_SHAPES))
+        self.assertEqual(len(shape_names), 26)
+        self.assertEqual(set(shape_names), {shape for group in IDENTITY_SHAPES.values() for shape in group})
+
+    def test_identity_cohort_adds_only_two_singleton_groups_and_preserves_history(self) -> None:
+        reviewed = bind_cohorts(hashed_json("reviewed"), hashed_json("native"), COHORTS)
+        raw = indexed_native_manifests(hashed_json("native"), COHORTS)
+        self.assertEqual(len(reviewed), 4)
+        self.assertEqual(len(IDENTITY_SHAPES), 16)
+        self.assertEqual(sum(map(len, IDENTITY_SHAPES.values())), 26)
+        self.assertEqual(set(IDENTITY_SHAPES) - set(LABEL_SHAPES),
+                         {"ContainerUser", "ContainerWorkdir"})
+        for lane, (path, record) in reviewed[IDENTITY_CANDIDATE, IDENTITY_RUN].items():
+            with self.subTest(lane=lane):
+                self.assertEqual(path.stem, IDENTITY_REVIEWED[lane])
+                self.assertEqual(record["native_manifest_sha256"], IDENTITY_MANIFESTS[lane])
+                self.assertEqual(record["identity"], EXPECTED_IDENTITIES[lane])
+                claims = {entry["name"]: entry["admitted_shapes"] for entry in record["capabilities"]}
+                manifest = raw[IDENTITY_MANIFESTS[lane]][1]
+                self.assertEqual(claims, IDENTITY_SHAPES)
+                self.assertEqual(manifest["admitted_shapes"], IDENTITY_SHAPES)
+                self.assertEqual(manifest["capability_outcome"],
+                                 dict.fromkeys(IDENTITY_SHAPES, "available"))
+                self.assertEqual(manifest["identity_contract"], "container-identity-v1")
+                self.assertEqual(manifest["identity_cases"], IDENTITY_CASES)
+                self.assertEqual(manifest["identity_probes"], IDENTITY_PROBES)
+                for name, shapes in LABEL_SHAPES.items():
+                    self.assertEqual(claims[name], shapes)
+                for name in ("SupplementaryGroups", "UserNamespace", "PortHostIpv4"):
+                    self.assertNotIn(name, claims)
+
+    def test_identity_admission_rejects_legacy_partial_or_reordered_proof_markers(self) -> None:
+        reviewed_records = hashed_json("reviewed")
+        native_records = hashed_json("native")
+        for lane in LANES:
+            for field, expected in (
+                ("identity_cases", IDENTITY_CASES),
+                ("identity_probes", IDENTITY_PROBES),
+            ):
+                for fault in (None, [], expected[:-1], expected[::-1], [*expected, expected[0]]):
+                    native = deepcopy(native_records)
+                    manifest = next(data for path, data in native if path.stem == IDENTITY_MANIFESTS[lane])
+                    if fault is None:
+                        del manifest[field]
+                    else:
+                        manifest[field] = fault
+                    with self.subTest(lane=lane, field=field, fault=fault):
+                        with self.assertRaises(ValueError):
+                            bind_cohorts(reviewed_records, native, COHORTS)
+            for contract in (None, "", "container-identity-v2"):
+                native = deepcopy(native_records)
+                manifest = next(data for path, data in native if path.stem == IDENTITY_MANIFESTS[lane])
+                if contract is None:
+                    del manifest["identity_contract"]
+                else:
+                    manifest["identity_contract"] = contract
+                with self.subTest(lane=lane, contract=contract):
+                    with self.assertRaises(ValueError):
+                        bind_cohorts(reviewed_records, native, COHORTS)
+
+    def test_identity_groups_require_complete_positive_linked_raw_and_reviewed_evidence(self) -> None:
+        reviewed_records = hashed_json("reviewed")
+        native_records = hashed_json("native")
+        for lane in LANES:
+            for name in ("ContainerUser", "ContainerWorkdir"):
+                for side in ("raw", "reviewed"):
+                    for fault in ("missing", "empty", "duplicate", "wrong_group", "unavailable", "unknown"):
+                        reviewed = deepcopy(reviewed_records)
+                        native = deepcopy(native_records)
+                        wrong_shape = "ContainerWorkdir" if name == "ContainerUser" else "ContainerUser"
+                        if side == "raw":
+                            manifest = next(data for path, data in native if path.stem == IDENTITY_MANIFESTS[lane])
+                            if fault == "missing":
+                                del manifest["admitted_shapes"][name]
+                            elif fault == "empty":
+                                manifest["admitted_shapes"][name] = []
+                            elif fault == "duplicate":
+                                manifest["admitted_shapes"][name] *= 2
+                            elif fault == "wrong_group":
+                                manifest["admitted_shapes"][name] = [wrong_shape]
+                            else:
+                                manifest["capability_outcome"][name] = fault
+                        else:
+                            record = next(data for path, data in reviewed if path.stem == IDENTITY_REVIEWED[lane])
+                            entry = next(entry for entry in record["capabilities"] if entry["name"] == name)
+                            if fault == "missing":
+                                record["capabilities"].remove(entry)
+                            elif fault == "empty":
+                                entry["admitted_shapes"] = []
+                            elif fault == "duplicate":
+                                entry["admitted_shapes"] *= 2
+                            elif fault == "wrong_group":
+                                entry["admitted_shapes"] = [wrong_shape]
+                            else:
+                                entry["state"] = fault
+                        with self.subTest(lane=lane, group=name, side=side, fault=fault):
+                            with self.assertRaises(ValueError):
+                                bind_cohorts(reviewed, native, COHORTS)
 
     def test_label_candidate_requires_positive_complete_raw_and_reviewed_label_group(self) -> None:
         reviewed_records = hashed_json("reviewed")

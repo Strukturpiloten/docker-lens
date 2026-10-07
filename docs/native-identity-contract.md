@@ -2,8 +2,13 @@
 
 This documents the private version-2 producer/consumer seam for #86, under
 [ADR 0013](decisions/0013-parameterized-container-identity.md). Source and mocked
-controls do not establish Engine compatibility. Fresh exact-candidate native
-evidence and a separately reviewed sealed cohort remain required.
+controls do not establish Engine compatibility. Source candidate
+`032b1510524f391f08a795dab4da73f6fa8f7213` passed all four lanes in run
+`37439627551`, attempt 1. The #89 candidate selects its independently reviewed
+sixteen-capability/twenty-six-shape cohort under
+[ADR 0014](decisions/0014-reviewed-identity-cohort.md). Fresh final-candidate
+native evidence, complete gates and the retained six-fixture volume-only
+consumer rehearsal are still required before merge/main/release admission.
 
 The canonical tenth native check remains
 `native_identity::live_container_process_identity_matches_engine`. It executes
@@ -60,13 +65,19 @@ The producer has a 120-second internal deadline and reserves 40 seconds for
 cleanup, including command kill grace. SIGKILL or host failure may prevent
 cleanup; no positive proof may be inferred from interruption or missing records.
 
-## Raw mapping, not catalogue admission
+## Raw mapping and separate sealed selection
 
 Only complete v2 validation maps raw singleton `ContainerUser`/`ContainerWorkdir`
 shape groups. The sanitized manifest adds fixed `identity_contract` and
 `identity_cases`; it never exports names, IDs, run tokens, user values, paths,
 process output or native errors. Filesystem and external binding checks establish
 trusted-harness provenance, not attestation against a privileged writer.
+
+Raw proof does not automatically change the catalogue. The #89 selection is
+a separate source/evidence review of four immutable manifests and four
+digest-bound envelopes. It adds only these two singleton groups, not
+supplementary groups, ports or other runtime settings. Source-run success is
+not proof for a later candidate or an arbitrary destination image.
 
 Version-1 numeric-only proof retains its 4-KiB limit and non-admission meaning.
 Its definitions and historical records remain unchanged. The reviewed-record

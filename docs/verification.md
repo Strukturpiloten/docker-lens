@@ -557,13 +557,15 @@ dependency or Renovate extraction path changes are introduced.
 [ADR 0013](decisions/0013-parameterized-container-identity.md) bounds authored
 user/group syntax and defines the expanded parameterized proof required before
 identity capability admission. The historical proof described below remains
-numeric-only non-admission evidence; expanded ten-pair proof is tracked in #86.
+numeric-only non-admission evidence. #86's expanded ten-pair source proof
+passed all four lanes in run `37439627551`, attempt 1. Candidate sealed
+selection is governed separately by ADR 0014 and the final-candidate gates.
 
 The version-2 producer/consumer seam is documented in
 [parameterized identity proof](native-identity-contract.md). The canonical check
 now contains the ten pairs, while the historical numeric-only v1 record below
 retains its original meaning. Only complete validated v2 proof can map the two
-singleton raw identity groups; this does not change sealed catalogue admission
+singleton raw identity groups; this does not automatically change sealed catalogue admission
 or establish a passing native run.
 
 ### Historical v1 proof (retained non-admission contract)
@@ -629,84 +631,76 @@ downloaded tool, or operational definition is added or moved.
 
 ## Reviewed target-profile records
 
-This #49 candidate catalogue selects four reviewed records from native run
-[`37214738475`, attempt 1](https://github.com/Strukturpiloten/docker-lens/actions/runs/37214738475/attempts/1),
-of #70 source candidate `0d8268155a5aacddaeb501adf7f8b2fe06a718ca`, for
-pre-merge volume-only consumer rehearsal under
-[ADR 0012](decisions/0012-candidate-volume-label-admission.md). This cohort
-contains the original ten capabilities/twenty shapes plus exactly
-`VolumeExternalReference` / `ExternalVolumeReference`,
-`NetworkExternalReference` / `ExternalNetworkReference`,
-`NetworkInternal` / `InternalBridgeNetworkCreate`, and
-`VolumeLabels` / `VolumeCreateLabels`: fourteen capabilities and twenty-four
-shapes for each exact lane identity. Production merge, main admission and
-release remain blocked until fresh exact-final-candidate four-lane native
-proof, independently reviewed volume-only consumer rehearsal of all six actual
-authored fixture mappings and complete gates pass. The authenticated source
-run proves the source candidate, not a later final candidate, release or six
-application acceptance. Its dispatcher workflow head is not the source SHA.
+The #89 candidate catalogue selects four reviewed records from native run
+[`37439627551`, attempt 1](https://github.com/Strukturpiloten/docker-lens/actions/runs/37439627551/attempts/1),
+of #88 source candidate `032b1510524f391f08a795dab4da73f6fa8f7213`, under
+[ADR 0014](decisions/0014-reviewed-identity-cohort.md). The exact set is sixteen
+capabilities and twenty-six shapes: the #70 fourteen/twenty-four set plus only
+`ContainerUser` / `ContainerUser` and `ContainerWorkdir` / `ContainerWorkdir`.
+The ten independent CLI/renderer pairs and complete private v2 proof establish
+parameterized native fields, not arbitrary-image startup or host UID mapping.
 
-The original four records
-from run `36451790131`, attempt 1, candidate
-`d51d7dbfda5ee6f8fefe92605afe8baea3dc504e`, and all of their raw bytes remain
-preserved. They retain their original ten/twenty admissions. The separate #68
-cohort from run `37209363801`, attempt 1, candidate
-`702910b003daae58babd540d7ba3de4998275feb`, retains its thirteen/twenty-three
-admissions and raw positive-but-unselected label group. Neither prior cohort
-is relabeled, regenerated or rewritten as #70 evidence. The candidate
-catalogue still has four identities, selected only from the #70 cohort rather
-than duplicate historical/new profile entries.
-Exact raw manifests and reviewed envelopes are checked in under
-`docs/evidence/native/sha256/` and `docs/evidence/reviewed/sha256/`. Each
-changed candidate and release needs fresh complete and four-lane native gates.
-Each record must conform to
-[`native-evidence.schema.json`](native-evidence.schema.json). Its lane and exact
-identity bind the distribution package revision (or upstream origin), reported
-Engine release, advertised maximum API, negotiated acquisition API, tested
-rendering API, and rootful or rootless mode. The run URL includes the attempt
-number. `candidate_sha` names the source tree actually executed by that run.
-The schema recognizes the capability and renderer-shape names already defined
-by DockerLens, but recognition is not admission. The compiled catalogue
-requires exactly the candidate cohort's fourteen capabilities and twenty-four
-shapes per lane. The separate label group is the only addition to #68's
-reviewed set; no raw probe alone grants a positive claim. Other topology,
-resource, security and container-setting groups
-remain unadmitted; the broader #31, #44 and consumer milestones remain open.
-A later cohort must explicitly bind its candidate SHA, source run, each lane's
-identity and content digests, and the complete
-`NativeCapabilityShape::required_for` group for every positive capability.
-Each positive reviewed shape list must exactly match the linked raw manifest's
-admitted shapes, and its raw capability outcome must be `available`.
-Duplicate or missing lanes, partial groups, and shapes belonging to another
-capability cannot establish a catalog claim. Preserve historical evidence
-bytes unchanged when preparing that separate review.
+Production merge/main/release remain blocked until fresh exact-final-candidate
+four-lane native proof, complete gates and independently reviewed six actual
+authored-fixture volume-only consumer rehearsals pass. The retained
+[ADR 0012](decisions/0012-candidate-volume-label-admission.md) gate applies
+because this selection still admits `VolumeLabels`. Offline consumer tests
+exercise the sealed planner but do not replace isolated native rehearsal.
+The authenticated source run validates its source candidate, not a later
+candidate, release or six-application acceptance. The trusted dispatcher
+workflow head is distinct from the executed source SHA.
 
-The new envelopes were generated from the four unmodified #70 artifacts named
-`dockerlens-native-<lane>`, each containing `<lane>.json`. SHA-256 was computed
-over each downloaded artifact file's exact bytes with `sha256sum`; the raw file
-was retained verbatim at that digest's native evidence path. Each envelope
-derives upstream versus Debian build provenance from the observed lane and
-exact package field, copies Engine, advertised/acquisition/rendering APIs and
-mode from its linked raw manifest, binds the actual source
-candidate and run attempt above, and selects only the closed fourteen groups
-whose ordered shape lists exactly match those raw positive outcomes. It adds
-no default identity or inferred probe-to-capability admission. The envelope is
-UTF-8 JSON with two-space indentation and one final newline; its independent
-SHA-256 names the reviewed file and compiled evidence key. The cohort
-specification in `tests/test_reviewed_catalog.py` pins all four raw and
-reviewed digests and checks all three cohorts, source binding, complete
-`required_for` groups and the exact compiled selection. Historical source and
-reviewed files were neither regenerated nor rewritten. No operational pin,
-manager ownership or Renovate extraction path changes are introduced; these
-content-addressed historical evidence files remain outside update streams.
-The #70 source run passed nine exact ignored proof tests per lane. Its raw
-manifests retain the closed nineteen source, twenty-two network, six external
-volume and four label probe markers; nine tests do not mean nine label markers.
-Public candidate regressions use the real sealed catalogue to check literal
-complete label artifacts on every profile, protected Debug, duplicate and
-oversized rejection, external-volume non-mutation, wrong evidence/mode/API
-controls and preserved unsupported groups. These offline tests are not native
-or consumer rehearsal evidence and do not waive the remaining gates.
+All earlier raw and reviewed cohorts remain immutable and retain their own
+admissions: original run `36451790131`, attempt 1, source
+`d51d7dbfda5ee6f8fefe92605afe8baea3dc504e` (ten/twenty);
+#68 run `37209363801`, attempt 1, source
+`702910b003daae58babd540d7ba3de4998275feb` (thirteen/twenty-three);
+and #70 run `37214738475`, attempt 1, source
+`0d8268155a5aacddaeb501adf7f8b2fe06a718ca` (fourteen/twenty-four).
+No prior record is relabeled, regenerated or rewritten. The active catalogue
+still has exactly four identities, selected only from #88.
+
+Exact manifests and reviewed envelopes live under
+`docs/evidence/native/sha256/` and `docs/evidence/reviewed/sha256/`.
+Records conform to [the reviewed schema](native-evidence.schema.json) and bind
+lane, build/package provenance, reported Engine release, advertised maximum,
+acquisition and rendering APIs, daemon mode, actual source SHA and run attempt.
+The compiled catalogue requires exactly sixteen complete capability groups
+and twenty-six shapes per lane. Each `NativeCapabilityShape::required_for`
+group must match its linked raw manifest's exact available shape group.
+Missing/duplicate lanes, partial groups, wrong-group shapes or unavailable
+outcomes cannot authorize planning. Raw probe markers alone grant no claim.
+
+The four unmodified #88 artifacts are named `dockerlens-native-<lane>` and
+contain `<lane>.json`. Downloaded archive hashes matched authenticated GitHub
+artifact digests; the independently reviewed bounded projector verified the
+candidate/lane/image/package/API/probe/case bindings. Each exact manifest is
+retained verbatim under its content SHA-256. Its reviewed envelope derives
+build provenance from the observed lane/package, copies the native identity
+and APIs, binds the actual source/run above, and selects only the sixteen
+complete available groups. UTF-8 JSON with two-space indentation and a final
+newline has a separate SHA-256 naming the reviewed file and evidence key.
+
+`tests/test_reviewed_catalog.py` pins all four cohorts' raw/reviewed hashes,
+identity bindings and complete groups and checks the exact compiled selection.
+Identity admission additionally requires the exact ordered parameterized case
+and probe markers; legacy, omitted, partial, duplicated or reordered markers
+fail the linked-evidence regression checks.
+Public regressions use the real sealed catalogue, independently authored
+identity requests and complete labelled-volume artifacts on every profile.
+They check omission, canonical numeric/named/mixed users, protected Debug,
+malformed values, wrong evidence/mode/API, duplicate/oversized labels and
+external-volume non-mutation. Supplementary groups, host namespace, port and
+remaining runtime/network groups stay unadmitted. Offline assertions cannot
+replace fresh native or consumer proof.
+
+The #88 source run passed ten exact ignored proof tests per lane. Its raw
+manifests retain nineteen source, twenty-two network, six external-volume,
+four label and five identity probe markers plus the ten ordered identity
+cases and `container-identity-v1` contract. Test count is not probe count.
+No operational pin, manager ownership or Renovate extraction path changes;
+immutable historical evidence remains outside automatic update streams.
+
 `native_manifest_artifact_name` identifies the run's per-lane artifact;
 `native_manifest_sha256` is the SHA-256 of its sanitized JSON manifest
 emitted by the native harness after success; that manifest contains observed
