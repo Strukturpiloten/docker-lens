@@ -638,6 +638,20 @@ ephemeral IPv6 and repeated-ephemeral functions retain all eight port markers,
 independent CLI creates, literal request comparisons, ordinary sealed planning,
 configured/runtime inspections, TCP and UDP canaries, and exact kernel-refusal
 loopback isolation. UDP controls exercise both oracle and rendered fixtures.
+Each completed fixture now uses the existing exact-ID ownership-checked removal
+before the next independent fixture is created: fixed IPv4 and fixed IPv6
+rendered fixtures close at the end of their assertions, while dynamic IPv6 and
+repeated-ephemeral IPv4 close the oracle after capturing its independent outcome
+or both host-address traffic probes, then close the rendered fixture after its
+own checks. Both bindings within a repeated-binding fixture remain simultaneous.
+Deletion still revalidates canonical ID, name, run label and image, requires
+direct ID/name 404 readbacks, and leaves the created ledger intact for the final
+two absence rounds. Failed assertions unwind to cleanup; they never delete early
+and continue. Pure fake-Engine trace controls exercise this same removal path,
+assertions-before-delete, failure interruption and idempotent absence checks.
+These fixture-isolation definitions preserve all eight shapes, TCP/UDP,
+exposed-only and namespace checks and existing budgets; they are not native
+qualification or permission to retry, force allocations or admit a boundary.
 Context uses genuine bounded acquisition/decode scope, direct and CLI Engine
 facts, and exactly one inner dockerd's effective UID; an environment assertion
 alone is not mode, version or capability evidence. The reused outer-namespace
@@ -870,6 +884,12 @@ POST start, followed by responsive version GET and a timed-out same-object
 inspect. State, bindings and cleanup remained uncertain. That observation does
 not establish a cause, an unsupported boundary, or positive native evidence;
 fresh exact-candidate passing lanes and independent review remain required.
+
+Run `37625002155` again failed only Debian 11 rootless at the repeated-ephemeral
+oracle's existing 24-second POST-start limit; the other three lanes passed.
+This retained failure does not identify a cause or qualify the changed
+fixture-isolation candidate. Fresh exact-candidate passing lanes and independent
+review remain required; no product capability, pin or catalogue record changes.
 
 The existing main, reviewed-PR native dispatcher and Release validation workflows
 all consume `scripts/native-conformance.sh`; that canonical definition now

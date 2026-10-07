@@ -68,6 +68,199 @@ fn owned(value: &Value, id: Option<&str>, name: &str, run: &str, image: &str) ->
         && value["Config"]["Image"] == image
 }
 
+enum OwnedPortRemoval<'a> {
+    Inspect(&'a str),
+    Delete(&'a str),
+}
+
+fn verified_port_removal(
+    name: &str,
+    id: &str,
+    run: &str,
+    image: &str,
+    mut request: impl FnMut(OwnedPortRemoval<'_>) -> (u16, Value),
+) -> bool {
+    let (status, value) = request(OwnedPortRemoval::Inspect(id));
+    if status == 404 {
+        return request(OwnedPortRemoval::Inspect(name)).0 == 404;
+    }
+    if status != 200 || !owned(&value, Some(id), name, run, image) {
+        return false;
+    }
+    // Immediate immutable identity revalidation precedes ID-only removal.
+    if request(OwnedPortRemoval::Delete(id)).0 != 204 {
+        return false;
+    }
+    request(OwnedPortRemoval::Inspect(id)).0 == 404
+        && request(OwnedPortRemoval::Inspect(name)).0 == 404
+}
+
+fn port_assertions_then_delete<S, T>(
+    state: &mut S,
+    assertions: impl FnOnce(&mut S) -> T,
+    delete: impl FnOnce(&mut S),
+) -> T {
+    let outcome = assertions(state);
+    delete(state);
+    outcome
+}
+
+#[derive(Default)]
+struct PortRemovalControl {
+    live: bool,
+    lingering_name: bool,
+    trace: Vec<&'static str>,
+}
+
+fn fake_port_removal(
+    control: &mut PortRemovalControl,
+    name: &str,
+    id: &str,
+    inspected: &Value,
+) -> bool {
+    verified_port_removal(name, id, "Control01", "fixture", |request| match request {
+        OwnedPortRemoval::Inspect(key) => {
+            assert!(key == id || key == name);
+            control.trace.push(if key == id {
+                "inspect_id"
+            } else {
+                "inspect_name"
+            });
+            if control.live || (key == name && control.lingering_name) {
+                (200, inspected.clone())
+            } else {
+                (404, Value::Null)
+            }
+        }
+        OwnedPortRemoval::Delete(key) => {
+            assert_eq!(key, id);
+            control.trace.push("delete_id");
+            control.live = false;
+            (204, Value::Null)
+        }
+    })
+}
+
+#[test]
+fn isolated_port_fixture_trace_checks_then_removes_before_next_create() {
+    let fixtures: &[&[&str]] = &[
+        &["http_primary", "http_secondary", "exposed_runtime", "udp"],
+        &[
+            "http_primary",
+            "http_secondary",
+            "exposed_runtime",
+            "namespace_refusal",
+            "udp",
+        ],
+        &["fixed_ipv6_oracle_boundary"],
+        &["fixed_ipv6_rendered_boundary"],
+        &["dynamic_ipv6_oracle_boundary"],
+        &["dynamic_ipv6_rendered_boundary"],
+        &["dynamic_http_primary", "dynamic_http_secondary"],
+        &["dynamic_http_primary", "dynamic_http_secondary"],
+    ];
+    let mut control = PortRemovalControl::default();
+    let mut ledger = Vec::new();
+    for (index, checks) in fixtures.iter().enumerate() {
+        assert!(!control.live);
+        let id = format!("{index:064x}");
+        let name = format!("dl-port-Control01-{index}");
+        let inspected = json!({"Id":id,"Name":format!("/{name}"),
+            "Config":{"Image":"fixture","Labels":{OWNER:"Control01"}}});
+        control.trace.push("create");
+        control.live = true;
+        let start = control.trace.len();
+        let outcome = port_assertions_then_delete(
+            &mut control,
+            |control| {
+                control.trace.extend(checks.iter().copied());
+                "independent_outcome"
+            },
+            |control| assert!(fake_port_removal(control, &name, &id, &inspected)),
+        );
+        assert_eq!(outcome, "independent_outcome");
+        let mut expected = checks.to_vec();
+        expected.extend(["inspect_id", "delete_id", "inspect_id", "inspect_name"]);
+        assert_eq!(control.trace[start..], expected);
+        ledger.push((name, id, inspected));
+    }
+    // Completed fixtures remain in the ledger. Two final absence rounds are idempotent.
+    let completed = control.trace.len();
+    for _ in 0..2 {
+        for (name, id, inspected) in &ledger {
+            assert!(fake_port_removal(&mut control, name, id, inspected));
+        }
+    }
+    assert_eq!(control.trace[completed..].len(), fixtures.len() * 4);
+    assert!(!control.trace[completed..].contains(&"delete_id"));
+}
+
+#[test]
+fn isolated_port_fixture_failed_assertion_never_deletes_or_continues() {
+    for failure in [
+        "http_primary",
+        "http_secondary",
+        "exposed_runtime",
+        "namespace_refusal",
+        "udp",
+    ] {
+        let mut control = PortRemovalControl {
+            live: true,
+            ..PortRemovalControl::default()
+        };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            port_assertions_then_delete(
+                &mut control,
+                |control| {
+                    control.trace.push(failure);
+                    panic!("closed fixture assertion failure");
+                },
+                |control| control.trace.push("delete_id"),
+            );
+            control.trace.push("next_create");
+        }));
+        assert!(result.is_err());
+        assert!(control.live);
+        assert_eq!(control.trace, vec![failure]);
+    }
+}
+
+#[test]
+fn isolated_port_fixture_removal_rejects_foreign_identity_and_incomplete_absence() {
+    let id = "a".repeat(64);
+    let name = "dl-port-Control01-fixture";
+    let inspected = json!({"Id":id,"Name":format!("/{name}"),
+        "Config":{"Image":"fixture","Labels":{OWNER:"Control01"}}});
+    for pointer in [
+        "/Id",
+        "/Name",
+        "/Config/Image",
+        "/Config/Labels/io.dockerlens.native-run",
+    ] {
+        let mut foreign = inspected.clone();
+        *foreign
+            .pointer_mut(pointer)
+            .unwrap_or_else(|| panic!("closed control pointer")) = json!("foreign");
+        let mut control = PortRemovalControl {
+            live: true,
+            ..PortRemovalControl::default()
+        };
+        assert!(!fake_port_removal(&mut control, name, &id, &foreign));
+        assert!(control.live);
+        assert_eq!(control.trace, vec!["inspect_id"]);
+    }
+    let mut control = PortRemovalControl {
+        live: true,
+        lingering_name: true,
+        ..PortRemovalControl::default()
+    };
+    assert!(!fake_port_removal(&mut control, name, &id, &inspected));
+    assert_eq!(
+        control.trace,
+        vec!["inspect_id", "delete_id", "inspect_id", "inspect_name"]
+    );
+}
+
 fn private_stream(mut reader: impl Read, cap: usize) -> (Vec<u8>, bool) {
     let mut kept = Vec::new();
     let mut overflow = false;
@@ -818,28 +1011,25 @@ impl NativeRun {
     }
 
     fn remove_owned(&mut self, name: &str, id: &str, cleanup: bool) -> bool {
-        let (status, value) = self.inspect_with_cleanup(id, cleanup);
-        if status == 404 {
-            return self.inspect_with_cleanup(name, cleanup).0 == 404;
-        }
-        if status != 200 || !owned(&value, Some(id), name, &self.run_id, &self.image) {
-            return false;
-        }
-        // Immediate immutable identity revalidation precedes ID-only removal.
-        if self
-            .api_with_cleanup(
-                "DELETE",
-                &format!("/v{}/containers/{id}?force=1", self.api_version),
-                None,
-                cleanup,
-            )
-            .0
-            != 204
-        {
-            return false;
-        }
-        self.inspect_with_cleanup(id, cleanup).0 == 404
-            && self.inspect_with_cleanup(name, cleanup).0 == 404
+        verified_port_removal(
+            name,
+            id,
+            &self.run_id,
+            &self.image,
+            |request| match request {
+                OwnedPortRemoval::Inspect(key) => self.inspect_with_cleanup(key, cleanup),
+                OwnedPortRemoval::Delete(id) => (
+                    self.api_with_cleanup(
+                        "DELETE",
+                        &format!("/v{}/containers/{id}?force=1", self.api_version),
+                        None,
+                        cleanup,
+                    )
+                    .0,
+                    Value::Null,
+                ),
+            },
+        )
     }
 
     fn delete(&mut self, id: &str) {
@@ -851,6 +1041,10 @@ impl NativeRun {
             self.remove_owned(&name, id, false),
             "verified exact port oracle removal"
         );
+    }
+
+    fn complete_port_fixture<T>(&mut self, id: &str, assertions: impl FnOnce(&mut Self) -> T) -> T {
+        port_assertions_then_delete(self, assertions, |run| run.delete(id))
     }
 
     fn cleanup(&mut self) -> bool {
@@ -3639,36 +3833,38 @@ fn probe_ipv4_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
         None,
     );
     assert_native_api_status(NativeApiOperation::Start, status, 204);
-    assert_fixed_ipv4_http(run, &id, "port-rendered", false);
-    assert_fixed_ipv4_http(run, &id, "port-rendered", true);
-    assert_exposed_only_runtime(run, &id);
-    mark_port_stage("port-rendered", "isolated_http");
-    let isolated = run.namespace_probe("tcp_refusal", None);
-    let isolation_result = match isolated.stdout.as_slice() {
-        b"refused\n" => "refused",
-        b"connected\n" => "connected",
-        b"timeout\n" => "timeout",
-        _ => "other",
-    };
-    if !isolated.status.success() || isolation_result != "refused" {
-        eprintln!("DOCKERLENS_NATIVE_ISOLATION_DIAG: result={isolation_result}");
-    }
-    mark_port_stage("port-rendered", "isolated_assert");
-    assert!(
-        isolated.status.success() && isolation_result == "refused",
-        "127.0.0.1 publication must not widen to 127.0.0.2"
-    );
-    assert_ephemeral_udp(run, &id, "port-rendered");
-    record_many(
-        evidence,
-        &[
-            "ExposedOnlyPort",
-            "FixedIpv4HostPort",
-            "EphemeralIpv4HostPort",
-            "MultipleFixedPortBindings",
-            "EphemeralHostPort",
-        ],
-    );
+    run.complete_port_fixture(&id, |run| {
+        assert_fixed_ipv4_http(run, &id, "port-rendered", false);
+        assert_fixed_ipv4_http(run, &id, "port-rendered", true);
+        assert_exposed_only_runtime(run, &id);
+        mark_port_stage("port-rendered", "isolated_http");
+        let isolated = run.namespace_probe("tcp_refusal", None);
+        let isolation_result = match isolated.stdout.as_slice() {
+            b"refused\n" => "refused",
+            b"connected\n" => "connected",
+            b"timeout\n" => "timeout",
+            _ => "other",
+        };
+        if !isolated.status.success() || isolation_result != "refused" {
+            eprintln!("DOCKERLENS_NATIVE_ISOLATION_DIAG: result={isolation_result}");
+        }
+        mark_port_stage("port-rendered", "isolated_assert");
+        assert!(
+            isolated.status.success() && isolation_result == "refused",
+            "127.0.0.1 publication must not widen to 127.0.0.2"
+        );
+        assert_ephemeral_udp(run, &id, "port-rendered");
+        record_many(
+            evidence,
+            &[
+                "ExposedOnlyPort",
+                "FixedIpv4HostPort",
+                "EphemeralIpv4HostPort",
+                "MultipleFixedPortBindings",
+                "EphemeralHostPort",
+            ],
+        );
+    });
 }
 
 fn probe_fixed_ipv6_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
@@ -3757,25 +3953,27 @@ fn probe_fixed_ipv6_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
         None,
     );
     assert_native_api_status(NativeApiOperation::Start, status, 204);
-    if let Some(oracle_outcome) = oracle_outcome {
-        let rendered_outcome = assert_debian_ipv6_fixture(
-            run,
-            &id,
-            "8083/tcp",
-            "native-ipv6-canary",
-            "ipv6-rendered",
-            Some(18112),
-        );
-        record_ipv6_fixture_outcomes(
-            evidence,
-            "FixedIpv6HostPort",
-            oracle_outcome,
-            rendered_outcome,
-        );
-    } else {
-        assert_ipv6_traffic(run, &id, "ipv6-rendered");
-        evidence.positive("FixedIpv6HostPort");
-    }
+    run.complete_port_fixture(&id, |run| {
+        if let Some(oracle_outcome) = oracle_outcome {
+            let rendered_outcome = assert_debian_ipv6_fixture(
+                run,
+                &id,
+                "8083/tcp",
+                "native-ipv6-canary",
+                "ipv6-rendered",
+                Some(18112),
+            );
+            record_ipv6_fixture_outcomes(
+                evidence,
+                "FixedIpv6HostPort",
+                oracle_outcome,
+                rendered_outcome,
+            );
+        } else {
+            assert_ipv6_traffic(run, &id, "ipv6-rendered");
+            evidence.positive("FixedIpv6HostPort");
+        }
+    });
 }
 
 fn assert_ipv6_traffic(run: &NativeRun, id: &str, suffix: &str) {
@@ -3874,25 +4072,27 @@ fn probe_ephemeral_ipv6_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence)
     let ipv6_oracle_id = ipv6_oracle["Id"].as_str().unwrap().to_owned();
     mark_port_stage("ipv6-dynamic-oracle", "oracle_start");
     start_container(run, &ipv6_oracle_id);
-    let oracle_outcome = if run.debian_default_bridge_boundary() {
-        Some(assert_debian_ipv6_fixture(
-            run,
-            &ipv6_oracle_id,
-            "8084/tcp",
-            "native-dynamic-canary",
-            "ipv6-dynamic-oracle",
-            None,
-        ))
-    } else {
-        assert_dynamic_http(
-            run,
-            &ipv6_oracle_id,
-            "8084/tcp",
-            "::1",
-            "ipv6-dynamic-oracle",
-        );
-        None
-    };
+    let oracle_outcome = run.complete_port_fixture(&ipv6_oracle_id, |run| {
+        if run.debian_default_bridge_boundary() {
+            Some(assert_debian_ipv6_fixture(
+                run,
+                &ipv6_oracle_id,
+                "8084/tcp",
+                "native-dynamic-canary",
+                "ipv6-dynamic-oracle",
+                None,
+            ))
+        } else {
+            assert_dynamic_http(
+                run,
+                &ipv6_oracle_id,
+                "8084/tcp",
+                "::1",
+                "ipv6-dynamic-oracle",
+            );
+            None
+        }
+    });
     let mut container = bare_container(&run.image);
     container.command =
         ImageCommand::Exec(vec![argument("sh"), argument("-c"), argument(ipv6_script)]);
@@ -3942,25 +4142,27 @@ fn probe_ephemeral_ipv6_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence)
     }
     mark_port_stage("ipv6-dynamic-rendered", "api_start");
     start_container(run, &id);
-    if let Some(oracle_outcome) = oracle_outcome {
-        let rendered_outcome = assert_debian_ipv6_fixture(
-            run,
-            &id,
-            "8084/tcp",
-            "native-dynamic-canary",
-            "ipv6-dynamic-rendered",
-            None,
-        );
-        record_ipv6_fixture_outcomes(
-            evidence,
-            "EphemeralIpv6HostPort",
-            oracle_outcome,
-            rendered_outcome,
-        );
-    } else {
-        assert_dynamic_http(run, &id, "8084/tcp", "::1", "ipv6-dynamic-rendered");
-        evidence.positive("EphemeralIpv6HostPort");
-    }
+    run.complete_port_fixture(&id, |run| {
+        if let Some(oracle_outcome) = oracle_outcome {
+            let rendered_outcome = assert_debian_ipv6_fixture(
+                run,
+                &id,
+                "8084/tcp",
+                "native-dynamic-canary",
+                "ipv6-dynamic-rendered",
+                None,
+            );
+            record_ipv6_fixture_outcomes(
+                evidence,
+                "EphemeralIpv6HostPort",
+                oracle_outcome,
+                rendered_outcome,
+            );
+        } else {
+            assert_dynamic_http(run, &id, "8084/tcp", "::1", "ipv6-dynamic-rendered");
+            evidence.positive("EphemeralIpv6HostPort");
+        }
+    });
 }
 
 fn probe_multiple_ephemeral_ports(run: &mut NativeRun, evidence: &mut ProbeEvidence) {
@@ -3982,15 +4184,17 @@ fn probe_multiple_ephemeral_ports(run: &mut NativeRun, evidence: &mut ProbeEvide
     let multiple_oracle_id = multiple_oracle["Id"].as_str().unwrap().to_owned();
     mark_port_stage("multi-dynamic-oracle", "oracle_start");
     start_container(run, &multiple_oracle_id);
-    for ip in ["127.0.0.1", "127.0.0.2"] {
-        assert_dynamic_http(
-            run,
-            &multiple_oracle_id,
-            "8085/tcp",
-            ip,
-            "multi-dynamic-oracle",
-        );
-    }
+    run.complete_port_fixture(&multiple_oracle_id, |run| {
+        for ip in ["127.0.0.1", "127.0.0.2"] {
+            assert_dynamic_http(
+                run,
+                &multiple_oracle_id,
+                "8085/tcp",
+                ip,
+                "multi-dynamic-oracle",
+            );
+        }
+    });
     let mut container = bare_container(&run.image);
     container.command = ImageCommand::Exec(vec![
         argument("sh"),
@@ -4043,10 +4247,12 @@ fn probe_multiple_ephemeral_ports(run: &mut NativeRun, evidence: &mut ProbeEvide
     );
     mark_port_stage("multi-dynamic-rendered", "api_start");
     start_container(run, &id);
-    for ip in ["127.0.0.1", "127.0.0.2"] {
-        assert_dynamic_http(run, &id, "8085/tcp", ip, "multi-dynamic-rendered");
-    }
-    evidence.positive("MultipleEphemeralPortBindings");
+    run.complete_port_fixture(&id, |run| {
+        for ip in ["127.0.0.1", "127.0.0.2"] {
+            assert_dynamic_http(run, &id, "8085/tcp", ip, "multi-dynamic-rendered");
+        }
+        evidence.positive("MultipleEphemeralPortBindings");
+    });
 }
 
 fn start_container(run: &NativeRun, id: &str) {
