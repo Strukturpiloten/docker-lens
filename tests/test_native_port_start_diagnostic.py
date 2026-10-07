@@ -1,46 +1,26 @@
-"""Independent failed-start observations: private, closed, bounded, never proof."""
-
+"""Independent private-file diagnostics; no daemon or privileged query."""
 import importlib.util
 import json
 import os
 import shlex
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location(
-    "native_port_start_diagnostic", ROOT / "scripts/native-port-start-diagnostic.py")
+HELPER = ROOT / "scripts/native-port-start-diagnostic.py"
+SPEC = importlib.util.spec_from_file_location("port_start_diagnostic", HELPER)
 assert SPEC is not None and SPEC.loader is not None
 DIAG = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(DIAG)
-
-RUN = "Ab12Cd34"
-CANDIDATE = "b" * 40
-OUTER = "a" * 64
-CREATED = "c" * 64
+RUN, OUTER, CREATED, CANDIDATE = "Ab12Cd34", "a" * 64, "c" * 64, "b" * 40
+IMAGE = "registry.invalid/native:1.0.0@sha256:" + "d" * 64
 CANARY = "protected-secret native-ID 18113 /private/path"
-
-
-class FakeCollector:
-    def __init__(self, responses=()):
-        self.responses = list(responses)
-        self.calls = []
-
-    def check(self):
-        pass
-
-    def query(self, arguments):
-        self.calls.append(arguments)
-        response = self.responses.pop(0)
-        if isinstance(response, Exception):
-            raise response
-        return response
 
 
 class NativePortStartDiagnosticTests(unittest.TestCase):
@@ -49,252 +29,249 @@ class NativePortStartDiagnosticTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.root.chmod(0o700)
-        (self.root / "diagnostics").mkdir(mode=0o700)
-        self.path = self.root / "diagnostics" / "port-start-window.json"
-        self.end = time.time_ns() - 1_000_000_000
-        self.start = self.end - 8_000_000_000
-        self.invocation = (self.start - 1_000_000_000) // 1000
+        self.diag = self.root / "diagnostics"
+        self.diag.mkdir(mode=0o700)
+        DIAG.prepare(self.root, RUN, "debian11-rootless")
+        self.log = self.diag / DIAG.LOG_FILE
+        self.registration = self.diag / DIAG.REGISTRATION_FILE
+        self.window = self.diag / DIAG.WINDOW_FILE
+        self.fd = os.open(self.log, os.O_RDONLY | os.O_NOFOLLOW)
+        self.addCleanup(os.close, self.fd)
+        self.end = time.time_ns() - 10**9
+        self.start = self.end - 8 * 10**9
+        self.invocation = (self.start - 10**9) // 1000
+        self.prefix = self.line(self.start - 10, "startup " + CANARY)
+        self.log.write_bytes(self.prefix)
+        self.native = {
+            "Id": OUTER, "Name": f"dl-native-{RUN}", "ImageName": "normalized-display-name",
+            "ImageDigest": DIAG.image_digest(IMAGE),
+            "Config": {"Labels": {"io.dockerlens.native-run": RUN}},
+            "HostConfig": {"LogConfig": {"Type": "k8s-file", "Path": str(self.log)}},
+        }
+        DIAG.register(self.root, RUN, "debian11-rootless", IMAGE, OUTER, self.fd, self.native)
         self.record = {
             "schemaVersion": 1, "phase": "multi_dynamic_oracle_start", "status": "timeout",
             "runId": RUN, "lane": "debian11-rootless", "candidateSha": CANDIDATE,
             "outerId": OUTER, "outerName": f"dl-native-{RUN}", "createdId": CREATED,
             "createdName": f"dl-port-{RUN}-multi-dynamic-oracle", "apiVersion": "1.41",
             "startRealtimeNs": self.start, "endRealtimeNs": self.end,
-            "cutoffEpoch": self.end // 1_000_000_000 + 60,
+            "cutoffEpoch": self.end // 10**9 + 60,
         }
-        self.write()
+        self.write(self.window, self.record)
 
-    def write(self, record=None):
-        self.path.write_text(json.dumps(self.record if record is None else record))
-        self.path.chmod(0o600)
+    def write(self, path, value):
+        path.write_text(json.dumps(value))
+        path.chmod(0o600)
 
-    def inspect(self, **changes):
-        value = {"Id": OUTER, "Name": f"dl-native-{RUN}",
-                 "Config": {"Labels": {"io.dockerlens.native-run": RUN}}}
-        value.update(changes)
-        return json.dumps(value).encode(), b""
+    def line(self, instant, payload, stream="stdout", flag="F"):
+        return f"{DIAG.timestamp_arg(instant)} {stream} {flag} {payload}\n".encode()
 
-    def line(self, instant, text):
-        return f"{DIAG.timestamp_arg(instant)} {text}\n".encode()
-
-    def observe(self, collector):
-        result = DIAG.observe(self.root, os.getuid(), RUN, "debian11-rootless", CANDIDATE,
-                              self.invocation, collector)
-        for forbidden in (CANARY, OUTER, CREATED, "18113", "/private/path", "2026-"):
-            self.assertNotIn(forbidden, result)
-        return result
-
-    def test_actual_window_only_rootless_trace_survives_as_closed_category(self):
-        logs = (self.line(self.start - 1, "permission denied " + CANARY)
-                + self.line(self.start, "DOCKERLENS_ROOTLESS_TRACE: rootlesskit " + CANARY)
-                + self.line(self.end, "DOCKERLENS_ROOTLESS_TRACE: slirp4netns " + CANARY)
-                + self.line(self.end + 1, "cleanup runc " + CANARY))
-        collector = FakeCollector([self.inspect(), self.inspect(), (logs, b"")])
-        self.assertEqual(self.observe(collector), DIAG.closed(
-            "complete", "rootless_trace", "rootless_network"))
-        self.assertEqual(collector.calls[:2], [
-            ["inspect", "--format", "{{json .}}", OUTER],
-            ["inspect", "--format", "{{json .}}", f"dl-native-{RUN}"],
-        ])
-        self.assertEqual(collector.calls[2], [
-            "logs", "--timestamps", "--since", DIAG.timestamp_arg(self.start),
-            "--until", DIAG.timestamp_arg(self.end), "--tail", "80", OUTER,
-        ])
-
-    def test_log_stderr_is_timestamp_filtered_and_raw_lines_never_classified(self):
-        stdout = self.line(self.start, "docker-proxy bind: " + CANARY)
-        stderr = (self.line(self.end, "address already in use " + CANARY)
-                  + b"permission denied protected-secret\n"
-                  + self.line(self.end + 1, "cleanup rootlesskit"))
-        self.assertEqual(DIAG.classify(stdout, stderr, self.start, self.end),
-                         ("daemon", "port_proxy"))
-        self.assertEqual(DIAG.classify(b"rootlesskit\n", b"", self.start, self.end),
-                         ("none", "unclassified"))
-        self.assertEqual(DIAG.classify(self.line(self.start, "runc permission denied"),
-                                       b"", self.start, self.end), ("daemon", "ambiguous"))
-
-    def test_missing_window_other_stage_pending_success_stale_run_never_query(self):
-        mutations = (
-            {"phase": "cleanup"}, {"status": "pending"}, {"status": "pass"},
-            {"runId": "Stale001"}, {"lane": "upstream-rootless"},
-            {"candidateSha": "d" * 40}, {"apiVersion": "1.56"},
-            {"createdName": f"dl-port-{RUN}-multi-dynamic-rendered"},
-            {"outerName": "foreign"}, {"createdId": "short"}, {"outerId": "A" * 64},
-            {"schemaVersion": True}, {"unexpected": CANARY},
-        )
-        for mutation in mutations:
-            with self.subTest(mutation=mutation):
-                self.write(self.record | mutation)
-                collector = FakeCollector()
-                self.assertEqual(self.observe(collector), DIAG.closed("window_unavailable"))
-                self.assertEqual(collector.calls, [])
-        self.path.unlink()
-        collector = FakeCollector()
-        self.assertEqual(self.observe(collector), DIAG.closed("window_unavailable"))
-        self.assertEqual(collector.calls, [])
-
-    def test_duplicate_oversize_wrong_owner_mode_symlink_and_path_reject_before_io(self):
-        self.path.write_text(json.dumps(self.record)[:-1] + ', "status":"timeout"}')
-        self.assertEqual(self.observe(FakeCollector()), DIAG.closed("window_unavailable"))
-        self.path.write_bytes(b"x" * 4097)
-        self.assertEqual(self.observe(FakeCollector()), DIAG.closed("window_unavailable"))
-        self.write()
-        for mode in (0o644, 0o400, 0o660, 0o4600):
-            self.path.chmod(mode)
-            self.assertEqual(self.observe(FakeCollector()), DIAG.closed("window_unavailable"))
-        self.write()
-        for location in (self.root, self.root / "diagnostics"):
-            location.chmod(0o755)
-            self.assertEqual(self.observe(FakeCollector()), DIAG.closed("window_unavailable"))
-            location.chmod(0o700)
-        self.assertEqual(DIAG.observe(self.root, os.getuid() + 1, RUN,
-                                     "debian11-rootless", CANDIDATE, self.invocation, FakeCollector()),
-                         DIAG.closed("window_unavailable"))
-        saved = self.path.with_name("original")
-        self.path.rename(saved)
-        self.path.symlink_to(saved)
-        self.assertEqual(self.observe(FakeCollector()), DIAG.closed("window_unavailable"))
-        self.path.unlink()
-        saved.rename(self.path)
-        alias = self.root / "alias"
-        alias.symlink_to(self.root, target_is_directory=True)
-        self.assertEqual(DIAG.observe(alias, os.getuid(), RUN, "debian11-rootless",
-                                     CANDIDATE, self.invocation, FakeCollector()),
-                         DIAG.closed("window_unavailable"))
-
-    def test_hardlink_and_directory_symlink_reject_without_query(self):
-        os.link(self.path, self.root / "linked")
-        self.assertEqual(self.observe(FakeCollector()), DIAG.closed("window_unavailable"))
-        (self.root / "linked").unlink()
-        diagnostics = self.root / "diagnostics"
-        diagnostics.rename(self.root / "elsewhere")
-        diagnostics.symlink_to(self.root / "elsewhere", target_is_directory=True)
-        self.assertEqual(self.observe(FakeCollector()), DIAG.closed("window_unavailable"))
-
-    def test_future_reversal_stale_and_original_cutoff_reject_without_query(self):
-        mutations = (
-            {"startRealtimeNs": self.end + 1},
-            {"endRealtimeNs": time.time_ns() + 10_000_000_000},
-            {"startRealtimeNs": self.start - 200_000_000_000,
-             "endRealtimeNs": self.end - 200_000_000_000},
-            {"startRealtimeNs": self.end - 12_000_000_000},
-            {"cutoffEpoch": self.start // 1_000_000_000 - 1},
-            {"cutoffEpoch": self.end // 1_000_000_000 + 181},
-            {"startRealtimeNs": True}, {"endRealtimeNs": -1},
-        )
-        for mutation in mutations:
-            with self.subTest(mutation=mutation):
-                self.write(self.record | mutation)
-                collector = FakeCollector()
-                self.assertEqual(self.observe(collector), DIAG.closed("window_unavailable"))
-                self.assertEqual(collector.calls, [])
-        self.write()
-        collector = FakeCollector()
-        self.assertEqual(DIAG.observe(self.root, os.getuid(), RUN, "debian11-rootless",
-                                     CANDIDATE, self.end // 1000, collector),
-                         DIAG.closed("window_unavailable"))
-        self.assertEqual(collector.calls, [])
-
-    def test_immutable_id_and_current_named_outer_both_require_owner(self):
-        foreign = (
-            self.inspect(Id="e" * 64), self.inspect(Name="foreign"),
-            self.inspect(Config={"Labels": {"io.dockerlens.native-run": "Stale001"}}),
-            (self.inspect()[0], b"warning " + CANARY.encode()),
-        )
-        for bad in foreign:
-            for stage in (0, 1):
-                with self.subTest(stage=stage, bad=bad):
-                    collector = FakeCollector([self.inspect()] * stage + [bad])
-                    self.assertEqual(self.observe(collector), DIAG.closed("ownership_unverified"))
-                    self.assertEqual(len(collector.calls), stage + 1)
-
-    def test_file_content_metadata_or_inode_drift_suppresses_result(self):
-        for fault in ("content", "mode", "inode"):
-            with self.subTest(fault=fault):
-                self.write()
-                collector = FakeCollector([self.inspect(), self.inspect(), (b"", b"")])
-                original = collector.query
-
-                def drift(arguments):
-                    result = original(arguments)
-                    if fault == "content":
-                        self.path.write_bytes(self.path.read_bytes().replace(b'"timeout"', b'"pending"'))
-                    elif fault == "mode":
-                        self.path.chmod(0o644)
-                    else:
-                        data = self.path.read_bytes()
-                        self.path.rename(self.path.with_name("old"))
-                        self.path.write_bytes(data)
-                        self.path.chmod(0o600)
-                    return result
-
-                collector.query = drift
-                self.assertEqual(self.observe(collector), DIAG.closed("window_unavailable"))
-                self.assertEqual(len(collector.calls), 1)
-                old = self.path.with_name("old")
-                if old.exists():
-                    old.unlink()
-
-    def test_timeout_cancel_nonzero_and_overflow_never_accept_partial_observation(self):
-        for category in ("timeout", "cancelled", "query_failed", "output_limit", "unavailable"):
-            collector = FakeCollector([self.inspect(), self.inspect(), DIAG.Unavailable(category)])
-            self.assertEqual(self.observe(collector), DIAG.closed(category))
+    def append(self, data):
+        with self.log.open("ab") as output:
+            output.write(data)
 
     def collector(self, remaining=100):
-        return DIAG.Collector(int(time.clock_gettime(time.CLOCK_BOOTTIME) * 100),
-                              remaining, os.getpid())
+        return DIAG.Collector(int(time.clock_gettime(time.CLOCK_BOOTTIME) * 100), remaining, os.getpid())
 
-    def test_total_allowance_uses_boot_and_monotonic_not_realtime_and_no_budget_extension(self):
-        boot = time.clock_gettime(time.CLOCK_BOOTTIME)
-        for remaining in (0, 1, 3, 4):
-            with self.subTest(remaining=remaining), self.assertRaises(DIAG.Unavailable) as caught:
-                DIAG.Collector(int(boot * 100), remaining, os.getpid())
-            self.assertEqual(caught.exception.collector, "budget")
+    def observe(self, collector=None):
+        result = DIAG.observe(self.root, os.geteuid(), RUN, "debian11-rootless", CANDIDATE,
+                              self.invocation, collector or self.collector(), self.fd, IMAGE)
+        for secret in (CANARY, OUTER, CREATED, "18113", "/private/path", "2026-"):
+            self.assertNotIn(secret, result)
+        return result
+
+    def test_exclusive_private_setup_and_digest_normalization(self):
+        value = json.loads(self.registration.read_bytes())
+        self.assertEqual(value["status"], "registered")
+        self.assertEqual(value["imageDigest"], DIAG.image_digest(IMAGE))
+        self.assertEqual(value["prefixBytes"], len(self.prefix))
+        for path in (self.log, self.registration):
+            self.assertEqual(path.stat().st_mode & 0o7777, 0o600)
+        self.assertEqual(self.diag.stat().st_mode & 0o7777, 0o700)
+        with self.assertRaises(FileExistsError):
+            DIAG.prepare(self.root, RUN, "debian11-rootless")
+
+    def test_registration_rejects_id_name_label_digest_driver_path_and_empty_prefix(self):
+        prepared = json.loads(self.registration.read_bytes())
+        prepared.update(status="prepared", outerId=None, image=None, imageDigest=None,
+                        prefixBytes=0, prefixSha256=None)
+        for change in (
+            {"Id": "e" * 64}, {"Name": "foreign"}, {"ImageDigest": None},
+            {"ImageDigest": "sha256:" + "e" * 64},
+            {"Config": {"Labels": {"io.dockerlens.native-run": "Stale001"}}},
+            {"HostConfig": {"LogConfig": {"Type": "journald", "Path": str(self.log)}}},
+            {"HostConfig": {"LogConfig": {"Type": "k8s-file", "Path": "/foreign"}}},
+        ):
+            with self.subTest(change=change):
+                self.write(self.registration, prepared)
+                with self.assertRaises(DIAG.Unavailable):
+                    DIAG.register(self.root, RUN, "debian11-rootless", IMAGE, OUTER,
+                                  self.fd, self.native | change)
+        self.write(self.registration, prepared)
+        self.log.write_bytes(b"")
         with self.assertRaises(DIAG.Unavailable):
-            DIAG.Collector(int((boot - 4) * 100), 100, os.getpid())
-        with self.assertRaises(DIAG.Unavailable):
-            DIAG.Collector(int((boot + 2) * 100), 100, os.getpid())
+            DIAG.register(self.root, RUN, "debian11-rootless", IMAGE, OUTER, self.fd, self.native)
+
+    def test_only_actual_window_complete_rootless_stdout_stderr_are_classified(self):
+        self.append(self.line(self.start, "DOCKERLENS_ROOTLESS_TRACE: rootlesskit " + CANARY)
+                    + self.line(self.end, "DOCKERLENS_ROOTLESS_TRACE: slirp4netns " + CANARY, "stderr")
+                    + self.line(self.end + 1, "cleanup permission denied " + CANARY))
+        self.assertEqual(self.observe(), DIAG.closed("complete", "rootless_trace", "rootless_network"))
+
+    def test_eighty_records_preserve_the_first_error_and_overflow_refuses(self):
+        self.append(self.line(self.start, "permission denied " + CANARY)
+                    + b"".join(self.line(self.start + index, "benign " + CANARY) for index in range(79)))
+        self.assertEqual(self.observe(), DIAG.closed("complete", "daemon", "permission"))
+        self.append(self.line(self.start + 80, "benign " + CANARY))
+        self.assertEqual(self.observe(), DIAG.closed("output_limit"))
+
+    def test_missing_other_stage_pending_stale_wrong_api_and_clock_windows_do_not_read_log(self):
+        for mutation in (
+            {"phase": "cleanup"}, {"status": "pending"}, {"status": "pass"},
+            {"runId": "Stale001"}, {"lane": "upstream-rootless"}, {"candidateSha": "e" * 40},
+            {"createdId": "short"}, {"outerId": "A" * 64}, {"apiVersion": "1.56"},
+            {"createdName": f"dl-port-{RUN}-multi-dynamic-rendered"}, {"schemaVersion": True},
+            {"startRealtimeNs": self.end + 1}, {"endRealtimeNs": time.time_ns() + 10**10},
+            {"startRealtimeNs": self.start - 200 * 10**9, "endRealtimeNs": self.end - 200 * 10**9},
+            {"cutoffEpoch": self.start // 10**9 - 1}, {"unexpected": CANARY},
+        ):
+            with self.subTest(mutation=mutation):
+                self.write(self.window, self.record | mutation)
+                with patch.object(DIAG.os, "pread") as read:
+                    self.assertEqual(self.observe(), DIAG.closed("window_unavailable"))
+                    read.assert_not_called()
+        self.window.unlink()
+        self.assertEqual(self.observe(), DIAG.closed("window_unavailable"))
+
+    def test_context_duplicate_key_oversize_owner_mode_symlink_and_drift(self):
+        for path in (self.window, self.registration):
+            baseline = path.read_bytes()
+            path.write_bytes(baseline[:-1] + b',"schemaVersion":1}')
+            self.assertNotIn("collector=complete", self.observe())
+            path.write_bytes(b"x" * 4097)
+            self.assertNotIn("collector=complete", self.observe())
+            path.write_bytes(baseline)
+            path.chmod(0o644)
+            self.assertNotIn("collector=complete", self.observe())
+            path.chmod(0o600)
+            saved = path.with_name(path.name + ".saved")
+            path.rename(saved)
+            path.symlink_to(saved)
+            self.assertNotIn("collector=complete", self.observe())
+            path.unlink()
+            saved.rename(path)
+        self.root.chmod(0o755)
+        self.assertEqual(self.observe(), DIAG.closed("window_unavailable"))
+        self.root.chmod(0o700)
+        with patch.object(DIAG, "classify", side_effect=lambda *args: (
+                self.window.chmod(0o644) or "daemon", "permission")):
+            self.assertNotIn("collector=complete", self.observe())
+
+    def test_context_identity_digest_and_metadata_must_match_original_source(self):
+        baseline = json.loads(self.registration.read_bytes())
+        for mutation in ({"outerId": "e" * 64}, {"runId": "Stale001"},
+                         {"imageDigest": "sha256:" + "e" * 64}, {"logDriver": "journald"},
+                         {"uid": os.geteuid() + 1}, {"inode": baseline["inode"] + 1},
+                         {"mode": 0o644}, {"prefixSha256": "f" * 64}, {"prefixBytes": 0}):
+            with self.subTest(mutation=mutation):
+                self.write(self.registration, baseline | mutation)
+                self.assertEqual(self.observe(), DIAG.closed("ownership_unverified"))
+
+    def test_rotation_never_reads_replacement_or_fixes_mode(self):
+        replacement = self.log.with_name("replacement")
+        replacement.write_bytes(self.prefix + self.line(self.start, "permission denied " + CANARY))
+        replacement.chmod(0o640)
+        self.log.unlink()
+        replacement.rename(self.log)
+        with patch.object(DIAG.os, "pread") as read:
+            self.assertEqual(self.observe(), DIAG.closed("ownership_unverified"))
+            read.assert_not_called()
+        self.assertEqual(self.log.stat().st_mode & 0o777, 0o640)
+
+    def test_source_symlink_hardlink_and_mode_refuse_before_read(self):
+        for fault in ("symlink", "hardlink", "mode"):
+            with self.subTest(fault=fault):
+                saved = self.log.with_name("saved")
+                if fault == "symlink":
+                    self.log.rename(saved)
+                    self.log.symlink_to(saved)
+                elif fault == "hardlink":
+                    os.link(self.log, saved)
+                else:
+                    self.log.chmod(0o644)
+                with patch.object(DIAG.os, "pread") as read:
+                    self.assertEqual(self.observe(), DIAG.closed("ownership_unverified"))
+                    read.assert_not_called()
+                if fault == "symlink":
+                    self.log.unlink()
+                    saved.rename(self.log)
+                elif fault == "hardlink":
+                    saved.unlink()
+                else:
+                    self.log.chmod(0o600)
+        original = os.fstat
+
+        def wrong_owner(descriptor):
+            info = original(descriptor)
+            if descriptor != self.fd:
+                return info
+            fields = list(info)
+            fields[4] = info.st_uid + 1
+            return os.stat_result(fields)
+
+        with patch.object(DIAG.os, "fstat", side_effect=wrong_owner), patch.object(DIAG.os, "pread") as read:
+            self.assertEqual(self.observe(), DIAG.closed("ownership_unverified"))
+            read.assert_not_called()
+
+    def test_truncate_prefix_drift_oversize_partial_malformed_and_reversed_cri_refuse(self):
+        for data, category in (
+            (b"", "output_limit"), (b"x" * (DIAG.OUTPUT_LIMIT + 1), "output_limit"),
+            (self.prefix.replace(b"startup", b"forged!") + self.line(self.start, "runc"), "ownership_unverified"),
+            (self.prefix + self.line(self.start, "runc")[:-1], "unavailable"),
+            (self.prefix + self.line(self.start, "runc", flag="P"), "unavailable"),
+            (self.prefix + self.line(self.start, "runc", stream="unknown"), "unavailable"),
+            (self.prefix + b"malformed timestamp stdout F private\n", "unavailable"),
+            (self.prefix + self.line(self.start, "runc") + self.line(self.start - 1, "runc"), "unavailable"),
+        ):
+            with self.subTest(category=category):
+                self.log.write_bytes(data)
+                collector = self.collector()
+                self.assertEqual(self.observe(collector), DIAG.closed(category))
+                self.assertLessEqual(collector.bytes, DIAG.OUTPUT_LIMIT)
+
+    def test_append_race_during_snapshot_suppresses_result(self):
+        original = os.pread
+
+        def race(*args):
+            data = original(*args)
+            self.append(self.line(self.end + 1, "cleanup " + CANARY))
+            return data
+
+        with patch.object(DIAG.os, "pread", side_effect=race):
+            self.assertEqual(self.observe(), DIAG.closed("ownership_unverified"))
+
+    def test_timeout_cancel_watchdog_budget_and_boottime_bound_new_io(self):
+        for reason in ("timeout", "cancelled", "watchdog"):
+            collector = self.collector()
+            if reason == "timeout":
+                collector.deadline = time.monotonic() - 1
+            elif reason == "cancelled":
+                collector.cancel(signal.SIGTERM, None)
+            else:
+                collector.watchdog = 1
+            with patch.object(DIAG.os, "pread") as read:
+                self.assertEqual(self.observe(collector), DIAG.closed(reason))
+                read.assert_not_called()
+        for remaining in (0, 3, 4):
+            with self.assertRaises(DIAG.Unavailable):
+                self.collector(remaining)
         collector = self.collector()
         self.assertLessEqual(collector.deadline - time.monotonic(), 3)
         with patch.object(DIAG.time, "time_ns", return_value=0):
             collector.check()
         with patch.object(DIAG.time, "clock_gettime", return_value=collector.boot_deadline):
-            with self.assertRaises(DIAG.Unavailable) as caught:
+            with self.assertRaises(DIAG.Unavailable):
                 collector.check()
-            self.assertEqual(caught.exception.collector, "timeout")
-        collector = self.collector()
-        collector.cancel(signal.SIGTERM, None)
-        with self.assertRaises(DIAG.Unavailable) as caught:
-            collector.check()
-        self.assertEqual(caught.exception.collector, "cancelled")
-        with self.assertRaises(DIAG.Unavailable):
-            DIAG.Collector(int(boot * 100), 100, 1)
-
-    def tool(self, name, content):
-        path = self.root / name
-        path.write_text(content)
-        path.chmod(0o755)
-        return path
-
-    def test_real_process_nonzero_valid_stdout_warning_timeout_and_combined_cap(self):
-        # Uses only fake Podman and the installed timeout; no native runtime.
-        for script, category in (
-            ("printf '%s' '{\"Id\":\"valid\"}'; exit 42", "query_failed"),
-            ("printf 'protected-secret'; printf 'warning' >&2; exit 125", "query_failed"),
-            ("sleep 10", "timeout"),
-            (f"{shlex.quote(os.sys.executable)} -c 'import os; os.write(1,b\"x\"*40000); os.write(2,b\"y\"*40000)'",
-             "output_limit"),
-        ):
-            with self.subTest(category=category):
-                self.tool("podman", "#!/bin/sh\n" + script + "\n")
-                collector = self.collector()
-                started = time.monotonic()
-                with patch.dict(os.environ, {"PATH": str(self.root) + ":" + os.environ["PATH"]}):
-                    with self.assertRaises(DIAG.Unavailable) as caught:
-                        collector.query(["logs", OUTER])
-                self.assertEqual(caught.exception.collector, category)
-                self.assertLess(time.monotonic() - started, 4)
-                self.assertLessEqual(collector.bytes, DIAG.OUTPUT_LIMIT + 4096)
 
     def shell_function(self):
         source = (ROOT / "scripts/native-conformance.sh").read_text()
@@ -302,111 +279,48 @@ class NativePortStartDiagnosticTests(unittest.TestCase):
             "port_start_failure_diagnostic() {", 1)[1].split(
                 '\n"$(dirname "$0")/run-exact-native-test.sh" native_capture', 1)[0]
 
-    def test_parent_original_failure_cleanup_even_diagnostic_failure_and_no_query_pass(self):
+    def test_original_wrapper_status_cleanup_and_no_observer_on_pass(self):
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         block = 'port_invocation_us=${EPOCHREALTIME/./}' + source.split(
             'port_invocation_us=${EPOCHREALTIME/./}', 1)[1].split(
                 '\nif [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR', 1)[0]
         block = block.replace('"$(dirname "$0")/run-exact-native-test.sh"', "exact_wrapper")
+        calls = self.root / "calls"
         for status in (0, 37):
-            script = ("set -euo pipefail\n"
-                      "trap 'printf cleanup >> \"$calls\"' EXIT\n"
-                      f"exact_wrapper() {{ return {status}; }}\n"
-                      "port_start_failure_diagnostic() { printf diagnostic >> \"$calls\"; return 91; }\n"
+            script = ("set -euo pipefail\ntrap 'printf cleanup >> \"$calls\"' EXIT\n"
+                      + f"exact_wrapper() {{ return {status}; }}\n"
+                      + "port_start_failure_diagnostic() { printf diagnostic >> \"$calls\"; return 91; }\n"
                       + block + "\nprintf evidence >> \"$calls\"\n")
-            calls = self.root / "calls"
             result = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
                                     env=os.environ | {"calls": str(calls)})
             self.assertEqual(result.returncode, status)
             self.assertEqual(calls.read_text(), "evidencecleanup" if status == 0 else "diagnosticcleanup")
             calls.unlink()
 
-    def test_parent_root_budget_guard_and_helper_status_are_closed(self):
-        # Exercise root control flow with fake tools regardless of test UID;
-        # the real non-root subprocess refusal is verified separately below.
-        function = self.shell_function().replace("EUID", "observer_test_euid")
-        for seconds, helper_status, expected in (
-            (0, 0, "complete"), (1796, 0, "budget"), (0, 42, "unavailable"),
+    def tool(self, name, content):
+        path = self.root / name
+        path.write_text(content)
+        path.chmod(0o755)
+
+    def test_parent_budget_late_boottime_raw_and_nonzero_helpers_are_closed(self):
+        for seconds, end, status, output, expected in (
+            (0, "103.98", 0, DIAG.closed("complete", "daemon", "port_proxy"), "complete"),
+            (0, "103.99", 0, DIAG.closed("complete", "daemon", "port_proxy"), "timeout"),
+            (0, "99.00", 0, DIAG.closed("complete", "daemon", "port_proxy"), "timeout"),
+            (1796, "100.00", 0, "ignored", "budget"),
+            (0, "100.00", 42, "ignored", "unavailable"),
+            (0, "100.00", 0, CANARY, "unavailable"),
         ):
-            with self.subTest(seconds=seconds, helper_status=helper_status):
-                calls = self.root / "helper-calls"
-                self.tool("timeout", '#!/bin/sh\nprintf "%s\\n" "$*" >> "$calls"\nshift 3\nexec "$@"\n')
-                self.tool("python3", '#!/bin/sh\nprintf "%s\\n" "$*" >> "$calls"\n'
-                          + f"printf '%s\\n' '{DIAG.closed('complete', 'rootless_trace', 'rootless_network')}'\n"
-                          + f"exit {helper_status}\n")
-                script = ("set -euo pipefail\n" + function + "\n"
-                          + f"SECONDS={seconds}; watchdog_pid=$$; observer_test_euid=0; "
-                          + "podman_cmd=(podman); "
-                          + "script_dir=/private; run_dir=/private; run_id=Ab12Cd34; lane=debian11-rootless; "
-                          + f"NATIVE_PORT_CANDIDATE_SHA={CANDIDATE}; port_invocation_us=1234567890123456; "
-                          + "port_start_failure_diagnostic\n")
-                result = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
-                    env=os.environ | {"PATH": str(self.root) + ":" + os.environ["PATH"], "calls": str(calls)})
-                self.assertEqual(result.returncode, 0)
-                self.assertIn("collector=" + expected, result.stderr)
-                self.assertNotIn(CANARY, result.stderr)
-                if seconds == 1796:
-                    self.assertFalse(calls.exists())
-                else:
-                    self.assertIn("--signal=TERM --kill-after=0.25s 3.5s", calls.read_text())
-                    calls.unlink()
-
-    def test_nonroot_observer_refuses_before_stalled_sudo_or_any_query(self):
-        # Use an actual unprivileged Bash, dropping only the test child UID if
-        # this offline suite itself runs as root. No sudo is used for the test.
-        self.root.chmod(0o755)
-        calls = self.root / "refused-calls"
-        calls.touch()
-        calls.chmod(0o666)
-        for name in ("sudo", "timeout", "python3", "podman"):
-            self.tool(name, '#!/bin/sh\nprintf "%s\\n" "$0" >> "$calls"\nsleep 30\n')
-        script = ("set -euo pipefail\n" + self.shell_function() + "\n"
-                  + "(( EUID != 0 )) || exit 99\n"
-                  + "SECONDS=0; watchdog_pid=$$; podman_cmd=(sudo -n podman); "
-                  + "script_dir=/private; run_dir=/private; run_id=Ab12Cd34; lane=debian11-rootless; "
-                  + f"NATIVE_PORT_CANDIDATE_SHA={CANDIDATE}; port_invocation_us=1234567890123456; "
-                  + "port_start_failure_diagnostic\n")
-        identity = {"user": 65534, "group": 65534} if os.geteuid() == 0 else {}
-        started = time.monotonic()
-        result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=1,
-            env=os.environ | {"PATH": str(self.root) + ":" + os.environ["PATH"], "calls": str(calls)},
-            **identity)
-        self.assertLess(time.monotonic() - started, 1)
-        self.assertEqual(result.returncode, 0)
-        self.assertEqual(result.stderr.strip(), DIAG.closed("unavailable"))
-        self.assertEqual(result.stdout, "")
-        self.assertEqual(calls.read_text(), "")
-
-    def test_helper_nonroot_entrypoint_refuses_without_initialization_or_query(self):
-        with patch.object(DIAG.os, "geteuid", return_value=1000), \
-                patch.object(DIAG, "Collector") as collector, \
-                patch.object(DIAG.subprocess, "Popen") as popen, \
-                patch("builtins.print") as output:
-            self.assertEqual(DIAG.main(["private"] * 9), 0)
-            output.assert_called_once_with(DIAG.closed("unavailable"))
-            collector.assert_not_called()
-            popen.assert_not_called()
-
-    def test_parent_final_boot_handoff_rejects_late_reversed_and_raw_results(self):
-        function = self.shell_function().replace("EUID", "observer_test_euid")
-        for end, output, expected in (
-            ("103.98", DIAG.closed("complete", "daemon", "port_proxy"), "complete"),
-            ("103.99", DIAG.closed("complete", "daemon", "port_proxy"), "timeout"),
-            ("104.01", DIAG.closed("complete", "daemon", "port_proxy"), "timeout"),
-            ("99.00", DIAG.closed("complete", "daemon", "port_proxy"), "timeout"),
-            ("100.00", CANARY, "unavailable"),
-            ("100.00", DIAG.closed("complete", "daemon", "port_proxy") + CANARY, "unavailable"),
-        ):
-            with self.subTest(end=end, output=output):
+            with self.subTest(expected=expected, end=end):
                 self.tool("timeout", '#!/bin/sh\nshift 3\nexec "$@"\n')
-                self.tool("python3", "#!/bin/sh\nprintf '%s\\n' " + shlex.quote(output) + "\n")
-                script = ("set -euo pipefail\n" + function + "\n"
-                          + "read_count=0\nread() { read_count=$((read_count + 1)); "
+                self.tool("python3", "#!/bin/sh\nprintf '%s\\n' " + shlex.quote(output) + f"\nexit {status}\n")
+                script = ("set -euo pipefail\n" + self.shell_function() + "\n"
+                          + "read_count=0\nread() { read_count=$((read_count+1)); "
                           + f"if (( read_count == 1 )); then builtin read \"$@\" <<< '100.00 0'; "
                           + f"else builtin read \"$@\" <<< '{end} 0'; fi; }}\n"
-                          + "SECONDS=0; watchdog_pid=$$; observer_test_euid=0; podman_cmd=(podman); script_dir=/private; "
-                          + "run_dir=/private; run_id=Ab12Cd34; lane=debian11-rootless; "
-                          + f"NATIVE_PORT_CANDIDATE_SHA={CANDIDATE}; port_invocation_us=1234567890123456; "
+                          + f"SECONDS={seconds}; watchdog_pid=$$; script_dir=/private; run_dir=/private; "
+                          + f"run_id={RUN}; lane=debian11-rootless; NATIVE_PORT_CANDIDATE_SHA={CANDIDATE}; "
+                          + f"port_invocation_us=1234567890123456; port_start_log_fd=9; image={shlex.quote(IMAGE)}; "
                           + "port_start_failure_diagnostic\n")
                 result = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
                     env=os.environ | {"PATH": str(self.root) + ":" + os.environ["PATH"]})
@@ -414,49 +328,90 @@ class NativePortStartDiagnosticTests(unittest.TestCase):
                 self.assertIn("collector=" + expected, result.stderr)
                 self.assertNotIn(CANARY, result.stdout + result.stderr)
 
-    def test_timestamp_fraction_offset_and_malformed_window_filter(self):
-        self.assertEqual(DIAG.timestamp_ns(b"1970-01-01T00:00:00.000000001Z"), 1)
-        self.assertEqual(DIAG.timestamp_ns(b"1970-01-01T01:00:00.000000001+01:00"), 1)
-        for invalid in (b"2026-13-01T00:00:00Z", b"2026-01-01T24:00:00Z",
-                        b"2026-01-01T00:00:00.1234567890Z", b"2026-01-01T00:00:00"):
-            self.assertIsNone(DIAG.timestamp_ns(invalid))
+    def test_actual_nonroot_helper_reads_held_fd_without_stalled_sudo_or_podman(self):
+        self.append(self.line(self.start, "DOCKERLENS_ROOTLESS_TRACE: rootlesskit " + CANARY))
+        marker = self.root / "queried"
+        marker.touch()
+        marker.chmod(0o666)
+        for name in ("sudo", "podman"):
+            self.tool(name, '#!/bin/sh\nprintf queried >> "$marker"\nsleep 30\n')
+        uid = 65534 if os.geteuid() == 0 else os.geteuid()
+        if os.geteuid() == 0:
+            value = json.loads(self.registration.read_bytes())
+            value["uid"] = uid
+            self.write(self.registration, value)
+            for path in (self.root, self.diag, self.log, self.registration, self.window):
+                os.chown(path, uid, 65534)
+        args = [str(self.root), str(uid), RUN, "debian11-rootless", CANDIDATE,
+                str(self.invocation), str(int(time.clock_gettime(time.CLOCK_BOOTTIME) * 100)),
+                "100", str(os.getpid()), str(self.fd), IMAGE]
+        identity = {"user": uid, "group": 65534} if os.geteuid() == 0 else {}
+        started = time.monotonic()
+        child = ('import os,runpy,sys; sys.argv=sys.argv[1:]; '
+                 'sys.argv[9]=str(os.getpid()); runpy.run_path(sys.argv[0],run_name="__main__")')
+        result = subprocess.run([sys.executable, "-c", child, str(HELPER), *args], capture_output=True,
+            text=True, timeout=2, pass_fds=(self.fd,), **identity,
+            env=os.environ | {"PATH": str(self.root) + ":" + os.environ["PATH"], "marker": str(marker)})
+        self.assertLess(time.monotonic() - started, 2)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), DIAG.closed("complete", "rootless_trace", "rootless_network"))
+        self.assertEqual(result.stderr, "")
+        self.assertEqual(marker.read_text(), "")
 
-    def test_watchdog_dead_cancellation_and_clock_expiry_prevent_new_query(self):
-        for category in ("watchdog", "cancelled", "timeout"):
-            collector = self.collector()
-            if category == "watchdog":
-                collector.watchdog = 1
-            elif category == "cancelled":
-                collector.cancel(signal.SIGINT, None)
-            else:
-                collector.deadline = time.monotonic() - 1
-            with patch.object(DIAG.subprocess, "Popen") as popen:
-                with self.assertRaises(DIAG.Unavailable) as caught:
-                    collector.query(["inspect", OUTER])
-                self.assertEqual(caught.exception.collector, category)
-                popen.assert_not_called()
+    def test_actual_nonroot_bash_timeout_python_chain_preserves_held_fd(self):
+        self.append(self.line(self.start, "DOCKERLENS_ROOTLESS_TRACE: rootlesskit " + CANARY))
+        marker = self.root / "queried"
+        marker.touch()
+        marker.chmod(0o666)
+        for name in ("sudo", "podman"):
+            self.tool(name, '#!/bin/sh\nprintf queried >> "$marker"\nsleep 30\n')
+        uid = 65534 if os.geteuid() == 0 else os.geteuid()
+        if os.geteuid() == 0:
+            value = json.loads(self.registration.read_bytes())
+            value["uid"] = uid
+            self.write(self.registration, value)
+            for path in (self.root, self.diag, self.log, self.registration, self.window):
+                os.chown(path, uid, 65534)
+        script = (self.shell_function()
+                  + f"\nscript_dir={shlex.quote(str(HELPER.parent))}; "
+                  + f"run_dir={shlex.quote(str(self.root))}; run_id={RUN}; "
+                  + f"lane=debian11-rootless; NATIVE_PORT_CANDIDATE_SHA={CANDIDATE}; "
+                  + f"port_invocation_us={self.invocation}; port_start_log_fd={self.fd}; "
+                  + f"image={shlex.quote(IMAGE)}; "
+                  + "sleep 20 & watchdog_pid=$!; "
+                  + "trap 'kill \"$watchdog_pid\" 2>/dev/null || true; "
+                  + "wait \"$watchdog_pid\" 2>/dev/null || true' EXIT; "
+                  + "port_start_failure_diagnostic\n")
+        identity = {"user": uid, "group": 65534} if os.geteuid() == 0 else {}
+        started = time.monotonic()
+        result = subprocess.run(["bash", "--noprofile", "--norc", "-c", script],
+            capture_output=True, text=True, timeout=4, pass_fds=(self.fd,), **identity,
+            env=os.environ | {"PATH": str(self.root) + ":" + os.environ["PATH"], "marker": str(marker)})
+        self.assertLess(time.monotonic() - started, 4)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stderr.strip(), DIAG.closed("complete", "rootless_trace", "rootless_network"))
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(marker.read_text(), "")
 
-    def test_rust_and_evidence_boundaries_remain_explicit(self):
+    def test_definition_and_proof_boundaries(self):
         source = (ROOT / "src/native_port_tests.rs").read_text()
-        wrapper = (ROOT / "scripts/run-exact-native-test.sh").read_text()
         harness = (ROOT / "scripts/native-conformance.sh").read_text()
-        evidence = (ROOT / "scripts/native-evidence.py").read_text()
-        self.assertIn('Some(28 | 124)', source)
-        self.assertIn('start_window_identity(method, path, cleanup)', source)
-        self.assertIn('"NATIVE_PORT_START_DIAGNOSTIC_PATH"', source)
-        self.assertIn('let directory = capture.join("diagnostics")', source)
-        self.assertIn('if cleanup || method != "POST"', source)
-        self.assertIn('canonical_id(id)', source.split('fn start_window_identity', 1)[1].split('fn api_with_cleanup', 1)[0])
-        self.assertIn('let Some(total) = start_diagnostic_budget(self.remaining())', source)
-        self.assertIn('Some(Duration::from_secs(4))', source)
-        self.assertIn('remaining > if cleanup { 1 } else { 40 }', source)
-        self.assertIn('const EXPECTED_SHAPES: [&str; 8]', source)
-        self.assertIn('run_deadline_epoch=$(( $(date +%s) + 180 ))', wrapper)
-        self.assertIn('timeout 180 cargo', wrapper)
-        self.assertNotIn('port-start-window', evidence)
-        self.assertNotIn('START_DIAGNOSTIC', evidence)
-        self.assertLess(harness.index('port_start_failure_diagnostic || true'),
-                        harness.index('python3 "$script_dir/native-evidence.py"'))
+        helper = HELPER.read_text()
+        wrapper = (ROOT / "scripts/run-exact-native-test.sh").read_text()
+        emitter = (ROOT / "scripts/native-evidence.py").read_text()
+        self.assertIn('--log-driver=k8s-file --log-opt "path=$run_dir/diagnostics/daemon.log" --log-opt max-size=1048576', harness)
+        self.assertNotIn("subprocess", helper)
+        observer = self.shell_function()
+        self.assertNotIn("sudo", observer)
+        self.assertNotIn("podman", observer)
+        self.assertIn("--kill-after=0.25s 3.5s", observer)
+        self.assertIn("Some(28 | 124)", source)
+        self.assertIn("Some(Duration::from_secs(4))", source)
+        self.assertIn("remaining > if cleanup { 1 } else { 40 }", source)
+        self.assertIn("const EXPECTED_SHAPES: [&str; 8]", source)
+        self.assertIn("run_deadline_epoch=$(( $(date +%s) + 180 ))", wrapper)
+        for private in (DIAG.REGISTRATION_FILE, DIAG.LOG_FILE, DIAG.WINDOW_FILE):
+            self.assertNotIn(private, emitter)
 
 
 if __name__ == "__main__":

@@ -749,37 +749,51 @@ Failure to publish or finalize leaves the optional observation unavailable;
 it cannot affect the original request, assertions, eight port shapes, existing
 four-second two-GET follow-up, forty-second inner cleanup reserve, or proof.
 
+Before the existing outer run, the caller exclusively pre-creates a no-follow,
+mode-0600 `diagnostics/daemon.log` and holds its original descriptor. Only the
+daemon outer container gets the explicit `k8s-file` driver, that exact path,
+and a 1-MiB maximum-size setting. The existing authorized setup privilege
+inspection also projects canonical ID, exact name, native-run label, observed
+image digest and log driver/path; its ID must equal the actual creation ID.
+The digest must equal the immutable digest in the expected image pin; normalized
+image display names never substitute for digest integrity. Successful local
+registration binds those facts to the original file's device/inode/UID/mode/link
+count and a nonempty bounded startup-prefix digest in a separate private record.
+Missing or mismatched facts leave the optional observation unavailable.
+
 The parent captures only the final exact port wrapper's status. On failure,
-before outer EXIT cleanup, the stdlib-only
-`scripts/native-port-start-diagnostic.py` can inspect both the recorded immutable
-outer ID and its current exact name, requiring matching canonical identity and
-native-run label in both successful responses. Name-only or label-only matches,
-nonzero inspect status despite valid stdout, missing/pending/stale records,
+before outer EXIT cleanup, the stdlib-only helper reads only the held local file,
+in either caller mode, with no sudo, Podman, daemon query or privilege handoff.
+Registration must match the exact Rust POST window's immutable outer identity
+and run/lane context. Both private records reject missing/pending/stale inputs,
 duplicate keys, unknown fields, oversized files, symlinks, owner/mode/link
-mismatches, path/file drift, future timestamps and reversed windows fail closed.
-Only a validated timeout window permits timestamped outer logs: fixed tail 80,
-actual start through actual POST failure end, independently filtered again in
-Python. All ownership and log stdout/stderr share a 64-KiB retained-output cap.
-Startup, post-failure and cleanup records are excluded. Rootless trace lines
-are classified rather than discarded; only fixed `source`, `category` and
-`collector` enums leave the boundary. No raw messages, traces, IDs, ports,
-timestamps, runtime errors or files are added to manifests or evidence archives.
-Categories identify observations for investigation, not attributed causes.
+mismatches, path/file drift, future timestamps and reversed windows. The file
+snapshot has a 64-KiB total log-input cap, independent of the 1-MiB storage cap:
+larger logs are unavailable rather than tail-sampled as complete. Original
+descriptor and named-path metadata, prefix, and stable before/after metadata
+must all match. Replacement/rotation, ownership changes, truncation/prefix drift,
+concurrent writes, malformed timestamps and incomplete CRI records fail closed.
+The observer never reads a replacement file or repairs its permissions.
+
+Only complete timestamped CRI stdout/stderr records inside the actual start
+through actual POST failure end enter classification. More than 80 eligible
+records yields closed unavailability rather than silently dropping an early
+failure; startup, post-failure and cleanup records are excluded.
+Rootless trace lines are classified rather than discarded; only fixed `source`,
+`category` and `collector` enums leave the boundary. No raw messages, traces, IDs,
+ports, timestamps, runtime errors or diagnostic files enter manifests or evidence
+archives. Categories identify observations for investigation, not attributed causes.
 
 This separate failure-only observation has at most four seconds inside the
 remaining existing parent 30-minute active budget, including helper
-initialization, both ownership queries, collection, classification and
+initialization, private record validation, file collection, classification and
 TERM/KILL/reap. The parent conservatively requires five remaining whole seconds,
 checks the existing watchdog, and uses Linux BOOTTIME readings before collection
 and before accepting output; the helper checks BOOTTIME and a shared monotonic
-deadline. The observer runs only when the harness already has effective UID zero:
-non-root invocations emit closed unavailability before any sudo or Podman query.
-Starting a root-owned timeout after sudo would not bound PAM/NSS handoff, so this
-observer never attempts that handoff. Its already-root timeout, helper and group
-termination share the client's existing privileges. Ordinary non-root GitHub
-native invocations can therefore skip this optional observation; it provides no
-promise of diagnosing the hosted failure or its cause. Normal native harness
-sudo behavior and workflow privileges remain unchanged. Late, cancelled,
+deadline. The 3.5-second TERM timeout and 0.25-second KILL fallback share the
+file reader's caller privileges, including ordinary non-root hosted invocations.
+Normal native harness sudo behavior and workflow privileges remain unchanged.
+Late, cancelled,
 nonzero, oversized or
 incomplete results remain uncertainty and cannot turn the original failure into
 a pass. The original wrapper status is retained even if diagnostics fail, and
@@ -787,6 +801,14 @@ outer EXIT cleanup still runs. No parent budget is reset or extended. The hosted
 35-minute timeout supplies no promised five-minute cleanup reserve: the existing
 parent watchdog has no aggregate protected cleanup reserve, and SIGKILL or host
 failure can still prevent cleanup or any diagnostic.
+
+A bounded local Podman 6.0.2 probe preserved a caller-owned mode-0600 file's
+inode for small `k8s-file` stdout/stderr and confirmed the configured driver/path
+and immutable image digest. A 64-KiB overflow probe instead replaced the inode
+with a different-owner mode-0640 file. The observer explicitly refuses that
+rotation behavior without reading the new file or changing permissions. These
+local observations do not establish hosted availability or universal Podman
+behavior; fresh hosted execution must establish whether a usable source exists.
 
 Run `37447905139` observed only a Debian 11 rootless timeout at this oracle's
 POST start, followed by responsive version GET and a timed-out same-object

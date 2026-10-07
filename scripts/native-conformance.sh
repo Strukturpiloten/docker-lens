@@ -533,11 +533,20 @@ sidecar_start_category=$(timeout --signal=TERM --kill-after=2s 120s "${podman_cm
   echo "DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=sidecar_failure category=$sidecar_start_category" >&2
   sidecar_setup_failed sidecar_start
 }
-timeout --signal=TERM --kill-after=2s 120s "${podman_cmd[@]}" run --pull=never -d --name "$container" --label "io.dockerlens.native-run=$run_id" \
+python3 "$script_dir/native-port-start-diagnostic.py" prepare "$run_dir" "$run_id" "$lane" || {
+  echo 'DOCKERLENS_NATIVE_PORT_START_LOG_DIAG: source=none category=unavailable collector=unavailable' >&2
+  exit 1
+}
+# Hold the original caller-owned file; registration checks this descriptor
+# against the exclusive no-follow creation before reading any native bytes.
+exec {port_start_log_fd}< "$run_dir/diagnostics/daemon.log"
+outer_container_id=$(timeout --signal=TERM --kill-after=2s 120s "${podman_cmd[@]}" run --pull=never -d --name "$container" --label "io.dockerlens.native-run=$run_id" \
+  --log-driver=k8s-file --log-opt "path=$run_dir/diagnostics/daemon.log" --log-opt max-size=1048576 \
   --network "$outer_network" \
   --privileged --pids-limit=512 --memory=4g --cpus=2 "${run_flags[@]}" \
   --volume "$storage_mount" --volume "$socket_dir:/dockerlens-native" \
-  "$image" "${start[@]}" >/dev/null 2>&1 || sidecar_setup_failed daemon_attach
+  "$image" "${start[@]}" 2>/dev/null) || sidecar_setup_failed daemon_attach
+[[ $outer_container_id =~ ^[0-9a-f]{64}$ ]] || sidecar_setup_failed daemon_identity
 sidecar_state=$(timeout --signal=TERM --kill-after=2s 10s "${podman_cmd[@]}" inspect \
   --format '{{.State.Running}}|{{.State.Status}}|{{.State.ExitCode}}' "$sidecar" 2>/dev/null) || {
   echo 'DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=sidecar_state category=inspect_failed exit=unavailable' >&2
@@ -576,8 +585,22 @@ daemon_ip=$(validated_outer_ipv4 daemon "$container") || exit 1
 [[ $sidecar_ip != "$daemon_ip" ]] || {
   sidecar_setup_failed address_collision
 }
-privileged=$("${podman_cmd[@]}" inspect --format '{{.HostConfig.Privileged}}' "$container")
+outer_setup=$("${podman_cmd[@]}" inspect --format \
+  '{"Id":{{json .Id}},"Name":{{json .Name}},"ImageDigest":{{json .ImageDigest}},"Config":{"Labels":{{json .Config.Labels}}},"HostConfig":{"Privileged":{{json .HostConfig.Privileged}},"LogConfig":{{json .HostConfig.LogConfig}}}}' "$container")
+privileged=$(printf '%s' "$outer_setup" | python3 -c 'import json,sys
+try:
+    value = json.load(sys.stdin)["HostConfig"]["Privileged"]
+except (ValueError, TypeError, KeyError):
+    raise SystemExit(1)
+if type(value) is not bool:
+    raise SystemExit(1)
+print("true" if value else "false")')
 [[ $privileged == true ]] || { echo 'outer container does not have reviewed nesting privilege' >&2; exit 1; }
+# Reuse this existing authorized setup inspection. Registration failures affect
+# only optional observations; the original native assertions remain mandatory.
+printf '%s' "$outer_setup" | python3 "$script_dir/native-port-start-diagnostic.py" register \
+  "$run_dir" "$run_id" "$lane" "$image" "$outer_container_id" "$port_start_log_fd" || true
+unset outer_setup
 volume_mounts=$("${podman_cmd[@]}" inspect --format '{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}}:{{.Destination}}{{"\n"}}{{end}}{{end}}' "$container")
 expected_mount=${storage_mount%:*}
 [[ $volume_mounts == "$expected_mount" ]] || {
@@ -943,12 +966,6 @@ if [[ $EUID == 0 ]]; then export NATIVE_PODMAN_USE_SUDO=0; else export NATIVE_PO
 
 port_start_failure_diagnostic() {
   local remaining=$((1800 - SECONDS)) started ended ignored started_cs ended_cs result diagnostic_status=0
-  # sudo/PAM/NSS handoff cannot be bounded by a timeout started afterward.
-  # This optional observer therefore runs only with already-held root rights.
-  if (( EUID != 0 )); then
-    echo 'DOCKERLENS_NATIVE_PORT_START_LOG_DIAG: source=none category=unavailable collector=unavailable' >&2
-    return 0
-  fi
   # Failure-only observation lives inside the existing active 30-minute
   # budget. It is not a new parent cleanup reserve or a timeout extension.
   if (( remaining < 5 )) || [[ -z $watchdog_pid ]] || ! kill -0 "$watchdog_pid" 2>/dev/null; then
@@ -958,11 +975,13 @@ port_start_failure_diagnostic() {
   read -r started ignored < /proc/uptime || return 0
   [[ $started =~ ^[0-9]+\.[0-9]{2}$ ]] || return 0
   started_cs=${started/./}
-  # Timeout and helper already share the root Podman client's privileges.
+  # Local file reads need no privilege handoff or Podman client. Timeout and
+  # helper share the caller's privileges in both root and non-root invocations.
   result=$(timeout --signal=TERM --kill-after=0.25s 3.5s \
     python3 "$script_dir/native-port-start-diagnostic.py" \
     "$run_dir" "$EUID" "$run_id" "$lane" "$NATIVE_PORT_CANDIDATE_SHA" \
-    "$port_invocation_us" "$started_cs" "$remaining" "$watchdog_pid" 2>/dev/null) || diagnostic_status=$?
+    "$port_invocation_us" "$started_cs" "$remaining" "$watchdog_pid" \
+    "$port_start_log_fd" "$image" 2>/dev/null) || diagnostic_status=$?
   read -r ended ignored < /proc/uptime || return 0
   [[ $ended =~ ^[0-9]+\.[0-9]{2}$ ]] || return 0
   ended_cs=${ended/./}

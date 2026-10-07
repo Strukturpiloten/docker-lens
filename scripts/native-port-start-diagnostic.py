@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import datetime
+import hashlib
 import json
 import os
 import re
-import selectors
 import signal
 import stat
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -18,6 +17,13 @@ FILE_LIMIT = 4096
 OUTPUT_LIMIT = 64 * 1024
 OBSERVATION_SECONDS = 4
 WINDOW_FILE = "port-start-window.json"
+REGISTRATION_FILE = "port-log-registration.json"
+LOG_FILE = "daemon.log"
+REGISTRATION_FIELDS = frozenset((
+    "schemaVersion", "status", "runId", "lane", "outerId", "outerName", "image", "imageDigest",
+    "logDriver", "logPath", "device", "inode", "uid", "mode", "links",
+    "prefixBytes", "prefixSha256", "registeredSize",
+))
 OWNER_LABEL = "io.dockerlens.native-run"
 FIELDS = frozenset((
     "schemaVersion", "phase", "status", "runId", "lane", "candidateSha",
@@ -81,9 +87,10 @@ def epoch_us(value: str) -> int:
 class Window:
     """Hold both private directories and a no-follow file through collection."""
 
-    def __init__(self, directory: Path, uid: int):
+    def __init__(self, directory: Path, uid: int, filename: str = WINDOW_FILE):
         self.directory = directory
         self.uid = uid
+        self.filename = filename
         self.fds: list[int] = []
         try:
             self._open()
@@ -92,7 +99,7 @@ class Window:
             raise
 
     def _open(self) -> None:
-        path = self.directory / "diagnostics" / WINDOW_FILE
+        path = self.directory / "diagnostics" / self.filename
         if not self.directory.is_absolute() or self.directory.resolve(strict=True) != self.directory:
             raise Unavailable("window_unavailable")
         self.infos = []
@@ -108,7 +115,7 @@ class Window:
             self.infos.append(info)
         if path.parent.resolve(strict=True) != path.parent:
             raise Unavailable("window_unavailable")
-        descriptor = os.open(WINDOW_FILE, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+        descriptor = os.open(self.filename, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
                              dir_fd=self.fds[1])
         self.fds.append(descriptor)
         self.info = os.fstat(descriptor)
@@ -130,7 +137,7 @@ class Window:
                 raise Unavailable("window_unavailable")
         if self.directory.resolve(strict=True) != self.directory:
             raise Unavailable("window_unavailable")
-        if (fingerprint(os.stat(WINDOW_FILE, dir_fd=self.fds[1], follow_symlinks=False))
+        if (fingerprint(os.stat(self.filename, dir_fd=self.fds[1], follow_symlinks=False))
                 != fingerprint(self.info)
                 or fingerprint(os.fstat(self.fds[2])) != fingerprint(self.info)):
             raise Unavailable("window_unavailable")
@@ -253,129 +260,237 @@ class Collector:
         except OSError:
             raise Unavailable("watchdog") from None
 
-    def query(self, arguments: list[str]) -> tuple[bytes, bytes]:
-        self.check()
-        seconds = min(0.8, self.deadline - time.monotonic() - 0.2)
-        if seconds <= 0:
-            raise Unavailable("timeout")
-        process = subprocess.Popen(
-            ["timeout", "--signal=TERM", "--kill-after=0.15s", f"{seconds:.6f}s",
-             "podman", *arguments], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            start_new_session=True)
-        output = (bytearray(), bytearray())
-        completed = False
-        try:
-            with selectors.DefaultSelector() as selector:
-                for index, stream in enumerate((process.stdout, process.stderr)):
-                    assert stream is not None
-                    os.set_blocking(stream.fileno(), False)
-                    selector.register(stream, selectors.EVENT_READ, index)
-                while selector.get_map():
-                    self.check()
-                    for key, _ in selector.select(0.02):
-                        chunk = os.read(key.fd, 4096)
-                        if not chunk:
-                            selector.unregister(key.fileobj)
-                            continue
-                        self.bytes += len(chunk)
-                        if self.bytes > OUTPUT_LIMIT:
-                            raise Unavailable("output_limit")
-                        output[key.data].extend(chunk)
-                self.check()
-                # Observe exit without reaping, so group signaling cannot hit
-                # a reused PID. Descendants are never accepted as completion.
-                status = os.waitid(os.P_PID, process.pid,
-                                   os.WEXITED | os.WNOHANG | os.WNOWAIT)
-                while status is None:
-                    self.check()
-                    time.sleep(0.005)
-                    status = os.waitid(os.P_PID, process.pid,
-                                       os.WEXITED | os.WNOHANG | os.WNOWAIT)
-                if status.si_code != os.CLD_EXITED or status.si_status != 0:
-                    raise Unavailable("timeout" if status.si_status in (124, 137)
-                                      else "query_failed")
-                completed = True
-        finally:
-            # Same root privileges as the client; terminate the entire group
-            # before reaping even on overflow, cancellation or collector error.
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            for stream in (process.stdout, process.stderr):
-                if stream is not None:
-                    stream.close()
-            try:
-                process.wait(timeout=min(0.15, max(0.001, self.deadline - time.monotonic())))
-                os.killpg(process.pid, 0)
-            except ProcessLookupError:
-                pass
-            except subprocess.TimeoutExpired:
-                completed = False
-            else:
-                # Remaining group members make the observation uncertain.
-                completed = False
-        self.check()
-        if not completed:
+def log_identity(info: os.stat_result) -> tuple:
+    return (info.st_dev, info.st_ino, info.st_uid, stat.S_IMODE(info.st_mode), info.st_nlink)
+
+
+def registered_identity(record: dict) -> tuple:
+    return tuple(record[key] for key in ("device", "inode", "uid", "mode", "links"))
+
+
+def check_log(descriptor: int, registration: Window) -> os.stat_result:
+    value = registration.record
+    actual = os.fstat(descriptor)
+    named = os.stat(LOG_FILE, dir_fd=registration.fds[1], follow_symlinks=False)
+    if (not stat.S_ISREG(actual.st_mode) or not stat.S_ISREG(named.st_mode)
+            or log_identity(actual) != registered_identity(value)
+            or fingerprint(actual) != fingerprint(named)
+            or actual.st_uid != registration.uid or stat.S_IMODE(actual.st_mode) != 0o600
+            or actual.st_nlink != 1):
+        raise Unavailable("ownership_unverified")
+    return actual
+
+
+def prepare(directory: Path, run: str, lane: str) -> None:
+    if re.fullmatch(r"[A-Za-z0-9]{8}", run) is None or lane not in LANES:
+        raise Unavailable("unavailable")
+    if not directory.is_absolute() or directory.resolve(strict=True) != directory:
+        raise Unavailable("unavailable")
+    uid = os.geteuid()
+    parent = directory / "diagnostics"
+    for location in (directory, parent):
+        info = os.lstat(location)
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != uid
+                or stat.S_IMODE(info.st_mode) != 0o700):
             raise Unavailable("unavailable")
-        return bytes(output[0]), bytes(output[1])
+    held = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        if (fingerprint(os.fstat(held)) != fingerprint(info)
+                or fingerprint(os.lstat(parent)) != fingerprint(info)):
+            raise Unavailable("unavailable")
+        log = os.open(LOG_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                      0o600, dir_fd=held)
+        try:
+            info = os.fstat(log)
+            if log_identity(info)[2:] != (uid, 0o600, 1):
+                raise Unavailable("unavailable")
+            value = {
+                "schemaVersion": 1, "status": "prepared", "runId": run, "lane": lane,
+                "outerId": None, "outerName": f"dl-native-{run}", "image": None, "imageDigest": None,
+                "logDriver": "k8s-file", "logPath": str(parent / LOG_FILE),
+                "device": info.st_dev, "inode": info.st_ino, "uid": uid,
+                "mode": 0o600, "links": 1, "prefixBytes": 0, "prefixSha256": None, "registeredSize": 0,
+            }
+            output = os.open(REGISTRATION_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             0o600, dir_fd=held)
+            with os.fdopen(output, "wb") as stream:
+                stream.write(json.dumps(value, separators=(",", ":")).encode())
+                stream.flush()
+                os.fsync(stream.fileno())
+        finally:
+            os.close(log)
+    finally:
+        os.close(held)
 
 
-def verify_outer(stdout: bytes, stderr: bytes, record: dict) -> None:
-    if stderr:
+def validate_registration(registration: Window, run: str, lane: str) -> dict:
+    value = registration.record
+    if (not isinstance(value, dict) or set(value) != REGISTRATION_FIELDS
+            or type(value["schemaVersion"]) is not int or value["schemaVersion"] != 1
+            or value["runId"] != run or value["lane"] != lane
+            or value["outerName"] != f"dl-native-{run}"
+            or value["logDriver"] != "k8s-file"
+            or value["logPath"] != str(registration.directory / "diagnostics" / LOG_FILE)
+            or value["uid"] != registration.uid or value["mode"] != 0o600 or value["links"] != 1
+            or any(type(value[key]) is not int or value[key] < 0
+                   for key in ("device", "inode", "uid", "mode", "links", "prefixBytes", "registeredSize"))):
         raise Unavailable("ownership_unverified")
-    value = json.loads(stdout, object_pairs_hook=unique_object)
-    if (not isinstance(value, dict) or value.get("Id") != record["outerId"]
-            or value.get("Name") not in (record["outerName"], "/" + record["outerName"])
-            or not isinstance(value.get("Config"), dict)
-            or not isinstance(value["Config"].get("Labels"), dict)
-            or value["Config"]["Labels"].get(OWNER_LABEL) != record["runId"]):
-        raise Unavailable("ownership_unverified")
+    return value
+
+
+def register(directory: Path, run: str, lane: str, image: str, outer_id: str,
+             descriptor: int, native: dict) -> None:
+    registration = Window(directory, os.geteuid(), REGISTRATION_FILE)
+    try:
+        value = validate_registration(registration, run, lane)
+        if not isinstance(native, dict):
+            raise Unavailable("ownership_unverified")
+        config, host = native.get("Config"), native.get("HostConfig")
+        if (value["status"] != "prepared" or not canonical(outer_id)
+                or native.get("Id") != outer_id or native.get("Name") != value["outerName"]
+                or not isinstance(config, dict) or not isinstance(config.get("Labels"), dict)
+                or config["Labels"].get(OWNER_LABEL) != run or native.get("ImageDigest") != image_digest(image)
+                or not isinstance(host, dict) or not isinstance(host.get("LogConfig"), dict)
+                or host["LogConfig"].get("Type") != "k8s-file"
+                or host["LogConfig"].get("Path") != value["logPath"]):
+            raise Unavailable("ownership_unverified")
+        before = check_log(descriptor, registration)
+        if not 0 < before.st_size <= OUTPUT_LIMIT:
+            raise Unavailable("output_limit")
+        count = min(before.st_size, 256)
+        prefix = os.pread(descriptor, count, 0)
+        if len(prefix) != count or fingerprint(check_log(descriptor, registration)) != fingerprint(before):
+            raise Unavailable("ownership_unverified")
+        registration.recheck()
+        value.update(status="registered", outerId=outer_id, image=image, imageDigest=image_digest(image),
+                     prefixBytes=count, prefixSha256=hashlib.sha256(prefix).hexdigest(), registeredSize=before.st_size)
+        target = os.open(REGISTRATION_FILE, os.O_WRONLY | os.O_NOFOLLOW,
+                         dir_fd=registration.fds[1])
+        try:
+            if fingerprint(os.fstat(target)) != fingerprint(registration.info):
+                raise Unavailable("ownership_unverified")
+            os.ftruncate(target, 0)
+            payload = json.dumps(value, separators=(",", ":")).encode()
+            if len(payload) > FILE_LIMIT or os.write(target, payload) != len(payload):
+                raise Unavailable("unavailable")
+            os.fsync(target)
+            finished = os.fstat(target)
+            named = os.stat(REGISTRATION_FILE, dir_fd=registration.fds[1], follow_symlinks=False)
+            if (fingerprint(finished) != fingerprint(named)
+                    or log_identity(finished) != log_identity(registration.info)
+                    or finished.st_size != len(payload)):
+                raise Unavailable("unavailable")
+        finally:
+            os.close(target)
+    finally:
+        registration.close()
+
+
+def cri_records(data: bytes, start: int, end: int, collector: Collector) -> tuple[bytes, bytes]:
+    if not data or not data.endswith(b"\n"):
+        raise Unavailable("unavailable")
+    eligible = []
+    previous = None
+    for line in data.splitlines():
+        collector.check()
+        parts = line.split(b" ", 3)
+        if (len(parts) != 4 or timestamp_ns(parts[0]) is None
+                or parts[1] not in (b"stdout", b"stderr") or parts[2] != b"F"):
+            raise Unavailable("unavailable")
+        instant = timestamp_ns(parts[0])
+        if previous is not None and instant < previous:
+            raise Unavailable("unavailable")
+        previous = instant
+        if start <= instant <= end:
+            eligible.append((parts[1], parts[0] + b" " + parts[3] + b"\n"))
+            if len(eligible) > 80:
+                raise Unavailable("output_limit")
+    return tuple(b"".join(line for stream, line in eligible if stream == selected)
+                 for selected in (b"stdout", b"stderr"))
 
 
 def observe(directory: Path, uid: int, run: str, lane: str, candidate: str,
-            invocation_us: int, collector: Collector) -> str:
-    window = None
+            invocation_us: int, collector: Collector, descriptor: int, image: str) -> str:
+    window = registration = None
     try:
         window = Window(directory, uid)
         record = window.validate(run, lane, candidate, invocation_us, time.time_ns())
         collector.check()
-        for identity in (record["outerId"], record["outerName"]):
-            stdout, stderr = collector.query(["inspect", "--format", "{{json .}}", identity])
-            verify_outer(stdout, stderr, record)
-            window.recheck()
-        stdout, stderr = collector.query([
-            "logs", "--timestamps", "--since", timestamp_arg(record["startRealtimeNs"]),
-            "--until", timestamp_arg(record["endRealtimeNs"]), "--tail", "80", record["outerId"],
-        ])
+        registration = Window(directory, uid, REGISTRATION_FILE)
+        value = validate_registration(registration, run, lane)
+        if (value["status"] != "registered" or value["outerId"] != record["outerId"]
+                or value["outerName"] != record["outerName"] or value["image"] != image
+                or value["imageDigest"] != image_digest(image)
+                or not canonical(value["outerId"]) or not image
+                or not value["prefixBytes"] <= value["registeredSize"] <= OUTPUT_LIMIT
+                or not 0 < value["prefixBytes"] <= 256 or not canonical(value["prefixSha256"])):
+            raise Unavailable("ownership_unverified")
+        before = check_log(descriptor, registration)
+        if not value["registeredSize"] <= before.st_size <= OUTPUT_LIMIT:
+            raise Unavailable("output_limit")
+        chunks = []
+        while collector.bytes < before.st_size:
+            collector.check()
+            chunk = os.pread(descriptor, min(4096, before.st_size - collector.bytes), collector.bytes)
+            if not chunk:
+                raise Unavailable("unavailable")
+            collector.bytes += len(chunk)
+            chunks.append(chunk)
+        data = b"".join(chunks)
+        if hashlib.sha256(data[:value["prefixBytes"]]).hexdigest() != value["prefixSha256"]:
+            raise Unavailable("ownership_unverified")
+        stdout, stderr = cri_records(data, record["startRealtimeNs"], record["endRealtimeNs"], collector)
         source, category = classify(stdout, stderr, record["startRealtimeNs"], record["endRealtimeNs"])
+        if fingerprint(check_log(descriptor, registration)) != fingerprint(before):
+            raise Unavailable("ownership_unverified")
+        registration.recheck()
         window.recheck()
         collector.check()
         return closed("complete", source, category)
     except Unavailable as error:
         return closed(error.collector)
-    except (OSError, ValueError, TypeError, KeyError, OverflowError):
+    except (OSError, ValueError, TypeError, KeyError, OverflowError, AttributeError):
         return closed("window_unavailable" if window is None else "unavailable")
     finally:
-        if window is not None:
-            window.close()
+        for held in (window, registration):
+            if held is not None:
+                held.close()
+
+
+def image_digest(image: str) -> str:
+    if not isinstance(image, str) or re.fullmatch(r"[^\s@]+:[^/@\s]+@sha256:[0-9a-f]{64}", image) is None:
+        raise Unavailable("ownership_unverified")
+    return image.rsplit("@", 1)[1]
 
 
 def main(arguments: list[str]) -> int:
     try:
-        if os.geteuid() != 0 or len(arguments) != 9:
+        if arguments and arguments[0] == "prepare" and len(arguments) == 4:
+            prepare(Path(arguments[1]), arguments[2], arguments[3])
+            return 0
+        if arguments and arguments[0] == "register" and len(arguments) == 7:
+            data = sys.stdin.buffer.read(OUTPUT_LIMIT + 1)
+            if len(data) > OUTPUT_LIMIT:
+                raise Unavailable("output_limit")
+            register(Path(arguments[1]), arguments[2], arguments[3], arguments[4], arguments[5],
+                     int(arguments[6]), json.loads(data, object_pairs_hook=unique_object))
+            return 0
+        if len(arguments) != 11:
             raise Unavailable("unavailable")
-        directory, uid, run, lane, candidate, invocation, observation, remaining, watchdog = arguments
+        (directory, uid, run, lane, candidate, invocation, observation,
+         remaining, watchdog, descriptor, image) = arguments
         collector = Collector(int(observation), int(remaining), int(watchdog))
         for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
             signal.signal(number, collector.cancel)
         result = observe(Path(directory), int(uid), run, lane, candidate,
-                         epoch_us(invocation), collector)
+                         epoch_us(invocation), collector, int(descriptor), image)
         collector.check()
     except Unavailable as error:
         result = closed(error.collector)
-    except (OSError, ValueError, TypeError, OverflowError):
+    except (OSError, ValueError, TypeError, OverflowError, AttributeError):
         result = closed("unavailable")
+    if arguments and arguments[0] in ("prepare", "register"):
+        return 1
     print(result)
     return 0
 

@@ -1727,6 +1727,8 @@ case "$command" in
  prior=
  for item in "$@"; do
  if [[ $prior == --name ]]; then name=$item; fi
+ if [[ $item == path=* ]]; then log_path=${item#path=}; fi
+ if [[ $item == *@sha256:* ]]; then daemon_image=$item; fi
  prior=$item
  done
  if [[ $name == dl-native-egress-* ]]; then
@@ -1742,6 +1744,10 @@ case "$command" in
    printf '%s\n' "$name" > "$state/expected-container"
    touch "$state/ran" "$state/container"
    [[ $FAKE_NATIVE_FAULT == run ]] && exit 42
+   printf '%s\n' "$log_path" > "$state/daemon-log-path"
+   printf '%s\n' "$daemon_image" > "$state/daemon-image"
+   printf '1970-01-01T00:00:00.000000000Z stdout F private-startup-canary\n' >> "$log_path"
+   printf '%s\n' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
  fi
  exit 0 ;;
 logs)
@@ -1765,7 +1771,18 @@ logs)
    echo 'private-canary' >&2
  fi ;;
  inspect)
- if [[ $* == *Labels* ]]; then
+ if [[ $* == *ImageDigest* && $* == *HostConfig.LogConfig* ]]; then
+  read -r name < "$state/expected-container"
+  read -r log_path < "$state/daemon-log-path"
+  read -r daemon_image < "$state/daemon-image"
+  outer_id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  image_digest=${daemon_image##*@}
+  [[ $FAKE_NATIVE_FAULT != log_registration_id ]] || outer_id=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+  [[ $FAKE_NATIVE_FAULT != log_registration_digest ]] || image_digest=sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+  [[ $FAKE_NATIVE_FAULT != log_registration_path ]] || log_path=/foreign-private-path
+  printf '{"Id":"%s","Name":"%s","ImageDigest":"%s","Config":{"Labels":{"io.dockerlens.native-run":"%s"}},"HostConfig":{"Privileged":true,"LogConfig":{"Type":"k8s-file","Path":"%s"}}}\n' \
+    "$outer_id" "$name" "$image_digest" "${name#dl-native-}" "$log_path"
+ elif [[ $* == *Labels* ]]; then
  for name; do :; done
  if [[ $name == dl-native-egress-* && $FAKE_NATIVE_FAULT == sidecar_inspect_hang ]]; then sleep 30; fi
  echo "$name" | sed -e 's/^dl-native-egress-//' -e 's/^dl-native-//'
@@ -1797,7 +1814,10 @@ logs)
    echo 'bind: address already in use private-canary'
  fi
  elif [[ $* == *HostConfig.Privileged* ]]; then echo true
-    elif [[ $* == *'.Mounts'* ]]; then echo unexpected:/var/lib/docker
+    elif [[ $* == *'.Mounts'* ]]; then
+      read -r log_path < "$state/daemon-log-path"
+      cp "${log_path%/*}/port-log-registration.json" "$state/registration-observed.json"
+      echo unexpected:/var/lib/docker
  else exit 4; fi ;;
  exec)
  touch "$state/health-attempted"
@@ -1839,6 +1859,9 @@ esac
             ("debian11-rootful", "cancel_after_sidecar"),
             ("debian11-rootful", "run"),
             ("debian11-rootless", "unexpected_mount"),
+            ("debian11-rootless", "log_registration_id"),
+            ("debian11-rootless", "log_registration_digest"),
+            ("debian11-rootless", "log_registration_path"),
             ("upstream-rootful", "unexpected_mount"),
             ("upstream-rootless", "run"),
             ("debian11-rootful", "container_query_error"),
@@ -1903,6 +1926,10 @@ esac
                     if fault == "sidecar_inspect_hang":
                         self.assertLess(time.monotonic() - started, 18)
                 self.assertNotEqual(result.returncode, 0)
+                if fault in ("unexpected_mount", "log_registration_id", "log_registration_digest", "log_registration_path"):
+                    observed = json.loads((state / "registration-observed.json").read_text())
+                    self.assertEqual(observed["status"], "registered" if fault == "unexpected_mount" else "prepared")
+                    self.assertIn("outer container has unexpected image or data-root volumes", result.stderr)
                 self.assertEqual((state / "volume").exists(), fault in ("volume_remains", "volume_inspect_partial"))
                 self.assertEqual((state / "container").exists(), fault in ("container_remains", "container_inspect_partial"))
                 self.assertEqual((state / "sidecar").exists(), fault in ("sidecar_remains", "sidecar_inspect_partial", "sidecar_inspect_hang"))
