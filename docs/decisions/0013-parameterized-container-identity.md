@@ -1,7 +1,8 @@
 # ADR 0013: Bound identity syntax and prove parameterized native semantics
 
-Status: accepted target contract; expanded native proof and capability admission
-remain pending under #86 and #39.
+Status: accepted target contract; #86's expanded source proof passed all four
+lanes. Candidate sealed-cohort sequencing is refined by ADR 0014; final
+candidate admission and the wider #39 milestone remain pending.
 
 This refines ADR 0007's malformed-container-setting boundary. Its inert renderer,
 protected values and exact-profile admission rules remain unchanged. ADR 0012's

@@ -3,9 +3,10 @@
 
 use docker_lens::observation::ResourceRef;
 use docker_lens::target::{
-    DockerApiRenderer, DockerPlanner, IntentError, NetworkCreate, NetworkDriver, NetworkIntent,
-    NetworkRole, NetworkSource, Planner, PlanningContext, Renderer, TargetIdentity, TargetIntent,
-    TargetResource, VolumeLabel,
+    ContainerIntent, ContainerSettings, ContainerUser, DockerApiRenderer, DockerPlanner,
+    ImageCommand, ImageReference, IntentError, NetworkCreate, NetworkDriver, NetworkIntent,
+    NetworkRole, NetworkSource, Planner, PlanningContext, PlanningError, Renderer, TargetField,
+    TargetIdentity, TargetIntent, TargetResource, UserNamespaceMode, VolumeLabel, WorkingDirectory,
 };
 use docker_lens::version::{
     ApiVersion, Capability, CapabilityError, CapabilityEvidenceKey, DaemonMode,
@@ -26,41 +27,263 @@ fn exact_profiles_admit_reviewed_prerequisites_but_keep_other_groups_closed() {
         let resolved = catalog.resolve(profile).unwrap();
         assert_eq!(
             resolved.evidence().candidate_sha(),
-            "0d8268155a5aacddaeb501adf7f8b2fe06a718ca"
+            "032b1510524f391f08a795dab4da73f6fa8f7213"
         );
         assert_eq!(
             resolved.evidence().run_url(),
-            "https://github.com/Strukturpiloten/docker-lens/actions/runs/37214738475/attempts/1"
+            "https://github.com/Strukturpiloten/docker-lens/actions/runs/37439627551/attempts/1"
         );
         for capability in [
+            Capability::StandaloneContainer,
+            Capability::NamedVolume,
+            Capability::BridgeNetwork,
+            Capability::PortPublish,
+            Capability::BindMount,
+            Capability::EnvironmentAssignment,
+            Capability::Command,
+            Capability::Entrypoint,
+            Capability::Healthcheck,
+            Capability::RestartPolicy,
             Capability::VolumeExternalReference,
             Capability::NetworkExternalReference,
             Capability::NetworkInternal,
             Capability::VolumeLabels,
+            Capability::ContainerUser,
+            Capability::ContainerWorkdir,
         ] {
             assert!(resolved.supports(capability));
         }
         for capability in [
+            Capability::TmpfsMount,
             Capability::NetworkIpv6,
             Capability::NetworkIpam,
+            Capability::NetworkIpamDriver,
             Capability::NetworkOptions,
             Capability::NetworkLabels,
             Capability::NetworkAliases,
             Capability::NetworkStaticAddress,
             Capability::NetworkMultipleAttachment,
+            Capability::HostNetwork,
+            Capability::PortExposeOnly,
+            Capability::PortHostIpv4,
+            Capability::PortHostIpv6,
+            Capability::PortMultipleBindings,
             Capability::PortEphemeral,
             Capability::CommandClear,
+            Capability::EntrypointClear,
             Capability::HealthShell,
+            Capability::HealthDisabled,
+            Capability::HealthStartPeriod,
             Capability::HealthStartInterval,
             Capability::ContainerLabels,
-            Capability::ContainerUser,
+            Capability::ContainerHostname,
+            Capability::SupplementaryGroups,
+            Capability::ReadOnlyRootfs,
+            Capability::ContainerInit,
+            Capability::StopSignal,
+            Capability::StopTimeout,
             Capability::MemoryLimit,
             Capability::PidsLimit,
+            Capability::ShmSize,
+            Capability::Ulimits,
+            Capability::UlimitNofile,
+            Capability::DeviceMappings,
+            Capability::LinuxCapabilities,
+            Capability::CapAddNetBindService,
+            Capability::CapDropSysAdmin,
             Capability::SecurityOptions,
+            Capability::Sysctls,
+            Capability::SysctlIpv4Forward,
+            Capability::DnsServers,
+            Capability::ExtraHosts,
+            Capability::LogConfig,
+            Capability::LogOptionMaxSize,
             Capability::UserNamespace,
         ] {
             assert!(!resolved.supports(capability));
         }
+    }
+}
+
+fn identity_container(settings: ContainerSettings) -> TargetIntent {
+    TargetIntent::new(vec![TargetResource::Container(Box::new(ContainerIntent {
+        reference: ResourceRef::new(1),
+        identity: TargetIdentity::new(b"private-identity-container".to_vec()).unwrap(),
+        image: ImageReference::new(b"unverified-private-image:fixture".to_vec()).unwrap(),
+        environment: vec![],
+        ports: vec![],
+        mounts: vec![],
+        networks: vec![],
+        entrypoint: ImageCommand::Inherit,
+        command: ImageCommand::Inherit,
+        healthcheck: None,
+        restart: None,
+        settings,
+    }))])
+    .unwrap()
+}
+
+#[test]
+fn sealed_identity_profiles_render_parameterized_fields_and_protect_values() {
+    // These are independently authored request expectations. No image is read:
+    // account lookup, directory creation and process startup remain native obligations.
+    let catalog = TargetCapabilityCatalog::reviewed();
+    for user in [
+        None,
+        Some("1000"),
+        Some("1000:1001"),
+        Some("private_principal"),
+        Some("private_principal:private_group"),
+        Some("private_principal:1001"),
+        Some("1000:private_group"),
+        Some("0"),
+        Some("2147483647:2147483647"),
+        Some("missing_image_account:missing_image_group"),
+    ] {
+        for directory in [
+            None,
+            Some("/private-new-directory"),
+            Some("/private/Grüße\"\\"),
+        ] {
+            let settings = ContainerSettings {
+                user: user.map(|value| ContainerUser::new(value.as_bytes().to_vec()).unwrap()),
+                working_dir: directory
+                    .map(|value| WorkingDirectory::new(value.as_bytes().to_vec()).unwrap()),
+                ..ContainerSettings::default()
+            };
+            assert!(!format!("{settings:?}").contains("private"));
+            if let Some(value) = &settings.user {
+                assert!(!format!("{value:?}").contains(user.unwrap()));
+            }
+            if let Some(value) = &settings.working_dir {
+                assert!(!format!("{value:?}").contains(directory.unwrap()));
+            }
+            let intent = identity_container(settings);
+            for profile in catalog.profiles() {
+                let admitted = catalog.resolve(profile).unwrap();
+                let graph = DockerPlanner.plan(&intent, &admitted).unwrap();
+                let artifact = DockerApiRenderer.render(&graph).unwrap();
+                let mut body = serde_json::json!({
+                    "Image": "unverified-private-image:fixture",
+                    "HostConfig": {},
+                });
+                if let Some(value) = user {
+                    body["User"] = value.into();
+                }
+                if let Some(value) = directory {
+                    body["WorkingDir"] = value.into();
+                }
+                let request = serde_json::json!({
+                    "method": "POST",
+                    "path": format!("/v{}.{}/containers/create?name=private-identity-container",
+                                    profile.rendering_api_version().major,
+                                    profile.rendering_api_version().minor),
+                    "body": body,
+                });
+                let request_only: serde_json::Value =
+                    serde_json::from_slice(artifact.bytes()).unwrap();
+                assert_eq!(request_only, request);
+                let complete: serde_json::Value =
+                    serde_json::from_slice(&artifact.complete_bytes().unwrap()).unwrap();
+                assert_eq!(
+                    complete,
+                    serde_json::json!({
+                        "schema_version": 1,
+                        "context": reviewed_prerequisite_context(profile),
+                        "requests": [request],
+                        "prerequisites": [],
+                    })
+                );
+                assert_eq!(graph.context(), &PlanningContext::Target(profile.clone()));
+                assert!(artifact.volume_prerequisites().is_empty());
+                assert!(artifact.network_prerequisites().is_empty());
+                for debug in [
+                    format!("{intent:?}"),
+                    format!("{graph:?}"),
+                    format!("{artifact:?}"),
+                ] {
+                    for protected in [
+                        "private-identity-container",
+                        "unverified-private-image",
+                        "private_principal",
+                        "private_group",
+                        "missing_image_account",
+                        "missing_image_group",
+                        "private-new-directory",
+                        "Grüße",
+                    ] {
+                        assert!(!debug.contains(protected));
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn identity_admission_does_not_admit_supplementary_groups_or_host_namespace() {
+    let catalog = TargetCapabilityCatalog::reviewed();
+    for (field, capability, settings) in [
+        (
+            TargetField::SupplementaryGroups,
+            Capability::SupplementaryGroups,
+            ContainerSettings {
+                group_add: vec![ContainerUser::new(b"private_group".to_vec()).unwrap()],
+                ..ContainerSettings::default()
+            },
+        ),
+        (
+            TargetField::UserNamespace,
+            Capability::UserNamespace,
+            ContainerSettings {
+                userns_mode: Some(UserNamespaceMode::Host),
+                ..ContainerSettings::default()
+            },
+        ),
+    ] {
+        let intent = identity_container(ContainerSettings {
+            user: Some(ContainerUser::new(b"2147483647:private_group".to_vec()).unwrap()),
+            working_dir: Some(WorkingDirectory::new(b"/unverified-directory".to_vec()).unwrap()),
+            ..settings
+        });
+        for profile in catalog.profiles() {
+            let admitted = catalog.resolve(profile).unwrap();
+            let error = DockerPlanner.plan(&intent, &admitted).unwrap_err();
+            assert_eq!(
+                error,
+                PlanningError::MissingCapability {
+                    resource: ResourceRef::new(1),
+                    field,
+                    capability,
+                }
+            );
+            assert!(!format!("{error:?}").contains("private_group"));
+            assert!(!format!("{error:?}").contains("unverified-directory"));
+        }
+    }
+}
+
+#[test]
+fn public_identity_values_reject_malformed_syntax_without_disclosing_values() {
+    for value in [
+        "private:user:group",
+        "private:",
+        "01",
+        "2147483648",
+        "private user",
+    ] {
+        let error = ContainerUser::new(value.as_bytes().to_vec()).unwrap_err();
+        assert_eq!(error, IntentError::InvalidContainerUser);
+        assert!(!format!("{error:?}").contains(value));
+    }
+    for value in [
+        b"private-relative".as_slice(),
+        b"/private\0directory",
+        &[0xff],
+    ] {
+        let error = WorkingDirectory::new(value.to_vec()).unwrap_err();
+        assert_eq!(error, IntentError::InvalidWorkingDirectory);
+        assert!(!format!("{error:?}").contains("private"));
     }
 }
 
@@ -75,16 +298,16 @@ fn reviewed_prerequisite_context(profile: &TargetProfile) -> serde_json::Value {
                 "20.10.5+dfsg1",
                 "1.41",
                 "1.41",
-                "2306973726b1ecaeac9b26936cfe4df127a9f4927ae5f7bd41be99b528ee37fa",
-                "f471fc1f6998bfdebb130734a11c484ff7bb7e42a406805ab269bd482347eac4",
+                "24313f10b84b8a3410906d5ad4721d3ef389ad2e09be5b59416929ef57e86b78",
+                "c9800d722f1b505f5b1e5a54d9c60e68502fceaa0779f690c5504623ec473333",
             ),
             EngineBuild::Upstream => (
                 serde_json::json!({"kind": "upstream"}),
                 "29.8.1",
                 "1.56",
                 "1.49",
-                "dd2dec14ce75c1dfb672f018a8ade98334783edcd964758da6b4a432d22429a0",
-                "280839c9f4d6cfd1adda9f25bbf17fdfbb3fab162e91c346a614c31e1e318c44",
+                "b6cebf2f71be5992b112661650e37e69270d45f7d1b8e89843e843bded325020",
+                "81a1ee33c3a02d83fe6cd0f1683e1bb9b6c8774dc8aa192b2160c6ee44ba0943",
             ),
         };
     let (mode, evidence_key) = match profile.mode() {
@@ -184,16 +407,16 @@ fn literal_label_artifact(profile: &TargetProfile) -> &'static str {
     // Independently authored wire expectations, not bytes obtained from the renderer.
     match (profile.identity().build(), profile.mode()) {
         (EngineBuild::DebianPackage(_), DaemonMode::Rootful) => {
-            "{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"debian_package\",\"revision\":\"20.10.5+dfsg1-1+deb11u2\"},\"engine_release\":\"20.10.5+dfsg1\",\"advertised_api_version\":\"1.41\",\"acquisition_api_version\":\"1.41\",\"rendering_api_version\":\"1.41\",\"daemon_mode\":\"rootful\",\"evidence_sha256\":\"2306973726b1ecaeac9b26936cfe4df127a9f4927ae5f7bd41be99b528ee37fa\"},\"requests\":[{\"method\":\"POST\",\"path\":\"/v1.41/volumes/create\",\"body\":{\"Name\":\"candidate-volume\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"empty\":\"\",\"private-key\":\"Grüße\\\"\\\\\\n\"}}}],\"prerequisites\":[]}\n"
+            "{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"debian_package\",\"revision\":\"20.10.5+dfsg1-1+deb11u2\"},\"engine_release\":\"20.10.5+dfsg1\",\"advertised_api_version\":\"1.41\",\"acquisition_api_version\":\"1.41\",\"rendering_api_version\":\"1.41\",\"daemon_mode\":\"rootful\",\"evidence_sha256\":\"24313f10b84b8a3410906d5ad4721d3ef389ad2e09be5b59416929ef57e86b78\"},\"requests\":[{\"method\":\"POST\",\"path\":\"/v1.41/volumes/create\",\"body\":{\"Name\":\"candidate-volume\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"empty\":\"\",\"private-key\":\"Grüße\\\"\\\\\\n\"}}}],\"prerequisites\":[]}\n"
         }
         (EngineBuild::Upstream, DaemonMode::Rootful) => {
-            "{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"upstream\"},\"engine_release\":\"29.8.1\",\"advertised_api_version\":\"1.56\",\"acquisition_api_version\":\"1.49\",\"rendering_api_version\":\"1.56\",\"daemon_mode\":\"rootful\",\"evidence_sha256\":\"dd2dec14ce75c1dfb672f018a8ade98334783edcd964758da6b4a432d22429a0\"},\"requests\":[{\"method\":\"POST\",\"path\":\"/v1.56/volumes/create\",\"body\":{\"Name\":\"candidate-volume\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"empty\":\"\",\"private-key\":\"Grüße\\\"\\\\\\n\"}}}],\"prerequisites\":[]}\n"
+            "{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"upstream\"},\"engine_release\":\"29.8.1\",\"advertised_api_version\":\"1.56\",\"acquisition_api_version\":\"1.49\",\"rendering_api_version\":\"1.56\",\"daemon_mode\":\"rootful\",\"evidence_sha256\":\"b6cebf2f71be5992b112661650e37e69270d45f7d1b8e89843e843bded325020\"},\"requests\":[{\"method\":\"POST\",\"path\":\"/v1.56/volumes/create\",\"body\":{\"Name\":\"candidate-volume\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"empty\":\"\",\"private-key\":\"Grüße\\\"\\\\\\n\"}}}],\"prerequisites\":[]}\n"
         }
         (EngineBuild::DebianPackage(_), DaemonMode::Rootless) => {
-            "{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"debian_package\",\"revision\":\"20.10.5+dfsg1-1+deb11u2\"},\"engine_release\":\"20.10.5+dfsg1\",\"advertised_api_version\":\"1.41\",\"acquisition_api_version\":\"1.41\",\"rendering_api_version\":\"1.41\",\"daemon_mode\":\"rootless\",\"evidence_sha256\":\"f471fc1f6998bfdebb130734a11c484ff7bb7e42a406805ab269bd482347eac4\"},\"requests\":[{\"method\":\"POST\",\"path\":\"/v1.41/volumes/create\",\"body\":{\"Name\":\"candidate-volume\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"empty\":\"\",\"private-key\":\"Grüße\\\"\\\\\\n\"}}}],\"prerequisites\":[]}\n"
+            "{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"debian_package\",\"revision\":\"20.10.5+dfsg1-1+deb11u2\"},\"engine_release\":\"20.10.5+dfsg1\",\"advertised_api_version\":\"1.41\",\"acquisition_api_version\":\"1.41\",\"rendering_api_version\":\"1.41\",\"daemon_mode\":\"rootless\",\"evidence_sha256\":\"c9800d722f1b505f5b1e5a54d9c60e68502fceaa0779f690c5504623ec473333\"},\"requests\":[{\"method\":\"POST\",\"path\":\"/v1.41/volumes/create\",\"body\":{\"Name\":\"candidate-volume\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"empty\":\"\",\"private-key\":\"Grüße\\\"\\\\\\n\"}}}],\"prerequisites\":[]}\n"
         }
         (EngineBuild::Upstream, DaemonMode::Rootless) => {
-            "{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"upstream\"},\"engine_release\":\"29.8.1\",\"advertised_api_version\":\"1.56\",\"acquisition_api_version\":\"1.49\",\"rendering_api_version\":\"1.56\",\"daemon_mode\":\"rootless\",\"evidence_sha256\":\"280839c9f4d6cfd1adda9f25bbf17fdfbb3fab162e91c346a614c31e1e318c44\"},\"requests\":[{\"method\":\"POST\",\"path\":\"/v1.56/volumes/create\",\"body\":{\"Name\":\"candidate-volume\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"empty\":\"\",\"private-key\":\"Grüße\\\"\\\\\\n\"}}}],\"prerequisites\":[]}\n"
+            "{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"upstream\"},\"engine_release\":\"29.8.1\",\"advertised_api_version\":\"1.56\",\"acquisition_api_version\":\"1.49\",\"rendering_api_version\":\"1.56\",\"daemon_mode\":\"rootless\",\"evidence_sha256\":\"81a1ee33c3a02d83fe6cd0f1683e1bb9b6c8774dc8aa192b2160c6ee44ba0943\"},\"requests\":[{\"method\":\"POST\",\"path\":\"/v1.56/volumes/create\",\"body\":{\"Name\":\"candidate-volume\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"empty\":\"\",\"private-key\":\"Grüße\\\"\\\\\\n\"}}}],\"prerequisites\":[]}\n"
         }
         (_, DaemonMode::Unknown) => panic!("reviewed profiles must bind a daemon mode"),
     }

@@ -18,9 +18,13 @@ ephemeral publications, exposed-only ports, command clearing, shell and
 disabled health checks, and protected runtime settings. These new branches
 likewise remain capability-unadmitted pending exact native evidence.
 Created named volumes can carry bounded protected labels in the inert target
-contract. This #49 candidate selects a separately reviewed #70 cohort with the
-complete `VolumeLabels` group for pre-merge consumer rehearsal only, under
-[ADR 0012](docs/decisions/0012-candidate-volume-label-admission.md).
+contract. The #89 candidate selects the independently reviewed #88 source
+cohort: sixteen capabilities and twenty-six shapes, including `VolumeLabels`
+and parameterized `ContainerUser` / `ContainerWorkdir`, under
+[ADR 0014](docs/decisions/0014-reviewed-identity-cohort.md).
+Identity support does not promise arbitrary-image startup or host UID mapping.
+The [ADR 0012](docs/decisions/0012-candidate-volume-label-admission.md)
+six-fixture volume-only consumer gate remains effective.
 Production merge, main admission and release remain blocked until fresh exact-final-candidate
 four-lane native proof, independent review of all six actual authored fixtures'
 volume-only consumer rehearsal, and complete gates pass. No application or full

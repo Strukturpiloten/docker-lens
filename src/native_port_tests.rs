@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 use std::cell::Cell;
 use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::num::NonZeroU16;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
@@ -293,6 +293,25 @@ impl NativeRun {
             .map(|(name, _)| name.as_str())
     }
 
+    fn start_window_identity(
+        &self,
+        method: &str,
+        path: &str,
+        cleanup: bool,
+    ) -> Option<(&str, &str)> {
+        if cleanup || method != "POST" {
+            return None;
+        }
+        self.created
+            .iter()
+            .find(|(name, id)| {
+                canonical_id(id)
+                    && *name == self.name("multi-dynamic-oracle")
+                    && path == format!("/v{}/containers/{id}/start", self.api_version)
+            })
+            .map(|(name, id)| (name.as_str(), id.as_str()))
+    }
+
     fn api_with_cleanup(
         &self,
         method: &str,
@@ -357,7 +376,17 @@ impl NativeRun {
             command.args(["--data-binary", ""]);
         }
         command.args(["-w", "\n%{http_code}", &format!("http://localhost{path}")]);
+        // This private record is observation context, never a native proof.
+        // Publication is best effort and must not change the original request.
+        let start_window = self
+            .start_window_identity(method, path, cleanup)
+            .and_then(|(name, id)| PrivateStartWindow::begin(self, name, id));
         let output = self.capture(&mut command, input.as_deref(), 131080);
+        if !output.status.success() && matches!(output.status.code(), Some(28 | 124)) {
+            if let Some(window) = start_window {
+                window.finish_timeout();
+            }
+        }
         if !output.status.success() {
             let action = if method == "GET" && path == "/version" {
                 "version"
@@ -1332,6 +1361,314 @@ printf '%s:%s\n' "$count" "$effective""#,
 }
 
 const OWNER: &str = "io.dockerlens.native-run";
+
+const START_WINDOW_FILE: &str = "port-start-window.json";
+
+struct PrivateStartWindow {
+    directory: PathBuf,
+    held: File,
+    file: File,
+    record: Value,
+    initial: Vec<u8>,
+}
+
+impl PrivateStartWindow {
+    fn begin(run: &NativeRun, name: &str, id: &str) -> Option<Self> {
+        let path = PathBuf::from(std::env::var("NATIVE_PORT_START_DIAGNOSTIC_PATH").ok()?);
+        let capture = PathBuf::from(std::env::var("NATIVE_CAPTURE_DIR").ok()?);
+        Self::begin_at(run, name, id, &capture, &path)
+    }
+
+    fn begin_at(
+        run: &NativeRun,
+        name: &str,
+        id: &str,
+        capture: &Path,
+        path: &Path,
+    ) -> Option<Self> {
+        let outer_id = run.outer_identity.as_deref()?.split('|').next()?;
+        if !canonical_id(outer_id)
+            || !canonical_id(id)
+            || run.known_id(id) != Some(name)
+            || name != run.name("multi-dynamic-oracle")
+        {
+            return None;
+        }
+        if path.file_name()?.to_str()? != START_WINDOW_FILE {
+            return None;
+        }
+        let directory = capture.join("diagnostics");
+        if path != directory.join(START_WINDOW_FILE) {
+            return None;
+        }
+        if !directory.is_absolute() || directory.canonicalize().ok()? != directory {
+            return None;
+        }
+        let before = fs::symlink_metadata(&directory).ok()?;
+        let owner = fs::metadata("/proc/self").ok()?.uid();
+        if !before.is_dir() || before.uid() != owner || before.mode() & 0o7777 != 0o700 {
+            return None;
+        }
+        let held = File::open(&directory).ok()?;
+        if !same_start_metadata(&before, &held.metadata().ok()?) {
+            return None;
+        }
+        let start = realtime_ns()?;
+        let cutoff = run
+            .epoch_deadline
+            .duration_since(UNIX_EPOCH)
+            .ok()?
+            .as_secs();
+        if start >= cutoff.checked_mul(1_000_000_000)? {
+            return None;
+        }
+        let record = json!({
+            "schemaVersion": 1,
+            "phase": "multi_dynamic_oracle_start",
+            "status": "pending",
+            "runId": run.run_id,
+            "lane": run.lane,
+            "candidateSha": run.candidate,
+            "outerId": outer_id,
+            "outerName": format!("dl-native-{}", run.run_id),
+            "createdId": id,
+            "createdName": name,
+            "apiVersion": run.api_version,
+            "startRealtimeNs": start,
+            "endRealtimeNs": null,
+            "cutoffEpoch": cutoff,
+        });
+        let initial = serde_json::to_vec(&record).ok()?;
+        let relative =
+            PathBuf::from(format!("/proc/self/fd/{}", held.as_raw_fd())).join(START_WINDOW_FILE);
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(relative)
+            .ok()?;
+        file.write_all(&initial).ok()?;
+        file.sync_all().ok()?;
+        let window = Self {
+            directory,
+            held,
+            file,
+            record,
+            initial,
+        };
+        window.unchanged().then_some(window)
+    }
+
+    fn unchanged(&self) -> bool {
+        let checked = || -> Option<bool> {
+            if self.directory.canonicalize().ok()? != self.directory {
+                return None;
+            }
+            let parent = fs::symlink_metadata(&self.directory).ok()?;
+            if !same_start_metadata(&parent, &self.held.metadata().ok()?) {
+                return None;
+            }
+            let actual = self.file.metadata().ok()?;
+            let named = fs::symlink_metadata(self.directory.join(START_WINDOW_FILE)).ok()?;
+            Some(
+                actual.is_file()
+                    && actual.uid() == parent.uid()
+                    && actual.mode() & 0o7777 == 0o600
+                    && actual.nlink() == 1
+                    && actual.len() <= 4096
+                    && same_start_metadata(&actual, &named)
+                    && actual.len() == named.len()
+                    && actual.mtime() == named.mtime()
+                    && actual.mtime_nsec() == named.mtime_nsec(),
+            )
+        };
+        checked() == Some(true)
+    }
+
+    fn finish_timeout(mut self) {
+        let mut finish = || -> Option<()> {
+            let end = realtime_ns()?;
+            let start = self.record["startRealtimeNs"].as_u64()?;
+            let cutoff = self.record["cutoffEpoch"]
+                .as_u64()?
+                .checked_mul(1_000_000_000)?;
+            if end < start || end > cutoff || !self.unchanged() {
+                return None;
+            }
+            self.file.seek(SeekFrom::Start(0)).ok()?;
+            let mut current = Vec::new();
+            Read::by_ref(&mut self.file)
+                .take(4097)
+                .read_to_end(&mut current)
+                .ok()?;
+            if current != self.initial {
+                return None;
+            }
+            let record = self.record.as_object_mut()?;
+            record.insert("status".into(), json!("timeout"));
+            record.insert("endRealtimeNs".into(), json!(end));
+            let bytes = serde_json::to_vec(&self.record).ok()?;
+            if bytes.len() > 4096 {
+                return None;
+            }
+            self.file.seek(SeekFrom::Start(0)).ok()?;
+            self.file.set_len(0).ok()?;
+            self.file.write_all(&bytes).ok()?;
+            self.file.sync_all().ok()?;
+            self.unchanged().then_some(())
+        };
+        let _ = finish();
+    }
+}
+
+fn same_start_metadata(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    (
+        left.dev(),
+        left.ino(),
+        left.uid(),
+        left.mode(),
+        left.nlink(),
+    ) == (
+        right.dev(),
+        right.ino(),
+        right.uid(),
+        right.mode(),
+        right.nlink(),
+    )
+}
+
+fn realtime_ns() -> Option<u64> {
+    u64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()?
+            .as_nanos(),
+    )
+    .ok()
+}
+
+fn start_window_control_run() -> NativeRun {
+    NativeRun {
+        api_version: "1.41".into(),
+        image: "protected-image".into(),
+        run_id: "Test0001".into(),
+        lane: "debian11-rootless".into(),
+        candidate: "b".repeat(40),
+        mode: DaemonMode::Rootless,
+        engine_release: "20.10.5".into(),
+        socket: "/private-unused".into(),
+        outer_identity: Some(format!("{}|2|aa|1", "a".repeat(64))),
+        attempted: BTreeSet::new(),
+        created: vec![(
+            "dl-port-Test0001-multi-dynamic-oracle".into(),
+            "c".repeat(64),
+        )],
+        fact_source: None,
+        deadline: Instant::now() + Duration::from_secs(180),
+        epoch_deadline: SystemTime::now() + Duration::from_secs(180),
+        calls: Cell::new(0),
+        bytes: Cell::new(0),
+        uncertain_mutation: Cell::new(true),
+        cleaned: true,
+    }
+}
+
+#[test]
+fn start_window_is_only_the_registered_canonical_oracle_post_without_cleanup() {
+    let mut run = start_window_control_run();
+    let name = run.name("multi-dynamic-oracle");
+    let id = "c".repeat(64);
+    let path = format!("/v1.41/containers/{id}/start");
+    assert_eq!(
+        run.start_window_identity("POST", &path, false),
+        Some((name.as_str(), id.as_str()))
+    );
+    assert!(run.start_window_identity("POST", &path, true).is_none());
+    assert!(run.start_window_identity("GET", &path, false).is_none());
+    for other in [
+        format!("/v1.41/containers/{name}/start"),
+        format!("/v1.56/containers/{id}/start"),
+        format!("/v1.41/containers/{id}/json"),
+        format!("/v1.41/containers/{id}/start?retry=1"),
+        format!("/v1.41/containers/{}/start", "d".repeat(64)),
+    ] {
+        assert!(run.start_window_identity("POST", &other, false).is_none());
+    }
+    run.created[0].0 = run.name("multi-dynamic-rendered");
+    assert!(run.start_window_identity("POST", &path, false).is_none());
+    run.created[0] = (name, "C".repeat(64));
+    assert!(
+        run.start_window_identity(
+            "POST",
+            &format!("/v1.41/containers/{}/start", "C".repeat(64)),
+            false
+        )
+        .is_none()
+    );
+    assert_eq!(run.calls.get(), 0);
+    assert_eq!(run.bytes.get(), 0);
+    assert!(run.uncertain_mutation.get());
+}
+
+#[test]
+fn private_start_window_is_separate_pending_then_timeout_without_overwrite_or_proof() {
+    let run = start_window_control_run();
+    let directory = std::env::temp_dir().join(format!(
+        "dockerlens-start-test-{}-{}",
+        std::process::id(),
+        realtime_ns().unwrap()
+    ));
+    fs::create_dir(&directory).unwrap();
+    fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+    let diagnostics = directory.join("diagnostics");
+    fs::create_dir(&diagnostics).unwrap();
+    fs::set_permissions(&diagnostics, fs::Permissions::from_mode(0o700)).unwrap();
+    let path = diagnostics.join(START_WINDOW_FILE);
+    let name = run.name("multi-dynamic-oracle");
+    let id = "c".repeat(64);
+    assert!(
+        PrivateStartWindow::begin_at(
+            &run,
+            &name,
+            &id,
+            &directory,
+            &directory.join(START_WINDOW_FILE)
+        )
+        .is_none()
+    );
+    let window = PrivateStartWindow::begin_at(&run, &name, &id, &directory, &path).unwrap();
+    let pending: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(pending["status"], "pending");
+    assert_eq!(pending["endRealtimeNs"], Value::Null);
+    assert_eq!(pending["createdId"], id);
+    assert_eq!(pending["createdName"], name);
+    assert_eq!(pending["outerId"], "a".repeat(64));
+    assert_eq!(pending["candidateSha"], "b".repeat(40));
+    assert_eq!(fs::symlink_metadata(&path).unwrap().mode() & 0o7777, 0o600);
+    assert!(PrivateStartWindow::begin_at(&run, &name, &id, &directory, &path).is_none());
+    window.finish_timeout();
+    let finalized: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(finalized["status"], "timeout");
+    assert!(
+        finalized["endRealtimeNs"].as_u64().unwrap()
+            >= finalized["startRealtimeNs"].as_u64().unwrap()
+    );
+    assert!(!directory.join("port-probes.json").exists());
+    assert_eq!(run.calls.get(), 0);
+    assert_eq!(run.bytes.get(), 0);
+    assert!(run.uncertain_mutation.get());
+    fs::remove_file(&path).unwrap();
+    let window = PrivateStartWindow::begin_at(&run, &name, &id, &directory, &path).unwrap();
+    let mut drift = pending;
+    drift["status"] = json!("private-drift");
+    fs::write(&path, serde_json::to_vec(&drift).unwrap()).unwrap();
+    window.finish_timeout();
+    let unchanged: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(unchanged["status"], "private-drift");
+    fs::remove_dir_all(&directory).unwrap();
+}
+
 const EXPECTED_SHAPES: [&str; 8] = [
     "FixedIpv4HostPort",
     "EphemeralIpv4HostPort",

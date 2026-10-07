@@ -1,6 +1,7 @@
 //! Crate-owned candidate admission of four independently reviewed native records.
 //! The JSON is part of the published crate; no caller-supplied bytes enter here.
-//! ADR 0012 bounds label admission to pre-merge rehearsal until all production gates pass.
+//! Source evidence binds parameterized identity fields, not arbitrary-image startup
+//! or namespace representability. Final-candidate and consumer gates remain separate.
 
 use std::{collections::HashSet, num::NonZeroU16};
 
@@ -13,9 +14,9 @@ use crate::version::{
     TargetProfileIdentity,
 };
 
-const SOURCE_CANDIDATE: &str = "0d8268155a5aacddaeb501adf7f8b2fe06a718ca";
+const SOURCE_CANDIDATE: &str = "032b1510524f391f08a795dab4da73f6fa8f7213";
 const SOURCE_RUN: &str =
-    "https://github.com/Strukturpiloten/docker-lens/actions/runs/37214738475/attempts/1";
+    "https://github.com/Strukturpiloten/docker-lens/actions/runs/37439627551/attempts/1";
 
 // This is the exact admission set for the currently compiled cohort. A later
 // reviewed cohort must explicitly replace the set for each lane; extending the
@@ -35,6 +36,8 @@ const REVIEWED_CAPABILITIES: &[Capability] = &[
     Capability::NetworkExternalReference,
     Capability::NetworkInternal,
     Capability::VolumeLabels,
+    Capability::ContainerUser,
+    Capability::ContainerWorkdir,
 ];
 const REVIEWED_SHAPES: &[NativeCapabilityShape] = &[
     NativeCapabilityShape::StandaloneCreate,
@@ -61,6 +64,8 @@ const REVIEWED_SHAPES: &[NativeCapabilityShape] = &[
     NativeCapabilityShape::ExternalNetworkReference,
     NativeCapabilityShape::InternalBridgeNetworkCreate,
     NativeCapabilityShape::VolumeCreateLabels,
+    NativeCapabilityShape::ContainerUser,
+    NativeCapabilityShape::ContainerWorkdir,
 ];
 
 fn expected_admission(
@@ -77,30 +82,30 @@ fn expected_admission(
 const RECORDS: [(NativeEvidenceLane, &str, &str); 4] = [
     (
         NativeEvidenceLane::Debian11Rootful,
-        "2306973726b1ecaeac9b26936cfe4df127a9f4927ae5f7bd41be99b528ee37fa",
+        "24313f10b84b8a3410906d5ad4721d3ef389ad2e09be5b59416929ef57e86b78",
         include_str!(
-            "../docs/evidence/reviewed/sha256/2306973726b1ecaeac9b26936cfe4df127a9f4927ae5f7bd41be99b528ee37fa.json"
+            "../docs/evidence/reviewed/sha256/24313f10b84b8a3410906d5ad4721d3ef389ad2e09be5b59416929ef57e86b78.json"
         ),
     ),
     (
         NativeEvidenceLane::Debian11Rootless,
-        "f471fc1f6998bfdebb130734a11c484ff7bb7e42a406805ab269bd482347eac4",
+        "c9800d722f1b505f5b1e5a54d9c60e68502fceaa0779f690c5504623ec473333",
         include_str!(
-            "../docs/evidence/reviewed/sha256/f471fc1f6998bfdebb130734a11c484ff7bb7e42a406805ab269bd482347eac4.json"
+            "../docs/evidence/reviewed/sha256/c9800d722f1b505f5b1e5a54d9c60e68502fceaa0779f690c5504623ec473333.json"
         ),
     ),
     (
         NativeEvidenceLane::UpstreamRootful,
-        "dd2dec14ce75c1dfb672f018a8ade98334783edcd964758da6b4a432d22429a0",
+        "b6cebf2f71be5992b112661650e37e69270d45f7d1b8e89843e843bded325020",
         include_str!(
-            "../docs/evidence/reviewed/sha256/dd2dec14ce75c1dfb672f018a8ade98334783edcd964758da6b4a432d22429a0.json"
+            "../docs/evidence/reviewed/sha256/b6cebf2f71be5992b112661650e37e69270d45f7d1b8e89843e843bded325020.json"
         ),
     ),
     (
         NativeEvidenceLane::UpstreamRootless,
-        "280839c9f4d6cfd1adda9f25bbf17fdfbb3fab162e91c346a614c31e1e318c44",
+        "81a1ee33c3a02d83fe6cd0f1683e1bb9b6c8774dc8aa192b2160c6ee44ba0943",
         include_str!(
-            "../docs/evidence/reviewed/sha256/280839c9f4d6cfd1adda9f25bbf17fdfbb3fab162e91c346a614c31e1e318c44.json"
+            "../docs/evidence/reviewed/sha256/81a1ee33c3a02d83fe6cd0f1683e1bb9b6c8774dc8aa192b2160c6ee44ba0943.json"
         ),
     ),
 ];
@@ -502,13 +507,21 @@ mod tests {
     }
 
     #[test]
-    fn rejects_partial_prerequisite_and_label_groups_and_unreviewed_network_labels() {
+    fn rejects_partial_prerequisite_label_and_identity_groups_and_unreviewed_network_labels() {
         for name in [
             "VolumeExternalReference",
             "NetworkExternalReference",
             "NetworkInternal",
             "VolumeLabels",
+            "ContainerUser",
+            "ContainerWorkdir",
         ] {
+            rejected(|value| {
+                value["capabilities"]
+                    .as_array_mut()
+                    .unwrap()
+                    .retain(|entry| entry["name"] != name);
+            });
             rejected(|value| {
                 let entry = value["capabilities"]
                     .as_array_mut()
@@ -525,7 +538,35 @@ mod tests {
                     .iter_mut()
                     .find(|entry| entry["name"] == name)
                     .unwrap();
+                let shape = entry["admitted_shapes"][0].clone();
+                entry["admitted_shapes"].as_array_mut().unwrap().push(shape);
+            });
+            rejected(|value| {
+                let entry = value["capabilities"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|entry| entry["name"] == name)
+                    .unwrap();
+                entry["state"] = "unavailable".into();
+            });
+            rejected(|value| {
+                let entry = value["capabilities"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|entry| entry["name"] == name)
+                    .unwrap();
                 entry["state"] = "unknown".into();
+            });
+            rejected(|value| {
+                let entry = value["capabilities"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|entry| entry["name"] == name)
+                    .unwrap();
+                entry["admitted_shapes"] = serde_json::json!(["StandaloneCreate"]);
             });
         }
         rejected(|value| {

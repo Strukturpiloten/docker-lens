@@ -68,6 +68,7 @@ printf 'native-bind-canary\n' > "$socket_dir/native-bind/canary"
 printf 'native-tcp-canary\n' > "$socket_dir/native-bind/index.html"
 chmod 0644 "$socket_dir/native-bind/canary" "$socket_dir/native-bind/index.html"
 chmod 0700 "$run_dir"
+mkdir -m 0700 "$run_dir/diagnostics"
 watchdog_pid=
 native_success_summary=
 preserve_run_dir=0
@@ -933,11 +934,53 @@ export NATIVE_VOLUME_PROBES_PATH="$run_dir/volume-probes.json"
 export NATIVE_VOLUME_LABEL_PROBES_PATH="$run_dir/volume-label-probes.json"
 export NATIVE_IDENTITY_PROBES_PATH="$run_dir/identity-probes.json"
 export NATIVE_PORT_PROBES_PATH="$run_dir/port-probes.json"
+export NATIVE_PORT_START_DIAGNOSTIC_PATH="$run_dir/diagnostics/port-start-window.json"
 export NATIVE_IDENTITY_CANDIDATE_SHA
 NATIVE_IDENTITY_CANDIDATE_SHA=$(git -C "$script_dir/.." rev-parse HEAD)
 [[ $NATIVE_IDENTITY_CANDIDATE_SHA =~ ^[0-9a-f]{40}$ ]] || { echo 'native identity requires exact candidate SHA' >&2; exit 1; }
 export NATIVE_PORT_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 if [[ $EUID == 0 ]]; then export NATIVE_PODMAN_USE_SUDO=0; else export NATIVE_PODMAN_USE_SUDO=1; fi
+
+port_start_failure_diagnostic() {
+  local remaining=$((1800 - SECONDS)) started ended ignored started_cs ended_cs result diagnostic_status=0
+  # sudo/PAM/NSS handoff cannot be bounded by a timeout started afterward.
+  # This optional observer therefore runs only with already-held root rights.
+  if (( EUID != 0 )); then
+    echo 'DOCKERLENS_NATIVE_PORT_START_LOG_DIAG: source=none category=unavailable collector=unavailable' >&2
+    return 0
+  fi
+  # Failure-only observation lives inside the existing active 30-minute
+  # budget. It is not a new parent cleanup reserve or a timeout extension.
+  if (( remaining < 5 )) || [[ -z $watchdog_pid ]] || ! kill -0 "$watchdog_pid" 2>/dev/null; then
+    echo 'DOCKERLENS_NATIVE_PORT_START_LOG_DIAG: source=none category=unavailable collector=budget' >&2
+    return 0
+  fi
+  read -r started ignored < /proc/uptime || return 0
+  [[ $started =~ ^[0-9]+\.[0-9]{2}$ ]] || return 0
+  started_cs=${started/./}
+  # Timeout and helper already share the root Podman client's privileges.
+  result=$(timeout --signal=TERM --kill-after=0.25s 3.5s \
+    python3 "$script_dir/native-port-start-diagnostic.py" \
+    "$run_dir" "$EUID" "$run_id" "$lane" "$NATIVE_PORT_CANDIDATE_SHA" \
+    "$port_invocation_us" "$started_cs" "$remaining" "$watchdog_pid" 2>/dev/null) || diagnostic_status=$?
+  read -r ended ignored < /proc/uptime || return 0
+  [[ $ended =~ ^[0-9]+\.[0-9]{2}$ ]] || return 0
+  ended_cs=${ended/./}
+  # BOOTTIME includes helper initialization and collection. Centisecond
+  # quantization is conservatively below four seconds at the final handoff.
+  if (( ended_cs < started_cs || ended_cs - started_cs >= 399 || SECONDS >= 1800 )) ||
+      ! kill -0 "$watchdog_pid" 2>/dev/null; then
+    echo 'DOCKERLENS_NATIVE_PORT_START_LOG_DIAG: source=none category=unavailable collector=timeout' >&2
+  elif (( diagnostic_status != 0 )); then
+    echo 'DOCKERLENS_NATIVE_PORT_START_LOG_DIAG: source=none category=unavailable collector=unavailable' >&2
+  elif [[ $result =~ ^DOCKERLENS_NATIVE_PORT_START_LOG_DIAG:\ source=(none|daemon|rootless_trace|mixed)\ category=(unavailable|unclassified|ambiguous|rootless_network|port_proxy|uidmap|permission|daemon_network|daemon_runtime)\ collector=(complete|window_unavailable|ownership_unverified|query_failed|output_limit|timeout|cancelled|budget|watchdog|unavailable)$ ]]; then
+    printf '%s\n' "$result" >&2
+  else
+    echo 'DOCKERLENS_NATIVE_PORT_START_LOG_DIAG: source=none category=unavailable collector=unavailable' >&2
+  fi
+  return 0
+}
+
 "$(dirname "$0")/run-exact-native-test.sh" native_capture live_engine_capture_decodes
 "$(dirname "$0")/run-exact-native-test.sh" acquisition live_read_only_acquisition_matches_oracle
 "$(dirname "$0")/run-exact-native-test.sh" native_selection live_native_selection_and_source_observations
@@ -948,7 +991,15 @@ if [[ $EUID == 0 ]]; then export NATIVE_PODMAN_USE_SUDO=0; else export NATIVE_PO
 "$(dirname "$0")/run-exact-native-test.sh" native_volume live_existing_volume_prerequisite_matches_engine
 "$(dirname "$0")/run-exact-native-test.sh" native_volume_label live_created_volume_labels_match_engine
 "$(dirname "$0")/run-exact-native-test.sh" native_identity live_container_process_identity_matches_engine
+port_invocation_us=${EPOCHREALTIME/./}
+port_status=0
+{
 "$(dirname "$0")/run-exact-native-test.sh" native_port live_port_publications_match_engine
+} || port_status=$?
+if (( port_status != 0 )); then
+  port_start_failure_diagnostic || true
+  exit "$port_status"
+fi
 
 if [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]; then
   candidate_sha=$(git -C "$script_dir/.." rev-parse HEAD)
