@@ -38,6 +38,14 @@ EXPECTED_RAW_SHAPES = {
     **SHAPES, "NetworkInternal": ["InternalBridgeNetworkCreate"],
     **PREREQUISITE_SHAPES,
 }
+EXPECTED_PORT_CAPABILITY_SHAPES = {
+    "PortHostIpv4": ["FixedIpv4HostPort", "EphemeralIpv4HostPort"],
+    "PortHostIpv6": ["FixedIpv6HostPort", "EphemeralIpv6HostPort"],
+    "PortMultipleBindings": ["MultipleFixedPortBindings", "MultipleEphemeralPortBindings"],
+    "PortExposeOnly": ["ExposedOnlyPort"],
+    "PortEphemeral": ["EphemeralHostPort"],
+}
+EXPECTED_FUTURE_RAW_SHAPES = {**EXPECTED_RAW_SHAPES, **EXPECTED_PORT_CAPABILITY_SHAPES}
 SOURCE_PROBES = [
     "DiscoveryMetadata", "ExactContainerId", "ExactContainerName",
     "LiteralNamePrefix", "ExactLabel", "ExplicitAllContainers",
@@ -314,9 +322,9 @@ class NativeEvidenceTests(unittest.TestCase):
         self.assertEqual(evidence["acquisition_api"], "1.49")
         self.assertEqual(evidence["rendering_api"], "1.52")
         self.assertEqual(evidence["runtime_components"], {"containerd": "2.3.5", "runc": "1.5.1"})
-        self.assertEqual(len(evidence["capability_outcome"]), 14)
+        self.assertEqual(len(evidence["capability_outcome"]), 19)
         self.assertEqual(set(evidence["capability_outcome"].values()), {"available"})
-        self.assertEqual(evidence["admitted_shapes"], EXPECTED_RAW_SHAPES)
+        self.assertEqual(evidence["admitted_shapes"], EXPECTED_FUTURE_RAW_SHAPES)
         self.assertEqual(evidence["source_probes"], SOURCE_PROBES)
         self.assertEqual(evidence["network_probes"], NETWORK_PROBES)
         self.assertEqual(evidence["capability_outcome"]["NetworkInternal"], "available")
@@ -416,8 +424,8 @@ class NativeEvidenceTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         evidence = json.loads(path.read_text(encoding="utf-8"))
         self.assertIn("DaemonResourceSupportOracle", evidence["source_probes"])
-        self.assertEqual(set(evidence["capability_outcome"]), set(EXPECTED_RAW_SHAPES))
-        self.assertEqual(evidence["admitted_shapes"], EXPECTED_RAW_SHAPES)
+        self.assertEqual(set(evidence["capability_outcome"]), set(EXPECTED_FUTURE_RAW_SHAPES))
+        self.assertEqual(evidence["admitted_shapes"], EXPECTED_FUTURE_RAW_SHAPES)
         self.assertNotIn("MemoryLimit", evidence["capability_outcome"])
         self.assertNotIn("SwapLimit", evidence["capability_outcome"])
         self.assertNotIn("DaemonResourceSupportOracle", (
@@ -446,9 +454,9 @@ class NativeEvidenceTests(unittest.TestCase):
                     self.assertEqual(record["engine_version"], release)
                     self.assertEqual(record["rendering_api"], api)
                     self.assertEqual(record["capability_outcome"], {
-                        capability: "available" for capability in EXPECTED_RAW_SHAPES
+                        capability: "available" for capability in EXPECTED_FUTURE_RAW_SHAPES
                     })
-                    self.assertEqual(record["admitted_shapes"], EXPECTED_RAW_SHAPES)
+                    self.assertEqual(record["admitted_shapes"], EXPECTED_FUTURE_RAW_SHAPES)
                     self.assertEqual(record["source_probes"], SOURCE_PROBES)
                     self.assertEqual(record["identity_probes"], IDENTITY_PROBES)
 

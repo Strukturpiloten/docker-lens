@@ -76,6 +76,13 @@ PORT_NEGATIVE_REASONS = frozenset((
     "nested_default_bridge_ipv6_unavailable",
     "nested_default_bridge_ipv6_runtime_binding_absent",
 ))
+PORT_CAPABILITY_SHAPES = {
+    "PortHostIpv4": ("FixedIpv4HostPort", "EphemeralIpv4HostPort"),
+    "PortHostIpv6": ("FixedIpv6HostPort", "EphemeralIpv6HostPort"),
+    "PortMultipleBindings": ("MultipleFixedPortBindings", "MultipleEphemeralPortBindings"),
+    "PortExposeOnly": ("ExposedOnlyPort",),
+    "PortEphemeral": ("EphemeralHostPort",),
+}
 
 
 def identity_object(pairs):
@@ -443,6 +450,14 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
     if parameterized_identity:
         proof_shapes.update({"ContainerUser": ["ContainerUser"],
                              "ContainerWorkdir": ["ContainerWorkdir"]})
+    # read_port_proof has already required all eight ordered, bound outcomes.
+    # Map only complete positive groups, matching NativeCapabilityShape::required_for.
+    # A prescribed Debian IPv6 boundary withholds that whole group, not the others.
+    observed_port_shapes = {entry["shape"] for entry in port_probes
+                            if entry["outcome"] == "observed"}
+    for capability, required in PORT_CAPABILITY_SHAPES.items():
+        if all(shape in observed_port_shapes for shape in required):
+            proof_shapes[capability] = list(required)
 
     record = {
         "schema_version": 1,

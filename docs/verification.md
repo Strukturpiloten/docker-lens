@@ -683,8 +683,33 @@ this eleventh ignored test by exact name before manifest emission, preserving
 the exact-one execution check and 180-second deadline. The emitter validates
 the private direct-child file, directory identity, owner/mode, stable bounded
 bytes, full context and complete outcomes before writing any lane manifest.
-Only ordered `port_probes` shape/outcome/reason entries survive sanitization;
-private run and cleanup context is stripped. Capability admission remains
+Ordered `port_probes` shape/outcome/reason entries survive sanitization;
+private run and cleanup context is stripped. Future raw manifests additionally
+map only these explicit complete positive groups after the bound port proof
+passes validation, matching `NativeCapabilityShape::required_for`:
+
+| Raw capability | Required observed port shapes |
+| --- | --- |
+| `PortHostIpv4` | `FixedIpv4HostPort`, `EphemeralIpv4HostPort` |
+| `PortHostIpv6` | `FixedIpv6HostPort`, `EphemeralIpv6HostPort` |
+| `PortMultipleBindings` | `MultipleFixedPortBindings`, `MultipleEphemeralPortBindings` |
+| `PortExposeOnly` | `ExposedOnlyPort` |
+| `PortEphemeral` | `EphemeralHostPort` |
+
+Either prescribed Debian negative for either IPv6 member withholds the entire
+`PortHostIpv6` group while retaining the other four complete positive groups.
+It does not label Docker IPv6 universally unsupported. Missing, duplicated,
+unknown, reordered or malformed proof still rejects the entire manifest;
+there is no partial-evidence fallback or generic probe-to-capability promotion.
+Legacy identity proof v1 adds no identity group: future raw output contains
+18/19 groups and 30/32 shapes without/with the complete IPv6 group. Complete
+parameterized identity proof v2 alone adds `ContainerUser`/`ContainerWorkdir`,
+giving 20/21 groups and 32/34 shapes. The baseline ten-group proof input,
+historical raw/reviewed JSON, schema root and sealed sixteen-group/twenty-six-
+shape catalogue remain unchanged. Tests cover both identity versions and all
+four exact lanes, complete groups, prescribed negatives, and fail-closed
+counterfactuals. These are source-evidence definitions, not reviewed admission.
+Capability admission remains
 separate and pending; neither an explicit boundary nor a missing file is a
 positive capability or IPv4-unavailable result. The shared deadline reserves cleanup time; unknown
 failures, untested/partial results, cancellation, uncertain mutation or cleanup
@@ -903,6 +928,17 @@ still own the unchanged five image references in `scripts/native-conformance.sh`
 and the unchanged toolchain and Action references; the new stdlib helper adds
 no operational pin, manager, extraction path, grouping or approval change.
 Genuine exact-candidate native evidence remains integrator-owned and pending.
+The #91 raw-port mapping has the same canonical consumer path: local execution,
+`check.yml` main push, `native-validation.yml` reviewed-PR dispatch and
+`release-validation.yml` all call `scripts/native-conformance.sh`, which invokes
+`scripts/native-evidence.py` only after the exact native tests pass. Lens products
+still have no BoxFerry dependency, and BoxFerry consumer gates remain separate.
+The changed Python mapping adds no operational pin or shared workflow definition;
+the existing Renovate native-image manager still owns the unchanged five
+tag/digest pairs in `scripts/native-conformance.sh`. Its extraction paths,
+grouping and approvals and the existing Cargo/toolchain/Action managers need no
+change. Fresh complete gates, exact-head four-lane native validation, independent
+evidence review and any required later consumer/admission work remain pending.
 Offline helper, emitter, harness and Rust controls do not establish native compatibility,
 BoxFerry application acceptance, #39 completion or a release. Historical
 evidence and all earlier worktrees remain unchanged.
