@@ -10,6 +10,7 @@ from pathlib import Path
 
 from native_identity_proof import CASES as IDENTITY_CASES, CONTRACT as IDENTITY_CONTRACT, validate_identity_v2
 from native_health_metadata_proof import CONTRACT as HEALTH_METADATA_CONTRACT, read_health_metadata_proof
+from native_network_attachment_proof import CONTRACT as NETWORK_ATTACHMENT_CONTRACT, read_network_attachment_proof
 
 
 CAPABILITIES = (
@@ -361,7 +362,7 @@ def read_port_proof(path: Path, capture_dir: Path, lane: str, engine: str,
     ]
 
 
-def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path: Path, volume_path: Path, volume_label_path: Path, identity_path: Path, port_path: Path, health_metadata_path: Path, capture_dir: Path, destination: Path, lane: str, image: str,
+def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path: Path, volume_path: Path, volume_label_path: Path, identity_path: Path, port_path: Path, health_metadata_path: Path, network_attachment_path: Path, capture_dir: Path, destination: Path, lane: str, image: str,
          mode: str, package: str, candidate_sha: str, run_id: str) -> None:
     if lane not in LANES or mode != lane.rsplit("-", 1)[1]:
         raise ValueError("invalid native lane or mode")
@@ -441,6 +442,23 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         candidate_sha, run_id, os.environ.get("NATIVE_FIXTURE_IMAGE", ""))
 
     network_probes = read_network_proof(network_path)
+    # Context is independently derived from admitted canonical harness facts,
+    # never read back from the private proof and then used as its own oracle.
+    network_context = {
+        "candidate_sha": candidate_sha, "run_id": run_id, "lane": lane,
+        "engine_release": engine, "rendering_api": maximum,
+        "acquisition_api": f"1.{selected}", "mode": mode,
+        "docker_package": package, "fixture_image": os.environ.get("NATIVE_FIXTURE_IMAGE", ""),
+        "outer": {
+            "id": os.environ.get("NATIVE_OUTER_CONTAINER_ID", ""),
+            "name": f"dl-native-{run_id}", "owner": run_id, "image": image,
+            "data_volume": f"dl-native-data-{run_id}", "socket_source": str(capture_dir / "socket"),
+            "privileged": True, "memory_bytes": 4294967296, "cpu_quota": 200000,
+            "cpu_period": 100000, "pids_limit": 512,
+        },
+    }
+    network_attachment_probes = list(read_network_attachment_proof(
+        network_attachment_path, capture_dir, network_context))
 
     # Only these closed mappings follow the complete, validated native proof
     # files above. They extend raw lane evidence, never the reviewed catalogue.
@@ -469,6 +487,13 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         "HealthShell": ["ShellHealthcheck"],
         "HealthStartPeriod": ["HealthStartPeriodZero", "HealthStartPeriodPositive"],
     })
+    # Only the complete four-shape context/effect/cleanup protocol grants these
+    # future raw groups. The historical 22 network markers grant no new group.
+    proof_shapes.update({
+        "NetworkLabels": ["NetworkCreateLabels"],
+        "NetworkAliases": ["NetworkPrimaryAliases", "NetworkSecondaryAliases"],
+        "NetworkMultipleAttachment": ["NetworkSecondaryConnect"],
+    })
 
     record = {
         "schema_version": 1,
@@ -496,6 +521,8 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         "port_probes": port_probes,
         "health_metadata_contract": HEALTH_METADATA_CONTRACT,
         "health_metadata_probes": health_metadata_probes,
+        "network_attachment_contract": NETWORK_ATTACHMENT_CONTRACT,
+        "network_attachment_probes": network_attachment_probes,
     }
     if parameterized_identity:
         record["identity_contract"] = IDENTITY_CONTRACT
@@ -505,11 +532,11 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 18:
-        raise SystemExit("usage: native-evidence.py VERSION_JSON SHAPES_JSON SOURCE_JSON NETWORK_JSON VOLUME_JSON VOLUME_LABEL_JSON IDENTITY_JSON PORT_JSON HEALTH_METADATA_JSON CAPTURE_DIR DESTINATION LANE IMAGE MODE PACKAGE SHA RUN_ID")
+    if len(sys.argv) != 19:
+        raise SystemExit("usage: native-evidence.py VERSION_JSON SHAPES_JSON SOURCE_JSON NETWORK_JSON VOLUME_JSON VOLUME_LABEL_JSON IDENTITY_JSON PORT_JSON HEALTH_METADATA_JSON NETWORK_ATTACHMENT_JSON CAPTURE_DIR DESTINATION LANE IMAGE MODE PACKAGE SHA RUN_ID")
     try:
         emit(Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]), Path(sys.argv[4]),
              Path(sys.argv[5]), Path(sys.argv[6]), Path(sys.argv[7]), Path(sys.argv[8]),
-             Path(sys.argv[9]), Path(sys.argv[10]), Path(sys.argv[11]), *sys.argv[12:])
+             Path(sys.argv[9]), Path(sys.argv[10]), Path(sys.argv[11]), Path(sys.argv[12]), *sys.argv[13:])
     except (ValueError, OSError, json.JSONDecodeError, RecursionError):
         raise SystemExit("native evidence rejected") from None

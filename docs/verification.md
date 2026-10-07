@@ -1,5 +1,48 @@
 # Verification
 
+## Mandatory network attachment source proof
+
+The canonical harness adds
+`native_network_attachment_tests::live_network_attachments_match_engine` after
+all twelve prior mandatory tests. The
+[network-attachments-v1 contract](native-network-attachment-contract.md)
+requires independently authored CLI/rendered roles, literal request ordering,
+primary-only membership before secondary connect, both networks' active maps,
+direct labels/aliases, network-scoped unique/shared singleton DNS answers and
+named/direct HTTP canaries. Both roles recheck running state and topology after
+effects. Five run-owned resources are cleaned before the other role starts;
+whole-test time/request/byte limits reserve cleanup capacity and require two
+verified ID/name absence rounds before exclusive private proof publication.
+
+Advertised/rendered API and actual acquisition request API remain distinct:
+upstream 1.56 versus 1.49, Debian 1.41 for both. The decoder and actual capture
+exchanges must agree with the exact acquisition expectation, not merely each
+other. The outer ID/image/owner/data-volume/socket and bounded setup are
+independently verified; the emitter derives its expected context from canonical
+harness facts rather than reading the proof back as its own oracle.
+
+Only a complete owner-private proof projects the fixed contract and four ordered
+source markers. Complete future raw groups are NetworkLabels, NetworkAliases
+(both primary/secondary), and NetworkMultipleAttachment. The old 22 network
+markers cannot replace the new effect/ownership/cleanup proof. No IPv6, IPAM,
+static address, options, NAT or additional internal/external group is promoted.
+With current parameterized identity, health and port proof, future raw counts
+are Debian 26 capabilities/40 shapes and upstream 27/42; counts alone are not
+evidence. Historical JSON, reviewed-record schema root, and sealed 16/26
+catalogue remain unchanged; later admission/consumer gates stay mandatory.
+
+Local/main/reviewed-PR/release native consumers share the same canonical harness.
+BoxFerry consumer/application acceptance remains separate, and other Lens
+products/website do not consume this Docker-only private protocol. No Lens
+depends on BoxFerry. No dependency, operational image/toolchain/Action pin or
+extraction path changes: the enabled Cargo manager and existing five-image,
+toolchain and Action managers retain unique ownership, grouping and approval
+rules. Historical evidence remains excluded from operational updates.
+
+The new producer remains unqualified until final complete gates, fresh exact-head
+native execution and authenticated independent review pass. No publication,
+deployment, platform/Swarm expansion or application acceptance is authorized.
+
 ## Mandatory health and metadata source proof
 
 The canonical native harness now additionally requires
