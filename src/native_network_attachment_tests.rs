@@ -48,6 +48,14 @@ const CANARY: &str = "network-attachments-canary";
 const SERVER: &str = "printf network-attachments-canary >/tmp/index.html; httpd -f -p 8080 -h /tmp";
 const PEER: &str = "sleep 160";
 const SPECIAL: &str = "Grüße \"quoted\" \\ path\nline";
+const OUTPUT_BUDGET: usize = 4 * 1024 * 1024;
+
+fn with_output_capacity<T>(used: usize, stream_cap: usize, start: impl FnOnce() -> T) -> Option<T> {
+    if stream_cap == 0 || used.checked_add(stream_cap.checked_mul(2)?)? > OUTPUT_BUDGET {
+        return None;
+    }
+    Some(start())
+}
 
 fn required(key: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| panic!("closed attachment harness input missing"))
@@ -314,8 +322,13 @@ impl Run {
         if input.is_some() {
             command.stdin(Stdio::piped());
         }
-        let mut child = command
-            .spawn()
+        let used = if cleanup {
+            self.cleanup_bytes
+        } else {
+            self.work_bytes
+        };
+        let mut child = with_output_capacity(used, cap, || command.spawn())
+            .unwrap_or_else(|| panic!("closed attachment output capacity"))
             .unwrap_or_else(|_| panic!("closed attachment command spawn"));
         if let Some(bytes) = input {
             child
@@ -342,13 +355,13 @@ impl Run {
         if cleanup {
             self.cleanup_bytes += retained;
             assert!(
-                self.cleanup_bytes <= 4 * 1024 * 1024,
+                self.cleanup_bytes <= OUTPUT_BUDGET,
                 "attachment cleanup byte budget"
             );
         } else {
             self.work_bytes += retained;
             assert!(
-                self.work_bytes <= 4 * 1024 * 1024,
+                self.work_bytes <= OUTPUT_BUDGET,
                 "attachment work byte budget"
             );
         }
@@ -1737,6 +1750,38 @@ fn attachment_literal_wire_is_independent_and_contains_only_requested_groups() {
     assert!(!actual.iter().any(|v| v["body"].get("IPAM").is_some()
         || v["body"].get("Options").is_some()
         || v["body"].get("EnableIPv6").is_some()));
+}
+
+#[test]
+fn attachment_output_capacity_refuses_before_io_and_preserves_cleanup() {
+    use std::cell::Cell;
+
+    let starts = Cell::new(0);
+    let start = || starts.set(starts.get() + 1);
+    let limit = 4 * 1024 * 1024;
+    for (used, cap) in [
+        (limit - 127, 64),
+        (limit - 1, 1),
+        (limit, 1),
+        (usize::MAX, 1),
+        (1, usize::MAX),
+        (limit + 1, 1),
+        (0, 0),
+    ] {
+        assert!(with_output_capacity(used, cap, start).is_none());
+        assert_eq!(starts.get(), 0);
+    }
+    assert!(with_output_capacity(limit - 128, 64, start).is_some());
+    assert_eq!(starts.get(), 1);
+    let work_used = limit;
+    let cleanup_used = 0;
+    assert!(with_output_capacity(work_used, 64, start).is_none());
+    assert_eq!(starts.get(), 1);
+    assert!(with_output_capacity(cleanup_used, 64 * 1024, start).is_some());
+    assert_eq!(starts.get(), 2);
+    assert_eq!((work_used, cleanup_used), (limit, 0));
+    assert!(with_output_capacity(limit - 131072, 65536, start).is_some());
+    assert_eq!(starts.get(), 3);
 }
 
 #[test]

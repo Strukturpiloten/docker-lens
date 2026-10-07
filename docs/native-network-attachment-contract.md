@@ -144,7 +144,11 @@ resources and five live resources this is 55 seconds: ownership/delete checks
 for the live resources, two ID/name absence rounds for every historical
 resource, and context/publication overhead. At most five resources are live at
 once. Work and cleanup have separate 200/160 command budgets and separate
-4-MiB retained-output budgets. Initial acquisition is conservatively charged
+4-MiB retained-output budgets. Before spawning a command, checked arithmetic
+requires room for both full per-stream output envelopes in its selected pool;
+exhausted work cannot consume cleanup capacity, and exhausted cleanup refuses
+before I/O. Boundary controls cover exact fit, one-byte shortfall, zero capacity,
+and arithmetic overflow. Initial acquisition is conservatively charged
 16 requests and 1 MiB, is bounded to ten seconds and its own read/expansion/
 response limits, and cannot consume the cleanup reserve.
 
