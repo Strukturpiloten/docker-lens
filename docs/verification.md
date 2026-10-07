@@ -753,8 +753,10 @@ Before the existing outer run, the caller exclusively pre-creates a no-follow,
 mode-0600 `diagnostics/daemon.log` and holds its original descriptor. Only the
 daemon outer container gets the explicit `k8s-file` driver, that exact path,
 and a 1-MiB maximum-size setting. The existing authorized setup privilege
-inspection also projects canonical ID, exact name, native-run label, observed
-image digest and log driver/path; its ID must equal the actual creation ID.
+inspection serializes the full object with `{{json .}}`, then reads canonical
+ID, exact name, native-run label, observed image digest and log driver/path;
+its ID must equal the actual creation ID. Mandatory `HostConfig.Privileged`
+boolean validation remains separate from optional log registration.
 The digest must equal the immutable digest in the expected image pin; normalized
 image display names never substitute for digest integrity. Successful local
 registration binds those facts to the original file's device/inode/UID/mode/link
@@ -809,6 +811,19 @@ with a different-owner mode-0640 file. The observer explicitly refuses that
 rotation behavior without reading the new file or changing permissions. These
 local observations do not establish hosted availability or universal Podman
 behavior; fresh hosted execution must establish whether a usable source exists.
+
+Run `37609069502` failed all four lanes before native tests because the setup
+Go template projected `.Id`, which hosted Podman 4.9 could not evaluate. That is
+a harness regression, not Docker compatibility evidence. The existing inspect
+query now serializes the complete JSON object rather than depending on Go field
+spellings; JSON's `Id` key still requires exact creation-ID matching. The offline
+fixture rejects the unsafe `.Id` projection and supplies a full JSON snapshot
+with normalized display name, exact digest and log configuration. Missing image
+digest metadata refuses optional registration while mandatory privilege checks
+and native assertions continue. This is authored fake coverage; hosted JSON
+image-digest availability and the changed harness remain unverified until a
+fresh exact-candidate run passes. No ImageID fallback or integrity relaxation
+is introduced.
 
 Run `37447905139` observed only a Debian 11 rootless timeout at this oracle's
 POST start, followed by responsive version GET and a timed-out same-object

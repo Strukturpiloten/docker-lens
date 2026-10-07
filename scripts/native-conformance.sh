@@ -585,8 +585,9 @@ daemon_ip=$(validated_outer_ipv4 daemon "$container") || exit 1
 [[ $sidecar_ip != "$daemon_ip" ]] || {
   sidecar_setup_failed address_collision
 }
-outer_setup=$("${podman_cmd[@]}" inspect --format \
-  '{"Id":{{json .Id}},"Name":{{json .Name}},"ImageDigest":{{json .ImageDigest}},"Config":{"Labels":{{json .Config.Labels}}},"HostConfig":{"Privileged":{{json .HostConfig.Privileged}},"LogConfig":{{json .HostConfig.LogConfig}}}}' "$container")
+# JSON tags are stable even when Podman's Go field uses another spelling.
+# Keep this one existing query; optional metadata must not break template setup.
+outer_setup=$("${podman_cmd[@]}" inspect --format '{{json .}}' "$container")
 privileged=$(printf '%s' "$outer_setup" | python3 -c 'import json,sys
 try:
     value = json.load(sys.stdin)["HostConfig"]["Privileged"]

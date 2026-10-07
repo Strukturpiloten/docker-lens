@@ -400,6 +400,8 @@ class NativePortStartDiagnosticTests(unittest.TestCase):
         wrapper = (ROOT / "scripts/run-exact-native-test.sh").read_text()
         emitter = (ROOT / "scripts/native-evidence.py").read_text()
         self.assertIn('--log-driver=k8s-file --log-opt "path=$run_dir/diagnostics/daemon.log" --log-opt max-size=1048576', harness)
+        self.assertIn("inspect --format '{{json .}}'", harness)
+        self.assertNotIn("{{json .Id}}", harness)
         self.assertNotIn("subprocess", helper)
         observer = self.shell_function()
         self.assertNotIn("sudo", observer)

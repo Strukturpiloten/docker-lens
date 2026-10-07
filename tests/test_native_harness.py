@@ -1771,7 +1771,12 @@ logs)
    echo 'private-canary' >&2
  fi ;;
  inspect)
- if [[ $* == *ImageDigest* && $* == *HostConfig.LogConfig* ]]; then
+ if [[ $* == *'{{json .Id}}'* ]]; then
+  echo 'template: inspect: cannot evaluate field Id in type interface{}' >&2
+  touch "$state/go-field-projection-rejected"
+  exit 42
+ fi
+ if [[ $* == *'{{json .}}'* ]]; then
   read -r name < "$state/expected-container"
   read -r log_path < "$state/daemon-log-path"
   read -r daemon_image < "$state/daemon-image"
@@ -1780,8 +1785,10 @@ logs)
   [[ $FAKE_NATIVE_FAULT != log_registration_id ]] || outer_id=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
   [[ $FAKE_NATIVE_FAULT != log_registration_digest ]] || image_digest=sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
   [[ $FAKE_NATIVE_FAULT != log_registration_path ]] || log_path=/foreign-private-path
-  printf '{"Id":"%s","Name":"%s","ImageDigest":"%s","Config":{"Labels":{"io.dockerlens.native-run":"%s"}},"HostConfig":{"Privileged":true,"LogConfig":{"Type":"k8s-file","Path":"%s"}}}\n' \
-    "$outer_id" "$name" "$image_digest" "${name#dl-native-}" "$log_path"
+  digest_json=$(printf '"%s"' "$image_digest")
+  [[ $FAKE_NATIVE_FAULT != log_registration_missing_digest ]] || digest_json=null
+  printf '{"Id":"%s","Name":"%s","ImageName":"normalized-display-name","ImageDigest":%s,"Config":{"Labels":{"io.dockerlens.native-run":"%s"}},"HostConfig":{"Privileged":true,"LogConfig":{"Type":"k8s-file","Path":"%s"}}}\n' \
+    "$outer_id" "$name" "$digest_json" "${name#dl-native-}" "$log_path"
  elif [[ $* == *Labels* ]]; then
  for name; do :; done
  if [[ $name == dl-native-egress-* && $FAKE_NATIVE_FAULT == sidecar_inspect_hang ]]; then sleep 30; fi
@@ -1862,6 +1869,8 @@ esac
             ("debian11-rootless", "log_registration_id"),
             ("debian11-rootless", "log_registration_digest"),
             ("debian11-rootless", "log_registration_path"),
+            ("debian11-rootless", "log_registration_missing_digest"),
+            ("upstream-rootful", "legacy_podman_json"),
             ("upstream-rootful", "unexpected_mount"),
             ("upstream-rootless", "run"),
             ("debian11-rootful", "container_query_error"),
@@ -1926,10 +1935,11 @@ esac
                     if fault == "sidecar_inspect_hang":
                         self.assertLess(time.monotonic() - started, 18)
                 self.assertNotEqual(result.returncode, 0)
-                if fault in ("unexpected_mount", "log_registration_id", "log_registration_digest", "log_registration_path"):
+                if fault in ("unexpected_mount", "legacy_podman_json", "log_registration_id", "log_registration_digest", "log_registration_missing_digest", "log_registration_path"):
                     observed = json.loads((state / "registration-observed.json").read_text())
-                    self.assertEqual(observed["status"], "registered" if fault == "unexpected_mount" else "prepared")
+                    self.assertEqual(observed["status"], "registered" if fault in ("unexpected_mount", "legacy_podman_json") else "prepared")
                     self.assertIn("outer container has unexpected image or data-root volumes", result.stderr)
+                    self.assertFalse((state / "go-field-projection-rejected").exists())
                 self.assertEqual((state / "volume").exists(), fault in ("volume_remains", "volume_inspect_partial"))
                 self.assertEqual((state / "container").exists(), fault in ("container_remains", "container_inspect_partial"))
                 self.assertEqual((state / "sidecar").exists(), fault in ("sidecar_remains", "sidecar_inspect_partial", "sidecar_inspect_hang"))
