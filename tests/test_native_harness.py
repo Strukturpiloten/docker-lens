@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class NativeHarnessTests(unittest.TestCase):
-    def test_identity_is_independent_tenth_mandatory_check_before_manifest(self) -> None:
+    def test_port_publication_is_independent_eleventh_mandatory_check_before_manifest(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         invocations = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$',
                                  source, re.MULTILINE)
@@ -31,10 +31,13 @@ class NativeHarnessTests(unittest.TestCase):
             ("native_volume", "live_existing_volume_prerequisite_matches_engine"),
             ("native_volume_label", "live_created_volume_labels_match_engine"),
             ("native_identity", "live_container_process_identity_matches_engine"),
+            ("native_port", "live_port_publications_match_engine"),
         ])
-        self.assertLess(source.index('native_identity live_container_process_identity_matches_engine'),
+        self.assertLess(source.index('native_port live_port_publications_match_engine'),
                         source.index('python3 "$script_dir/native-evidence.py"'))
         self.assertIn('export NATIVE_IDENTITY_PROBES_PATH="$run_dir/identity-probes.json"', source)
+        self.assertIn('export NATIVE_PORT_PROBES_PATH="$run_dir/port-probes.json"', source)
+        self.assertIn('export NATIVE_PORT_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA', source)
 
     def test_identity_source_requires_pid1_owned_id_cleanup_and_positive_absence(self) -> None:
         source = (ROOT / "src/native_identity_tests.rs").read_text()
@@ -1724,6 +1727,8 @@ case "$command" in
  prior=
  for item in "$@"; do
  if [[ $prior == --name ]]; then name=$item; fi
+ if [[ $item == path=* ]]; then log_path=${item#path=}; fi
+ if [[ $item == *@sha256:* ]]; then daemon_image=$item; fi
  prior=$item
  done
  if [[ $name == dl-native-egress-* ]]; then
@@ -1739,6 +1744,10 @@ case "$command" in
    printf '%s\n' "$name" > "$state/expected-container"
    touch "$state/ran" "$state/container"
    [[ $FAKE_NATIVE_FAULT == run ]] && exit 42
+   printf '%s\n' "$log_path" > "$state/daemon-log-path"
+   printf '%s\n' "$daemon_image" > "$state/daemon-image"
+   printf '1970-01-01T00:00:00.000000000Z stdout F private-startup-canary\n' >> "$log_path"
+   printf '%s\n' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
  fi
  exit 0 ;;
 logs)
@@ -1762,7 +1771,25 @@ logs)
    echo 'private-canary' >&2
  fi ;;
  inspect)
- if [[ $* == *Labels* ]]; then
+ if [[ $* == *'{{json .Id}}'* ]]; then
+  echo 'template: inspect: cannot evaluate field Id in type interface{}' >&2
+  touch "$state/go-field-projection-rejected"
+  exit 42
+ fi
+ if [[ $* == *'{{json .}}'* ]]; then
+  read -r name < "$state/expected-container"
+  read -r log_path < "$state/daemon-log-path"
+  read -r daemon_image < "$state/daemon-image"
+  outer_id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  image_digest=${daemon_image##*@}
+  [[ $FAKE_NATIVE_FAULT != log_registration_id ]] || outer_id=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+  [[ $FAKE_NATIVE_FAULT != log_registration_digest ]] || image_digest=sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+  [[ $FAKE_NATIVE_FAULT != log_registration_path ]] || log_path=/foreign-private-path
+  digest_json=$(printf '"%s"' "$image_digest")
+  [[ $FAKE_NATIVE_FAULT != log_registration_missing_digest ]] || digest_json=null
+  printf '{"Id":"%s","Name":"%s","ImageName":"normalized-display-name","ImageDigest":%s,"Config":{"Labels":{"io.dockerlens.native-run":"%s"}},"HostConfig":{"Privileged":true,"LogConfig":{"Type":"k8s-file","Path":"%s"}}}\n' \
+    "$outer_id" "$name" "$digest_json" "${name#dl-native-}" "$log_path"
+ elif [[ $* == *Labels* ]]; then
  for name; do :; done
  if [[ $name == dl-native-egress-* && $FAKE_NATIVE_FAULT == sidecar_inspect_hang ]]; then sleep 30; fi
  echo "$name" | sed -e 's/^dl-native-egress-//' -e 's/^dl-native-//'
@@ -1794,7 +1821,10 @@ logs)
    echo 'bind: address already in use private-canary'
  fi
  elif [[ $* == *HostConfig.Privileged* ]]; then echo true
-    elif [[ $* == *'.Mounts'* ]]; then echo unexpected:/var/lib/docker
+    elif [[ $* == *'.Mounts'* ]]; then
+      read -r log_path < "$state/daemon-log-path"
+      cp "${log_path%/*}/port-log-registration.json" "$state/registration-observed.json"
+      echo unexpected:/var/lib/docker
  else exit 4; fi ;;
  exec)
  touch "$state/health-attempted"
@@ -1836,6 +1866,11 @@ esac
             ("debian11-rootful", "cancel_after_sidecar"),
             ("debian11-rootful", "run"),
             ("debian11-rootless", "unexpected_mount"),
+            ("debian11-rootless", "log_registration_id"),
+            ("debian11-rootless", "log_registration_digest"),
+            ("debian11-rootless", "log_registration_path"),
+            ("debian11-rootless", "log_registration_missing_digest"),
+            ("upstream-rootful", "legacy_podman_json"),
             ("upstream-rootful", "unexpected_mount"),
             ("upstream-rootless", "run"),
             ("debian11-rootful", "container_query_error"),
@@ -1900,6 +1935,11 @@ esac
                     if fault == "sidecar_inspect_hang":
                         self.assertLess(time.monotonic() - started, 18)
                 self.assertNotEqual(result.returncode, 0)
+                if fault in ("unexpected_mount", "legacy_podman_json", "log_registration_id", "log_registration_digest", "log_registration_missing_digest", "log_registration_path"):
+                    observed = json.loads((state / "registration-observed.json").read_text())
+                    self.assertEqual(observed["status"], "registered" if fault in ("unexpected_mount", "legacy_podman_json") else "prepared")
+                    self.assertIn("outer container has unexpected image or data-root volumes", result.stderr)
+                    self.assertFalse((state / "go-field-projection-rejected").exists())
                 self.assertEqual((state / "volume").exists(), fault in ("volume_remains", "volume_inspect_partial"))
                 self.assertEqual((state / "container").exists(), fault in ("container_remains", "container_inspect_partial"))
                 self.assertEqual((state / "sidecar").exists(), fault in ("sidecar_remains", "sidecar_inspect_partial", "sidecar_inspect_hang"))
@@ -2400,6 +2440,354 @@ fi
             self.assertEqual(len(calls), 2)
             self.assertTrue(all("--lib" in call and "--test" not in call for call in calls))
             self.assertIn(f"--ignored --exact {selected}", calls[1])
+
+    def test_native_port_uses_private_library_test_by_exact_name(self) -> None:
+        selected = "native_port_tests::live_port_publications_match_engine"
+        for listed, expected_success in ((0, False), (1, True), (2, False)):
+            with self.subTest(listed=listed), tempfile.TemporaryDirectory() as directory:
+                bin_dir = Path(directory)
+                self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+printf '%s\\n' "$*" >> "$FAKE_NATIVE_INVOCATIONS"
+if [[ $* == *--list* ]]; then
+  for ((i=0; i<FAKE_NATIVE_LISTED; i++)); do
+    echo 'native_port_tests::live_port_publications_match_engine: test'
+  done
+else
+  echo 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;'
+fi
+""")
+                invocation = bin_dir / "invocations"
+                env = os.environ.copy()
+                env.update(PATH=f"{bin_dir}:{env['PATH']}",
+                           FAKE_NATIVE_INVOCATIONS=str(invocation),
+                           FAKE_NATIVE_LISTED=str(listed))
+                result = subprocess.run(
+                    [str(ROOT / "scripts/run-exact-native-test.sh"), "native_port",
+                     "live_port_publications_match_engine"],
+                    env=env, capture_output=True, text=True, timeout=15, check=False,
+                )
+                self.assertEqual(result.returncode == 0, expected_success)
+                calls = invocation.read_text().splitlines()
+                self.assertEqual(len(calls), 2 if expected_success else 1)
+                self.assertTrue(all("--lib" in call and "--test" not in call for call in calls))
+                if expected_success:
+                    self.assertIn(f"--ignored --exact {selected}", calls[1])
+
+    def test_native_port_failure_markers_are_closed(self) -> None:
+        selected = "native_port_tests::live_port_publications_match_engine"
+        for marker, accepted in (("port_fixed_ipv4_oracle_cli_create", True),
+                                 ("port_context", True),
+                                 ("container_port_fixed_ipv4_oracle_cli_create", False),
+                                 ("port_private_canary", False)):
+            with self.subTest(marker=marker), tempfile.TemporaryDirectory() as directory:
+                bin_dir = Path(directory)
+                self._tool(bin_dir, "cargo", f"""#!/usr/bin/env bash
+set -eu
+if [[ $* == *--list* ]]; then
+  echo '{selected}: test'
+else
+  echo 'DOCKERLENS_NATIVE_CHECK: {marker}'
+  echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;'
+  exit 101
+fi
+""")
+                env = os.environ.copy()
+                env["PATH"] = f"{bin_dir}:{env['PATH']}"
+                result = subprocess.run(
+                    [str(ROOT / "scripts/run-exact-native-test.sh"), "native_port",
+                     "live_port_publications_match_engine"],
+                    env=env, capture_output=True, text=True, timeout=15, check=False,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual((f"DOCKERLENS_NATIVE_CHECK: {marker}" in result.stderr), accepted)
+
+    def _port_wrapper(self, output: str, status: int = 101, target: str = "native_port") -> subprocess.CompletedProcess[str]:
+        test_name = "live_port_publications_match_engine"
+        selected = f"{target}_tests::{test_name}"
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            self._tool(bin_dir, "cargo", """#!/usr/bin/env bash
+set -eu
+printf '%s\\n' "$*" >> "$FAKE_NATIVE_INVOCATIONS"
+if [[ $* == *--list* ]]; then
+  printf '%s: test\\n' "$FAKE_NATIVE_SELECTED"
+else
+  printf '%s\\n' "$FAKE_NATIVE_OUTPUT"
+  exit "$FAKE_NATIVE_STATUS"
+fi
+""")
+            invocation = bin_dir / "invocations"
+            env = os.environ.copy()
+            env.update(PATH=f"{bin_dir}:{env['PATH']}", FAKE_NATIVE_INVOCATIONS=str(invocation),
+                       FAKE_NATIVE_SELECTED=selected, FAKE_NATIVE_OUTPUT=output,
+                       FAKE_NATIVE_STATUS=str(status))
+            result = subprocess.run([str(ROOT / "scripts/run-exact-native-test.sh"), target, test_name],
+                                    env=env, capture_output=True, text=True, timeout=15, check=False)
+            calls = invocation.read_text().splitlines()
+            self.assertEqual(len(calls), 2)
+            self.assertIn(f"--ignored --exact {selected}", calls[1])
+            return result
+
+    def test_port_failure_preserves_pre_cleanup_stage_and_first_selected_panic(self) -> None:
+        selected = "native_port_tests::live_port_publications_match_engine"
+        for suffix in ("", " (123)"):
+            for cleanup_outcome in ("pass", "fail", "panic"):
+                with self.subTest(suffix=suffix, cleanup_outcome=cleanup_outcome):
+                    result = self._port_wrapper("\n".join([
+                        "DOCKERLENS_NATIVE_CHECK: port_fixed_ipv6_oracle_tcp6_boundary",
+                        "DOCKERLENS_NATIVE_API_DIAG: transport=timeout",
+                        "thread 'protected-secret' panicked at src/native_port_tests.rs:1:2:",
+                        f"thread '{selected}'{suffix} panicked at src/native_port_tests.rs:205:9:",
+                        "protected-secret compared runtime values",
+                        "DOCKERLENS_NATIVE_CHECK: port_cleanup",
+                        "DOCKERLENS_NATIVE_API_DIAG: transport=other",
+                        f"DOCKERLENS_NATIVE_PORT_CLEANUP_DIAG: attempt=primary outcome={cleanup_outcome} reserve=low mutation=clear",
+                        f"thread '{selected}' panicked at src/native_port_tests.rs:2883:5:",
+                        "DOCKERLENS_NATIVE_CHECK: port_fixed_ipv4_rendered_cli_http",
+                        "DOCKERLENS_NATIVE_PORT_CLEANUP_DIAG: attempt=drop outcome=panic reserve=exhausted mutation=uncertain",
+                        "DOCKERLENS_NATIVE_CHECK: port_cleanup_unverified",
+                        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 130 filtered out;",
+                    ]))
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn("DOCKERLENS_NATIVE_CHECK: port_fixed_ipv6_oracle_tcp6_boundary", result.stderr)
+                    self.assertIn("DOCKERLENS_NATIVE_CHECK: port_cleanup_unverified", result.stderr)
+                    self.assertIn("DOCKERLENS_NATIVE_PANIC: source=native_port_tests line=205 column=9", result.stderr)
+                    self.assertNotIn("line=2883", result.stderr)
+                    self.assertNotIn("line=1 column=2", result.stderr)
+                    self.assertNotIn("port_fixed_ipv4_rendered_cli_http", result.stderr)
+                    self.assertNotIn("protected-secret", result.stdout + result.stderr)
+                    self.assertIn(f"attempt=primary outcome={cleanup_outcome}", result.stderr)
+                    self.assertIn("attempt=drop outcome=panic", result.stderr)
+                    self.assertIn("DOCKERLENS_NATIVE_API_DIAG: transport=timeout", result.stderr)
+                    self.assertNotIn("DOCKERLENS_NATIVE_API_DIAG: transport=other", result.stderr)
+
+    def test_port_diagnostic_families_are_closed_and_target_scoped(self) -> None:
+        valid = [
+            "DOCKERLENS_NATIVE_API_DIAG: transport=timeout",
+            "DOCKERLENS_NATIVE_PORT_API_DIAG: action=start phase=probe exit=curl_timeout",
+            "DOCKERLENS_NATIVE_PORT_API_DIAG: action=inspect_name phase=cleanup exit=outer_timeout",
+            "DOCKERLENS_NATIVE_PORT_START_DIAG: outcome=observed version=responsive object=timeout identity=unknown state=unknown primary=unknown secondary=unknown allocation_relation=unknown mutation=uncertain",
+            "DOCKERLENS_NATIVE_API_DIAG: operation=start status=server",
+            "DOCKERLENS_NATIVE_HTTP_DIAG: exit=other category=connection_refused",
+            "DOCKERLENS_NATIVE_CLI_DIAG: exit=timeout stderr=permission",
+            "DOCKERLENS_NATIVE_NAMESPACE_DIAG: category=identity",
+            "DOCKERLENS_NATIVE_IPV6_DIAG: local_service=pass inner_all=disabled inner_lo=disabled outer_tcp6=available curl_exit=7",
+            "DOCKERLENS_NATIVE_IPV6_BOUNDARY_DIAG: result=refused",
+            "DOCKERLENS_NATIVE_ISOLATION_DIAG: result=other",
+            "DOCKERLENS_NATIVE_PORT_BINDINGS_DIAG: key=array count=two ipv4=one ipv6=zero other=one v4_port=nonzero v6_port=absent",
+            "DOCKERLENS_NATIVE_PORT_CLEANUP_DIAG: attempt=primary outcome=fail reserve=low mutation=clear",
+            "DOCKERLENS_NATIVE_PORT_CLEANUP_DIAG: attempt=drop outcome=panic reserve=exhausted mutation=uncertain",
+        ]
+        summary = "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 130 filtered out;"
+        result = self._port_wrapper("\n".join(valid + [summary]))
+        self.assertEqual(result.returncode, 1)
+        for line in valid:
+            self.assertEqual(result.stderr.splitlines().count(line), 1)
+        non_port = self._port_wrapper("\n".join(valid + [summary]), target="native_identity")
+        for line in valid:
+            self.assertNotIn(line, non_port.stderr)
+        malformed = []
+        for line in valid:
+            malformed.extend((line + " protected-secret", "protected-secret " + line,
+                              line + "\r", line.replace("=", "=protected-secret", 1)))
+            # Replace every individual enum independently, including bounded
+            # numerical HTTP categories. A known field cannot rescue an unknown.
+            for field in line.split()[1:]:
+                key, value = field.split("=", 1)
+                malformed.extend((line.replace(field, f"{key}=unknown_enum", 1),
+                                  line.replace(field, f"{key}=protected\nsecret", 1)))
+        rejected = self._port_wrapper("\n".join(malformed + [summary]))
+        self.assertEqual(rejected.returncode, 1)
+        self.assertNotIn("_DIAG:", rejected.stderr)
+        self.assertNotIn("protected", rejected.stdout + rejected.stderr)
+        self.assertNotIn("unknown_enum", rejected.stderr)
+
+    def test_port_start_followup_observations_never_replace_failure_or_reveal_values(self) -> None:
+        selected = "native_port_tests::live_port_publications_match_engine"
+        observations = [
+            "outcome=observed version=responsive object=timeout identity=unknown state=unknown primary=unknown secondary=unknown allocation_relation=unknown mutation=uncertain",
+            "outcome=observed version=timeout object=timeout identity=unknown state=unknown primary=unknown secondary=unknown allocation_relation=unknown mutation=uncertain",
+            "outcome=observed version=responsive object=responsive identity=same state=running primary=one secondary=one allocation_relation=same mutation=uncertain",
+            "outcome=observed version=responsive object=responsive identity=same state=running primary=one secondary=one allocation_relation=different mutation=uncertain",
+            "outcome=observed version=responsive object=responsive identity=mismatch state=unknown primary=unknown secondary=unknown allocation_relation=unknown mutation=uncertain",
+            "outcome=skipped version=unknown object=unknown identity=unknown state=unknown primary=unknown secondary=unknown allocation_relation=unknown mutation=uncertain",
+        ]
+        for observation in observations:
+            with self.subTest(observation=observation):
+                result = self._port_wrapper("\n".join([
+                    "DOCKERLENS_NATIVE_CHECK: port_repeated_dynamic_ipv4_oracle_oracle_start",
+                    "DOCKERLENS_NATIVE_API_DIAG: transport=timeout",
+                    "DOCKERLENS_NATIVE_PORT_API_DIAG: action=start phase=probe exit=curl_timeout",
+                    "DOCKERLENS_NATIVE_PORT_DIAGNOSTIC_SCOPE: begin",
+                    f"thread '{selected}' panicked at src/native_port_tests.rs:505:9:",
+                    "private-native-ID protected-secret 32000",
+                    "DOCKERLENS_NATIVE_PORT_DIAGNOSTIC_SCOPE: end",
+                    f"DOCKERLENS_NATIVE_PORT_START_DIAG: {observation}",
+                    f"thread '{selected}' panicked at src/native_port_tests.rs:415:9:",
+                    "DOCKERLENS_NATIVE_CHECK: port_cleanup",
+                    "DOCKERLENS_NATIVE_PORT_API_DIAG: action=delete phase=cleanup exit=outer_timeout",
+                    "DOCKERLENS_NATIVE_CHECK: port_cleanup_unverified",
+                    "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 130 filtered out;",
+                ]))
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("line=415 column=9", result.stderr)
+                self.assertNotIn("line=505", result.stderr)
+                self.assertIn(f"DOCKERLENS_NATIVE_PORT_START_DIAG: {observation}", result.stderr)
+                self.assertIn("action=start phase=probe exit=curl_timeout", result.stderr)
+                self.assertIn("action=delete phase=cleanup exit=outer_timeout", result.stderr)
+                for secret in ("private-native-ID", "protected-secret", "32000"):
+                    self.assertNotIn(secret, result.stdout + result.stderr)
+
+    def test_port_start_allocation_relation_requires_exact_finite_field(self) -> None:
+        prefix = ("DOCKERLENS_NATIVE_PORT_START_DIAG: outcome=observed version=responsive "
+                  "object=responsive identity=same state=created primary=one secondary=one ")
+        summary = "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 130 filtered out;"
+        for relation in ("same", "different", "unknown"):
+            line = f"{prefix}allocation_relation={relation} mutation=uncertain"
+            result = self._port_wrapper("\n".join([line, summary]))
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.stderr.splitlines().count(line), 1)
+        invalid = [
+            prefix + "mutation=uncertain",
+            prefix + "allocation_relation=32000 mutation=uncertain",
+            prefix + "allocation_relation=protected-secret mutation=uncertain",
+            prefix + "allocation_relation=unknown_enum mutation=uncertain",
+            prefix + "allocation_relation=same allocation_relation=different mutation=uncertain",
+            prefix + "allocation_relation=same mutation=uncertain protected-secret",
+            prefix + "allocation_relation=same mutation=uncertain\r",
+            prefix + "allocation_relation=same extra=protected-secret mutation=uncertain",
+        ]
+        result = self._port_wrapper("\n".join(invalid + [summary]))
+        self.assertEqual(result.returncode, 1)
+        self.assertNotIn("DOCKERLENS_NATIVE_PORT_START_DIAG", result.stderr)
+        for secret in ("32000", "protected-secret", "unknown_enum"):
+            self.assertNotIn(secret, result.stdout + result.stderr)
+
+    def test_port_start_followup_reuses_only_test_scoped_canonical_gets(self) -> None:
+        source = (ROOT / "src/native_port_tests.rs").read_text()
+        failure = source.split('let output = self.capture(&mut command, input.as_deref(), 131080);', 1)[1].split('let split = output', 1)[0]
+        self.assertIn('if !cleanup && method == "POST" && start', failure)
+        self.assertIn('self.name("multi-dynamic-oracle")', failure)
+        self.assertIn('path == format!("{prefix}/containers/{id}/start")', failure)
+        self.assertLess(failure.index('DIAGNOSTIC_SCOPE: begin'), failure.index('self.repeated_start_diagnostics('))
+        self.assertLess(failure.index('self.repeated_start_diagnostics('), failure.index('DIAGNOSTIC_SCOPE: end'))
+        followup = source.split('fn repeated_start_diagnostics(', 1)[1].split('fn api(', 1)[0]
+        self.assertIn('self.known_id(id) != Some(name)', followup)
+        self.assertLess(followup.index('start_diagnostic_budget('), followup.index('ReadRequest::DaemonVersion'))
+        self.assertEqual(followup.count('ReadRequest::DaemonVersion'), 1)
+        self.assertEqual(followup.count('ReadRequest::InspectContainer('), 1)
+        for forbidden in ('self.capture(', 'self.api(', 'self.cleanup(', 'Command::new(',
+                          'uncertain_mutation.set', 'thread::spawn', 'ReadRequest::List',
+                          'self.calls.set', 'self.bytes.set'):
+            self.assertNotIn(forbidden, followup)
+        canonical = (ROOT / 'src/acquisition.rs').read_text()
+        seam = canonical.split('pub(crate) fn diagnostic_get(', 1)[1].split('fn exchange', 1)[0]
+        self.assertIn('diagnostic_request_allowed(request, api)', seam)
+        self.assertEqual(seam.count('http_get('), 1)
+        self.assertIn('remaining(budget.started, limit, cancelled)?', seam)
+        self.assertNotIn('acquire(', seam)
+        self.assertIn('#[cfg(test)]\npub(crate) fn diagnostic_get', canonical)
+
+    def test_port_panic_projection_excludes_caught_ipv6_followups(self) -> None:
+        selected = "native_port_tests::live_port_publications_match_engine"
+        begin = "DOCKERLENS_NATIVE_PORT_DIAGNOSTIC_SCOPE: begin"
+        end = "DOCKERLENS_NATIVE_PORT_DIAGNOSTIC_SCOPE: end"
+        optional = f"thread '{selected}' panicked at src/native_port_tests.rs:1054:9:"
+        primary = f"thread '{selected}' panicked at src/native_port_tests.rs:1080:9:"
+        for count in (1, 2):
+            with self.subTest(scopes=count):
+                events = ["DOCKERLENS_NATIVE_CHECK: port_fixed_ipv6_rendered_cli_http",
+                          "DOCKERLENS_NATIVE_HTTP_DIAG: exit=other category=no_route"]
+                for _ in range(count):
+                    events.extend([begin, optional, "protected-secret compared values", end])
+                events.extend([primary, "DOCKERLENS_NATIVE_CHECK: port_cleanup",
+                               f"thread '{selected}' panicked at src/native_port_tests.rs:3000:5:",
+                               "DOCKERLENS_NATIVE_CHECK: port_cleanup_unverified"])
+                result = self._port_wrapper("\n".join(events))
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("DOCKERLENS_NATIVE_PANIC: source=native_port_tests line=1080 column=9", result.stderr)
+                self.assertNotIn("line=1054", result.stderr)
+                self.assertNotIn("line=3000", result.stderr)
+                self.assertIn("DOCKERLENS_NATIVE_HTTP_DIAG: exit=other category=no_route", result.stderr)
+                self.assertNotIn("DIAGNOSTIC_SCOPE", result.stdout + result.stderr)
+                self.assertNotIn("PORT_SCOPE_DIAG", result.stderr)
+                self.assertNotIn("protected-secret", result.stdout + result.stderr)
+        # A timed-out stream with only caught follow-up panics has no eligible
+        # source site even when its observed scope happened to finish.
+        timeout = self._port_wrapper("\n".join([begin, optional, end]), status=124)
+        self.assertEqual(timeout.returncode, 1)
+        self.assertIn("failed (exit 124)", timeout.stderr)
+        self.assertNotIn("DOCKERLENS_NATIVE_PANIC:", timeout.stderr)
+        source = (ROOT / "src/native_port_tests.rs").read_text()
+        invocation = source.split('if let Some((id, local_ipv6)) = local_ipv6 {', 1)[1].split(
+            'panic!("closed published endpoint HTTP assertion failed")', 1)[0]
+        self.assertLess(invocation.index(begin), invocation.index("best_effort_ipv6_diagnostics("))
+        self.assertLess(invocation.index("best_effort_ipv6_diagnostics("), invocation.index(end))
+        helper = source.split("fn best_effort_ipv6_diagnostics(", 1)[1].split("#[test]", 1)[0]
+        self.assertNotIn("DIAGNOSTIC_SCOPE", helper)
+
+    def test_port_panic_projection_invalid_scope_suppresses_all_sites(self) -> None:
+        selected = "native_port_tests::live_port_publications_match_engine"
+        begin = "DOCKERLENS_NATIVE_PORT_DIAGNOSTIC_SCOPE: begin"
+        end = "DOCKERLENS_NATIVE_PORT_DIAGNOSTIC_SCOPE: end"
+        optional = f"thread '{selected}' panicked at src/native_port_tests.rs:1054:9:"
+        primary = f"thread '{selected}' panicked at src/native_port_tests.rs:1080:9:"
+        malformed = [
+            [begin, begin, optional, end, end, primary],
+            [end, primary],
+            [begin, optional, primary],
+            [begin, optional, end + " protected-secret", primary],
+            [begin, "DOCKERLENS_NATIVE_PORT_DIAGNOSTIC_SCOPE: unknown_enum", end, primary],
+            [begin, "DOCKERLENS_NATIVE_PORT_DIAGNOSTIC_SCOPE: be\ngin", end, primary],
+            [primary, begin, optional],
+            [primary, end],
+            [primary, " " + begin, end],
+            [primary, begin + " protected-secret", end],
+            [primary, begin + "\r", end],
+        ]
+        for index, events in enumerate(malformed):
+            for status in (101, 124):
+                with self.subTest(case=index, status=status):
+                    result = self._port_wrapper("\n".join(events), status=status)
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn(f"failed (exit {status})", result.stderr)
+                    self.assertIn("DOCKERLENS_NATIVE_PORT_SCOPE_DIAG: state=invalid", result.stderr)
+                    self.assertNotIn("DOCKERLENS_NATIVE_PANIC:", result.stderr)
+                    self.assertNotIn("DIAGNOSTIC_SCOPE", result.stdout + result.stderr)
+                    self.assertNotIn("unknown_enum", result.stderr)
+                    self.assertNotIn("protected-secret", result.stdout + result.stderr)
+
+    def test_port_panic_projection_rejects_other_sources_and_injected_locations(self) -> None:
+        selected = "native_port_tests::live_port_publications_match_engine"
+        invalid = [
+            f"thread '{selected}' panicked at src/native_identity_tests.rs:205:9:",
+            f"thread '{selected}' panicked at /protected-secret/src/native_port_tests.rs:205:9:",
+            f"thread '{selected}' panicked at src/native_port_tests.rs:1234567:9:",
+            f"thread '{selected}' panicked at src/native_port_tests.rs:205:12345:",
+            f"thread '{selected}' panicked at src/native_port_tests.rs:205:9: protected-secret",
+            f"thread '{selected}' panicked at src/native_port_tests.rs:205:protected-secret:",
+            "thread 'other_test' panicked at src/native_port_tests.rs:205:9:",
+        ]
+        result = self._port_wrapper("\n".join(invalid))
+        self.assertEqual(result.returncode, 1)
+        self.assertNotIn("DOCKERLENS_NATIVE_PANIC:", result.stderr)
+        self.assertNotIn("protected-secret", result.stdout + result.stderr)
+
+    def test_port_diagnostics_never_turn_failure_timeout_or_zero_tests_into_success(self) -> None:
+        diagnostic = "DOCKERLENS_NATIVE_API_DIAG: transport=timeout"
+        for status, passed, failed, success in ((0, 1, 0, True), (0, 0, 0, False),
+                                               (0, 2, 0, False), (101, 1, 0, False),
+                                               (124, 0, 1, False), (137, 0, 1, False)):
+            with self.subTest(status=status, passed=passed, failed=failed):
+                summary = f"test result: {'ok' if failed == 0 else 'FAILED'}. {passed} passed; {failed} failed; 0 ignored; 0 measured; 130 filtered out;"
+                result = self._port_wrapper(f"{diagnostic}\n{summary}", status=status)
+                self.assertEqual(result.returncode == 0, success)
+                if status != 0:
+                    self.assertIn(f"failed (exit {status})", result.stderr)
+                    self.assertIn(diagnostic, result.stderr)
+                else:
+                    self.assertNotIn(diagnostic, result.stdout + result.stderr)
 
     @staticmethod
     def _tool(directory: Path, name: str, content: str) -> None:

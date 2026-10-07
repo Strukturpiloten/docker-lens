@@ -629,6 +629,284 @@ image/fixture pins remain in `scripts/native-conformance.sh`, with unchanged
 Renovate ownership, extraction paths, grouping and approvals; no dependency,
 downloaded tool, or operational definition is added or moved.
 
+## Ports-only native proof preparation (#39)
+
+`native_port_tests::live_port_publications_match_engine` is a new ignored,
+test-only extraction of the repository-authored `7345ea3` port assertions, not
+the unrelated broad container-settings suite. Separate IPv4, fixed IPv6,
+ephemeral IPv6 and repeated-ephemeral functions retain all eight port markers,
+independent CLI creates, literal request comparisons, ordinary sealed planning,
+configured/runtime inspections, TCP and UDP canaries, and exact kernel-refusal
+loopback isolation. UDP controls exercise both oracle and rendered fixtures.
+Each completed fixture now uses the existing exact-ID ownership-checked removal
+before the next independent fixture is created: fixed IPv4 and fixed IPv6
+rendered fixtures close at the end of their assertions, while dynamic IPv6 and
+repeated-ephemeral IPv4 close the oracle after capturing its independent outcome
+or both host-address traffic probes, then close the rendered fixture after its
+own checks. Both bindings within a repeated-binding fixture remain simultaneous.
+Deletion still revalidates canonical ID, name, run label and image, requires
+direct ID/name 404 readbacks, and leaves the created ledger intact for the final
+two absence rounds. Failed assertions unwind to cleanup; they never delete early
+and continue. Pure fake-Engine trace controls exercise this same removal path,
+assertions-before-delete, failure interruption and idempotent absence checks.
+These fixture-isolation definitions preserve all eight shapes, TCP/UDP,
+exposed-only and namespace checks and existing budgets; they are not native
+qualification or permission to retry, force allocations or admit a boundary.
+Context uses genuine bounded acquisition/decode scope, direct and CLI Engine
+facts, and exactly one inner dockerd's effective UID; an environment assertion
+alone is not mode, version or capability evidence. The reused outer-namespace
+helper retains immutable outer identity and its held namespace FD. Before
+identity publication or namespace entry, that exact FD's kernel device/inode
+must differ from the helper's host/self network namespace. A name, label or
+bridge intent is not a substitute; unavailable/equal identities fail closed.
+The approved first-option `curl -q` keeps default client configuration disabled.
+
+The initial `NATIVE_PORT_PROBES_PATH` contract is a fresh, exclusive,
+owner-private regular file directly under validated `NATIVE_CAPTURE_DIR`.
+Its bounded schema-1 `dockerlens-native-port-probes` record binds candidate,
+lane, actual `engine_release`, rendering API and mode, plus the private exact
+run token and `cleanup: absent`. Its nested schema-1 `probes` contains ordered
+`positive` and `expected_negative` collections whose mutually exclusive union
+is exactly all eight shapes. Only fixed/ephemeral IPv6 in the two exact Debian
+lanes may retain the existing independently controlled
+`nested_default_bridge_ipv6_unavailable` or
+`nested_default_bridge_ipv6_runtime_binding_absent` reasons. These are observed
+boundaries, not passes or availability claims; upstream negatives, unknown
+reasons, duplicates, missing shapes and overlaps reject the entire proof.
+Independent IPv4, repeated-binding, exposed-only and ephemeral positives remain
+positive without promoting the negative IPv6 group. Every other requested group
+still needs every required shape positive before capability admission.
+
+The file is written only after all actual assertions and ID/name/label-verified
+cleanup with genuine name/ID absence readbacks. The canonical runner requires
+this eleventh ignored test by exact name before manifest emission, preserving
+the exact-one execution check and 180-second deadline. The emitter validates
+the private direct-child file, directory identity, owner/mode, stable bounded
+bytes, full context and complete outcomes before writing any lane manifest.
+Only ordered `port_probes` shape/outcome/reason entries survive sanitization;
+private run and cleanup context is stripped. Capability admission remains
+separate and pending; neither an explicit boundary nor a missing file is a
+positive capability or IPv4-unavailable result. The shared deadline reserves cleanup time; unknown
+failures, untested/partial results, cancellation, uncertain mutation or cleanup
+cannot publish a proof. Rootless low-port, missing-capability and API-floor checks are
+pure pre-I/O boundaries, not native reachability evidence.
+
+On a failed port invocation, the exact-test wrapper preserves the last closed
+port progress stage before cleanup separately from the cleanup/unverified marker.
+It projects the first selected-thread panic outside the optional IPv6 follow-up
+scope from the port test's fixed source basename to bounded numeric line/column
+only. Constant internal begin/end markers bracket the existing caught follow-up
+checks; their panics cannot replace the subsequent HTTP assertion's location.
+The projection waits for the complete scope stream: nested, unmatched,
+malformed or unfinished scopes suppress every source site and report only a
+fixed invalid-scope diagnostic. A later wrapper or Drop panic cannot replace
+the first eligible location. This location and the pre-cleanup stage narrow the
+failure; retained diagnostic families are observations, not universal root-cause
+claims. Strict full-line finite grammars retain at most one
+diagnostic per API transport/status, CLI, HTTP, namespace, IPv6 state/boundary,
+isolation and runtime-binding family. Unknown fields/enums, raw values, secret
+suffixes and other test targets cannot pass this port diagnostic boundary.
+Primary and Drop cleanup attempts separately report only `pass`, `fail` or
+`panic`, remaining reserve (`exhausted`: at most one whole second; `low`: two
+through forty; `reserved`: more than forty), and mutation `clear`/`uncertain`.
+These are observations after each existing cleanup attempt, not new allocations,
+retries, evidence or proof of remaining resources. Deadlines, exact ownership,
+repeated genuine absence checks, assertion outcomes and admission stay unchanged;
+raw test, controller and runtime output remains private.
+
+Failed API diagnostics separately retain the first closed action/phase/exit for
+probe and cleanup, distinguishing curl's request timeout from the outer command
+timeout and signals without printing a route, ID or response. Only a transport
+failure starting the exact registered repeated-ephemeral IPv4 CLI oracle enables
+an optional version GET and that same immutable ID's inspect GET. This uses a
+test-only guarded seam into the existing acquisition transport, not subprocess
+capture or another HTTP client; product acquisition behavior is unchanged.
+The two reads share one monotonic window of at most four seconds, each clipped
+to at most two seconds and the remaining original deadline before its forty-second
+cleanup reserve. Insufficient time reserve skips the observations without new
+I/O. The original 512-command/8-MiB retained-output counters are untouched on
+every diagnostic path; this failure-only allowance separately admits at most
+two GETs and charges a conservative whole-wire bound before each read. That
+bound derives from the canonical 16-KiB header/body and 64-byte chunk-line caps,
+bounded trailers and the longest 163-byte allowed request. The aggregate
+envelope is the original budgets plus this separate two-read allowance,
+not a claim that every budget is unchanged. This avoids spending cleanup
+counter space: its conservative known-resource byte envelope would not fit in
+the original 8 MiB even without diagnostics. Canonical framing, cancellation and terminal
+time checks cover complete framing and JSON classification; no child, drain,
+kill-grace or reap budget is introduced. An optional caught panic stays inside
+the same closed diagnostic scope and cannot replace the original failed API
+assertion. Only fixed responsiveness, exact identity, container state and
+primary/secondary allocation cardinalities and `allocation_relation` are emitted.
+That relation is `same` or `different` only when the already-read, owned
+`8085/tcp` response has exactly two bindings: one canonical nonzero decimal
+allocation for each of `127.0.0.1` and `127.0.0.2`. Missing, malformed, foreign-address or
+duplicate or zero-padded entries retain `unknown`; no further I/O or time allowance
+is added.
+This compares observed numerical allocations, not effective RootlessKit/proxy
+behavior or the cause of a failed start. A foreign or partial
+identity cannot authorize further observations; malformed/late results remain
+unknown. The same numerical port on different host addresses is valid and is
+never rejected by this diagnostic. No readback clears mutation uncertainty,
+retries start/delete, changes existing timeouts/assertions, creates an unsupported
+outcome or permits a proof after the original failure.
+
+The independently reviewed, nonqualifying isolated CLI reproduction recorded
+in [#83's observation](https://github.com/Strukturpiloten/docker-lens/issues/83#issuecomment-6037955983)
+completed one repeated-ephemeral IPv4 START in 16,919 ms on Debian 11 rootless
+Engine 20.10.5 / API 1.41. The container ran with two different numerical host
+allocations and RootlessKit 0.14.2's builtin driver listed two rows. Private logs
+contained the fixed `Timed out proxy starting` marker and no address-in-use
+marker. This is one fresh-daemon diagnostic observation, not the full native
+sequence, capability evidence or a universal cause. Reviewed exact Debian
+`libnetwork/portmapper/proxy.go` source has a 16-second docker-proxy readiness
+timeout/recovery path that can outlive the prior eight-second client cutoff.
+RootlessKit v0.14.2's reviewed wrapper source supports investigation of an
+allocation/reservation collision, but that explanation remains a hypothesis.
+No oracle source is copied or translated into the implementation.
+
+Only non-cleanup POST START requests for the exact registered canonical IDs and
+names of `multi-dynamic-oracle` and `multi-dynamic-rendered` get curl/outer
+ceilings of 24/26 seconds, and only after the independently verified
+`debian11-rootless` context records matching rootless capture facts, API 1.41
+and exact Engine 20.10.5 release text. The context's already accepted
+`20.10.5+dfsg1` spelling requires that same exact spelling in the captured facts;
+lane/environment declarations alone cannot enable the allowance. Other methods,
+fixtures, profiles and cleanup retain eight/ten-second ceilings. Both extended
+limits are clipped to the remaining original 180-second deadline, preserving
+forty seconds for cleanup, the existing one-second KILL grace, and a further
+one-second setup/reporting margin. Full 24/26 limits require 68 whole seconds
+remaining; at 45 seconds the clipped limits are 1/3, and less time submits no
+request. Curl remains two seconds below its outer timer. Limits are recomputed
+after optional private record publication before request I/O.
+
+All eight shape outcomes, traffic and exact assertions, command/byte caps,
+original 180-second deadline, existing four-second two-GET follow-up and separate
+four-second parent observer remain mandatory and unchanged. There is no START
+retry, unsupported reclassification, capability/catalogue or pin change. The
+private diagnostic window accepts at most 27 seconds only for its already
+authenticated Debian rootless / API 1.41 oracle phase and exact name; every
+other lane retains eleven seconds. Overlong, mismatched, future, reversed or
+stale windows still fail closed under the same cutoff. Fresh complete gates,
+independent review and all exact-final-candidate native lanes remain pending
+before qualification of this timeout correction.
+
+Only that same registered canonical repeated-ephemeral IPv4 CLI oracle's
+non-cleanup POST start can also create a best-effort private start-window
+record. `NATIVE_PORT_START_DIAGNOSTIC_PATH` is a mode-0600, single-link direct
+child of the separate mode-0700 `$run_dir/diagnostics` directory, outside the
+direct native proof inputs. The closed record binds run, lane, exact candidate,
+immutable outer ID and name, created ID and name, API, phase, and the original
+180-second cutoff. It starts immediately before capture and is finalized only
+on that original curl/command timeout, recording the actual POST failure end.
+Failure to publish or finalize leaves the optional observation unavailable;
+it cannot affect the original request, assertions, eight port shapes, existing
+four-second two-GET follow-up, forty-second inner cleanup reserve, or proof.
+
+Before the existing outer run, the caller exclusively pre-creates a no-follow,
+mode-0600 `diagnostics/daemon.log` and holds its original descriptor. Only the
+daemon outer container gets the explicit `k8s-file` driver, that exact path,
+and a 1-MiB maximum-size setting. The existing authorized setup privilege
+inspection serializes the full object with `{{json .}}`, then reads canonical
+ID, exact name, native-run label, observed image digest and log driver/path;
+its ID must equal the actual creation ID. Mandatory `HostConfig.Privileged`
+boolean validation remains separate from optional log registration.
+The digest must equal the immutable digest in the expected image pin; normalized
+image display names never substitute for digest integrity. Successful local
+registration binds those facts to the original file's device/inode/UID/mode/link
+count and a nonempty bounded startup-prefix digest in a separate private record.
+Missing or mismatched facts leave the optional observation unavailable.
+
+The parent captures only the final exact port wrapper's status. On failure,
+before outer EXIT cleanup, the stdlib-only helper reads only the held local file,
+in either caller mode, with no sudo, Podman, daemon query or privilege handoff.
+Registration must match the exact Rust POST window's immutable outer identity
+and run/lane context. Both private records reject missing/pending/stale inputs,
+duplicate keys, unknown fields, oversized files, symlinks, owner/mode/link
+mismatches, path/file drift, future timestamps and reversed windows. The file
+snapshot has a 64-KiB total log-input cap, independent of the 1-MiB storage cap:
+larger logs are unavailable rather than tail-sampled as complete. Original
+descriptor and named-path metadata, prefix, and stable before/after metadata
+must all match. Replacement/rotation, ownership changes, truncation/prefix drift,
+concurrent writes, malformed timestamps and incomplete CRI records fail closed.
+The observer never reads a replacement file or repairs its permissions.
+
+Only complete timestamped CRI stdout/stderr records inside the actual start
+through actual POST failure end enter classification. More than 80 eligible
+records yields closed unavailability rather than silently dropping an early
+failure; startup, post-failure and cleanup records are excluded.
+Rootless trace lines are classified rather than discarded; only fixed `source`,
+`category` and `collector` enums leave the boundary. No raw messages, traces, IDs,
+ports, timestamps, runtime errors or diagnostic files enter manifests or evidence
+archives. Categories identify observations for investigation, not attributed causes.
+
+This separate failure-only observation has at most four seconds inside the
+remaining existing parent 30-minute active budget, including helper
+initialization, private record validation, file collection, classification and
+TERM/KILL/reap. The parent conservatively requires five remaining whole seconds,
+checks the existing watchdog, and uses Linux BOOTTIME readings before collection
+and before accepting output; the helper checks BOOTTIME and a shared monotonic
+deadline. The 3.5-second TERM timeout and 0.25-second KILL fallback share the
+file reader's caller privileges, including ordinary non-root hosted invocations.
+Normal native harness sudo behavior and workflow privileges remain unchanged.
+Late, cancelled,
+nonzero, oversized or
+incomplete results remain uncertainty and cannot turn the original failure into
+a pass. The original wrapper status is retained even if diagnostics fail, and
+outer EXIT cleanup still runs. No parent budget is reset or extended. The hosted
+35-minute timeout supplies no promised five-minute cleanup reserve: the existing
+parent watchdog has no aggregate protected cleanup reserve, and SIGKILL or host
+failure can still prevent cleanup or any diagnostic.
+
+A bounded local Podman 6.0.2 probe preserved a caller-owned mode-0600 file's
+inode for small `k8s-file` stdout/stderr and confirmed the configured driver/path
+and immutable image digest. A 64-KiB overflow probe instead replaced the inode
+with a different-owner mode-0640 file. The observer explicitly refuses that
+rotation behavior without reading the new file or changing permissions. These
+local observations do not establish hosted availability or universal Podman
+behavior; fresh hosted execution must establish whether a usable source exists.
+
+Run `37609069502` failed all four lanes before native tests because the setup
+Go template projected `.Id`, which hosted Podman 4.9 could not evaluate. That is
+a harness regression, not Docker compatibility evidence. The existing inspect
+query now serializes the complete JSON object rather than depending on Go field
+spellings; JSON's `Id` key still requires exact creation-ID matching. The offline
+fixture rejects the unsafe `.Id` projection and supplies a full JSON snapshot
+with normalized display name, exact digest and log configuration. Missing image
+digest metadata refuses optional registration while mandatory privilege checks
+and native assertions continue. This is authored fake coverage; hosted JSON
+image-digest availability and the changed harness remain unverified until a
+fresh exact-candidate run passes. No ImageID fallback or integrity relaxation
+is introduced.
+
+Run `37447905139` observed only a Debian 11 rootless timeout at this oracle's
+POST start, followed by responsive version GET and a timed-out same-object
+inspect. State, bindings and cleanup remained uncertain. That observation does
+not establish a cause, an unsupported boundary, or positive native evidence;
+fresh exact-candidate passing lanes and independent review remain required.
+
+Run `37625002155` again failed only Debian 11 rootless at the repeated-ephemeral
+oracle's existing 24-second POST-start limit; the other three lanes passed.
+This retained failure does not identify a cause or qualify the changed
+fixture-isolation candidate. Fresh exact-candidate passing lanes and independent
+review remain required; no product capability, pin or catalogue record changes.
+
+The existing main, reviewed-PR native dispatcher and Release validation workflows
+all consume `scripts/native-conformance.sh`; that canonical definition now
+requires the port proof in every exact lane. No new workflow, dependency,
+downloaded tool, image/version/digest pin, extraction path or manager is added
+or moved. Existing native script pins retain their Renovate ownership, grouping
+and approvals; historical records and catalogue admission stay unchanged.
+The failed-start helper is a DockerLens-only consumer of the canonical native
+harness; it introduces no BoxFerry dependency. Verified Renovate manager paths
+still own the unchanged five image references in `scripts/native-conformance.sh`
+and the unchanged toolchain and Action references; the new stdlib helper adds
+no operational pin, manager, extraction path, grouping or approval change.
+Genuine exact-candidate native evidence remains integrator-owned and pending.
+Offline helper, emitter, harness and Rust controls do not establish native compatibility,
+BoxFerry application acceptance, #39 completion or a release. Historical
+evidence and all earlier worktrees remain unchanged.
+
 ## Reviewed target-profile records
 
 The #89 candidate catalogue selects four reviewed records from native run

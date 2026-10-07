@@ -76,6 +76,25 @@ IDENTITY_PROBES = [
     "ContainerUser", "ContainerWorkdir", "ContainerNumericUidGid",
     "ContainerProcessWorkingDirectory", "ContainerIdentityOwnershipCleanup",
 ]
+PORT_SHAPES = [
+    "FixedIpv4HostPort", "EphemeralIpv4HostPort", "FixedIpv6HostPort",
+    "EphemeralIpv6HostPort", "MultipleFixedPortBindings",
+    "MultipleEphemeralPortBindings", "ExposedOnlyPort", "EphemeralHostPort",
+]
+PORT_PROBES = {
+    "schema_version": 1,
+    "positive": PORT_SHAPES,
+    "expected_negative": [],
+}
+
+
+def port_proof(lane: str, mode: str, api: str, sha: str, engine: str) -> dict:
+    return {
+        "schema_version": 1, "kind": "dockerlens-native-port-probes",
+        "candidate_sha": sha, "lane": lane, "engine_release": engine,
+        "rendering_api": api, "daemon_mode": mode, "run_id": RUN_ID,
+        "cleanup": "absent", "probes": PORT_PROBES,
+    }
 
 
 def identity_proof(lane: str, mode: str, api: str, sha: str) -> dict:
@@ -102,14 +121,21 @@ class NativeEvidenceTests(unittest.TestCase):
                          IDENTITY_PROBES)
         self.assertFalse(defs["identity_probes"]["items"])
         self.assertFalse(defs["native_identity_proof"]["additionalProperties"])
+        self.assertEqual([item["allOf"][1]["properties"]["shape"]["const"]
+                          for item in defs["port_probes"]["prefixItems"]], PORT_SHAPES)
+        self.assertFalse(defs["port_probes"]["items"])
+        self.assertFalse(defs["native_port_probe_proof"]["additionalProperties"])
         self.assertNotIn("identity_probes", schema["properties"])
         self.assertNotIn("identity_probes", schema["required"])
         self.assertEqual(set(defs), {"api_version", "identity_probes",
                                      "identity_container_proof", "native_identity_proof",
-                                     "identity_container_v2", "identity_case_v2", "native_identity_proof_v2"})
+                                     "identity_container_v2", "identity_case_v2", "native_identity_proof_v2",
+                                     "port_shape", "port_probe_entry", "port_probes",
+                                     "native_port_probe_proof"})
         unchanged = copy.deepcopy(schema)
         for name in ("identity_probes", "identity_container_proof", "native_identity_proof",
-                     "identity_container_v2", "identity_case_v2", "native_identity_proof_v2"):
+                     "identity_container_v2", "identity_case_v2", "native_identity_proof_v2",
+                     "port_shape", "port_probe_entry", "port_probes", "native_port_probe_proof"):
             del unchanged["$defs"][name]
         # Canonical reviewed-record contract from the #74 clean base 946abb3;
         # adding disconnected definitions cannot rewrite historical admission.
@@ -193,8 +219,8 @@ class NativeEvidenceTests(unittest.TestCase):
                     proof.write_text(invalid[failure])
                 command = ["python3", str(SCRIPT), *[str(root / name) for name in
                            ("version.json", "shapes.json", "source.json", "network.json",
-                            "volume.json", "volume-label.json", "identity.json")],
-                           str(destination), "upstream-rootful", IMAGE, "rootful", "", SHA, RUN_ID]
+                            "volume.json", "volume-label.json", "identity.json", "port-probes.json")],
+                           str(root), str(destination), "upstream-rootful", IMAGE, "rootful", "", SHA, RUN_ID]
                 rejected = subprocess.run(command, capture_output=True, text=True,
                                           timeout=5, check=False)
                 self.assertNotEqual(rejected.returncode, 0)
@@ -235,7 +261,9 @@ class NativeEvidenceTests(unittest.TestCase):
                  network_probes: object = None,
                  volume_probes: object = None,
                  volume_label_probes: object = None,
-                 identity: object = None) -> tuple[subprocess.CompletedProcess[str], Path]:
+                 identity: object = None,
+                 port_probes: object = None,
+                 port_proof_override: object = None) -> tuple[subprocess.CompletedProcess[str], Path]:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
@@ -246,6 +274,7 @@ class NativeEvidenceTests(unittest.TestCase):
         volume_path = root / "volume.json"
         volume_label_path = root / "volume-label.json"
         identity_path = root / "identity.json"
+        port_path = root / "port-probes.json"
         destination = root / "out" / f"{lane}.json"
         version_path.write_text(json.dumps(version), encoding="utf-8")
         shapes_path.write_text(json.dumps(SHAPES if shapes is None else shapes), encoding="utf-8")
@@ -256,10 +285,17 @@ class NativeEvidenceTests(unittest.TestCase):
         identity_path.write_text(json.dumps(identity_proof(lane, mode, version.get("ApiVersion"), sha)
                                             if identity is None else identity), encoding="utf-8")
         identity_path.chmod(0o600)
+        proof = port_proof(lane, mode, version.get("ApiVersion"), sha, version.get("Version"))
+        if port_probes is not None:
+            proof["probes"] = port_probes
+        if port_proof_override is not None:
+            proof = port_proof_override
+        port_path.write_text(json.dumps(proof), encoding="utf-8")
+        port_path.chmod(0o600)
         result = subprocess.run(
             ["python3", str(SCRIPT), str(version_path), str(shapes_path), str(source_path),
-             str(network_path), str(volume_path), str(volume_label_path), str(identity_path), str(destination),
-             lane, image, mode, package, sha, RUN_ID],
+             str(network_path), str(volume_path), str(volume_label_path), str(identity_path),
+             str(port_path), str(root), str(destination), lane, image, mode, package, sha, RUN_ID],
             capture_output=True, text=True, check=False,
         )
         return result, destination
@@ -289,6 +325,9 @@ class NativeEvidenceTests(unittest.TestCase):
         self.assertEqual(evidence["volume_probes"], VOLUME_PROBES)
         self.assertEqual(evidence["volume_label_probes"], VOLUME_LABEL_PROBES)
         self.assertEqual(evidence["identity_probes"], IDENTITY_PROBES)
+        self.assertEqual(evidence["port_probes"], [
+            {"shape": shape, "outcome": "observed"} for shape in PORT_SHAPES
+        ])
         for private in (RUN_ID, "c" * 64, "d" * 64, "dl-identity-"):
             self.assertNotIn(private, path.read_text(encoding="utf-8"))
         self.assertNotIn("protected-secret", path.read_text(encoding="utf-8"))
@@ -461,7 +500,8 @@ class NativeEvidenceTests(unittest.TestCase):
                     command = ["python3", str(SCRIPT), str(root / "version.json"),
                                str(root / "shapes.json"), str(root / "source.json"),
                                str(root / "network.json"), str(root / "volume.json"),
-                               str(root / "volume-label.json"), str(root / "identity.json"), str(destination),
+                               str(root / "volume-label.json"), str(root / "identity.json"),
+                               str(root / "port-probes.json"), str(root), str(destination),
                                "upstream-rootful", IMAGE, "rootful", "", SHA, RUN_ID]
                     rejected = subprocess.run(command, capture_output=True, text=True, check=False)
                     self.assertNotEqual(rejected.returncode, 0)
@@ -512,7 +552,8 @@ class NativeEvidenceTests(unittest.TestCase):
         probe_path = root / "network.json"
         command = ["python3", str(SCRIPT), str(root / "version.json"), str(root / "shapes.json"),
                    str(root / "source.json"), str(probe_path), str(root / "volume.json"),
-                   str(root / "volume-label.json"), str(root / "identity.json"), str(destination),
+                   str(root / "volume-label.json"), str(root / "identity.json"),
+                   str(root / "port-probes.json"), str(root), str(destination),
                    "upstream-rootful", IMAGE, "rootful", "", SHA, RUN_ID]
         destination.unlink()
         probe_path.write_bytes(b"[" + b"x" * 4096 + b"]")
@@ -548,6 +589,134 @@ class NativeEvidenceTests(unittest.TestCase):
                 self.assertNotEqual(wrong_mode.returncode, 0)
                 self.assertFalse(absent.exists())
 
+    def test_port_publication_outcomes_are_complete_closed_and_non_admitting(self) -> None:
+        upstream = {"Version": "29.8.1", "ApiVersion": "1.56", "MinAPIVersion": "1.44"}
+        positive = [shape for shape in PORT_SHAPES if shape not in
+                    ("FixedIpv6HostPort", "EphemeralIpv6HostPort")]
+        negative = [
+            {"shape": "FixedIpv6HostPort", "reason": "nested_default_bridge_ipv6_unavailable"},
+            {"shape": "EphemeralIpv6HostPort", "reason": "nested_default_bridge_ipv6_runtime_binding_absent"},
+        ]
+        probes = {"schema_version": 1, "positive": positive, "expected_negative": negative}
+        image = "ghcr.io/strukturpiloten/docker-debian-11-rootful:v1.0.0@sha256:" + "c" * 64
+        version = {"Version": "20.10.5+dfsg1", "ApiVersion": "1.41", "MinAPIVersion": "1.12"}
+        result, path = self.run_emit(version, lane="debian11-rootful", mode="rootful",
+                                     image=image, package="20.10.5+dfsg1-1+deb11u2",
+                                     port_probes=probes)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        record = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(record["port_probes"], [
+            {"shape": shape, "outcome": (
+                "expected_negative" if shape in ("FixedIpv6HostPort", "EphemeralIpv6HostPort")
+                else "observed"), **({"reason": negative[0 if shape == "FixedIpv6HostPort" else 1]["reason"]}
+                                     if shape in ("FixedIpv6HostPort", "EphemeralIpv6HostPort") else {})}
+            for shape in PORT_SHAPES
+        ])
+        self.assertEqual(record["capability_outcome"]["PortPublish"], "available")
+        self.assertEqual(record["admitted_shapes"]["PortPublish"], ["FixedTcpPort", "FixedUdpPort"])
+        serialized = path.read_text(encoding="utf-8")
+        self.assertNotIn(RUN_ID, serialized)
+
+        bad = [
+            {"schema_version": 1, "positive": positive[:-1], "expected_negative": negative},
+            {"schema_version": 1, "positive": [*positive, positive[0]], "expected_negative": negative},
+            {"schema_version": 1, "positive": PORT_SHAPES, "expected_negative": negative},
+            {"schema_version": 1, "positive": positive, "expected_negative": [*negative, negative[0]]},
+            {"schema_version": 1, "positive": positive[::-1], "expected_negative": negative},
+            {"schema_version": 1, "positive": [*positive, "private-canary"], "expected_negative": negative},
+            {"schema_version": 1, "positive": [s for s in PORT_SHAPES if s != "FixedIpv6HostPort"],
+             "expected_negative": [dict(negative[0], reason="private-canary"), negative[1]]},
+            {"schema_version": 1, "positive": [s for s in PORT_SHAPES if s != "FixedIpv4HostPort"],
+             "expected_negative": [{"shape": "FixedIpv4HostPort", "reason": negative[0]["reason"]}]},
+            {"schema_version": True, "positive": positive, "expected_negative": negative},
+            {"schema_version": 1, "positive": positive, "expected_negative": negative,
+             "private-canary": "secret"},
+        ]
+        for invalid in bad:
+            with self.subTest(probes=invalid):
+                rejected, absent = self.run_emit(version, lane="debian11-rootful", mode="rootful",
+                                                 image=image, package="20.10.5+dfsg1-1+deb11u2",
+                                                 port_probes=invalid)
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertFalse(absent.exists())
+                self.assertNotIn("private-canary", rejected.stdout + rejected.stderr)
+
+        upstream_negative, absent = self.run_emit(upstream, port_probes={
+            "schema_version": 1, "positive": positive, "expected_negative": negative,
+        })
+        self.assertNotEqual(upstream_negative.returncode, 0)
+        self.assertFalse(absent.exists())
+
+    def test_port_proof_requires_private_direct_capture_child(self) -> None:
+        version = {"Version": "29.8.1", "ApiVersion": "1.56", "MinAPIVersion": "1.44"}
+        result, destination = self.run_emit(version)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        root = destination.parent.parent
+        proof = root / "port-probes.json"
+        destination.unlink()
+        command = ["python3", str(SCRIPT), *[str(root / name) for name in
+                   ("version.json", "shapes.json", "source.json", "network.json", "volume.json",
+                    "volume-label.json", "identity.json", "port-probes.json")], str(root),
+                   str(destination), "upstream-rootful", IMAGE, "rootful", "", SHA, RUN_ID]
+        for failure in ("missing", "symlink", "hardlink", "public", "oversized", "notchild", "duplicate"):
+            with self.subTest(failure=failure):
+                if proof.exists() or proof.is_symlink():
+                    proof.unlink()
+                proof.write_text(json.dumps(port_proof("upstream-rootful", "rootful", "1.56", SHA, "29.8.1")))
+                proof.chmod(0o600)
+                alternate = root / "alternate"
+                if alternate.exists():
+                    alternate.unlink()
+                args = list(command)
+                if failure == "missing":
+                    proof.unlink()
+                elif failure == "symlink":
+                    proof.unlink()
+                    proof.symlink_to(root / "version.json")
+                elif failure == "hardlink":
+                    os.link(proof, root / "second-link")
+                elif failure == "public":
+                    proof.chmod(0o640)
+                elif failure == "oversized":
+                    proof.write_text("x" * 4097)
+                elif failure == "notchild":
+                    alternate.write_text(proof.read_text())
+                    alternate.chmod(0o600)
+                    args[9] = str(alternate)
+                elif failure == "duplicate":
+                    content = proof.read_text()
+                    proof.write_text(content.replace('"schema_version": 1',
+                                                     '"schema_version": 0, "schema_version": 1'))
+                rejected = subprocess.run(args, capture_output=True, text=True, timeout=5, check=False)
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertFalse(destination.exists())
+                self.assertEqual(rejected.stderr.strip(), "native evidence rejected")
+
+    def test_port_proof_binds_exact_context_and_rejects_extra_fields(self) -> None:
+        version = {"Version": "29.8.1", "ApiVersion": "1.56", "MinAPIVersion": "1.44"}
+        good = port_proof("upstream-rootful", "rootful", "1.56", SHA, "29.8.1")
+        invalid = []
+        for key, value in (("schema_version", True), ("kind", "other"),
+                           ("candidate_sha", "b" * 40), ("lane", "upstream-rootless"),
+                           ("engine_release", "29.8.0"), ("rendering_api", "1.55"),
+                           ("daemon_mode", "rootless"), ("run_id", "Stale123"),
+                           ("cleanup", "present")):
+            changed = copy.deepcopy(good)
+            changed[key] = value
+            invalid.append(changed)
+        extra = copy.deepcopy(good)
+        extra["private-canary"] = "secret"
+        invalid.append(extra)
+        nested_extra = copy.deepcopy(good)
+        nested_extra["probes"]["private-canary"] = "secret"
+        invalid.append(nested_extra)
+        for proof in invalid:
+            with self.subTest(proof=proof):
+                result, path = self.run_emit(version, port_proof_override=proof)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(path.exists())
+                self.assertNotIn("secret", result.stdout + result.stderr)
+
     def test_volume_probes_are_exact_closed_non_admission_evidence(self) -> None:
         version = {"Version": "29.8.1", "ApiVersion": "1.56", "MinAPIVersion": "1.44"}
         for probes in (VOLUME_PROBES[:-1], VOLUME_PROBES + ["private-canary"],
@@ -567,7 +736,8 @@ class NativeEvidenceTests(unittest.TestCase):
         probe_path = root / "volume.json"
         command = ["python3", str(SCRIPT), str(root / "version.json"), str(root / "shapes.json"),
                    str(root / "source.json"), str(root / "network.json"),
-                   str(probe_path), str(root / "volume-label.json"), str(root / "identity.json"), str(destination),
+                   str(probe_path), str(root / "volume-label.json"), str(root / "identity.json"),
+                   str(root / "port-probes.json"), str(root), str(destination),
                    "upstream-rootful", IMAGE, "rootful", "", SHA, RUN_ID]
         valid = subprocess.run(command, capture_output=True, text=True, check=False)
         self.assertEqual(valid.returncode, 0, valid.stderr)
@@ -602,7 +772,8 @@ class NativeEvidenceTests(unittest.TestCase):
         probe_path = root / "volume-label.json"
         command = ["python3", str(SCRIPT), str(root / "version.json"), str(root / "shapes.json"),
                    str(root / "source.json"), str(root / "network.json"),
-                   str(root / "volume.json"), str(probe_path), str(root / "identity.json"), str(destination),
+                   str(root / "volume.json"), str(probe_path), str(root / "identity.json"),
+                   str(root / "port-probes.json"), str(root), str(destination),
                    "upstream-rootful", IMAGE, "rootful", "", SHA, RUN_ID]
         valid = subprocess.run(command, capture_output=True, text=True, check=False)
         self.assertEqual(valid.returncode, 0, valid.stderr)

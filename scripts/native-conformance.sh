@@ -68,6 +68,7 @@ printf 'native-bind-canary\n' > "$socket_dir/native-bind/canary"
 printf 'native-tcp-canary\n' > "$socket_dir/native-bind/index.html"
 chmod 0644 "$socket_dir/native-bind/canary" "$socket_dir/native-bind/index.html"
 chmod 0700 "$run_dir"
+mkdir -m 0700 "$run_dir/diagnostics"
 watchdog_pid=
 native_success_summary=
 preserve_run_dir=0
@@ -532,11 +533,20 @@ sidecar_start_category=$(timeout --signal=TERM --kill-after=2s 120s "${podman_cm
   echo "DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=sidecar_failure category=$sidecar_start_category" >&2
   sidecar_setup_failed sidecar_start
 }
-timeout --signal=TERM --kill-after=2s 120s "${podman_cmd[@]}" run --pull=never -d --name "$container" --label "io.dockerlens.native-run=$run_id" \
+python3 "$script_dir/native-port-start-diagnostic.py" prepare "$run_dir" "$run_id" "$lane" || {
+  echo 'DOCKERLENS_NATIVE_PORT_START_LOG_DIAG: source=none category=unavailable collector=unavailable' >&2
+  exit 1
+}
+# Hold the original caller-owned file; registration checks this descriptor
+# against the exclusive no-follow creation before reading any native bytes.
+exec {port_start_log_fd}< "$run_dir/diagnostics/daemon.log"
+outer_container_id=$(timeout --signal=TERM --kill-after=2s 120s "${podman_cmd[@]}" run --pull=never -d --name "$container" --label "io.dockerlens.native-run=$run_id" \
+  --log-driver=k8s-file --log-opt "path=$run_dir/diagnostics/daemon.log" --log-opt max-size=1048576 \
   --network "$outer_network" \
   --privileged --pids-limit=512 --memory=4g --cpus=2 "${run_flags[@]}" \
   --volume "$storage_mount" --volume "$socket_dir:/dockerlens-native" \
-  "$image" "${start[@]}" >/dev/null 2>&1 || sidecar_setup_failed daemon_attach
+  "$image" "${start[@]}" 2>/dev/null) || sidecar_setup_failed daemon_attach
+[[ $outer_container_id =~ ^[0-9a-f]{64}$ ]] || sidecar_setup_failed daemon_identity
 sidecar_state=$(timeout --signal=TERM --kill-after=2s 10s "${podman_cmd[@]}" inspect \
   --format '{{.State.Running}}|{{.State.Status}}|{{.State.ExitCode}}' "$sidecar" 2>/dev/null) || {
   echo 'DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=sidecar_state category=inspect_failed exit=unavailable' >&2
@@ -575,8 +585,23 @@ daemon_ip=$(validated_outer_ipv4 daemon "$container") || exit 1
 [[ $sidecar_ip != "$daemon_ip" ]] || {
   sidecar_setup_failed address_collision
 }
-privileged=$("${podman_cmd[@]}" inspect --format '{{.HostConfig.Privileged}}' "$container")
+# JSON tags are stable even when Podman's Go field uses another spelling.
+# Keep this one existing query; optional metadata must not break template setup.
+outer_setup=$("${podman_cmd[@]}" inspect --format '{{json .}}' "$container")
+privileged=$(printf '%s' "$outer_setup" | python3 -c 'import json,sys
+try:
+    value = json.load(sys.stdin)["HostConfig"]["Privileged"]
+except (ValueError, TypeError, KeyError):
+    raise SystemExit(1)
+if type(value) is not bool:
+    raise SystemExit(1)
+print("true" if value else "false")')
 [[ $privileged == true ]] || { echo 'outer container does not have reviewed nesting privilege' >&2; exit 1; }
+# Reuse this existing authorized setup inspection. Registration failures affect
+# only optional observations; the original native assertions remain mandatory.
+printf '%s' "$outer_setup" | python3 "$script_dir/native-port-start-diagnostic.py" register \
+  "$run_dir" "$run_id" "$lane" "$image" "$outer_container_id" "$port_start_log_fd" || true
+unset outer_setup
 volume_mounts=$("${podman_cmd[@]}" inspect --format '{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}}:{{.Destination}}{{"\n"}}{{end}}{{end}}' "$container")
 expected_mount=${storage_mount%:*}
 [[ $volume_mounts == "$expected_mount" ]] || {
@@ -932,10 +957,50 @@ export NATIVE_NETWORK_PROBES_PATH="$run_dir/network-probes.json"
 export NATIVE_VOLUME_PROBES_PATH="$run_dir/volume-probes.json"
 export NATIVE_VOLUME_LABEL_PROBES_PATH="$run_dir/volume-label-probes.json"
 export NATIVE_IDENTITY_PROBES_PATH="$run_dir/identity-probes.json"
+export NATIVE_PORT_PROBES_PATH="$run_dir/port-probes.json"
+export NATIVE_PORT_START_DIAGNOSTIC_PATH="$run_dir/diagnostics/port-start-window.json"
 export NATIVE_IDENTITY_CANDIDATE_SHA
 NATIVE_IDENTITY_CANDIDATE_SHA=$(git -C "$script_dir/.." rev-parse HEAD)
 [[ $NATIVE_IDENTITY_CANDIDATE_SHA =~ ^[0-9a-f]{40}$ ]] || { echo 'native identity requires exact candidate SHA' >&2; exit 1; }
+export NATIVE_PORT_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 if [[ $EUID == 0 ]]; then export NATIVE_PODMAN_USE_SUDO=0; else export NATIVE_PODMAN_USE_SUDO=1; fi
+
+port_start_failure_diagnostic() {
+  local remaining=$((1800 - SECONDS)) started ended ignored started_cs ended_cs result diagnostic_status=0
+  # Failure-only observation lives inside the existing active 30-minute
+  # budget. It is not a new parent cleanup reserve or a timeout extension.
+  if (( remaining < 5 )) || [[ -z $watchdog_pid ]] || ! kill -0 "$watchdog_pid" 2>/dev/null; then
+    echo 'DOCKERLENS_NATIVE_PORT_START_LOG_DIAG: source=none category=unavailable collector=budget' >&2
+    return 0
+  fi
+  read -r started ignored < /proc/uptime || return 0
+  [[ $started =~ ^[0-9]+\.[0-9]{2}$ ]] || return 0
+  started_cs=${started/./}
+  # Local file reads need no privilege handoff or Podman client. Timeout and
+  # helper share the caller's privileges in both root and non-root invocations.
+  result=$(timeout --signal=TERM --kill-after=0.25s 3.5s \
+    python3 "$script_dir/native-port-start-diagnostic.py" \
+    "$run_dir" "$EUID" "$run_id" "$lane" "$NATIVE_PORT_CANDIDATE_SHA" \
+    "$port_invocation_us" "$started_cs" "$remaining" "$watchdog_pid" \
+    "$port_start_log_fd" "$image" 2>/dev/null) || diagnostic_status=$?
+  read -r ended ignored < /proc/uptime || return 0
+  [[ $ended =~ ^[0-9]+\.[0-9]{2}$ ]] || return 0
+  ended_cs=${ended/./}
+  # BOOTTIME includes helper initialization and collection. Centisecond
+  # quantization is conservatively below four seconds at the final handoff.
+  if (( ended_cs < started_cs || ended_cs - started_cs >= 399 || SECONDS >= 1800 )) ||
+      ! kill -0 "$watchdog_pid" 2>/dev/null; then
+    echo 'DOCKERLENS_NATIVE_PORT_START_LOG_DIAG: source=none category=unavailable collector=timeout' >&2
+  elif (( diagnostic_status != 0 )); then
+    echo 'DOCKERLENS_NATIVE_PORT_START_LOG_DIAG: source=none category=unavailable collector=unavailable' >&2
+  elif [[ $result =~ ^DOCKERLENS_NATIVE_PORT_START_LOG_DIAG:\ source=(none|daemon|rootless_trace|mixed)\ category=(unavailable|unclassified|ambiguous|rootless_network|port_proxy|uidmap|permission|daemon_network|daemon_runtime)\ collector=(complete|window_unavailable|ownership_unverified|query_failed|output_limit|timeout|cancelled|budget|watchdog|unavailable)$ ]]; then
+    printf '%s\n' "$result" >&2
+  else
+    echo 'DOCKERLENS_NATIVE_PORT_START_LOG_DIAG: source=none category=unavailable collector=unavailable' >&2
+  fi
+  return 0
+}
+
 "$(dirname "$0")/run-exact-native-test.sh" native_capture live_engine_capture_decodes
 "$(dirname "$0")/run-exact-native-test.sh" acquisition live_read_only_acquisition_matches_oracle
 "$(dirname "$0")/run-exact-native-test.sh" native_selection live_native_selection_and_source_observations
@@ -946,6 +1011,15 @@ if [[ $EUID == 0 ]]; then export NATIVE_PODMAN_USE_SUDO=0; else export NATIVE_PO
 "$(dirname "$0")/run-exact-native-test.sh" native_volume live_existing_volume_prerequisite_matches_engine
 "$(dirname "$0")/run-exact-native-test.sh" native_volume_label live_created_volume_labels_match_engine
 "$(dirname "$0")/run-exact-native-test.sh" native_identity live_container_process_identity_matches_engine
+port_invocation_us=${EPOCHREALTIME/./}
+port_status=0
+{
+"$(dirname "$0")/run-exact-native-test.sh" native_port live_port_publications_match_engine
+} || port_status=$?
+if (( port_status != 0 )); then
+  port_start_failure_diagnostic || true
+  exit "$port_status"
+fi
 
 if [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]; then
   candidate_sha=$(git -C "$script_dir/.." rev-parse HEAD)
@@ -957,7 +1031,7 @@ if [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]; then
     echo 'native evidence requires a clean candidate checkout' >&2
     exit 1
   }
-  python3 "$script_dir/native-evidence.py" "$run_dir/version.json" "$NATIVE_SHAPES_PATH" "$NATIVE_SOURCE_PROBES_PATH" "$NATIVE_NETWORK_PROBES_PATH" "$NATIVE_VOLUME_PROBES_PATH" "$NATIVE_VOLUME_LABEL_PROBES_PATH" "$NATIVE_IDENTITY_PROBES_PATH" \
+  python3 "$script_dir/native-evidence.py" "$run_dir/version.json" "$NATIVE_SHAPES_PATH" "$NATIVE_SOURCE_PROBES_PATH" "$NATIVE_NETWORK_PROBES_PATH" "$NATIVE_VOLUME_PROBES_PATH" "$NATIVE_VOLUME_LABEL_PROBES_PATH" "$NATIVE_IDENTITY_PROBES_PATH" "$NATIVE_PORT_PROBES_PATH" "$run_dir" \
     "$DOCKERLENS_NATIVE_EVIDENCE_DIR/$lane.json" "$lane" "$image" "$expected_mode" \
     "$installed_docker_package" "$candidate_sha" "$run_id"
 fi

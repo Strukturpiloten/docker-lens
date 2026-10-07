@@ -278,6 +278,80 @@
           "items": false
         }
       }
+    },
+    "port_shape": {
+      "enum": [
+        "FixedIpv4HostPort", "EphemeralIpv4HostPort", "FixedIpv6HostPort",
+        "EphemeralIpv6HostPort", "MultipleFixedPortBindings",
+        "MultipleEphemeralPortBindings", "ExposedOnlyPort", "EphemeralHostPort"
+      ]
+    },
+    "port_probe_entry": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["shape", "outcome"],
+          "properties": { "shape": { "$ref": "#/$defs/port_shape" }, "outcome": { "const": "observed" } }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["shape", "outcome", "reason"],
+          "properties": {
+            "shape": { "enum": ["FixedIpv6HostPort", "EphemeralIpv6HostPort"] },
+            "outcome": { "const": "expected_negative" },
+            "reason": { "enum": ["nested_default_bridge_ipv6_unavailable", "nested_default_bridge_ipv6_runtime_binding_absent"] }
+          }
+        }
+      ]
+    },
+    "port_probes": {
+      "description": "Canonical sanitized native port-publication outcomes; separate from capability admission.",
+      "type": "array", "minItems": 8, "maxItems": 8,
+      "prefixItems": [
+        { "allOf": [{ "$ref": "#/$defs/port_probe_entry" }, { "properties": { "shape": { "const": "FixedIpv4HostPort" } } }] },
+        { "allOf": [{ "$ref": "#/$defs/port_probe_entry" }, { "properties": { "shape": { "const": "EphemeralIpv4HostPort" } } }] },
+        { "allOf": [{ "$ref": "#/$defs/port_probe_entry" }, { "properties": { "shape": { "const": "FixedIpv6HostPort" } } }] },
+        { "allOf": [{ "$ref": "#/$defs/port_probe_entry" }, { "properties": { "shape": { "const": "EphemeralIpv6HostPort" } } }] },
+        { "allOf": [{ "$ref": "#/$defs/port_probe_entry" }, { "properties": { "shape": { "const": "MultipleFixedPortBindings" } } }] },
+        { "allOf": [{ "$ref": "#/$defs/port_probe_entry" }, { "properties": { "shape": { "const": "MultipleEphemeralPortBindings" } } }] },
+        { "allOf": [{ "$ref": "#/$defs/port_probe_entry" }, { "properties": { "shape": { "const": "ExposedOnlyPort" } } }] },
+        { "allOf": [{ "$ref": "#/$defs/port_probe_entry" }, { "properties": { "shape": { "const": "EphemeralHostPort" } } }] }
+      ],
+      "items": false
+    },
+    "native_port_probe_proof": {
+      "description": "Private harness proof bound by the emitter to the capture directory, candidate, lane, Engine release, API, mode and run; not cryptographic attestation.",
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "kind", "candidate_sha", "lane", "engine_release", "rendering_api", "daemon_mode", "run_id", "cleanup", "probes"],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "kind": { "const": "dockerlens-native-port-probes" },
+        "candidate_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "lane": { "enum": ["debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless"] },
+        "engine_release": { "type": "string", "minLength": 1 },
+        "rendering_api": { "$ref": "#/$defs/api_version" },
+        "daemon_mode": { "enum": ["rootful", "rootless"] },
+        "run_id": { "type": "string", "pattern": "^[a-zA-Z0-9]{8}$" },
+        "cleanup": { "const": "absent" },
+        "probes": {
+          "type": "object", "additionalProperties": false,
+          "required": ["schema_version", "positive", "expected_negative"],
+          "properties": {
+            "schema_version": { "const": 1 },
+            "positive": { "type": "array", "items": { "$ref": "#/$defs/port_shape" }, "uniqueItems": true },
+            "expected_negative": {
+              "type": "array", "items": {
+                "type": "object", "additionalProperties": false,
+                "required": ["shape", "reason"],
+                "properties": {
+                  "shape": { "enum": ["FixedIpv6HostPort", "EphemeralIpv6HostPort"] },
+                  "reason": { "enum": ["nested_default_bridge_ipv6_unavailable", "nested_default_bridge_ipv6_runtime_binding_absent"] }
+                }
+              }, "uniqueItems": true
+            }
+          }
+        }
+      }
     }
   },
   "allOf": [
