@@ -167,6 +167,52 @@ class NativePortStartDiagnosticTests(unittest.TestCase):
                 self.window.chmod(0o644) or "daemon", "permission")):
             self.assertNotIn("collector=complete", self.observe())
 
+    def test_only_exact_debian_rootless_oracle_window_allows_twenty_seven_seconds(self):
+        for duration, accepted in ((27 * 10**9, True), (27 * 10**9 + 1, False)):
+            record = self.record | {"startRealtimeNs": self.end - duration}
+            self.write(self.window, record)
+            held = DIAG.Window(self.root, os.geteuid())
+            try:
+                invocation = (record["startRealtimeNs"] - 10**9) // 1000
+                if accepted:
+                    self.assertEqual(held.validate(RUN, "debian11-rootless", CANDIDATE, invocation,
+                                                   time.time_ns()), record)
+                else:
+                    with self.assertRaises(DIAG.Unavailable):
+                        held.validate(RUN, "debian11-rootless", CANDIDATE, invocation, time.time_ns())
+            finally:
+                held.close()
+
+    def test_other_profile_windows_keep_eleven_seconds_and_mismatches_never_gain_allowance(self):
+        for lane, api in (("debian11-rootful", "1.41"), ("upstream-rootful", "1.56"),
+                          ("upstream-rootless", "1.56")):
+            for duration, accepted in ((11 * 10**9, True), (11 * 10**9 + 1, False)):
+                record = self.record | {"lane": lane, "apiVersion": api,
+                                        "startRealtimeNs": self.end - duration}
+                self.write(self.window, record)
+                held = DIAG.Window(self.root, os.geteuid())
+                try:
+                    invocation = (record["startRealtimeNs"] - 10**9) // 1000
+                    if accepted:
+                        self.assertEqual(held.validate(RUN, lane, CANDIDATE, invocation,
+                                                       time.time_ns()), record)
+                    else:
+                        with self.assertRaises(DIAG.Unavailable):
+                            held.validate(RUN, lane, CANDIDATE, invocation, time.time_ns())
+                finally:
+                    held.close()
+        for change in ({"lane": "upstream-rootless"}, {"apiVersion": "1.56"},
+                       {"createdName": f"dl-port-{RUN}-multi-dynamic-rendered"}, {"phase": "cleanup"}):
+            record = self.record | {"startRealtimeNs": self.end - 27 * 10**9} | change
+            self.write(self.window, record)
+            held = DIAG.Window(self.root, os.geteuid())
+            try:
+                with self.assertRaises(DIAG.Unavailable):
+                    held.validate(RUN, "debian11-rootless", CANDIDATE,
+                                  (record["startRealtimeNs"] - 10**9) // 1000, time.time_ns())
+            finally:
+                held.close()
+
     def test_context_identity_digest_and_metadata_must_match_original_source(self):
         baseline = json.loads(self.registration.read_bytes())
         for mutation in ({"outerId": "e" * 64}, {"runId": "Stale001"},

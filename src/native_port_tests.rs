@@ -97,6 +97,15 @@ const PORT_SUFFIXES: [&str; 8] = [
     "multi-dynamic-rendered",
 ];
 
+fn repeated_start_timeouts(remaining: Duration) -> Option<(u64, u64)> {
+    // Reserve forty seconds for cleanup, the existing one-second KILL grace,
+    // and one further second for setup/reporting. Keep curl two seconds below
+    // its outer timer, including when the shared deadline clips both limits.
+    let outer = remaining.as_secs().checked_sub(42)?.min(26);
+    let curl = outer.checked_sub(2)?.min(24);
+    (curl > 0).then_some((curl, outer))
+}
+
 struct NativeRun {
     api_version: String,
     image: String,
@@ -312,6 +321,45 @@ impl NativeRun {
             .map(|(name, id)| (name.as_str(), id.as_str()))
     }
 
+    fn repeated_start_uses_proxy_allowance(&self, method: &str, path: &str, cleanup: bool) -> bool {
+        if cleanup
+            || method != "POST"
+            || self.lane != "debian11-rootless"
+            || self.mode != DaemonMode::Rootless
+            || self.api_version != "1.41"
+            || !matches!(self.engine_release.as_str(), "20.10.5" | "20.10.5+dfsg1")
+            || !self.fact_source.as_ref().is_some_and(|facts| {
+                facts.mode == DaemonMode::Rootless
+                    && facts.api_version == Some(ApiVersion::new(NonZeroU16::new(1).unwrap(), 41))
+                    && facts
+                        .release
+                        .as_ref()
+                        .is_some_and(|release| release.as_str() == self.engine_release)
+            })
+        {
+            return false;
+        }
+        self.created.iter().any(|(name, id)| {
+            canonical_id(id)
+                && (name == &self.name("multi-dynamic-oracle")
+                    || name == &self.name("multi-dynamic-rendered"))
+                && self.known_id(id) == Some(name.as_str())
+                && self
+                    .created
+                    .iter()
+                    .filter(|(_, registered)| registered == id)
+                    .count()
+                    == 1
+                && self
+                    .created
+                    .iter()
+                    .filter(|(registered, _)| registered == name)
+                    .count()
+                    == 1
+                && path == format!("/v1.41/containers/{id}/start")
+        })
+    }
+
     fn api_with_cleanup(
         &self,
         method: &str,
@@ -347,12 +395,30 @@ impl NativeRun {
                 || method == "DELETE" && delete,
             "closed port API route"
         );
+        let proxy_allowance = self.repeated_start_uses_proxy_allowance(method, path, cleanup);
+        let request_timeouts = || {
+            if proxy_allowance {
+                repeated_start_timeouts(self.remaining())
+                    .unwrap_or_else(|| panic!("shared repeated port start cleanup reserve"))
+            } else {
+                (8, 10)
+            }
+        };
+        let _ = request_timeouts();
         let previous = self.uncertain_mutation.get();
         if method != "GET" {
             self.uncertain_mutation.set(true);
         }
         let input = body.map(|value| serde_json::to_vec(value).unwrap());
-        let mut command = self.timer(cleanup, false, 10);
+        // This private record is observation context, never a native proof.
+        // Publication is best effort and must not change the original request.
+        let start_window = self
+            .start_window_identity(method, path, cleanup)
+            .and_then(|(name, id)| PrivateStartWindow::begin(self, name, id));
+        // Recompute after publication so its elapsed time cannot consume the
+        // extended request's cleanup reserve. This check precedes request I/O.
+        let (curl_seconds, outer_seconds) = request_timeouts();
+        let mut command = self.timer(cleanup, false, outer_seconds);
         command.args([
             "curl",
             "-q",
@@ -360,7 +426,7 @@ impl NativeRun {
             "*",
             "-sS",
             "--max-time",
-            "8",
+            &curl_seconds.to_string(),
             "--max-filesize",
             "131072",
             "--unix-socket",
@@ -376,11 +442,6 @@ impl NativeRun {
             command.args(["--data-binary", ""]);
         }
         command.args(["-w", "\n%{http_code}", &format!("http://localhost{path}")]);
-        // This private record is observation context, never a native proof.
-        // Publication is best effort and must not change the original request.
-        let start_window = self
-            .start_window_identity(method, path, cleanup)
-            .and_then(|(name, id)| PrivateStartWindow::begin(self, name, id));
         let output = self.capture(&mut command, input.as_deref(), 131080);
         if !output.status.success() && matches!(output.status.code(), Some(28 | 124)) {
             if let Some(window) = start_window {
@@ -1572,6 +1633,165 @@ fn start_window_control_run() -> NativeRun {
         uncertain_mutation: Cell::new(true),
         cleaned: true,
     }
+}
+
+fn repeated_start_control_run() -> NativeRun {
+    let mut run = start_window_control_run();
+    run.fact_source = Some(offline_facts(DaemonMode::Rootless, 41));
+    run.created
+        .push((run.name("multi-dynamic-rendered"), "d".repeat(64)));
+    run
+}
+
+#[test]
+fn repeated_start_proxy_allowance_requires_exact_registered_roles_and_routes() {
+    let run = repeated_start_control_run();
+    for (name, id) in &run.created {
+        let path = format!("/v1.41/containers/{id}/start");
+        assert!(run.repeated_start_uses_proxy_allowance("POST", &path, false));
+        assert!(!run.repeated_start_uses_proxy_allowance("POST", &path, true));
+        for method in ["GET", "DELETE", "post"] {
+            assert!(!run.repeated_start_uses_proxy_allowance(method, &path, false));
+        }
+        for other in [
+            format!("/v1.41/containers/{name}/start"),
+            format!("/v1.56/containers/{id}/start"),
+            format!("/v1.41/containers/{id}/json"),
+            format!("/v1.41/containers/{id}/start?retry=1"),
+            format!("/v1.41/containers/{}/start", "e".repeat(64)),
+        ] {
+            assert!(!run.repeated_start_uses_proxy_allowance("POST", &other, false));
+        }
+    }
+    for suffix in PORT_SUFFIXES {
+        let mut run = repeated_start_control_run();
+        let name = run.name(suffix);
+        run.created = vec![(name, "c".repeat(64))];
+        assert_eq!(
+            run.repeated_start_uses_proxy_allowance(
+                "POST",
+                &format!("/v1.41/containers/{}/start", "c".repeat(64)),
+                false
+            ),
+            matches!(suffix, "multi-dynamic-oracle" | "multi-dynamic-rendered")
+        );
+    }
+    let mut run = repeated_start_control_run();
+    run.created[0].1 = "C".repeat(64);
+    assert!(!run.repeated_start_uses_proxy_allowance(
+        "POST",
+        &format!("/v1.41/containers/{}/start", "C".repeat(64)),
+        false
+    ));
+    let mut run = repeated_start_control_run();
+    let path = format!("/v1.41/containers/{}/start", "c".repeat(64));
+    run.created.push((run.name("port-oracle"), "c".repeat(64)));
+    assert!(!run.repeated_start_uses_proxy_allowance("POST", &path, false));
+    let mut run = repeated_start_control_run();
+    run.created
+        .push((run.name("multi-dynamic-oracle"), "e".repeat(64)));
+    assert!(!run.repeated_start_uses_proxy_allowance("POST", &path, false));
+}
+
+#[test]
+fn repeated_start_proxy_allowance_needs_observed_matching_rootless_release_api_facts() {
+    let path = format!("/v1.41/containers/{}/start", "c".repeat(64));
+    for lane in [
+        "debian11-rootful",
+        "upstream-rootful",
+        "upstream-rootless",
+        "debian11-rootless-extra",
+    ] {
+        let mut run = repeated_start_control_run();
+        run.lane = lane.into();
+        assert!(!run.repeated_start_uses_proxy_allowance("POST", &path, false));
+    }
+    for mode in [DaemonMode::Rootful, DaemonMode::Unknown] {
+        let mut run = repeated_start_control_run();
+        run.mode = mode;
+        assert!(!run.repeated_start_uses_proxy_allowance("POST", &path, false));
+        let mut run = repeated_start_control_run();
+        run.fact_source.as_mut().unwrap().mode = mode;
+        assert!(!run.repeated_start_uses_proxy_allowance("POST", &path, false));
+    }
+    for api in ["1.40", "1.56", "1.041", "2.41"] {
+        let mut run = repeated_start_control_run();
+        run.api_version = api.into();
+        assert!(!run.repeated_start_uses_proxy_allowance("POST", &path, false));
+    }
+    for release in ["", "20.10.4", "20.10.50", "29.8.1", "20.10.5+unverified"] {
+        let mut run = repeated_start_control_run();
+        run.engine_release = release.into();
+        assert!(!run.repeated_start_uses_proxy_allowance("POST", &path, false));
+    }
+    let mut run = repeated_start_control_run();
+    run.fact_source = None;
+    assert!(!run.repeated_start_uses_proxy_allowance("POST", &path, false));
+    let mut run = repeated_start_control_run();
+    run.fact_source.as_mut().unwrap().release = None;
+    assert!(!run.repeated_start_uses_proxy_allowance("POST", &path, false));
+    for api in [
+        None,
+        Some(ApiVersion::new(NonZeroU16::new(1).unwrap(), 40)),
+        Some(ApiVersion::new(NonZeroU16::new(2).unwrap(), 41)),
+    ] {
+        let mut run = repeated_start_control_run();
+        run.fact_source.as_mut().unwrap().api_version = api;
+        assert!(!run.repeated_start_uses_proxy_allowance("POST", &path, false));
+    }
+    let mut run = repeated_start_control_run();
+    run.fact_source.as_mut().unwrap().release = EngineRelease::new("20.10.4".into());
+    assert!(!run.repeated_start_uses_proxy_allowance("POST", &path, false));
+    run.engine_release = "20.10.5+dfsg1".into();
+    assert!(!run.repeated_start_uses_proxy_allowance("POST", &path, false));
+    run.fact_source.as_mut().unwrap().release = EngineRelease::new(run.engine_release.clone());
+    assert!(run.repeated_start_uses_proxy_allowance("POST", &path, false));
+}
+
+#[test]
+fn repeated_start_proxy_timeouts_clip_both_limits_and_never_borrow_cleanup_reserve() {
+    for seconds in [0, 1, 40, 41, 42, 43, 44] {
+        assert_eq!(repeated_start_timeouts(Duration::from_secs(seconds)), None);
+    }
+    for (seconds, expected) in [
+        (45, (1, 3)),
+        (46, (2, 4)),
+        (50, (6, 8)),
+        (67, (23, 25)),
+        (68, (24, 26)),
+        (180, (24, 26)),
+    ] {
+        let limits = repeated_start_timeouts(Duration::from_secs(seconds)).unwrap();
+        assert_eq!(limits, expected);
+        assert!(limits.0 > 0 && limits.0 + 2 == limits.1);
+        assert!(seconds - limits.1 > 41);
+    }
+    assert_eq!(
+        repeated_start_timeouts(Duration::from_secs(45) - Duration::from_nanos(1)),
+        None
+    );
+    assert_eq!(
+        repeated_start_timeouts(Duration::from_secs(68) - Duration::from_nanos(1)),
+        Some((23, 25))
+    );
+}
+
+#[test]
+fn repeated_start_insufficient_reserve_prevents_request_and_mutation_uncertainty() {
+    let mut run = repeated_start_control_run();
+    run.deadline = Instant::now() + Duration::from_secs(44);
+    run.epoch_deadline = SystemTime::now() + Duration::from_secs(44);
+    run.uncertain_mutation.set(false);
+    let path = format!("/v1.41/containers/{}/start", "c".repeat(64));
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run.api_with_cleanup("POST", &path, None, false)
+        }))
+        .is_err()
+    );
+    assert_eq!(run.calls.get(), 0);
+    assert_eq!(run.bytes.get(), 0);
+    assert!(!run.uncertain_mutation.get());
 }
 
 #[test]

@@ -737,6 +737,46 @@ never rejected by this diagnostic. No readback clears mutation uncertainty,
 retries start/delete, changes existing timeouts/assertions, creates an unsupported
 outcome or permits a proof after the original failure.
 
+The independently reviewed, nonqualifying isolated CLI reproduction recorded
+in [#83's observation](https://github.com/Strukturpiloten/docker-lens/issues/83#issuecomment-6037955983)
+completed one repeated-ephemeral IPv4 START in 16,919 ms on Debian 11 rootless
+Engine 20.10.5 / API 1.41. The container ran with two different numerical host
+allocations and RootlessKit 0.14.2's builtin driver listed two rows. Private logs
+contained the fixed `Timed out proxy starting` marker and no address-in-use
+marker. This is one fresh-daemon diagnostic observation, not the full native
+sequence, capability evidence or a universal cause. Reviewed exact Debian
+`libnetwork/portmapper/proxy.go` source has a 16-second docker-proxy readiness
+timeout/recovery path that can outlive the prior eight-second client cutoff.
+RootlessKit v0.14.2's reviewed wrapper source supports investigation of an
+allocation/reservation collision, but that explanation remains a hypothesis.
+No oracle source is copied or translated into the implementation.
+
+Only non-cleanup POST START requests for the exact registered canonical IDs and
+names of `multi-dynamic-oracle` and `multi-dynamic-rendered` get curl/outer
+ceilings of 24/26 seconds, and only after the independently verified
+`debian11-rootless` context records matching rootless capture facts, API 1.41
+and exact Engine 20.10.5 release text. The context's already accepted
+`20.10.5+dfsg1` spelling requires that same exact spelling in the captured facts;
+lane/environment declarations alone cannot enable the allowance. Other methods,
+fixtures, profiles and cleanup retain eight/ten-second ceilings. Both extended
+limits are clipped to the remaining original 180-second deadline, preserving
+forty seconds for cleanup, the existing one-second KILL grace, and a further
+one-second setup/reporting margin. Full 24/26 limits require 68 whole seconds
+remaining; at 45 seconds the clipped limits are 1/3, and less time submits no
+request. Curl remains two seconds below its outer timer. Limits are recomputed
+after optional private record publication before request I/O.
+
+All eight shape outcomes, traffic and exact assertions, command/byte caps,
+original 180-second deadline, existing four-second two-GET follow-up and separate
+four-second parent observer remain mandatory and unchanged. There is no START
+retry, unsupported reclassification, capability/catalogue or pin change. The
+private diagnostic window accepts at most 27 seconds only for its already
+authenticated Debian rootless / API 1.41 oracle phase and exact name; every
+other lane retains eleven seconds. Overlong, mismatched, future, reversed or
+stale windows still fail closed under the same cutoff. Fresh complete gates,
+independent review and all exact-final-candidate native lanes remain pending
+before qualification of this timeout correction.
+
 Only that same registered canonical repeated-ephemeral IPv4 CLI oracle's
 non-cleanup POST start can also create a best-effort private start-window
 record. `NATIVE_PORT_START_DIAGNOSTIC_PATH` is a mode-0600, single-link direct

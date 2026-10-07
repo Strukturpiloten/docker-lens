@@ -164,8 +164,14 @@ class Window:
         if any(type(number) is not int or number <= 0 for number in (start, end, cutoff)):
             raise Unavailable("window_unavailable")
         cutoff_ns = cutoff * 1_000_000_000
+        # Only the already-validated Debian rootless oracle can have the new
+        # 24s curl / 26s outer start allowance plus its existing 1s KILL grace.
+        maximum_window_ns = (27 if lane == "debian11-rootless"
+                             and value["apiVersion"] == "1.41"
+                             and value["createdName"] == f"dl-port-{run}-multi-dynamic-oracle"
+                             and value["phase"] == "multi_dynamic_oracle_start" else 11) * 1_000_000_000
         if (not invocation_us * 1000 <= start <= end <= now_ns
-                or end - start > 11 * 1_000_000_000
+                or end - start > maximum_window_ns
                 or now_ns - end > 180 * 1_000_000_000
                 or not cutoff_ns - 180 * 1_000_000_000 <= start <= end <= cutoff_ns
                 or cutoff_ns > now_ns + 180 * 1_000_000_000):
