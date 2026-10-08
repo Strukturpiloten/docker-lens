@@ -1,0 +1,297 @@
+{
+  "acquisition_api": "1.41",
+  "admitted_shapes": {
+    "BindMount": [
+      "BindMountReadWrite",
+      "BindMountReadOnly"
+    ],
+    "BindRelabelPrivate": [
+      "BindMountPrivateRelabelReadWrite",
+      "BindMountPrivateRelabelReadOnly"
+    ],
+    "BindRelabelShared": [
+      "BindMountSharedRelabelReadWrite",
+      "BindMountSharedRelabelReadOnly"
+    ],
+    "BridgeNetwork": [
+      "BridgeNetworkCreate",
+      "BridgeNetworkAttach"
+    ],
+    "Command": [
+      "ExecCommand"
+    ],
+    "ContainerLabels": [
+      "ContainerCreateLabels"
+    ],
+    "ContainerUser": [
+      "ContainerUser"
+    ],
+    "ContainerWorkdir": [
+      "ContainerWorkdir"
+    ],
+    "Entrypoint": [
+      "ExecEntrypoint"
+    ],
+    "EnvironmentAssignment": [
+      "EnvironmentValue",
+      "EnvironmentEmptyValue"
+    ],
+    "HealthShell": [
+      "ShellHealthcheck"
+    ],
+    "HealthStartPeriod": [
+      "HealthStartPeriodZero",
+      "HealthStartPeriodPositive"
+    ],
+    "Healthcheck": [
+      "ExecHealthcheck"
+    ],
+    "NamedVolume": [
+      "NamedVolumeCreate",
+      "NamedVolumeMountReadWrite",
+      "NamedVolumeMountReadOnly"
+    ],
+    "NetworkAliases": [
+      "NetworkPrimaryAliases",
+      "NetworkSecondaryAliases"
+    ],
+    "NetworkExternalInternalExpectation": [
+      "ExternalNetworkInternalFalse",
+      "ExternalNetworkInternalTrue"
+    ],
+    "NetworkExternalReference": [
+      "ExternalNetworkReference"
+    ],
+    "NetworkInternal": [
+      "InternalBridgeNetworkCreate"
+    ],
+    "NetworkLabels": [
+      "NetworkCreateLabels"
+    ],
+    "NetworkMultipleAttachment": [
+      "NetworkSecondaryConnect"
+    ],
+    "PortEphemeral": [
+      "EphemeralHostPort"
+    ],
+    "PortExposeOnly": [
+      "ExposedOnlyPort"
+    ],
+    "PortHostIpv4": [
+      "FixedIpv4HostPort",
+      "EphemeralIpv4HostPort"
+    ],
+    "PortMultipleBindings": [
+      "MultipleFixedPortBindings",
+      "MultipleEphemeralPortBindings"
+    ],
+    "PortPublish": [
+      "FixedTcpPort",
+      "FixedUdpPort"
+    ],
+    "RestartPolicy": [
+      "RestartNo",
+      "RestartAlways",
+      "RestartUnlessStopped",
+      "RestartOnFailureUnlimited",
+      "RestartOnFailureLimited"
+    ],
+    "StandaloneContainer": [
+      "StandaloneCreate"
+    ],
+    "VolumeExternalReference": [
+      "ExternalVolumeReference"
+    ],
+    "VolumeLabels": [
+      "VolumeCreateLabels"
+    ]
+  },
+  "bind_relabel_contract": "bind-relabel-config-v1",
+  "bind_relabel_probes": [
+    "BindMountSharedRelabelReadWrite",
+    "BindMountSharedRelabelReadOnly",
+    "BindMountPrivateRelabelReadWrite",
+    "BindMountPrivateRelabelReadOnly"
+  ],
+  "bind_relabel_selinux_effect": "unverified",
+  "candidate_sha": "133f2857dac77c60aa79eab1a473c5749fd459ab",
+  "capability_outcome": {
+    "BindMount": "available",
+    "BindRelabelPrivate": "available",
+    "BindRelabelShared": "available",
+    "BridgeNetwork": "available",
+    "Command": "available",
+    "ContainerLabels": "available",
+    "ContainerUser": "available",
+    "ContainerWorkdir": "available",
+    "Entrypoint": "available",
+    "EnvironmentAssignment": "available",
+    "HealthShell": "available",
+    "HealthStartPeriod": "available",
+    "Healthcheck": "available",
+    "NamedVolume": "available",
+    "NetworkAliases": "available",
+    "NetworkExternalInternalExpectation": "available",
+    "NetworkExternalReference": "available",
+    "NetworkInternal": "available",
+    "NetworkLabels": "available",
+    "NetworkMultipleAttachment": "available",
+    "PortEphemeral": "available",
+    "PortExposeOnly": "available",
+    "PortHostIpv4": "available",
+    "PortMultipleBindings": "available",
+    "PortPublish": "available",
+    "RestartPolicy": "available",
+    "StandaloneContainer": "available",
+    "VolumeExternalReference": "available",
+    "VolumeLabels": "available"
+  },
+  "capability_version": "1.41",
+  "debian_docker_package": "20.10.5+dfsg1-1+deb11u2",
+  "engine_api_max": "1.41",
+  "engine_api_min": "1.12",
+  "engine_version": "20.10.5+dfsg1",
+  "expected_mode": "rootful",
+  "external_network_contract": "external-network-internal-v1",
+  "external_network_probes": [
+    "ExternalNetworkInternalFalse",
+    "ExternalNetworkInternalTrue"
+  ],
+  "health_metadata_contract": "health-metadata-v1",
+  "health_metadata_probes": [
+    "ContainerCreateLabels",
+    "ShellHealthcheck",
+    "HealthStartPeriodPositive",
+    "HealthStartPeriodZero"
+  ],
+  "identity_cases": [
+    "inherit",
+    "numeric_uid_gid",
+    "numeric_uid",
+    "named_user",
+    "named_user_group",
+    "named_user_numeric_group",
+    "numeric_user_named_group",
+    "missing_user",
+    "missing_group",
+    "nondirectory_workdir"
+  ],
+  "identity_contract": "container-identity-v1",
+  "identity_probes": [
+    "ContainerUser",
+    "ContainerWorkdir",
+    "ContainerNumericUidGid",
+    "ContainerProcessWorkingDirectory",
+    "ContainerIdentityOwnershipCleanup"
+  ],
+  "lane": "debian11-rootful",
+  "network_attachment_contract": "network-attachments-v1",
+  "network_attachment_probes": [
+    "NetworkCreateLabels",
+    "NetworkPrimaryAliases",
+    "NetworkSecondaryAliases",
+    "NetworkSecondaryConnect"
+  ],
+  "network_probes": [
+    "ExternalNetworkReference",
+    "InternalBridgeNetworkCreate",
+    "Ipv6BridgeNetworkCreate",
+    "NetworkIpamV4",
+    "NetworkIpamV6",
+    "NetworkIpamGateway",
+    "NetworkIpamRange",
+    "NetworkIpamAuxiliary",
+    "NetworkIpamDefaultDriver",
+    "NetworkBridgeMtu",
+    "NetworkBridgeIcc",
+    "NetworkBridgeMasquerade",
+    "NetworkBridgeHostBindingIp",
+    "NetworkCreateLabels",
+    "NetworkPrimaryAliases",
+    "NetworkSecondaryAliases",
+    "NetworkStaticIpv4",
+    "NetworkStaticIpv6",
+    "NetworkSecondaryConnect",
+    "NetworkBridgeIccDisabled",
+    "NetworkBridgeMasqueradeEnabled",
+    "NetworkCreateLabelsValueDomain"
+  ],
+  "outer_image": "ghcr.io/strukturpiloten/docker-debian-11-rootful:v1.0.0@sha256:656ab906588fcf0acfc66e48ff22e1cd56003495ea43b7066f307db9c7f63124",
+  "port_probes": [
+    {
+      "outcome": "observed",
+      "shape": "FixedIpv4HostPort"
+    },
+    {
+      "outcome": "observed",
+      "shape": "EphemeralIpv4HostPort"
+    },
+    {
+      "outcome": "expected_negative",
+      "reason": "nested_default_bridge_ipv6_runtime_binding_absent",
+      "shape": "FixedIpv6HostPort"
+    },
+    {
+      "outcome": "expected_negative",
+      "reason": "nested_default_bridge_ipv6_runtime_binding_absent",
+      "shape": "EphemeralIpv6HostPort"
+    },
+    {
+      "outcome": "observed",
+      "shape": "MultipleFixedPortBindings"
+    },
+    {
+      "outcome": "observed",
+      "shape": "MultipleEphemeralPortBindings"
+    },
+    {
+      "outcome": "observed",
+      "shape": "ExposedOnlyPort"
+    },
+    {
+      "outcome": "observed",
+      "shape": "EphemeralHostPort"
+    }
+  ],
+  "rendering_api": "1.41",
+  "runtime_components": {
+    "containerd": "1.4.13~ds1",
+    "runc": "1.0.0~rc93+ds1"
+  },
+  "schema_version": 1,
+  "source_probes": [
+    "DiscoveryMetadata",
+    "ExactContainerId",
+    "ExactContainerName",
+    "LiteralNamePrefix",
+    "ExactLabel",
+    "ExplicitAllContainers",
+    "ExactNetworkRoot",
+    "ExactVolumeRoot",
+    "UnrelatedInspectExcluded",
+    "IdentityFieldsOracle",
+    "PortBindingsOracle",
+    "MultipleHostIpBindingsOracle",
+    "MountEnvironmentOracle",
+    "HealthRestartOracle",
+    "SelectedFieldOrigins",
+    "DaemonResourceSupportOracle",
+    "NetworkActiveMembership",
+    "NetworkStoppedMembershipBoundary",
+    "ContainerInspectIdOracle"
+  ],
+  "volume_label_probes": [
+    "VolumeCreateLabels",
+    "VolumeLabelInspect",
+    "VolumeLabelPersistence",
+    "VolumeLabelOwnershipCleanup"
+  ],
+  "volume_probes": [
+    "ExistingVolumePrerequisite",
+    "ExistingVolumeTargetIdentity",
+    "ExistingVolumeReadOnlyData",
+    "ExistingVolumeReadWriteData",
+    "ExistingVolumePersistence",
+    "MissingVolumePrecheck"
+  ]
+}

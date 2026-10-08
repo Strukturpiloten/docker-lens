@@ -44,12 +44,13 @@
    advertised maximum API, negotiated acquisition API, tested rendering API,
    and daemon mode. Catalog discovery returns its SHA-256 evidence key. The
    candidate catalog selects four exact records from independently reviewed
-   run `37706460127`, attempt 1, source
-   `6df951eb9e112becf8124fe9f8624b1df0dfbf2e`, under ADR 0016.
-   Debian admits exactly 28 capabilities/44 shapes; upstream adds only the
-   complete IPv6 port group for 29/46. All four historical cohorts remain
+   run `37788762974`, attempt 1, source
+   `133f2857dac77c60aa79eab1a473c5749fd459ab`, under ADR 0018.
+   Debian admits exactly 29 capabilities/46 shapes; upstream adds only the
+   complete IPv6 port group for 30/48. All five historical cohorts remain
    immutable. ADR 0012's six actual authored fixture volume-only consumer gate
-   and reviewed actual Nextcloud/Supabase schema-2 bind consumers remain required.
+   and fresh reviewed actual Nextcloud/Supabase bind and desired external
+   expectation consumers remain required.
    Each changed candidate and release needs fresh complete and four-lane
    native gates before a compatibility claim. The operation graph
    retains the chosen context and
@@ -99,15 +100,16 @@ These modules define independent ownership boundaries for later native work.
 External network intent additionally retains an optional authored
 `expected_internal` requirement as `None`, explicit false, or explicit true.
 It is not an observed flag and creates no request. Both explicit values require
-the distinct, currently unadmitted `NetworkExternalInternalExpectation`
+the distinct, exactly admitted `NetworkExternalInternalExpectation`
 capability, whose complete evidence group contains false and true external
 expectation shapes. Created-network `NetworkInternal` evidence is not reused.
 An explicit expectation selects complete-artifact schema 3; otherwise schema 1
 and bind-only schema 2 retain their bytes. Combined schema 3 keeps every bind
 obligation, protected identity and existing prerequisite order. Vocabulary and
 test-local positive cases do not alter sealed catalogue selection, counts
-or historical evidence. All sealed profiles refuse this new
-constraint pending independent native proof. `NetworkPrerequisite::assess`
+or historical evidence. ADR 0018 selects the complete independently reviewed
+false/true source group on four sealed profiles for candidate rehearsal only.
+`NetworkPrerequisite::assess`
 purely matches supplied inventory/daemon scope, canonical selected network ID,
 capture-local root binding and present correctly-originated required fields.
 It does not compare target-graph references with capture references. Native IDs
@@ -126,12 +128,13 @@ empty-request schema-3 obligations and opposite snapshot refusals. The canonical
 harness now requires this fifteenth test after configured binds. Raw emission
 requires its fixed private proof against independently derived harness context
 and daemon UID, preserving the nineteen-argument emitter protocol. Only the
-complete false/true group and closed public projection are added; reviewed root
-schema, sealed catalogue and historical evidence remain unchanged. Prospective
-identity-v2 raw counts are Debian 29/46 and upstream 30/48, not sealed admission
-counts. Definitions or offline controls grant no native compatibility. Fresh
-authenticated exact-candidate four-lane execution, independent review and the
-separate ADR 0012/0016 consumer gates remain required.
+complete false/true group and closed public projection are added; root schema
+and historical evidence remain unchanged. ADR 0018 selects authenticated source
+run `37788762974` at Debian 29/46 and upstream 30/48 for candidate rehearsal.
+Definitions or offline controls grant no native compatibility. Fresh
+authenticated exact-final-candidate fifteen-test four-lane execution,
+independent review and the separate ADR 0012/0016/0018 consumer gates remain
+required before ready/merge. No source run qualifies a changed candidate.
 
 Created named volumes retain bounded protected authored labels and render a
 `Labels` object only when nonempty. The separate `VolumeLabels` capability

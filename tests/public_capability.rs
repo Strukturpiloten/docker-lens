@@ -30,11 +30,11 @@ fn exact_profiles_admit_reviewed_prerequisites_but_keep_other_groups_closed() {
         let resolved = catalog.resolve(profile).unwrap();
         assert_eq!(
             resolved.evidence().candidate_sha(),
-            "6df951eb9e112becf8124fe9f8624b1df0dfbf2e"
+            "133f2857dac77c60aa79eab1a473c5749fd459ab"
         );
         assert_eq!(
             resolved.evidence().run_url(),
-            "https://github.com/Strukturpiloten/docker-lens/actions/runs/37706460127/attempts/1"
+            "https://github.com/Strukturpiloten/docker-lens/actions/runs/37788762974/attempts/1"
         );
         for capability in [
             Capability::StandaloneContainer,
@@ -49,6 +49,7 @@ fn exact_profiles_admit_reviewed_prerequisites_but_keep_other_groups_closed() {
             Capability::RestartPolicy,
             Capability::VolumeExternalReference,
             Capability::NetworkExternalReference,
+            Capability::NetworkExternalInternalExpectation,
             Capability::NetworkInternal,
             Capability::VolumeLabels,
             Capability::ContainerUser,
@@ -70,7 +71,6 @@ fn exact_profiles_admit_reviewed_prerequisites_but_keep_other_groups_closed() {
         }
         for capability in [
             Capability::TmpfsMount,
-            Capability::NetworkExternalInternalExpectation,
             Capability::NetworkIpv6,
             Capability::NetworkIpam,
             Capability::NetworkIpamDriver,
@@ -115,45 +115,206 @@ fn exact_profiles_admit_reviewed_prerequisites_but_keep_other_groups_closed() {
 }
 
 #[test]
-fn sealed_profiles_refuse_external_internal_expectations_without_native_evidence() {
+fn sealed_external_expectations_distinguish_absence_false_true_without_requests() {
     let catalog = TargetCapabilityCatalog::reviewed();
     for profile in catalog.profiles() {
         let capabilities = catalog.resolve(profile).unwrap();
         for expectation in [None, Some(false), Some(true)] {
-            let intent = TargetIntent::new(vec![TargetResource::Network(NetworkIntent {
-                reference: ResourceRef::new(1),
-                identity: TargetIdentity::new(b"private-network-canary".to_vec()).unwrap(),
-                role: NetworkRole::Declared,
-                source: NetworkSource::External {
-                    expected_driver: NetworkDriver::Bridge,
-                    expected_internal: expectation,
-                },
-            })])
-            .unwrap();
-            let result = DockerPlanner.plan(&intent, &capabilities);
-            if expectation.is_none() {
-                let artifact = DockerApiRenderer.render(&result.unwrap()).unwrap();
-                assert!(artifact.bytes().is_empty());
-                let complete: serde_json::Value =
-                    serde_json::from_slice(&artifact.complete_bytes().unwrap()).unwrap();
-                assert_eq!(complete["schema_version"], 1);
-                assert!(
-                    complete["prerequisites"][0]
-                        .get("expected_internal")
-                        .is_none()
-                );
-            } else {
-                let error = result.unwrap_err();
-                assert_eq!(
-                    error,
-                    PlanningError::MissingCapability {
-                        resource: ResourceRef::new(1),
-                        field: TargetField::NetworkExternalInternalExpectation,
-                        capability: Capability::NetworkExternalInternalExpectation,
-                    }
-                );
+            let intent = external_network_intent(expectation);
+            let graph = DockerPlanner.plan(&intent, &capabilities).unwrap();
+            let artifact = DockerApiRenderer.render(&graph).unwrap();
+            assert!(artifact.bytes().is_empty());
+            let complete: serde_json::Value =
+                serde_json::from_slice(&artifact.complete_bytes().unwrap()).unwrap();
+            let mut row = serde_json::json!({
+                "kind": "network", "reference": "1",
+                "identity": "private-network-canary", "expected_driver": "bridge",
+            });
+            if let Some(internal) = expectation {
+                row["expected_internal"] = internal.into();
+            }
+            assert_eq!(
+                complete,
+                serde_json::json!({
+                    "schema_version": if expectation.is_some() { 3 } else { 1 },
+                    "context": reviewed_prerequisite_context(profile),
+                    "requests": [], "prerequisites": [row],
+                })
+            );
+            let prerequisite = &artifact.network_prerequisites()[0];
+            assert_eq!(prerequisite.expected_internal, expectation);
+            for debug in [
+                format!("{intent:?}"),
+                format!("{graph:?}"),
+                format!("{artifact:?}"),
+                format!("{prerequisite:?}"),
+            ] {
+                assert!(!debug.contains("private-network-canary"));
+            }
+        }
+    }
+}
+
+fn external_network_intent(expected_internal: Option<bool>) -> TargetIntent {
+    TargetIntent::new(vec![TargetResource::Network(NetworkIntent {
+        reference: ResourceRef::new(1),
+        identity: TargetIdentity::new(b"private-network-canary".to_vec()).unwrap(),
+        role: NetworkRole::Declared,
+        source: NetworkSource::External {
+            expected_driver: NetworkDriver::Bridge,
+            expected_internal,
+        },
+    })])
+    .unwrap()
+}
+
+fn authored_network_snapshot(internal: bool) -> docker_lens::decoder::DecodedInventory {
+    use docker_lens::acquisition::{
+        Budget, Limits, NativeId, ReadRequest, RootKind, SelectedRoot, SelectionReason,
+    };
+    use docker_lens::evidence::HttpStatus;
+    let mut budget = Budget::new(Limits {
+        max_requests: 1,
+        max_selected_resources: 1,
+        max_expansions: 1,
+        max_response_bytes: 4096,
+        max_total_bytes: 4096,
+        max_elapsed: std::time::Duration::from_secs(2),
+    })
+    .unwrap();
+    budget
+        .record_request(
+            ReadRequest::InspectNetwork(NativeId::new("a".repeat(64)).unwrap()),
+            Some(ResourceRef::new(97)),
+            Some(api(41)),
+        )
+        .unwrap();
+    let bytes = serde_json::to_vec(&serde_json::json!({
+        "Id": "a".repeat(64), "Name": "private-network-canary", "Driver": "bridge", "Internal": internal,
+    })).unwrap();
+    budget
+        .read_response(HttpStatus::new(200).unwrap(), bytes.as_slice())
+        .unwrap();
+    let mut inventory =
+        docker_lens::decoder::decode_capture(&budget.into_capture().unwrap()).unwrap();
+    // A caller-assembled snapshot is an assertion, not authenticated native proof.
+    inventory.selected_roots.push(SelectedRoot {
+        resource: ResourceRef::new(97),
+        kind: RootKind::Network,
+        reason: SelectionReason::ExactNetworkId,
+    });
+    inventory
+}
+
+#[test]
+fn sealed_prerequisites_assess_supplied_snapshots_without_granting_native_authority() {
+    use docker_lens::acquisition::NativeId;
+    use docker_lens::observation::{Availability, Observed, Origin};
+    use docker_lens::target::NetworkPrerequisiteError as Error;
+    let id = NativeId::new("a".repeat(64)).unwrap();
+    let catalog = TargetCapabilityCatalog::reviewed();
+    for profile in catalog.profiles() {
+        for expectation in [None, Some(false), Some(true)] {
+            let intent = external_network_intent(expectation);
+            let graph = DockerPlanner
+                .plan(&intent, &catalog.resolve(profile).unwrap())
+                .unwrap();
+            let artifact = DockerApiRenderer.render(&graph).unwrap();
+            let prerequisite = &artifact.network_prerequisites()[0];
+            let mut snapshot = authored_network_snapshot(expectation.unwrap_or(false));
+            let scope = snapshot.observation_id;
+            assert_ne!(prerequisite.reference, snapshot.networks[0].reference);
+            assert_eq!(prerequisite.assess(&snapshot, scope, &id), Ok(()));
+            if let Some(expected) = expectation {
+                snapshot.networks[0].internal =
+                    Observed::present(!expected, Availability::Present, Origin::Effective);
+                let error = prerequisite.assess(&snapshot, scope, &id).unwrap_err();
+                assert_eq!(error, Error::NetworkInternalMismatch);
                 assert!(!format!("{error:?}").contains("canary"));
             }
+            snapshot.networks[0].internal =
+                Observed::unavailable(Availability::Null, Origin::Effective);
+            assert_eq!(
+                prerequisite.assess(&snapshot, scope, &id),
+                if expectation.is_some() {
+                    Err(Error::InvalidNetworkInternalEvidence)
+                } else {
+                    Ok(())
+                }
+            );
+            assert_eq!(
+                prerequisite.assess(
+                    &snapshot,
+                    authored_network_snapshot(false).observation_id,
+                    &id
+                ),
+                Err(Error::ObservationScopeMismatch)
+            );
+            snapshot.selected_roots.clear();
+            assert_eq!(
+                prerequisite.assess(&snapshot, scope, &id),
+                Err(Error::SelectedRootNotFound)
+            );
+        }
+    }
+}
+
+#[test]
+fn sealed_schema_three_keeps_mixed_bind_obligations_and_schema_two_when_unconstrained() {
+    for profile in TargetCapabilityCatalog::reviewed().profiles() {
+        for expectation in [None, Some(false), Some(true)] {
+            let mut container = application_container();
+            container.mounts.push(
+                Mount::bind(b"/private-source".to_vec(), b"/target".to_vec(), true)
+                    .unwrap()
+                    .with_bind_relabel(BindRelabel::Private)
+                    .unwrap(),
+            );
+            let intent = TargetIntent::new(vec![
+                TargetResource::Network(NetworkIntent {
+                    reference: ResourceRef::new(1),
+                    identity: TargetIdentity::new(b"private-network-canary".to_vec()).unwrap(),
+                    role: NetworkRole::Declared,
+                    source: NetworkSource::External {
+                        expected_driver: NetworkDriver::Bridge,
+                        expected_internal: expectation,
+                    },
+                }),
+                TargetResource::Container(Box::new(container)),
+            ])
+            .unwrap();
+            let complete = complete_application(profile, &intent);
+            assert_eq!(
+                complete["schema_version"],
+                if expectation.is_some() { 3 } else { 2 }
+            );
+            assert_eq!(complete["requests"].as_array().unwrap().len(), 1);
+            let api = if matches!(profile.identity().build(), EngineBuild::Upstream) {
+                "1.56"
+            } else {
+                "1.41"
+            };
+            assert_eq!(
+                complete["requests"][0]["path"],
+                format!("/v{api}/containers/create?name=private-application")
+            );
+            let rows = complete["prerequisites"].as_array().unwrap();
+            assert_eq!(rows.len(), 2);
+            assert_eq!(
+                rows[1],
+                serde_json::json!({
+                    "kind":"bind_source","reference":"3","identity":"private-application",
+                    "mount_index":"0","source":"/private-source","target":"/target",
+                    "read_only":true,"relabel":"private",
+                    "source_conditions":["exists","type_reviewed","contents_reviewed","ownership_reviewed","permissions_reviewed"],
+                    "selinux_effect":"unverified",
+                    "selinux_conditions":["daemon_selinux_enabled","container_mount_label_present","policy_filesystem_support","relabel_authority"],
+                })
+            );
+            assert_eq!(
+                rows[0].get("expected_internal"),
+                expectation.map(serde_json::Value::Bool).as_ref()
+            );
         }
     }
 }
@@ -734,16 +895,16 @@ fn reviewed_prerequisite_context(profile: &TargetProfile) -> serde_json::Value {
                 "20.10.5+dfsg1",
                 "1.41",
                 "1.41",
-                "edc6276b2caf91be8057430159524563f59dae1528cda8f342f37c1336d2fdc2",
-                "bf3b2374782342abda9bc13f07f273f22a262f1412afb16376efcf376dceac17",
+                "60d1a2a4892eb47bc95244194113a1d0fd24c52a1e057ce3469be433106b3d12",
+                "e014e47b24643055f01349e5a3296a938d4d88f34415f0f9bb4f1286709be29a",
             ),
             EngineBuild::Upstream => (
                 serde_json::json!({"kind": "upstream"}),
                 "29.8.1",
                 "1.56",
                 "1.49",
-                "7eacfd00927374220e2bbe6340b62595803e8db2842b29034dc6145f73401cac",
-                "c2f380eaf9cbb8f4cdd8ca380afe350f6f97a39aeb98fc2211d531c3320d1d4a",
+                "727db2b40c56df2f03d26b9134a35d31f2837db8ed00d5887371896ab336635e",
+                "f951bf1919e7dc039c8900f3c2144e4b71ad05e675ec54fa64406963b37dba35",
             ),
         };
     let (mode, evidence_key) = match profile.mode() {
@@ -844,16 +1005,16 @@ fn literal_label_artifact(profile: &TargetProfile) -> &'static str {
     // Independently authored wire expectations, not bytes obtained from the renderer.
     match (profile.identity().build(), profile.mode()) {
         (EngineBuild::DebianPackage(_), DaemonMode::Rootful) => {
-            "{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"debian_package\",\"revision\":\"20.10.5+dfsg1-1+deb11u2\"},\"engine_release\":\"20.10.5+dfsg1\",\"advertised_api_version\":\"1.41\",\"acquisition_api_version\":\"1.41\",\"rendering_api_version\":\"1.41\",\"daemon_mode\":\"rootful\",\"evidence_sha256\":\"edc6276b2caf91be8057430159524563f59dae1528cda8f342f37c1336d2fdc2\"},\"requests\":[{\"method\":\"POST\",\"path\":\"/v1.41/volumes/create\",\"body\":{\"Name\":\"candidate-volume\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"empty\":\"\",\"private-key\":\"Grüße\\\"\\\\\\n\"}}}],\"prerequisites\":[]}\n"
+            "{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"debian_package\",\"revision\":\"20.10.5+dfsg1-1+deb11u2\"},\"engine_release\":\"20.10.5+dfsg1\",\"advertised_api_version\":\"1.41\",\"acquisition_api_version\":\"1.41\",\"rendering_api_version\":\"1.41\",\"daemon_mode\":\"rootful\",\"evidence_sha256\":\"60d1a2a4892eb47bc95244194113a1d0fd24c52a1e057ce3469be433106b3d12\"},\"requests\":[{\"method\":\"POST\",\"path\":\"/v1.41/volumes/create\",\"body\":{\"Name\":\"candidate-volume\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"empty\":\"\",\"private-key\":\"Grüße\\\"\\\\\\n\"}}}],\"prerequisites\":[]}\n"
         }
         (EngineBuild::Upstream, DaemonMode::Rootful) => {
-            "{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"upstream\"},\"engine_release\":\"29.8.1\",\"advertised_api_version\":\"1.56\",\"acquisition_api_version\":\"1.49\",\"rendering_api_version\":\"1.56\",\"daemon_mode\":\"rootful\",\"evidence_sha256\":\"7eacfd00927374220e2bbe6340b62595803e8db2842b29034dc6145f73401cac\"},\"requests\":[{\"method\":\"POST\",\"path\":\"/v1.56/volumes/create\",\"body\":{\"Name\":\"candidate-volume\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"empty\":\"\",\"private-key\":\"Grüße\\\"\\\\\\n\"}}}],\"prerequisites\":[]}\n"
+            "{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"upstream\"},\"engine_release\":\"29.8.1\",\"advertised_api_version\":\"1.56\",\"acquisition_api_version\":\"1.49\",\"rendering_api_version\":\"1.56\",\"daemon_mode\":\"rootful\",\"evidence_sha256\":\"727db2b40c56df2f03d26b9134a35d31f2837db8ed00d5887371896ab336635e\"},\"requests\":[{\"method\":\"POST\",\"path\":\"/v1.56/volumes/create\",\"body\":{\"Name\":\"candidate-volume\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"empty\":\"\",\"private-key\":\"Grüße\\\"\\\\\\n\"}}}],\"prerequisites\":[]}\n"
         }
         (EngineBuild::DebianPackage(_), DaemonMode::Rootless) => {
-            "{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"debian_package\",\"revision\":\"20.10.5+dfsg1-1+deb11u2\"},\"engine_release\":\"20.10.5+dfsg1\",\"advertised_api_version\":\"1.41\",\"acquisition_api_version\":\"1.41\",\"rendering_api_version\":\"1.41\",\"daemon_mode\":\"rootless\",\"evidence_sha256\":\"bf3b2374782342abda9bc13f07f273f22a262f1412afb16376efcf376dceac17\"},\"requests\":[{\"method\":\"POST\",\"path\":\"/v1.41/volumes/create\",\"body\":{\"Name\":\"candidate-volume\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"empty\":\"\",\"private-key\":\"Grüße\\\"\\\\\\n\"}}}],\"prerequisites\":[]}\n"
+            "{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"debian_package\",\"revision\":\"20.10.5+dfsg1-1+deb11u2\"},\"engine_release\":\"20.10.5+dfsg1\",\"advertised_api_version\":\"1.41\",\"acquisition_api_version\":\"1.41\",\"rendering_api_version\":\"1.41\",\"daemon_mode\":\"rootless\",\"evidence_sha256\":\"e014e47b24643055f01349e5a3296a938d4d88f34415f0f9bb4f1286709be29a\"},\"requests\":[{\"method\":\"POST\",\"path\":\"/v1.41/volumes/create\",\"body\":{\"Name\":\"candidate-volume\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"empty\":\"\",\"private-key\":\"Grüße\\\"\\\\\\n\"}}}],\"prerequisites\":[]}\n"
         }
         (EngineBuild::Upstream, DaemonMode::Rootless) => {
-            "{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"upstream\"},\"engine_release\":\"29.8.1\",\"advertised_api_version\":\"1.56\",\"acquisition_api_version\":\"1.49\",\"rendering_api_version\":\"1.56\",\"daemon_mode\":\"rootless\",\"evidence_sha256\":\"c2f380eaf9cbb8f4cdd8ca380afe350f6f97a39aeb98fc2211d531c3320d1d4a\"},\"requests\":[{\"method\":\"POST\",\"path\":\"/v1.56/volumes/create\",\"body\":{\"Name\":\"candidate-volume\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"empty\":\"\",\"private-key\":\"Grüße\\\"\\\\\\n\"}}}],\"prerequisites\":[]}\n"
+            "{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"upstream\"},\"engine_release\":\"29.8.1\",\"advertised_api_version\":\"1.56\",\"acquisition_api_version\":\"1.49\",\"rendering_api_version\":\"1.56\",\"daemon_mode\":\"rootless\",\"evidence_sha256\":\"f951bf1919e7dc039c8900f3c2144e4b71ad05e675ec54fa64406963b37dba35\"},\"requests\":[{\"method\":\"POST\",\"path\":\"/v1.56/volumes/create\",\"body\":{\"Name\":\"candidate-volume\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"empty\":\"\",\"private-key\":\"Grüße\\\"\\\\\\n\"}}}],\"prerequisites\":[]}\n"
         }
         (_, DaemonMode::Unknown) => panic!("reviewed profiles must bind a daemon mode"),
     }

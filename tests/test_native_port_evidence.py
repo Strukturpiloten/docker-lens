@@ -178,8 +178,8 @@ class PortCapabilityEvidenceTests(unittest.TestCase):
         shapes = catalogue.split("const REVIEWED_SHAPES:", 1)[1].split("];", 1)[0]
         common_names = re.findall(r"Capability::(\w+)", capabilities)
         common_shapes = re.findall(r"NativeCapabilityShape::(\w+)", shapes)
-        self.assertEqual(len(common_names), 28)
-        self.assertEqual(len(common_shapes), 44)
+        self.assertEqual(len(common_names), 29)
+        self.assertEqual(len(common_shapes), 46)
         self.assertEqual(set(PORT_GROUPS) - set(common_names), {"PortHostIpv6"})
         self.assertNotIn("FixedIpv6HostPort", common_shapes)
         self.assertNotIn("EphemeralIpv6HostPort", common_shapes)
@@ -190,8 +190,8 @@ class PortCapabilityEvidenceTests(unittest.TestCase):
         upstream_shapes = catalogue.split("const UPSTREAM_SHAPES:", 1)[1].split("];", 1)[0]
         upstream_names = re.findall(r"Capability::(\w+)", upstream)
         upstream_shape_names = re.findall(r"NativeCapabilityShape::(\w+)", upstream_shapes)
-        self.assertEqual(len(upstream_names), 29)
-        self.assertEqual(len(upstream_shape_names), 46)
+        self.assertEqual(len(upstream_names), 30)
+        self.assertEqual(len(upstream_shape_names), 48)
         self.assertEqual(set(upstream_names), set(common_names) | {"PortHostIpv6"})
         self.assertEqual(set(upstream_shape_names), set(common_shapes) | set(PORT_GROUPS["PortHostIpv6"]))
 

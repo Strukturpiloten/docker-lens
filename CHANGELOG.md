@@ -7,15 +7,23 @@
   messages; emit a fixed unavailable result when no causal location exists.
   This is diagnostic instrumentation, not an underlying native-behavior fix.
 
+- Select ADR 0018's authenticated external-network source cohort for candidate
+  rehearsal: Debian 29 capabilities/46 shapes and upstream 30/48. Admit only
+  the complete external Internal false/true group beyond the prior groups;
+  preserve None, inert schemas 1/2/3, snapshot boundaries and all historical bytes.
+  Fresh final-candidate complete/native and actual volume/bind consumer gates
+  remain required before ready/merge; no application or release claim follows.
+
 - Wire the separate external-network Internal source proof as the fifteenth
   canonical native test; require strict private proof before projecting its
   complete false/true raw group. Preserve emitter arguments, sealed admission
-  and historical evidence. Native execution and admission remain pending.
+  and historical evidence. ADR 0018 separately selects the reviewed source group;
+  fresh final-candidate execution remains required.
 
 - Add capability-unadmitted external-network internal expectations and conditional
   complete-artifact schema 3. Preserve absent/default schemas and request bytes;
   add pure observation-scoped snapshot matching with closed failures and no I/O.
-  Native proof and admission remain pending.
+  ADR 0018 separately admits reviewed source evidence for candidate rehearsal.
 
 - Reject dollar-bearing image references with the existing value-free invalid-image
   error, without interpolation or environment reads. Explicit image bytes remain
