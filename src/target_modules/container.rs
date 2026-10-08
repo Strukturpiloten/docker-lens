@@ -4,15 +4,24 @@ use crate::observation::ResourceRef;
 use std::net::IpAddr;
 use std::num::{NonZeroU16, NonZeroU32, NonZeroU64};
 
-/// An explicit image reference, with no inferred tag or platform.
+/// A concrete image reference, with no inferred tag or platform.
+/// Dollar-bearing placeholders are rejected; no interpolation or environment
+/// lookup is performed. This is not a full Docker image-reference parser.
 pub struct ImageReference(ProtectedValue);
 
 impl ImageReference {
+    /// Retain exact UTF-8 bytes without interpolation or inferred defaults.
+    /// Empty, whitespace, NUL and dollar-bearing input returns the value-free
+    /// `IntentError::InvalidImage`. It does not validate the full native grammar.
     pub fn new(bytes: Vec<u8>) -> Result<Self, IntentError> {
         let Ok(value) = std::str::from_utf8(&bytes) else {
             return Err(IntentError::InvalidImage);
         };
-        if value.is_empty() || value.chars().any(char::is_whitespace) || value.contains('\0') {
+        if value.is_empty()
+            || value.chars().any(char::is_whitespace)
+            || value.contains('\0')
+            || value.contains('$')
+        {
             return Err(IntentError::InvalidImage);
         }
         Ok(Self(ProtectedValue::new(bytes)))
@@ -771,3 +780,100 @@ pub struct ContainerIntent {
 #[cfg(test)]
 #[path = "container_user_tests.rs"]
 mod user_tests;
+
+#[cfg(test)]
+mod image_reference_tests {
+    use crate::observation::ResourceRef;
+    use crate::target::{
+        ContainerIntent, ContainerSettings, ImageCommand, ImageReference, IntentError,
+        TargetIdentity, TargetIntent, TargetResource,
+    };
+
+    fn target(bytes: Vec<u8>) -> Result<TargetIntent, IntentError> {
+        TargetIntent::new(vec![TargetResource::Container(Box::new(ContainerIntent {
+            reference: ResourceRef::new(1),
+            identity: TargetIdentity::new(b"app".to_vec()).unwrap(),
+            image: ImageReference::new(bytes)?,
+            environment: vec![],
+            ports: vec![],
+            mounts: vec![],
+            networks: vec![],
+            entrypoint: ImageCommand::Inherit,
+            command: ImageCommand::Inherit,
+            healthcheck: None,
+            restart: None,
+            settings: ContainerSettings::default(),
+        }))])
+    }
+
+    #[test]
+    fn placeholders_in_repository_tag_and_digest_fail_with_closed_errors() {
+        for value in [
+            "$IMAGE",
+            "${IMAGE}",
+            "$REGISTRY/private-repository:1",
+            "${REGISTRY}/private-repository:1",
+            "registry.$DOMAIN/private-repository:1",
+            "private-repository$SUFFIX:1",
+            "private-repository${SUFFIX}:1",
+            "private-repository:$TAG",
+            "private-repository:${TAG}",
+            "private-repository:release$SUFFIX",
+            "private-repository:release${SUFFIX}",
+            "private-repository@sha256:$DIGEST",
+            "private-repository@sha256:${DIGEST}",
+            "private-repository@sha256:abc${DIGEST}def",
+            "$",
+            "$$",
+            "private-repository:\\$TAG",
+            "private-repository:$",
+        ] {
+            let result = ImageReference::new(value.as_bytes().to_vec());
+            assert_eq!(result.err(), Some(IntentError::InvalidImage));
+            let public_result = target(value.as_bytes().to_vec());
+            assert_eq!(format!("{public_result:?}"), "Err(InvalidImage)");
+            assert!(!format!("{public_result:?}").contains(value));
+        }
+    }
+
+    #[test]
+    fn explicit_images_keep_exact_bytes_through_public_target_construction() {
+        for value in [
+            "busybox",
+            "docker.io/library/busybox:1.36.1",
+            "registry.example:5000/team/service:release-1.2",
+            "registry.example/team/service@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "registry.example/サービス:版1",
+        ] {
+            let image = ImageReference::new(value.as_bytes().to_vec()).unwrap();
+            assert_eq!(image.bytes(), value.as_bytes());
+            assert_eq!(format!("{image:?}"), "ImageReference([redacted])");
+            let intent = target(value.as_bytes().to_vec()).unwrap();
+            let TargetResource::Container(container) = &intent.resources()[0] else {
+                panic!("expected container")
+            };
+            assert_eq!(container.image.bytes(), value.as_bytes());
+            assert!(!format!("{intent:?}").contains(value));
+        }
+    }
+
+    #[test]
+    fn existing_utf8_empty_whitespace_and_nul_refusals_stay_closed() {
+        for bytes in [
+            vec![],
+            vec![0xff],
+            b"private-repository:\0".to_vec(),
+            b" private-repository:1".to_vec(),
+            b"private-repository:1\n".to_vec(),
+            "private-repository:1\u{a0}".as_bytes().to_vec(),
+            b"private-repository:\t$TAG".to_vec(),
+            vec![b'$', 0xff],
+        ] {
+            let error = ImageReference::new(bytes).err().unwrap();
+            assert_eq!(error, IntentError::InvalidImage);
+            assert_eq!(format!("{error:?}"), "InvalidImage");
+        }
+    }
+}

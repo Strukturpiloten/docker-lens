@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Reject dollar-bearing image references with the existing value-free invalid-image
+  error, without interpolation or environment reads. Explicit image bytes remain
+  unchanged; no native capability, request schema, or compatibility claim is added.
+
 - Select ADR 0016's coherent reviewed source cohort for pre-merge rehearsal:
   Debian 28 capabilities/44 shapes and upstream 29/46, with IPv6 ports
   upstream-only. Preserve historical evidence; fresh final-candidate gates,
