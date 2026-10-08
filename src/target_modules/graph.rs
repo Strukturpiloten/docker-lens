@@ -169,6 +169,7 @@ pub enum TargetField {
     NetworkStaticAddress,
     NetworkMultipleAttachment,
     NetworkExternalReference,
+    NetworkExternalInternalExpectation,
     VolumeExternalReference,
     Environment,
     Command,
@@ -390,10 +391,20 @@ impl<'a> OperationGraph<'a> {
                             require(TargetField::NetworkLabels, Capability::NetworkLabels)?;
                         }
                     }
-                    NetworkSource::External { .. } => require(
-                        TargetField::NetworkExternalReference,
-                        Capability::NetworkExternalReference,
-                    )?,
+                    NetworkSource::External {
+                        expected_internal, ..
+                    } => {
+                        require(
+                            TargetField::NetworkExternalReference,
+                            Capability::NetworkExternalReference,
+                        )?;
+                        if expected_internal.is_some() {
+                            require(
+                                TargetField::NetworkExternalInternalExpectation,
+                                Capability::NetworkExternalInternalExpectation,
+                            )?;
+                        }
+                    }
                 },
                 TargetResource::Volume { labels, .. } => {
                     require(TargetField::Resource, Capability::NamedVolume)?;

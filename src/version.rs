@@ -103,6 +103,8 @@ pub enum Capability {
     VolumeExternalReference,
     BridgeNetwork,
     NetworkExternalReference,
+    /// External network internal-flag requirement, not created bridge behavior.
+    NetworkExternalInternalExpectation,
     NetworkInternal,
     NetworkIpv6,
     NetworkIpam,
@@ -552,6 +554,8 @@ pub(crate) enum NativeCapabilityShape {
     BridgeNetworkCreate,
     BridgeNetworkAttach,
     ExternalNetworkReference,
+    ExternalNetworkInternalFalse,
+    ExternalNetworkInternalTrue,
     InternalBridgeNetworkCreate,
     Ipv6BridgeNetworkCreate,
     NetworkIpamV4,
@@ -660,6 +664,9 @@ impl NativeCapabilityShape {
             Self::ExternalVolumeReference => Capability::VolumeExternalReference,
             Self::BridgeNetworkCreate | Self::BridgeNetworkAttach => Capability::BridgeNetwork,
             Self::ExternalNetworkReference => Capability::NetworkExternalReference,
+            Self::ExternalNetworkInternalFalse | Self::ExternalNetworkInternalTrue => {
+                Capability::NetworkExternalInternalExpectation
+            }
             Self::InternalBridgeNetworkCreate => Capability::NetworkInternal,
             Self::Ipv6BridgeNetworkCreate => Capability::NetworkIpv6,
             Self::NetworkIpamV4
@@ -765,6 +772,10 @@ impl NativeCapabilityShape {
                 Some(&[Self::BridgeNetworkCreate, Self::BridgeNetworkAttach])
             }
             Capability::NetworkExternalReference => Some(&[Self::ExternalNetworkReference]),
+            Capability::NetworkExternalInternalExpectation => Some(&[
+                Self::ExternalNetworkInternalFalse,
+                Self::ExternalNetworkInternalTrue,
+            ]),
             Capability::NetworkInternal => Some(&[Self::InternalBridgeNetworkCreate]),
             Capability::NetworkIpv6 => Some(&[Self::Ipv6BridgeNetworkCreate]),
             Capability::NetworkIpam => Some(&[

@@ -57,6 +57,8 @@ mod reviewed_catalog;
 #[cfg(test)]
 mod native_bind_relabel_tests;
 #[cfg(test)]
+mod native_external_network_tests;
+#[cfg(test)]
 mod native_health_metadata_tests;
 #[cfg(test)]
 mod native_identity_tests;

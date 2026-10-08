@@ -56,6 +56,7 @@ fn external_network() -> TargetResource {
         role: NetworkRole::Declared,
         source: NetworkSource::External {
             expected_driver: NetworkDriver::Bridge,
+            expected_internal: None,
         },
     })
 }

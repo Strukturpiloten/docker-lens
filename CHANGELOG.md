@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Wire the separate external-network Internal source proof as the fifteenth
+  canonical native test; require strict private proof before projecting its
+  complete false/true raw group. Preserve emitter arguments, sealed admission
+  and historical evidence. Native execution and admission remain pending.
+
+- Add capability-unadmitted external-network internal expectations and conditional
+  complete-artifact schema 3. Preserve absent/default schemas and request bytes;
+  add pure observation-scoped snapshot matching with closed failures and no I/O.
+  Native proof and admission remain pending.
+
 - Reject dollar-bearing image references with the existing value-free invalid-image
   error, without interpolation or environment reads. Explicit image bytes remain
   unchanged; no native capability, request schema, or compatibility claim is added.

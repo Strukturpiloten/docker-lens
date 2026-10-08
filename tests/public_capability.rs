@@ -70,6 +70,7 @@ fn exact_profiles_admit_reviewed_prerequisites_but_keep_other_groups_closed() {
         }
         for capability in [
             Capability::TmpfsMount,
+            Capability::NetworkExternalInternalExpectation,
             Capability::NetworkIpv6,
             Capability::NetworkIpam,
             Capability::NetworkIpamDriver,
@@ -110,6 +111,50 @@ fn exact_profiles_admit_reviewed_prerequisites_but_keep_other_groups_closed() {
             resolved.supports(Capability::PortHostIpv6),
             matches!(profile.identity().build(), EngineBuild::Upstream)
         );
+    }
+}
+
+#[test]
+fn sealed_profiles_refuse_external_internal_expectations_without_native_evidence() {
+    let catalog = TargetCapabilityCatalog::reviewed();
+    for profile in catalog.profiles() {
+        let capabilities = catalog.resolve(profile).unwrap();
+        for expectation in [None, Some(false), Some(true)] {
+            let intent = TargetIntent::new(vec![TargetResource::Network(NetworkIntent {
+                reference: ResourceRef::new(1),
+                identity: TargetIdentity::new(b"private-network-canary".to_vec()).unwrap(),
+                role: NetworkRole::Declared,
+                source: NetworkSource::External {
+                    expected_driver: NetworkDriver::Bridge,
+                    expected_internal: expectation,
+                },
+            })])
+            .unwrap();
+            let result = DockerPlanner.plan(&intent, &capabilities);
+            if expectation.is_none() {
+                let artifact = DockerApiRenderer.render(&result.unwrap()).unwrap();
+                assert!(artifact.bytes().is_empty());
+                let complete: serde_json::Value =
+                    serde_json::from_slice(&artifact.complete_bytes().unwrap()).unwrap();
+                assert_eq!(complete["schema_version"], 1);
+                assert!(
+                    complete["prerequisites"][0]
+                        .get("expected_internal")
+                        .is_none()
+                );
+            } else {
+                let error = result.unwrap_err();
+                assert_eq!(
+                    error,
+                    PlanningError::MissingCapability {
+                        resource: ResourceRef::new(1),
+                        field: TargetField::NetworkExternalInternalExpectation,
+                        capability: Capability::NetworkExternalInternalExpectation,
+                    }
+                );
+                assert!(!format!("{error:?}").contains("canary"));
+            }
+        }
     }
 }
 
@@ -733,6 +778,7 @@ fn reviewed_profiles_plan_and_render_exact_prerequisites_and_internal_bridge() {
             role: NetworkRole::Declared,
             source: NetworkSource::External {
                 expected_driver: NetworkDriver::Bridge,
+                expected_internal: None,
             },
         }),
         TargetResource::Network(NetworkIntent {

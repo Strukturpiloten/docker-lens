@@ -1,5 +1,40 @@
 # Verification
 
+## Mandatory external-network prerequisite source proof
+
+[The new private contract](native-external-network-contract.md) defines an ignored
+test-only producer and strict validator for independently CLI-created ordinary
+and internal external-network prerequisites. It requires actual capture scope,
+literal acquisition/advertised API distinctions, expected/opposite assessment,
+empty request streams, ownership and two verified absence rounds before private
+proof publication. Offline controls are authored and establish no native proof.
+The canonical harness requires this fifteenth test after configured binds and
+before emission, preserving all fourteen preceding invocations. The exact runner
+requires one ignored library-test success, preserves causal failure before
+cleanup and filters output to fixed stages and bounded source locations.
+The emitter's nineteen-positional-argument protocol remains unchanged: it
+requires the fixed private proof and independently derives expected context from
+canonical harness facts and the observed dockerd UID. Invalid or absent proof
+refuses the whole manifest. Only the complete false/true raw group and fixed
+contract/ordered-probes public projection are added; disconnected schema
+definitions leave the reviewed root and historical records unchanged.
+Prospective parameterized-identity raw counts are Debian 29/46 and upstream
+30/48. Sealed counts remain Debian 28/44 and upstream 29/46. No passing native
+run, compatibility or sealed admission is claimed. Fresh exact-candidate complete
+and authenticated four-lane native gates, independent review and a separate
+catalogue admission remain pending, together with ADR 0012/0016's six actual
+authored-fixture volume rehearsals and actual Nextcloud/Supabase bind consumers.
+
+Local execution, `check.yml` main push, `native-validation.yml` reviewed-PR
+dispatch and `release-validation.yml` all invoke `scripts/native-conformance.sh`;
+no consumer workflow definition changes. Read-only Renovate review confirms the
+existing unique native-image regex still extracts the unchanged five tag/digest
+pairs, with unchanged grouping and manual approval. Cargo/toolchain/Action
+ownership and extraction remain unchanged; no dependency, runtime, downloaded
+tool or Action pin is added, moved or changed. Other Lens products and the website
+do not consume this Docker-only private proof. BoxFerry's profile/producer-receipt
+and application-consumer contracts remain separate and no Lens depends on it.
+
 ## Mandatory configured-bind source proof
 
 The canonical local/main/reviewed-PR/release harness additionally requires
@@ -18,7 +53,8 @@ software pin; it cannot be supplied by the proof itself. The emitter derives
 all expected context from those harness facts and requires the complete private
 four-case/two-role proof before emitting only two configured-retention groups,
 four ordered markers and an explicitly unverified SELinux effect. With preceding
-source producers, raw counts are Debian 28/44 and upstream 29/46. ADR 0016
+source producers excluding the later external-network group, raw counts are
+Debian 28/44 and upstream 29/46. ADR 0016
 now selects the independently reviewed coherent source cohort for candidate
 admission; earlier evidence stays immutable and final-candidate gates remain.
 
@@ -1108,7 +1144,7 @@ health or start-interval groups. Identity is not arbitrary-image startup or
 host UID mapping; bind configuration is not relabel effect evidence.
 
 This is pre-merge candidate rehearsal admission. Production merge/main/release
-still require complete final-edit gates, fresh fourteen-test four-lane proof
+still require complete final-edit gates, fresh fifteen-test four-lane proof
 on the final candidate, all six actual authored fixture volume-only consumer
 rehearsals required by ADR 0012, and reviewed BoxFerry schema-2 consumption of
 the actual authored Nextcloud/Supabase binds. This source run cannot qualify a

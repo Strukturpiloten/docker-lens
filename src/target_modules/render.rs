@@ -10,6 +10,9 @@ use std::fmt::Write;
 mod bind_relabel_tests;
 #[path = "render/container.rs"]
 mod container;
+#[cfg(test)]
+#[path = "render/external_internal_tests.rs"]
+mod external_internal_tests;
 #[path = "render/network.rs"]
 mod network;
 #[cfg(test)]
@@ -133,9 +136,12 @@ impl std::fmt::Debug for BindSourcePrerequisite {
 }
 
 /// A declared external network must be checked by the consumer before use.
+/// [`Self::assess`] matches supplied snapshot evidence without runtime verification.
 pub struct NetworkPrerequisite {
     pub reference: ResourceRef,
     pub expected_driver: super::NetworkDriver,
+    /// Optional authored preflight requirement; never destination observation.
+    pub expected_internal: Option<bool>,
     identity: ProtectedValue,
 }
 
@@ -229,7 +235,13 @@ impl RenderedArtifact {
             .native
             .as_ref()
             .ok_or(CompleteArtifactError::MissingNativeProvenance)?;
-        let schema = if self.bind_source_prerequisites.is_empty() {
+        let schema = if self
+            .network_prerequisites
+            .iter()
+            .any(|network| network.expected_internal.is_some())
+        {
+            3
+        } else if self.bind_source_prerequisites.is_empty() {
             1
         } else {
             2
@@ -263,6 +275,10 @@ impl RenderedArtifact {
                         &mut document,
                         network_driver_name(network.expected_driver).as_bytes(),
                     );
+                    if let Some(expected_internal) = network.expected_internal {
+                        document.push_str(",\"expected_internal\":");
+                        document.push_str(if expected_internal { "true" } else { "false" });
+                    }
                 }
                 PrerequisiteOrder::Volume(index) => {
                     let volume = &self.volume_prerequisites[*index];
@@ -350,12 +366,16 @@ impl Renderer for DockerApiRenderer {
                         format!("{prefix}networks/create"),
                         network::render_network(network),
                     )),
-                    NetworkSource::External { expected_driver } => {
+                    NetworkSource::External {
+                        expected_driver,
+                        expected_internal,
+                    } => {
                         prerequisite_order
                             .push(PrerequisiteOrder::Network(network_prerequisites.len()));
                         network_prerequisites.push(NetworkPrerequisite {
                             reference: network.reference,
                             expected_driver: *expected_driver,
+                            expected_internal: *expected_internal,
                             identity: ProtectedValue::new(network.identity.bytes().to_vec()),
                         });
                         None

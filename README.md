@@ -27,7 +27,7 @@ representations retain their existing behavior.
 
 This is candidate pre-merge rehearsal admission. Production merge, main
 admission and release remain blocked until fresh exact-final-candidate complete
-and four-lane fourteen-test native gates, independently reviewed volume-only
+and four-lane fifteen-test native gates, independently reviewed volume-only
 consumer rehearsals of all six actual authored fixtures under
 [ADR 0012](docs/decisions/0012-candidate-volume-label-admission.md), and reviewed
 BoxFerry schema-2 consumers of the actual Nextcloud/Supabase binds pass.

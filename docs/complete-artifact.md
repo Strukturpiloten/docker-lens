@@ -8,7 +8,8 @@ caller-created opaque artifacts. This API exposes protected authored values
 explicitly; storage, display, and access control belong to the consumer.
 
 The complete artifact is one UTF-8 JSON object followed by a newline. Artifacts
-without bind-source prerequisites retain version 1 and their existing bytes:
+without bind-source prerequisites or explicit external-network internal
+expectations retain version 1 and their existing bytes:
 
 ```json
 {
@@ -67,15 +68,18 @@ The document carries prerequisites for review and explicit consumer-side
 preflight decisions; it does not prove existence, contents, driver at runtime,
 or data transfer. Docker Engine may create an absent named volume implicitly
 when a container is created, so a consumer must not apply a mount request
-without independently checking the external volume prerequisite. DockerLens
-has no execution, transport, deployment, or file-writing method.
+without independently checking the external volume prerequisite. Artifact and
+planning methods have no execution, transport, deployment, or file-writing
+operation. The library separately provides bounded explicit read-only
+acquisition; artifact methods and pure snapshot assessment introduce none.
 
 ## Conditional version 2 bind-source prerequisites
 
 ADR 0016 admits shared/private configured retention on all four exact candidate
 profiles. This does not establish source suitability or SELinux effects; actual
 Nextcloud/Supabase consumer reviews and final-candidate native gates remain required.
-Only an artifact containing a relabelled bind emits `schema_version: 2`.
+An artifact containing a relabelled bind emits `schema_version: 2` unless an
+explicit external-network internal expectation requires version 3 below.
 The context, ordered request objects, and existing network/volume prerequisites
 keep their version 1 representation. Each relabelled bind adds this closed
 prerequisite kind in container planning order and original mount-index order:
@@ -130,3 +134,70 @@ retain every obligation before accepting these artifacts. The typed accessor
 is `RenderedArtifact::bind_source_prerequisites()`. Caller-created opaque
 artifacts still cannot produce either complete version. See
 [ADR 0015](decisions/0015-bind-relabel-intent.md).
+
+## Conditional version 3 external-network expectations (unadmitted)
+
+An external `NetworkSource::External` now requires an `expected_internal:
+Option<bool>` field. Existing callers use `None` to retain their unconstrained
+behavior. `Some(false)` explicitly requires an ordinary existing network;
+`Some(true)` explicitly requires an internal existing network. These are
+authored consumer obligations, not destination observations or evidence of
+existence, ownership, isolation, or reachability. The typed
+`NetworkPrerequisite::expected_internal` preserves all three states.
+
+Only an artifact with at least one explicit expectation uses schema 3. Its
+network prerequisite adds a boolean `expected_internal` after `expected_driver`:
+
+```json
+{
+  "kind": "network",
+  "reference": "1",
+  "identity": "edge",
+  "expected_driver": "bridge",
+  "expected_internal": false
+}
+```
+
+An unconstrained network omits the field even inside schema 3; it must never
+be treated as false. All existing context, ordered requests, and network,
+volume, and bind-source prerequisite representations remain unchanged. Schema
+3 takes precedence when expectations and bind-source obligations coexist,
+retaining every schema-2 source/SELinux obligation. Request-only bytes do not
+change. Without expectations, existing schema-1 and schema-2 bytes are preserved.
+Consumers must reject unsupported versions or constraints, not ignore the new
+field or infer satisfied preflight from rendering.
+
+The distinct `NetworkExternalInternalExpectation` capability requires both
+`ExternalNetworkInternalFalse` and `ExternalNetworkInternalTrue` shapes;
+created-network `NetworkInternal` evidence cannot authorize it. All current
+sealed profiles refuse explicit expectations pending genuine, independently
+reviewed exact-lane source proof. Only test-local capabilities exercise positive
+rendering. No native qualification or runtime preflight is delivered here;
+DockerLens still performs no execution, acquisition, file write or runtime
+mutation during planning/rendering. See [ADR 0017](decisions/0017-external-network-internal-expectation.md).
+
+### Pure observation-scoped snapshot assessment
+
+`NetworkPrerequisite::assess` accepts a supplied `DecodedInventory`, explicit
+expected `ObservationId` and full canonical selected network `NativeId`.
+Inventory and daemon observation identities must both match; matching versions
+or names cannot substitute. It requires exactly one matching network, one
+corresponding `Network`/`ExactNetworkId` selected root, and unambiguous capture
+references. A capture root reference binds to the observed network reference;
+it is never compared with the prerequisite's unrelated target-graph reference.
+The same native ID spelling in different resource kinds is not a collision.
+
+The ID must be present and runtime-assigned; name and driver must be present,
+effective and match the protected target expectation. An explicit internal
+boolean must also be present, effective and equal; `None` imposes no internal
+field requirement. Valueless, unavailable, redacted-but-valued and wrong-origin
+required fields fail with closed `NetworkPrerequisiteError` variants, never
+native values. Every scanned network/root/container/volume collection uses the
+decoder's existing 4096 bound. Container/volume scans inspect only references.
+
+Success means only that these supplied snapshot fields and checked capture
+bindings match. This is not full inventory validation, native authentication,
+an atomic snapshot, ownership, isolation, current/future existence or
+reachability proof. Caller-assembled snapshots remain caller assertions. The
+method performs no I/O, creates no capability claim and changes no catalogue
+admission; genuine independently reviewed native proof remains pending.
