@@ -135,7 +135,7 @@ is `RenderedArtifact::bind_source_prerequisites()`. Caller-created opaque
 artifacts still cannot produce either complete version. See
 [ADR 0015](decisions/0015-bind-relabel-intent.md).
 
-## Conditional version 3 external-network expectations (unadmitted)
+## Conditional version 3 external-network expectations
 
 An external `NetworkSource::External` now requires an `expected_internal:
 Option<bool>` field. Existing callers use `None` to retain their unconstrained
@@ -169,12 +169,15 @@ field or infer satisfied preflight from rendering.
 
 The distinct `NetworkExternalInternalExpectation` capability requires both
 `ExternalNetworkInternalFalse` and `ExternalNetworkInternalTrue` shapes;
-created-network `NetworkInternal` evidence cannot authorize it. All current
-sealed profiles refuse explicit expectations pending genuine, independently
-reviewed exact-lane source proof. Only test-local capabilities exercise positive
-rendering. No native qualification or runtime preflight is delivered here;
+created-network `NetworkInternal` evidence cannot authorize it. ADR 0018 selects
+the complete independently authenticated source group on four exact sealed
+profiles for candidate rehearsal. Public positive rendering uses those genuine
+records, not caller-manufactured facts. Fresh final-candidate native and actual
+consumer gates remain required; source evidence does not qualify a changed
+candidate. No runtime preflight is delivered here;
 DockerLens still performs no execution, acquisition, file write or runtime
-mutation during planning/rendering. See [ADR 0017](decisions/0017-external-network-internal-expectation.md).
+mutation during planning/rendering. See [ADR 0017](decisions/0017-external-network-internal-expectation.md)
+and [ADR 0018](decisions/0018-reviewed-external-network-cohort.md).
 
 ### Pure observation-scoped snapshot assessment
 
@@ -200,4 +203,5 @@ bindings match. This is not full inventory validation, native authentication,
 an atomic snapshot, ownership, isolation, current/future existence or
 reachability proof. Caller-assembled snapshots remain caller assertions. The
 method performs no I/O, creates no capability claim and changes no catalogue
-admission; genuine independently reviewed native proof remains pending.
+admission. ADR 0018 separately selects genuine reviewed source evidence; fresh
+final-candidate native and actual consumer qualification remains required.

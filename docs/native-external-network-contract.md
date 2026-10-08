@@ -3,9 +3,10 @@
 `external-network-internal-v1` is a new test-only source proof producer and
 private validator for [ADR 0017](decisions/0017-external-network-internal-expectation.md).
 The canonical harness invokes it as the fifteenth mandatory test, after the
-configured-bind proof and before raw emission. No passing native run or sealed
-admission is claimed. All fourteen preceding native invocations, sealed profiles
-and historical evidence retain their contracts and bytes.
+configured-bind proof and before raw emission. ADR 0018 separately selects the
+authenticated source group for candidate rehearsal, not final-candidate
+qualification. All fourteen preceding native invocations and historical
+evidence retain their contracts and bytes.
 
 ## Independent assertions
 
@@ -110,10 +111,12 @@ projection and complete `ExternalNetworkInternalFalse`/`ExternalNetworkInternalT
 raw group, separately from created-network `NetworkInternal`. Missing, partial,
 stale, cross-context or custody-invalid proof refuses the entire manifest.
 Schema projection definitions are additive and disconnected from the unchanged
-reviewed root contract. With parameterized identity-v2, prospective raw counts
-are Debian 29/46 and upstream 30/48; definitions/counts are not genuine evidence.
-The sealed catalogue remains unchanged until fresh authenticated four-lane
-execution, independent review and a separate admission change. No dependencies,
+reviewed root contract. With parameterized identity-v2, source raw counts are
+Debian 29/46 and upstream 30/48; definitions/counts alone are not genuine evidence.
+ADR 0018 selects authenticated run `37788762974`'s complete source group for
+sealed candidate rehearsal. Fresh exact-final-candidate fifteen-test four-lane
+execution, independent review and actual consumer gates remain required before
+ready/merge; source evidence does not qualify a changed candidate. No dependencies,
 software pins, operational images, workflow pins or Renovate extraction change.
 
 Local execution, `check.yml` main push, `native-validation.yml` reviewed-PR
@@ -122,5 +125,5 @@ workflow fork is added. Renovate's existing unique native-image manager still
 owns the same five tag/digest pairs, grouping and manual approvals. Cargo,
 toolchain and Action ownership/extraction remain unchanged. Other Lens products
 and the website do not consume this Docker-only proof. BoxFerry profile and
-producer-receipt contracts and ADR 0012/0016 authored-fixture/bind-consumer gates
+producer-receipt contracts and ADR 0012/0016/0018 authored-fixture/bind-consumer gates
 remain separate; no product dependency or consumer acceptance follows.

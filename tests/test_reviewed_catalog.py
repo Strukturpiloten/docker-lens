@@ -273,6 +273,48 @@ APPLICATION_CONTRACTS = {
         "BindMountPrivateRelabelReadWrite", "BindMountPrivateRelabelReadOnly",
     ]),
 }
+EXTERNAL_CANDIDATE = "133f2857dac77c60aa79eab1a473c5749fd459ab"
+EXTERNAL_RUN = "https://github.com/Strukturpiloten/docker-lens/actions/runs/37788762974/attempts/1"
+EXTERNAL_EXPECTATION_SHAPES = ["ExternalNetworkInternalFalse", "ExternalNetworkInternalTrue"]
+EXTERNAL_SHAPES = {**APPLICATION_SHAPES,
+                   "NetworkExternalInternalExpectation": EXTERNAL_EXPECTATION_SHAPES}
+EXTERNAL_UPSTREAM_SHAPES = {**APPLICATION_UPSTREAM_SHAPES,
+                            "NetworkExternalInternalExpectation": EXTERNAL_EXPECTATION_SHAPES}
+EXTERNAL_MANIFESTS = {
+    "debian11-rootful": "46ba7bb9f437161fba283adbd9dbdc2c31963f256d9e621f4044152a94988b6f",
+    "debian11-rootless": "62d926303919c1accda2f483a21932d97a9afc8db492d105e16167c18b9b2c96",
+    "upstream-rootful": "a4e0801a3c323fdbe4ffef214e8631d7130177217f1102ccc29a766e4ac15864",
+    "upstream-rootless": "4c430cd369650f7f0f12ae64491585230967e8cd7983f5d6594204d7cb46aa39"
+}
+EXTERNAL_REVIEWED = {
+    "debian11-rootful": "60d1a2a4892eb47bc95244194113a1d0fd24c52a1e057ce3469be433106b3d12",
+    "debian11-rootless": "e014e47b24643055f01349e5a3296a938d4d88f34415f0f9bb4f1286709be29a",
+    "upstream-rootful": "727db2b40c56df2f03d26b9134a35d31f2837db8ed00d5887371896ab336635e",
+    "upstream-rootless": "f951bf1919e7dc039c8900f3c2144e4b71ad05e675ec54fa64406963b37dba35"
+}
+EXTERNAL_ARCHIVES = {
+    "dockerlens-native-debian11-rootful": {
+        "id": 11555628216,
+        "digest": "sha256:bc7e59e2491a8fe16ef51e61f62d7a35c88c634e767f84df0db517fd2533cab3",
+        "size": 2078
+    },
+    "dockerlens-native-debian11-rootless": {
+        "id": 11555847235,
+        "digest": "sha256:0c99036427d733a0f1ae87e5848a35093d5018fd6c04f79c626d0e9b83c4d8cb",
+        "size": 2078
+    },
+    "dockerlens-native-upstream-rootful": {
+        "id": 11556251694,
+        "digest": "sha256:84cb87ffd1752ee66d1eacd29a75debbdd6da74f39168842b81467df100a419e",
+        "size": 2022
+    },
+    "dockerlens-native-upstream-rootless": {
+        "id": 11555702953,
+        "digest": "sha256:dcc1d1d9c99cfc4e4005e3cd1e25cfff94008107ec6d3b4b6e4ff2a90b836868",
+        "size": 2026
+    }
+}
+
 # Every reviewed cohort must be deliberately added here with its exact run,
 # candidate, four identities, four envelope digests, four raw manifest digests,
 # and exact reviewed capability-to-shape admissions. A later new shape needs
@@ -302,6 +344,12 @@ COHORTS = {
         lane: (APPLICATION_REVIEWED[lane], APPLICATION_MANIFESTS[lane],
                EXPECTED_IDENTITIES[lane], APPLICATION_SHAPES if lane.startswith("debian11-")
                else APPLICATION_UPSTREAM_SHAPES)
+        for lane in LANES
+    },
+    (EXTERNAL_CANDIDATE, EXTERNAL_RUN): {
+        lane: (EXTERNAL_REVIEWED[lane], EXTERNAL_MANIFESTS[lane],
+               EXPECTED_IDENTITIES[lane], EXTERNAL_SHAPES if lane.startswith("debian11-")
+               else EXTERNAL_UPSTREAM_SHAPES)
         for lane in LANES
     },
 }
@@ -451,7 +499,7 @@ def bind_cohorts(
                         or manifest.get("identity_cases") != IDENTITY_CASES
                         or manifest.get("identity_probes") != IDENTITY_PROBES):
                     raise ValueError("identity admission requires complete parameterized proof markers")
-            if cohort_key == (APPLICATION_CANDIDATE, APPLICATION_RUN):
+            if cohort_key in ((APPLICATION_CANDIDATE, APPLICATION_RUN), (EXTERNAL_CANDIDATE, EXTERNAL_RUN)):
                 if (manifest["admitted_shapes"] != expected_admission
                         or manifest["capability_outcome"] != dict.fromkeys(expected_admission, "available")
                         or manifest.get("bind_relabel_selinux_effect") != "unverified"):
@@ -473,6 +521,10 @@ def bind_cohorts(
                                      reason="nested_default_bridge_ipv6_runtime_binding_absent")
                 if manifest.get("port_probes") != ports:
                     raise ValueError("application admission requires exact per-lane port outcomes")
+            if cohort_key == (EXTERNAL_CANDIDATE, EXTERNAL_RUN):
+                if (manifest.get("external_network_contract") != "external-network-internal-v1"
+                        or manifest.get("external_network_probes") != EXTERNAL_EXPECTATION_SHAPES):
+                    raise ValueError("external admission requires complete independent source projection")
             if record["schema_version"] != 1 or record["native_manifest_artifact_name"] != f"dockerlens-native-{lane}":
                 raise ValueError("reviewed record schema or lane artifact differs")
             fields = (
@@ -524,14 +576,14 @@ class ReviewedCatalogTests(unittest.TestCase):
         self.assertEqual(section.count("NativeEvidenceLane::"), 4)
         reviewed = {
             lane: path.stem
-            for lane, (path, _) in indexed_cohorts(hashed_json("reviewed"), COHORTS)[APPLICATION_CANDIDATE, APPLICATION_RUN].items()
+            for lane, (path, _) in indexed_cohorts(hashed_json("reviewed"), COHORTS)[EXTERNAL_CANDIDATE, EXTERNAL_RUN].items()
         }
         self.assertEqual({match["variant"] for match in tuples}, set(LANE_VARIANTS))
         for match in tuples:
             lane = LANE_VARIANTS[match["variant"]]
             self.assertEqual(match["digest"], reviewed[lane])
             self.assertEqual(match["path_digest"], reviewed[lane])
-            self.assertEqual(match["digest"], APPLICATION_REVIEWED[lane])
+            self.assertEqual(match["digest"], EXTERNAL_REVIEWED[lane])
 
     def test_four_records_bind_exact_manifest_bytes_and_shapes(self) -> None:
         native_records = hashed_json("native")
@@ -633,11 +685,11 @@ class ReviewedCatalogTests(unittest.TestCase):
 
     def test_compiled_candidate_has_exact_per_lane_complete_groups(self) -> None:
         source = (ROOT / "src/reviewed_catalog.rs").read_text(encoding="utf-8")
-        self.assertIn(f'const SOURCE_CANDIDATE: &str = "{APPLICATION_CANDIDATE}";', source)
-        self.assertIn(f'"{APPLICATION_RUN}";', source)
+        self.assertIn(f'const SOURCE_CANDIDATE: &str = "{EXTERNAL_CANDIDATE}";', source)
+        self.assertIn(f'"{EXTERNAL_RUN}";', source)
         for prefix, expected, counts in (
-                ("REVIEWED", APPLICATION_SHAPES, (28, 44)),
-                ("UPSTREAM", APPLICATION_UPSTREAM_SHAPES, (29, 46))):
+                ("REVIEWED", EXTERNAL_SHAPES, (29, 46)),
+                ("UPSTREAM", EXTERNAL_UPSTREAM_SHAPES, (30, 48))):
             capabilities = source.split(f"const {prefix}_CAPABILITIES:", 1)[1].split("];", 1)[0]
             shapes = source.split(f"const {prefix}_SHAPES:", 1)[1].split("];", 1)[0]
             capability_names = re.findall(r"Capability::(\w+)", capabilities)
@@ -705,7 +757,7 @@ class ReviewedCatalogTests(unittest.TestCase):
 
     def test_application_cohort_binds_exact_groups_and_preserves_all_history(self) -> None:
         reviewed = bind_cohorts(hashed_json("reviewed"), hashed_json("native"), COHORTS)
-        self.assertEqual(len(reviewed), 5)
+        self.assertEqual(len(reviewed), 6)
         for lane, (path, record) in reviewed[APPLICATION_CANDIDATE, APPLICATION_RUN].items():
             expected = APPLICATION_SHAPES if lane.startswith("debian11-") else APPLICATION_UPSTREAM_SHAPES
             self.assertEqual(path.stem, APPLICATION_REVIEWED[lane])
@@ -781,7 +833,7 @@ class ReviewedCatalogTests(unittest.TestCase):
     def test_identity_cohort_adds_only_two_singleton_groups_and_preserves_history(self) -> None:
         reviewed = bind_cohorts(hashed_json("reviewed"), hashed_json("native"), COHORTS)
         raw = indexed_native_manifests(hashed_json("native"), COHORTS)
-        self.assertEqual(len(reviewed), 5)
+        self.assertEqual(len(reviewed), 6)
         self.assertEqual(len(IDENTITY_SHAPES), 16)
         self.assertEqual(sum(map(len, IDENTITY_SHAPES.values())), 26)
         self.assertEqual(set(IDENTITY_SHAPES) - set(LABEL_SHAPES),
@@ -1090,6 +1142,98 @@ class ReviewedCatalogTests(unittest.TestCase):
     def test_evidence_is_in_published_package_rule(self) -> None:
         manifest = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
         self.assertIn('"docs/**"', manifest)
+
+
+    def test_external_cohort_is_exact_append_only_and_publicly_authenticated(self) -> None:
+        native = hashed_json("native")
+        reviewed = bind_cohorts(hashed_json("reviewed"), native, COHORTS)
+        self.assertEqual(len(reviewed), 6)
+        raw = indexed_native_manifests(native, COHORTS)
+        for lane, (path, record) in reviewed[EXTERNAL_CANDIDATE, EXTERNAL_RUN].items():
+            expected = EXTERNAL_SHAPES if lane.startswith("debian11-") else EXTERNAL_UPSTREAM_SHAPES
+            prior = APPLICATION_SHAPES if lane.startswith("debian11-") else APPLICATION_UPSTREAM_SHAPES
+            self.assertEqual(path.stem, EXTERNAL_REVIEWED[lane])
+            self.assertEqual(record["native_manifest_sha256"], EXTERNAL_MANIFESTS[lane])
+            self.assertEqual({entry["name"]: entry["admitted_shapes"] for entry in record["capabilities"]}, expected)
+            self.assertEqual({name: shapes for name, shapes in expected.items()
+                              if name != "NetworkExternalInternalExpectation"}, prior)
+            self.assertEqual((len(expected), sum(map(len, expected.values()))),
+                             (29, 46) if lane.startswith("debian11-") else (30, 48))
+            manifest = raw[EXTERNAL_MANIFESTS[lane]][1]
+            self.assertEqual(manifest["external_network_contract"], "external-network-internal-v1")
+            self.assertEqual(manifest["external_network_probes"], EXTERNAL_EXPECTATION_SHAPES)
+            self.assertEqual(manifest["admitted_shapes"]["NetworkInternal"], ["InternalBridgeNetworkCreate"])
+        provenance = json.loads((ROOT / "docs/evidence/external-network-cohort-37788762974.json").read_text())
+        self.assertEqual(provenance["candidate_sha"], EXTERNAL_CANDIDATE)
+        self.assertEqual(provenance["repository"], {"id": 1387403220, "full_name": "Strukturpiloten/docker-lens"})
+        self.assertEqual(provenance["pull_request"], 105)
+        self.assertEqual(provenance["run"], {
+            "id": 37788762974, "attempt": 1, "event": "workflow_dispatch",
+            "workflow_path": ".github/workflows/native-validation.yml",
+            "workflow_ref": "refs/heads/main",
+            "dispatcher_sha": "3742f1136e7921260ffab149ffb47dfecea522d4", "conclusion": "success",
+        })
+        self.assertNotEqual(provenance["candidate_sha"], provenance["run"]["dispatcher_sha"])
+        self.assertEqual(provenance["review"]["native_tests_each_lane"], 15)
+        self.assertEqual(provenance["selinux_effect"], "unverified")
+        self.assertEqual(provenance["admission_counts"],
+                         {"debian": {"capabilities": 29, "shapes": 46},
+                          "upstream": {"capabilities": 30, "shapes": 48}})
+        self.assertEqual(len(provenance["artifacts"]), 4)
+        for artifact in provenance["artifacts"]:
+            self.assertFalse(artifact["expired"])
+            lane = artifact["name"].removeprefix("dockerlens-native-")
+            independent = EXTERNAL_ARCHIVES[artifact["name"]]
+            self.assertEqual((artifact["id"], artifact["archive_api_digest"], artifact["size"]),
+                             (independent["id"], independent["digest"], independent["size"]))
+            self.assertEqual(artifact["member_name"], lane + ".json")
+            self.assertEqual(artifact["native_manifest_sha256"], EXTERNAL_MANIFESTS[lane])
+            self.assertEqual(artifact["reviewed_record_sha256"], EXTERNAL_REVIEWED[lane])
+        self.assertEqual({job["id"] for job in provenance["jobs"]}, {113350256152,113350317080,113353241616,113353241618,113353241623,113353241736,113354704194})
+        self.assertTrue(all(job["conclusion"] == "success" for job in provenance["jobs"]))
+        forbidden = {"runtime_uid", "outer_id", "container_id", "network_id", "owner",
+                     "signed_url", "token", "credential", "private_proof", "log_body"}
+        def closed_public(value):
+            if isinstance(value, dict):
+                self.assertTrue(set(value).isdisjoint(forbidden))
+                for child in value.values():
+                    closed_public(child)
+            elif isinstance(value, list):
+                for child in value:
+                    closed_public(child)
+        closed_public(provenance)
+
+    def test_external_group_rejects_partial_created_bridge_and_nonpositive_evidence(self) -> None:
+        for lane in LANES:
+            for side in ("raw", "reviewed"):
+                for fault in ("missing", "false_only", "true_only", "duplicate", "created_bridge", "unavailable", "unknown"):
+                    reviewed = deepcopy(hashed_json("reviewed"))
+                    native = deepcopy(hashed_json("native"))
+                    manifest = next(value for path, value in native if path.stem == EXTERNAL_MANIFESTS[lane])
+                    record = next(value for path, value in reviewed if path.stem == EXTERNAL_REVIEWED[lane])
+                    name = "NetworkExternalInternalExpectation"
+                    entry = next(value for value in record["capabilities"] if value["name"] == name)
+                    if fault == "missing":
+                        if side == "raw":
+                            del manifest["admitted_shapes"][name]
+                        else:
+                            record["capabilities"].remove(entry)
+                    elif fault in ("unavailable", "unknown"):
+                        if side == "raw":
+                            manifest["capability_outcome"][name] = fault
+                        else:
+                            entry["state"] = fault
+                    else:
+                        shapes = {"false_only": [EXTERNAL_EXPECTATION_SHAPES[0]],
+                                  "true_only": [EXTERNAL_EXPECTATION_SHAPES[1]],
+                                  "duplicate": [EXTERNAL_EXPECTATION_SHAPES[0]] * 2,
+                                  "created_bridge": ["InternalBridgeNetworkCreate"]}[fault]
+                        if side == "raw":
+                            manifest["admitted_shapes"][name] = shapes
+                        else:
+                            entry["admitted_shapes"] = shapes
+                    with self.subTest(lane=lane, side=side, fault=fault), self.assertRaises(ValueError):
+                        bind_cohorts(reviewed, native, COHORTS)
 
 
 if __name__ == "__main__":

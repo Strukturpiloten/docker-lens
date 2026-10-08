@@ -18,12 +18,14 @@ canonical harness facts and the observed dockerd UID. Invalid or absent proof
 refuses the whole manifest. Only the complete false/true raw group and fixed
 contract/ordered-probes public projection are added; disconnected schema
 definitions leave the reviewed root and historical records unchanged.
-Prospective parameterized-identity raw counts are Debian 29/46 and upstream
-30/48. Sealed counts remain Debian 28/44 and upstream 29/46. No passing native
-run, compatibility or sealed admission is claimed. Fresh exact-candidate complete
-and authenticated four-lane native gates, independent review and a separate
-catalogue admission remain pending, together with ADR 0012/0016's six actual
-authored-fixture volume rehearsals and actual Nextcloud/Supabase bind consumers.
+Authenticated source run `37788762974`, attempt 1, passed all fifteen exact tests
+on all four lanes and strict public projection review. ADR 0018 selects only its
+complete external expectation group beyond the prior admissions: sealed counts
+are Debian 29/46 and upstream 30/48. This source enables candidate rehearsal,
+not final-candidate qualification. Fresh final-edit complete and authenticated
+exact-final-candidate four-lane native gates, independent review and fresh
+ADR 0012/0016/0018 six actual authored-fixture volume rehearsals plus actual
+Nextcloud/Supabase bind consumers remain required before ready/merge.
 
 Local execution, `check.yml` main push, `native-validation.yml` reviewed-PR
 dispatch and `release-validation.yml` all invoke `scripts/native-conformance.sh`;
@@ -80,9 +82,9 @@ all expected context from those harness facts and requires the complete private
 four-case/two-role proof before emitting only two configured-retention groups,
 four ordered markers and an explicitly unverified SELinux effect. With preceding
 source producers excluding the later external-network group, raw counts are
-Debian 28/44 and upstream 29/46. ADR 0016
-now selects the independently reviewed coherent source cohort for candidate
-admission; earlier evidence stays immutable and final-candidate gates remain.
+Debian 28/44 and upstream 29/46. ADR 0016's historical coherent source cohort
+remains immutable; ADR 0018 selects the later independently reviewed complete
+external expectation cohort. Fresh final-candidate and consumer gates remain.
 
 Conditional complete-artifact schema 2 retains bind-source and SELinux
 obligations; default schema-1 bytes stay unchanged. BoxFerry's consumer and six
@@ -1148,7 +1150,25 @@ evidence and all earlier worktrees remain unchanged.
 
 ## Reviewed target-profile records
 
-The candidate selects the fifth coherent source cohort from
+The candidate selects the sixth source cohort from
+[run `37788762974`, attempt 1](https://github.com/Strukturpiloten/docker-lens/actions/runs/37788762974/attempts/1),
+source `133f2857dac77c60aa79eab1a473c5749fd459ab`, under
+[ADR 0018](decisions/0018-reviewed-external-network-cohort.md). Dispatcher
+`3742f1136e7921260ffab149ffb47dfecea522d4` remains a separate trusted-main
+identity. [Sanitized provenance](evidence/external-network-cohort-37788762974.json)
+binds successful API jobs, all four authenticated archive digests and genuine
+raw/reviewed member hashes. Every lane passed fifteen mandatory tests and
+cleanup, with independent primary/Sol source and public projection review.
+No private proof, log body, native resource identity or credentials are stored.
+The sole new capability is the complete external expectation false/true group;
+Debian admits 29/46 and upstream 30/48, retaining prescribed Debian IPv6 negatives.
+No other group is promoted. Snapshot assessment, schemas 1/2/3, protected values,
+zero external-only requests and configured bind obligations remain unchanged.
+
+All five earlier cohorts, including the following application source cohort,
+remain byte-exact. Its historical fourteen-test run is not rewritten:
+
+The fifth coherent source cohort came from
 [run `37706460127`, attempt 1](https://github.com/Strukturpiloten/docker-lens/actions/runs/37706460127/attempts/1),
 executed source `6df951eb9e112becf8124fe9f8624b1df0dfbf2e`, under
 [ADR 0016](decisions/0016-reviewed-application-cohort.md). Trusted dispatcher
@@ -1160,7 +1180,7 @@ exact tests passed per source lane, and strict public projections passed review.
 This establishes trusted harness execution and sanitized public projections,
 not direct private-proof inspection or SELinux effects.
 
-The closed selection retains sixteen/twenty-six groups/shapes and adds only
+That historical selection retained sixteen/twenty-six groups/shapes and added only
 complete common port, health/metadata, network attachment and configured-bind
 retention groups: exactly Debian 28/44 and upstream 29/46. Only upstream adds
 the complete IPv6 port group; either prescribed Debian negative withholds it.
@@ -1171,15 +1191,17 @@ host UID mapping; bind configuration is not relabel effect evidence.
 
 This is pre-merge candidate rehearsal admission. Production merge/main/release
 still require complete final-edit gates, fresh fifteen-test four-lane proof
-on the final candidate, all six actual authored fixture volume-only consumer
-rehearsals required by ADR 0012, and reviewed BoxFerry schema-2 consumption of
-the actual authored Nextcloud/Supabase binds. This source run cannot qualify a
+on the final candidate, fresh all six actual authored fixture volume-only consumer
+rehearsals required by ADR 0012, and fresh reviewed BoxFerry consumption of
+the actual authored Nextcloud/Supabase binds and desired external expectations.
+Neither source run nor old #104 receipts can qualify a
 changed admission candidate. #31/#343/#366 and full migration remain open.
 
 All four earlier raw/reviewed cohorts stay byte-exact: original run
 `36451790131` (10/20), #68 `37209363801` (13/23), #70 `37214738475` (14/24)
-and #88 `37439627551` (16/26), each attempt 1. The active catalogue still has
-four identities, now selecting only the new source cohort. Exactly four raw
+and #88 `37439627551` (16/26), each attempt 1. Together with application source
+`37706460127`, these are the five retained historical cohorts. The active catalogue
+still has four identities, selecting only the ADR 0018 source cohort. Four raw
 members and four reviewed envelopes are added under the existing digest paths.
 
 Records conform to [the schema](native-evidence.schema.json) and bind lane,
@@ -1193,10 +1215,10 @@ single named raw member is retained byte-for-byte under its SHA-256 name.
 Reviewed schema-1 envelopes use two-space UTF-8 JSON with a trailing newline;
 their separate content hashes become evidence keys without self-reference.
 
-Python regressions pin all five cohorts, exact active selection, source
+Python regressions pin all six cohorts, exact active selection, source
 projections, complete groups and Debian IPv6 negatives. Public Rust controls
 exercise every new group with sealed profiles, request order, protected values
-and all schema-2 source/SELinux obligations. Existing schema-1/request behavior
+and all mixed schema-3/source/SELinux obligations. Existing schema-1/2/request behavior
 stays unchanged apart from selected context/evidence keys.
 
 No dependency, image, workflow, toolchain or extraction-path changes. Readback

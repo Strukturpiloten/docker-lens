@@ -85,14 +85,15 @@ volume-only mappings and consumer rehearsal, and complete gates. A volume-only
 rehearsal cannot establish six-application or full migration acceptance; wider
 #31/#343/#366 evidence remains open.
 
-ADR 0016 selects the fifth coherent application source cohort for candidate
-pre-merge rehearsal: exactly Debian 28/44 and upstream 29/46. It retains
-parameterized identity and labelled volumes, then adds only complete common
-port, health/metadata, network attachment and configured-bind retention groups.
-All four historical cohorts remain byte-exact. Production merge/main/release
-still require fresh complete and exact-final-candidate fourteen-test four-lane
-native gates, all six actual authored fixture volume-only consumer rehearsals,
-and reviewed actual Nextcloud/Supabase schema-2 bind consumers. No full application
+ADR 0018 selects the sixth source cohort for candidate pre-merge rehearsal:
+exactly Debian 29/46 and upstream 30/48. It retains ADR 0016's parameterized
+identity, labelled volumes, complete common port/health/network-attachment and
+configured-bind groups, adding only the complete external Internal false/true
+expectation group. All five historical cohorts remain byte-exact. Ready/merge,
+main admission and release still require fresh complete and exact-final-candidate
+fifteen-test four-lane native gates, fresh all six actual authored fixture
+volume-only consumer rehearsals, and fresh reviewed actual Nextcloud/Supabase
+bind and desired external-expectation consumers. No full application
 or migration acceptance is established; #31/#343/#366 remain open.
 
 | #30 target branch | Typed request contract | Remaining proof / owner |

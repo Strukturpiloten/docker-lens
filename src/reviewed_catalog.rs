@@ -14,9 +14,9 @@ use crate::version::{
     TargetProfileIdentity,
 };
 
-const SOURCE_CANDIDATE: &str = "6df951eb9e112becf8124fe9f8624b1df0dfbf2e";
+const SOURCE_CANDIDATE: &str = "133f2857dac77c60aa79eab1a473c5749fd459ab";
 const SOURCE_RUN: &str =
-    "https://github.com/Strukturpiloten/docker-lens/actions/runs/37706460127/attempts/1";
+    "https://github.com/Strukturpiloten/docker-lens/actions/runs/37788762974/attempts/1";
 
 // This is the exact admission set for the currently compiled cohort. A later
 // reviewed cohort must explicitly replace the set for each lane; extending the
@@ -34,6 +34,7 @@ const REVIEWED_CAPABILITIES: &[Capability] = &[
     Capability::RestartPolicy,
     Capability::VolumeExternalReference,
     Capability::NetworkExternalReference,
+    Capability::NetworkExternalInternalExpectation,
     Capability::NetworkInternal,
     Capability::VolumeLabels,
     Capability::ContainerUser,
@@ -74,6 +75,8 @@ const REVIEWED_SHAPES: &[NativeCapabilityShape] = &[
     NativeCapabilityShape::RestartOnFailureLimited,
     NativeCapabilityShape::ExternalVolumeReference,
     NativeCapabilityShape::ExternalNetworkReference,
+    NativeCapabilityShape::ExternalNetworkInternalFalse,
+    NativeCapabilityShape::ExternalNetworkInternalTrue,
     NativeCapabilityShape::InternalBridgeNetworkCreate,
     NativeCapabilityShape::VolumeCreateLabels,
     NativeCapabilityShape::ContainerUser,
@@ -110,6 +113,7 @@ const UPSTREAM_CAPABILITIES: &[Capability] = &[
     Capability::RestartPolicy,
     Capability::VolumeExternalReference,
     Capability::NetworkExternalReference,
+    Capability::NetworkExternalInternalExpectation,
     Capability::NetworkInternal,
     Capability::VolumeLabels,
     Capability::ContainerUser,
@@ -151,6 +155,8 @@ const UPSTREAM_SHAPES: &[NativeCapabilityShape] = &[
     NativeCapabilityShape::RestartOnFailureLimited,
     NativeCapabilityShape::ExternalVolumeReference,
     NativeCapabilityShape::ExternalNetworkReference,
+    NativeCapabilityShape::ExternalNetworkInternalFalse,
+    NativeCapabilityShape::ExternalNetworkInternalTrue,
     NativeCapabilityShape::InternalBridgeNetworkCreate,
     NativeCapabilityShape::VolumeCreateLabels,
     NativeCapabilityShape::ContainerUser,
@@ -193,30 +199,30 @@ fn expected_admission(
 const RECORDS: [(NativeEvidenceLane, &str, &str); 4] = [
     (
         NativeEvidenceLane::Debian11Rootful,
-        "edc6276b2caf91be8057430159524563f59dae1528cda8f342f37c1336d2fdc2",
+        "60d1a2a4892eb47bc95244194113a1d0fd24c52a1e057ce3469be433106b3d12",
         include_str!(
-            "../docs/evidence/reviewed/sha256/edc6276b2caf91be8057430159524563f59dae1528cda8f342f37c1336d2fdc2.json"
+            "../docs/evidence/reviewed/sha256/60d1a2a4892eb47bc95244194113a1d0fd24c52a1e057ce3469be433106b3d12.json"
         ),
     ),
     (
         NativeEvidenceLane::Debian11Rootless,
-        "bf3b2374782342abda9bc13f07f273f22a262f1412afb16376efcf376dceac17",
+        "e014e47b24643055f01349e5a3296a938d4d88f34415f0f9bb4f1286709be29a",
         include_str!(
-            "../docs/evidence/reviewed/sha256/bf3b2374782342abda9bc13f07f273f22a262f1412afb16376efcf376dceac17.json"
+            "../docs/evidence/reviewed/sha256/e014e47b24643055f01349e5a3296a938d4d88f34415f0f9bb4f1286709be29a.json"
         ),
     ),
     (
         NativeEvidenceLane::UpstreamRootful,
-        "7eacfd00927374220e2bbe6340b62595803e8db2842b29034dc6145f73401cac",
+        "727db2b40c56df2f03d26b9134a35d31f2837db8ed00d5887371896ab336635e",
         include_str!(
-            "../docs/evidence/reviewed/sha256/7eacfd00927374220e2bbe6340b62595803e8db2842b29034dc6145f73401cac.json"
+            "../docs/evidence/reviewed/sha256/727db2b40c56df2f03d26b9134a35d31f2837db8ed00d5887371896ab336635e.json"
         ),
     ),
     (
         NativeEvidenceLane::UpstreamRootless,
-        "c2f380eaf9cbb8f4cdd8ca380afe350f6f97a39aeb98fc2211d531c3320d1d4a",
+        "f951bf1919e7dc039c8900f3c2144e4b71ad05e675ec54fa64406963b37dba35",
         include_str!(
-            "../docs/evidence/reviewed/sha256/c2f380eaf9cbb8f4cdd8ca380afe350f6f97a39aeb98fc2211d531c3320d1d4a.json"
+            "../docs/evidence/reviewed/sha256/f951bf1919e7dc039c8900f3c2144e4b71ad05e675ec54fa64406963b37dba35.json"
         ),
     ),
 ];
@@ -685,6 +691,39 @@ mod tests {
     }
 
     #[test]
+    fn external_expectations_never_borrow_created_internal_bridge_shapes() {
+        rejected(|value| {
+            let external = value["capabilities"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|entry| entry["name"] == "NetworkExternalInternalExpectation")
+                .unwrap();
+            external["admitted_shapes"] = serde_json::json!(["InternalBridgeNetworkCreate"]);
+        });
+        for (lane, digest, source) in RECORDS {
+            for omitted in [
+                "ExternalNetworkInternalFalse",
+                "ExternalNetworkInternalTrue",
+            ] {
+                let mut value: Value = serde_json::from_str(source).unwrap();
+                let external = value["capabilities"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|entry| entry["name"] == "NetworkExternalInternalExpectation")
+                    .unwrap();
+                external["admitted_shapes"]
+                    .as_array_mut()
+                    .unwrap()
+                    .retain(|shape| shape != omitted);
+                let changed = serde_json::to_string(&value).unwrap();
+                assert!(std::panic::catch_unwind(|| record(lane, digest, &changed)).is_err());
+            }
+        }
+    }
+
+    #[test]
     fn rejects_forged_source_run_and_candidate() {
         rejected(|value| value["candidate_sha"] = "a".repeat(40).into());
         rejected(|value| value["run_url"] = "https://example.invalid/run".into());
@@ -699,6 +738,7 @@ mod tests {
         for name in [
             "VolumeExternalReference",
             "NetworkExternalReference",
+            "NetworkExternalInternalExpectation",
             "NetworkInternal",
             "VolumeLabels",
             "ContainerUser",
@@ -793,6 +833,7 @@ mod tests {
                 "NetworkMultipleAttachment",
                 "BindRelabelShared",
                 "BindRelabelPrivate",
+                "NetworkExternalInternalExpectation",
             ]
             .into_iter()
             .chain(

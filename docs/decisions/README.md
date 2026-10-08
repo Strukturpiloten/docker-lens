@@ -19,8 +19,9 @@ Durable native boundaries and evidence/admission contracts:
 - [0015: Bind-relabel intent](0015-bind-relabel-intent.md)
 - [0016: Reviewed application cohort](0016-reviewed-application-cohort.md)
 - [0017: External-network internal expectation](0017-external-network-internal-expectation.md)
+- [0018: Reviewed external-network cohort](0018-reviewed-external-network-cohort.md)
 
-ADR 0017 changes only the external expectation and conditional schema-3 contract;
-its native admission remains pending; pure snapshot matching makes no native
-compatibility claim. Historical evidence and
-the earlier decisions' remaining obligations are preserved.
+ADR 0018 selects only the complete external expectation group for candidate
+rehearsal. ADR 0017's None/false/true, conditional schema-3 and pure snapshot
+boundaries remain; fresh final-candidate native and actual consumer gates still
+block ready/merge. Historical evidence and earlier obligations are preserved.

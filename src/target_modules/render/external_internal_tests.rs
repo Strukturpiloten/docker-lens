@@ -328,7 +328,7 @@ fn mixed_external_expectations_keep_false_true_and_absent_distinct() {
 }
 
 #[test]
-fn future_test_local_admission_requires_both_external_shapes() {
+fn test_local_admission_requires_both_external_shapes() {
     let capability = Capability::NetworkExternalInternalExpectation;
     let required = NativeCapabilityShape::required_for(capability).unwrap();
     assert_eq!(
@@ -347,6 +347,12 @@ fn future_test_local_admission_requires_both_external_shapes() {
         // Test-local records only. The sealed records and their selection are immutable.
         let mut record = crate::reviewed_catalog::records().remove(0);
         let profile = record.profile.clone();
+        record
+            .capabilities
+            .retain(|fact| fact.capability != capability);
+        record
+            .admitted_shapes
+            .retain(|shape| !required.contains(shape));
         record.capabilities.push(TargetCapabilityFact {
             capability,
             state: CapabilityState::Available,
