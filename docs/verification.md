@@ -37,6 +37,32 @@ and application-consumer contracts remain separate and no Lens depends on it.
 
 ## Mandatory configured-bind source proof
 
+The exact runner separately projects only the first selected bind-test panic
+before the first exact cleanup marker: fixed `native_bind_relabel_tests` basename,
+positive line (at most six digits) and column (at most four). Later cleanup or
+aggregate assertions cannot replace that causal site. If unavailable, a fixed
+`location=unavailable` diagnostic is emitted. Thread labels/IDs, panic messages,
+asserted values, absolute paths and private native output remain suppressed.
+Modern optional thread IDs are recognized but never printed. Failure, causal
+stage, all fifteen test invocations, timeout and cleanup semantics stay unchanged;
+these diagnostics grant no capability or successful result.
+
+This addresses diagnostic incompleteness after main run `37796227350` at
+`4889ea116eaffaeebdf87ee1850f5ab51bf04292` failed upstream-rootless at
+`bind_relabel_rendered` (exit 101). The failed evidence is retained; existing
+output identifies neither cause nor transience. The prospective diagnosis is
+`./scripts/native-conformance.sh upstream-rootless` at the independently reviewed
+exact diagnostic candidate, with fresh private evidence and existing bounded
+rootful outer/rootless inner setup. A definition or fake-runner control is not
+a diagnosis run or fix. Any identified underlying cause requires a separate
+reviewed change; semantic assertions must not be weakened.
+
+Local/main/reviewed-dispatch/release consumers still invoke the same canonical
+harness and exact runner. Readback of Renovate confirms the same unique native
+image/toolchain extraction, Cargo/Action ownership, grouping and approvals;
+no pin, manager, path, dependency or workflow changes are introduced. Other
+Lens products and the website do not consume this Docker-only runner.
+
 The canonical local/main/reviewed-PR/release harness additionally requires
 `native_bind_relabel_tests::live_bind_relabel_configuration_matches_engine`
 as its fourteenth mandatory test. The
