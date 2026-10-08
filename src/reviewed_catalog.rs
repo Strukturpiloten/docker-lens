@@ -1,7 +1,7 @@
 //! Crate-owned candidate admission of four independently reviewed native records.
 //! The JSON is part of the published crate; no caller-supplied bytes enter here.
-//! Source evidence binds parameterized identity fields, not arbitrary-image startup
-//! or namespace representability. Final-candidate and consumer gates remain separate.
+//! Source evidence covers closed configured fields and bounded native behavior.
+//! SELinux effects, final-candidate and actual consumer gates remain separate.
 
 use std::{collections::HashSet, num::NonZeroU16};
 
@@ -14,9 +14,9 @@ use crate::version::{
     TargetProfileIdentity,
 };
 
-const SOURCE_CANDIDATE: &str = "032b1510524f391f08a795dab4da73f6fa8f7213";
+const SOURCE_CANDIDATE: &str = "6df951eb9e112becf8124fe9f8624b1df0dfbf2e";
 const SOURCE_RUN: &str =
-    "https://github.com/Strukturpiloten/docker-lens/actions/runs/37439627551/attempts/1";
+    "https://github.com/Strukturpiloten/docker-lens/actions/runs/37706460127/attempts/1";
 
 // This is the exact admission set for the currently compiled cohort. A later
 // reviewed cohort must explicitly replace the set for each lane; extending the
@@ -38,6 +38,18 @@ const REVIEWED_CAPABILITIES: &[Capability] = &[
     Capability::VolumeLabels,
     Capability::ContainerUser,
     Capability::ContainerWorkdir,
+    Capability::PortHostIpv4,
+    Capability::PortMultipleBindings,
+    Capability::PortExposeOnly,
+    Capability::PortEphemeral,
+    Capability::ContainerLabels,
+    Capability::HealthShell,
+    Capability::HealthStartPeriod,
+    Capability::NetworkLabels,
+    Capability::NetworkAliases,
+    Capability::NetworkMultipleAttachment,
+    Capability::BindRelabelShared,
+    Capability::BindRelabelPrivate,
 ];
 const REVIEWED_SHAPES: &[NativeCapabilityShape] = &[
     NativeCapabilityShape::StandaloneCreate,
@@ -66,46 +78,145 @@ const REVIEWED_SHAPES: &[NativeCapabilityShape] = &[
     NativeCapabilityShape::VolumeCreateLabels,
     NativeCapabilityShape::ContainerUser,
     NativeCapabilityShape::ContainerWorkdir,
+    NativeCapabilityShape::FixedIpv4HostPort,
+    NativeCapabilityShape::EphemeralIpv4HostPort,
+    NativeCapabilityShape::MultipleFixedPortBindings,
+    NativeCapabilityShape::MultipleEphemeralPortBindings,
+    NativeCapabilityShape::ExposedOnlyPort,
+    NativeCapabilityShape::EphemeralHostPort,
+    NativeCapabilityShape::ContainerCreateLabels,
+    NativeCapabilityShape::ShellHealthcheck,
+    NativeCapabilityShape::HealthStartPeriodZero,
+    NativeCapabilityShape::HealthStartPeriodPositive,
+    NativeCapabilityShape::NetworkCreateLabels,
+    NativeCapabilityShape::NetworkPrimaryAliases,
+    NativeCapabilityShape::NetworkSecondaryAliases,
+    NativeCapabilityShape::NetworkSecondaryConnect,
+    NativeCapabilityShape::BindMountSharedRelabelReadWrite,
+    NativeCapabilityShape::BindMountSharedRelabelReadOnly,
+    NativeCapabilityShape::BindMountPrivateRelabelReadWrite,
+    NativeCapabilityShape::BindMountPrivateRelabelReadOnly,
+];
+const UPSTREAM_CAPABILITIES: &[Capability] = &[
+    Capability::StandaloneContainer,
+    Capability::NamedVolume,
+    Capability::BridgeNetwork,
+    Capability::PortPublish,
+    Capability::BindMount,
+    Capability::EnvironmentAssignment,
+    Capability::Command,
+    Capability::Entrypoint,
+    Capability::Healthcheck,
+    Capability::RestartPolicy,
+    Capability::VolumeExternalReference,
+    Capability::NetworkExternalReference,
+    Capability::NetworkInternal,
+    Capability::VolumeLabels,
+    Capability::ContainerUser,
+    Capability::ContainerWorkdir,
+    Capability::PortHostIpv4,
+    Capability::PortMultipleBindings,
+    Capability::PortExposeOnly,
+    Capability::PortEphemeral,
+    Capability::ContainerLabels,
+    Capability::HealthShell,
+    Capability::HealthStartPeriod,
+    Capability::NetworkLabels,
+    Capability::NetworkAliases,
+    Capability::NetworkMultipleAttachment,
+    Capability::BindRelabelShared,
+    Capability::BindRelabelPrivate,
+    Capability::PortHostIpv6,
+];
+const UPSTREAM_SHAPES: &[NativeCapabilityShape] = &[
+    NativeCapabilityShape::StandaloneCreate,
+    NativeCapabilityShape::NamedVolumeCreate,
+    NativeCapabilityShape::NamedVolumeMountReadWrite,
+    NativeCapabilityShape::NamedVolumeMountReadOnly,
+    NativeCapabilityShape::BridgeNetworkCreate,
+    NativeCapabilityShape::BridgeNetworkAttach,
+    NativeCapabilityShape::FixedTcpPort,
+    NativeCapabilityShape::FixedUdpPort,
+    NativeCapabilityShape::BindMountReadWrite,
+    NativeCapabilityShape::BindMountReadOnly,
+    NativeCapabilityShape::EnvironmentValue,
+    NativeCapabilityShape::EnvironmentEmptyValue,
+    NativeCapabilityShape::ExecCommand,
+    NativeCapabilityShape::ExecEntrypoint,
+    NativeCapabilityShape::ExecHealthcheck,
+    NativeCapabilityShape::RestartNo,
+    NativeCapabilityShape::RestartAlways,
+    NativeCapabilityShape::RestartUnlessStopped,
+    NativeCapabilityShape::RestartOnFailureUnlimited,
+    NativeCapabilityShape::RestartOnFailureLimited,
+    NativeCapabilityShape::ExternalVolumeReference,
+    NativeCapabilityShape::ExternalNetworkReference,
+    NativeCapabilityShape::InternalBridgeNetworkCreate,
+    NativeCapabilityShape::VolumeCreateLabels,
+    NativeCapabilityShape::ContainerUser,
+    NativeCapabilityShape::ContainerWorkdir,
+    NativeCapabilityShape::FixedIpv4HostPort,
+    NativeCapabilityShape::EphemeralIpv4HostPort,
+    NativeCapabilityShape::MultipleFixedPortBindings,
+    NativeCapabilityShape::MultipleEphemeralPortBindings,
+    NativeCapabilityShape::ExposedOnlyPort,
+    NativeCapabilityShape::EphemeralHostPort,
+    NativeCapabilityShape::ContainerCreateLabels,
+    NativeCapabilityShape::ShellHealthcheck,
+    NativeCapabilityShape::HealthStartPeriodZero,
+    NativeCapabilityShape::HealthStartPeriodPositive,
+    NativeCapabilityShape::NetworkCreateLabels,
+    NativeCapabilityShape::NetworkPrimaryAliases,
+    NativeCapabilityShape::NetworkSecondaryAliases,
+    NativeCapabilityShape::NetworkSecondaryConnect,
+    NativeCapabilityShape::BindMountSharedRelabelReadWrite,
+    NativeCapabilityShape::BindMountSharedRelabelReadOnly,
+    NativeCapabilityShape::BindMountPrivateRelabelReadWrite,
+    NativeCapabilityShape::BindMountPrivateRelabelReadOnly,
+    NativeCapabilityShape::FixedIpv6HostPort,
+    NativeCapabilityShape::EphemeralIpv6HostPort,
 ];
 
 fn expected_admission(
     lane: NativeEvidenceLane,
 ) -> (&'static [Capability], &'static [NativeCapabilityShape]) {
     match lane {
-        NativeEvidenceLane::Debian11Rootful
-        | NativeEvidenceLane::Debian11Rootless
-        | NativeEvidenceLane::UpstreamRootful
-        | NativeEvidenceLane::UpstreamRootless => (REVIEWED_CAPABILITIES, REVIEWED_SHAPES),
+        NativeEvidenceLane::Debian11Rootful | NativeEvidenceLane::Debian11Rootless => {
+            (REVIEWED_CAPABILITIES, REVIEWED_SHAPES)
+        }
+        NativeEvidenceLane::UpstreamRootful | NativeEvidenceLane::UpstreamRootless => {
+            (UPSTREAM_CAPABILITIES, UPSTREAM_SHAPES)
+        }
     }
 }
 
 const RECORDS: [(NativeEvidenceLane, &str, &str); 4] = [
     (
         NativeEvidenceLane::Debian11Rootful,
-        "24313f10b84b8a3410906d5ad4721d3ef389ad2e09be5b59416929ef57e86b78",
+        "edc6276b2caf91be8057430159524563f59dae1528cda8f342f37c1336d2fdc2",
         include_str!(
-            "../docs/evidence/reviewed/sha256/24313f10b84b8a3410906d5ad4721d3ef389ad2e09be5b59416929ef57e86b78.json"
+            "../docs/evidence/reviewed/sha256/edc6276b2caf91be8057430159524563f59dae1528cda8f342f37c1336d2fdc2.json"
         ),
     ),
     (
         NativeEvidenceLane::Debian11Rootless,
-        "c9800d722f1b505f5b1e5a54d9c60e68502fceaa0779f690c5504623ec473333",
+        "bf3b2374782342abda9bc13f07f273f22a262f1412afb16376efcf376dceac17",
         include_str!(
-            "../docs/evidence/reviewed/sha256/c9800d722f1b505f5b1e5a54d9c60e68502fceaa0779f690c5504623ec473333.json"
+            "../docs/evidence/reviewed/sha256/bf3b2374782342abda9bc13f07f273f22a262f1412afb16376efcf376dceac17.json"
         ),
     ),
     (
         NativeEvidenceLane::UpstreamRootful,
-        "b6cebf2f71be5992b112661650e37e69270d45f7d1b8e89843e843bded325020",
+        "7eacfd00927374220e2bbe6340b62595803e8db2842b29034dc6145f73401cac",
         include_str!(
-            "../docs/evidence/reviewed/sha256/b6cebf2f71be5992b112661650e37e69270d45f7d1b8e89843e843bded325020.json"
+            "../docs/evidence/reviewed/sha256/7eacfd00927374220e2bbe6340b62595803e8db2842b29034dc6145f73401cac.json"
         ),
     ),
     (
         NativeEvidenceLane::UpstreamRootless,
-        "81a1ee33c3a02d83fe6cd0f1683e1bb9b6c8774dc8aa192b2160c6ee44ba0943",
+        "c2f380eaf9cbb8f4cdd8ca380afe350f6f97a39aeb98fc2211d531c3320d1d4a",
         include_str!(
-            "../docs/evidence/reviewed/sha256/81a1ee33c3a02d83fe6cd0f1683e1bb9b6c8774dc8aa192b2160c6ee44ba0943.json"
+            "../docs/evidence/reviewed/sha256/c2f380eaf9cbb8f4cdd8ca380afe350f6f97a39aeb98fc2211d531c3320d1d4a.json"
         ),
     ),
 ];
@@ -469,7 +580,7 @@ mod tests {
     }
 
     #[test]
-    fn bind_relabel_vocabulary_parses_without_reviewed_admission() {
+    fn bind_relabel_groups_are_explicitly_admitted_but_remain_complete() {
         for (name, expected, shapes) in [
             (
                 "BindRelabelShared",
@@ -489,7 +600,7 @@ mod tests {
             ),
         ] {
             assert_eq!(capability(name), expected);
-            assert!(!REVIEWED_CAPABILITIES.contains(&expected));
+            assert!(REVIEWED_CAPABILITIES.contains(&expected));
             rejected(|value| {
                 value["capabilities"]
                     .as_array_mut()
@@ -528,7 +639,7 @@ mod tests {
             ),
         ] {
             assert_eq!(native_shape(name), expected);
-            assert!(!REVIEWED_SHAPES.contains(&expected));
+            assert!(REVIEWED_SHAPES.contains(&expected));
         }
     }
 
@@ -581,7 +692,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_partial_prerequisite_label_and_identity_groups_and_unreviewed_network_labels() {
+    fn rejects_partial_application_groups_and_unreviewed_network_options() {
         for name in [
             "VolumeExternalReference",
             "NetworkExternalReference",
@@ -589,6 +700,18 @@ mod tests {
             "VolumeLabels",
             "ContainerUser",
             "ContainerWorkdir",
+            "PortHostIpv4",
+            "PortMultipleBindings",
+            "PortExposeOnly",
+            "PortEphemeral",
+            "ContainerLabels",
+            "HealthShell",
+            "HealthStartPeriod",
+            "NetworkLabels",
+            "NetworkAliases",
+            "NetworkMultipleAttachment",
+            "BindRelabelShared",
+            "BindRelabelPrivate",
         ] {
             rejected(|value| {
                 value["capabilities"]
@@ -645,9 +768,66 @@ mod tests {
         }
         rejected(|value| {
             value["capabilities"].as_array_mut().unwrap().push(serde_json::json!({
-                "name": "NetworkLabels", "state": "available", "admitted_shapes": ["NetworkCreateLabels"]
+                "name": "NetworkOptions", "state": "available", "admitted_shapes": ["NetworkBridgeMtu"]
             }));
         });
+    }
+
+    #[test]
+    fn every_lane_requires_each_complete_application_group() {
+        for (lane, digest, source) in RECORDS {
+            let original: Value = serde_json::from_str(source).unwrap();
+            for name in [
+                "PortHostIpv4",
+                "PortMultipleBindings",
+                "PortExposeOnly",
+                "PortEphemeral",
+                "ContainerLabels",
+                "HealthShell",
+                "HealthStartPeriod",
+                "NetworkLabels",
+                "NetworkAliases",
+                "NetworkMultipleAttachment",
+                "BindRelabelShared",
+                "BindRelabelPrivate",
+            ]
+            .into_iter()
+            .chain(
+                matches!(
+                    lane,
+                    crate::version::NativeEvidenceLane::UpstreamRootful
+                        | crate::version::NativeEvidenceLane::UpstreamRootless
+                )
+                .then_some("PortHostIpv6"),
+            ) {
+                let mut value = original.clone();
+                let entry = value["capabilities"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|entry| entry["name"] == name)
+                    .unwrap();
+                entry["admitted_shapes"].as_array_mut().unwrap().pop();
+                let changed = serde_json::to_string(&value).unwrap();
+                assert!(std::panic::catch_unwind(|| record(lane, digest, &changed)).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn debian_never_borrows_upstream_ipv6_admission() {
+        for (lane, digest, source) in &RECORDS[..2] {
+            let mut value: Value = serde_json::from_str(source).unwrap();
+            value["capabilities"]
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!({
+                    "name":"PortHostIpv6", "state":"available",
+                    "admitted_shapes":["FixedIpv6HostPort","EphemeralIpv6HostPort"],
+                }));
+            let changed = serde_json::to_string(&value).unwrap();
+            assert!(std::panic::catch_unwind(|| record(*lane, digest, &changed)).is_err());
+        }
     }
 
     #[test]

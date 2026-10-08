@@ -1,0 +1,152 @@
+{
+  "schema_version": 1,
+  "kind": "reviewed-application-source-cohort",
+  "scope": "public projections and trusted harness execution; not direct private-proof inspection, catalogue admission or application acceptance",
+  "repository": {
+    "id": 1387403220,
+    "full_name": "Strukturpiloten/docker-lens"
+  },
+  "pull_request": 99,
+  "candidate_sha": "6df951eb9e112becf8124fe9f8624b1df0dfbf2e",
+  "run": {
+    "id": 37706460127,
+    "attempt": 1,
+    "event": "workflow_dispatch",
+    "workflow_path": ".github/workflows/native-validation.yml",
+    "workflow_ref": "refs/heads/main",
+    "dispatcher_sha": "719aeedf58f81a578b27649a81a2f26065115374",
+    "conclusion": "success"
+  },
+  "actors": {
+    "actor": {
+      "id": 1497405,
+      "login": "TheRealBecks",
+      "current_permission": "admin"
+    },
+    "triggering_actor": {
+      "id": 1497405,
+      "login": "TheRealBecks",
+      "current_permission": "admin"
+    }
+  },
+  "artifacts": [
+    {
+      "id": 11520685056,
+      "name": "dockerlens-native-upstream-rootful",
+      "archive_api_digest": "sha256:30c3867535885773789942e74e7d635169c18ed2b04829ffaf673473e3c159ef",
+      "size": 1960,
+      "expired": false,
+      "member_name": "upstream-rootful.json",
+      "native_manifest_sha256": "a6c4511598db1625565439549f4ef00d7684ed6af0809634b0222b1d0f50fdd2",
+      "reviewed_record_sha256": "7eacfd00927374220e2bbe6340b62595803e8db2842b29034dc6145f73401cac"
+    },
+    {
+      "id": 11520286786,
+      "name": "dockerlens-native-debian11-rootful",
+      "archive_api_digest": "sha256:a44d43b34994516a8f5141f83d158b7dbea548ab8a415fefc846b9428f50c19c",
+      "size": 2015,
+      "expired": false,
+      "member_name": "debian11-rootful.json",
+      "native_manifest_sha256": "5cdef1c4f537d44d6dc6e0e9040a4cc98760bdc10d6c50296c7824e572e43a67",
+      "reviewed_record_sha256": "edc6276b2caf91be8057430159524563f59dae1528cda8f342f37c1336d2fdc2"
+    },
+    {
+      "id": 11520112925,
+      "name": "dockerlens-native-debian11-rootless",
+      "archive_api_digest": "sha256:267ead5ec1e6e70dea94f6bd1c89a453d641ad0b59f71e96bc72cf9c77ef4e72",
+      "size": 2014,
+      "expired": false,
+      "member_name": "debian11-rootless.json",
+      "native_manifest_sha256": "c1838c7377d8a7aeed9606730dca813c6ec5c979b462bfd896d89bde7e53dd18",
+      "reviewed_record_sha256": "bf3b2374782342abda9bc13f07f273f22a262f1412afb16376efcf376dceac17"
+    },
+    {
+      "id": 11520012210,
+      "name": "dockerlens-native-upstream-rootless",
+      "archive_api_digest": "sha256:091cb4f4318bb0e3965875632fe71c6746b9f18842d10d86f9850bbbe4b68d68",
+      "size": 1963,
+      "expired": false,
+      "member_name": "upstream-rootless.json",
+      "native_manifest_sha256": "cc4c7dd0045054cabdd43c222d9ef07470d3a702cc70e127931621359bae0268",
+      "reviewed_record_sha256": "c2f380eaf9cbb8f4cdd8ca380afe350f6f97a39aeb98fc2211d531c3320d1d4a"
+    }
+  ],
+  "jobs": [
+    {
+      "id": 113081887680,
+      "name": "Validate dispatcher and exact reviewed PR head",
+      "conclusion": "success",
+      "authenticated_log_sha256": "d52fdd4274194d0785b9e43e4425d06cff56d31bade273ef9b4ed17957ad2c03"
+    },
+    {
+      "id": 113081926043,
+      "name": "Complete offline gate at exact PR head",
+      "conclusion": "success",
+      "authenticated_log_sha256": "dd08665a19ba9473865b08d5c1e53451e68b454f02dedc0df2afd9a397f47216"
+    },
+    {
+      "id": 113083692059,
+      "name": "Native Engine debian11-rootless",
+      "conclusion": "success",
+      "authenticated_log_sha256": "7927b3685baa77dddc52f233580b70b060e85d24be41ecba45c608fd78c91746"
+    },
+    {
+      "id": 113083692072,
+      "name": "Native Engine upstream-rootless",
+      "conclusion": "success",
+      "authenticated_log_sha256": "67b683f196bcb4bdeed6544b94986d0a091ee79505a80c3ecb9cd0851902c287"
+    },
+    {
+      "id": 113083692073,
+      "name": "Native Engine upstream-rootful",
+      "conclusion": "success",
+      "authenticated_log_sha256": "6992fb65d5669bbe79f64792eccf46f9e864ebb7c0f4bcfda218785a3f1036ae"
+    },
+    {
+      "id": 113083692171,
+      "name": "Native Engine debian11-rootful",
+      "conclusion": "success",
+      "authenticated_log_sha256": "0431f4be4bed7c7ab3590ec8d8f1cb7a2f4edba301c7f6606375363f7df98f6b"
+    },
+    {
+      "id": 113084563786,
+      "name": "All reviewed native validation required",
+      "conclusion": "success",
+      "authenticated_log_sha256": "0e84f506dd707659597338a8f34308e219cbc0eb8ad7539f34e3efba81eda14c"
+    }
+  ],
+  "review": {
+    "source_pr": "https://github.com/Strukturpiloten/docker-lens/pull/99",
+    "acceptance_comment": "https://github.com/Strukturpiloten/docker-lens/pull/99#issuecomment-6049645585",
+    "source_review": "independent Sol",
+    "native_tests_each_lane": 14,
+    "public_artifact_controls": 51,
+    "projection": "Dev Container p exit0; all4strict public projections valid; configured bind effect remains unverified"
+  },
+  "admission_scope": "candidate pre-merge rehearsal; final-candidate native and actual consumer gates required",
+  "oracle": {
+    "command": "./scripts/native-conformance.sh <lane>",
+    "debian_package": "docker.io 20.10.5+dfsg1-1+deb11u2",
+    "debian_engine": "20.10.5+dfsg1",
+    "upstream_engine": "29.8.1",
+    "source_license_reference": "ADR 0015: Moby/Debian source references Apache-2.0; no oracle source or binaries redistributed",
+    "redistribution": "Only sanitized public metadata under repository MPL-2.0; no private proof or log bodies"
+  },
+  "selinux_effect": "unverified",
+  "admission_counts": {
+    "debian": {
+      "capabilities": 28,
+      "shapes": 44
+    },
+    "upstream": {
+      "capabilities": 29,
+      "shapes": 46
+    }
+  },
+  "remaining_gates": [
+    "complete final-edit gate",
+    "four-lane fourteen-exact-test final candidate proof",
+    "all six actual authored fixture volume-only consumer rehearsals",
+    "reviewed BoxFerry schema-2 actual Nextcloud and Supabase bind consumers"
+  ]
+}

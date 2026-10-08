@@ -18,9 +18,9 @@ software pin; it cannot be supplied by the proof itself. The emitter derives
 all expected context from those harness facts and requires the complete private
 four-case/two-role proof before emitting only two configured-retention groups,
 four ordered markers and an explicitly unverified SELinux effect. With preceding
-source producers, future raw counts are Debian 28/44 and upstream 29/46; this is
-not sealed admission. Historical evidence, reviewed-record root schema and
-the 16/26 catalogue remain unchanged.
+source producers, raw counts are Debian 28/44 and upstream 29/46. ADR 0016
+now selects the independently reviewed coherent source cohort for candidate
+admission; earlier evidence stays immutable and final-candidate gates remain.
 
 Conditional complete-artifact schema 2 retains bind-source and SELinux
 obligations; default schema-1 bytes stay unchanged. BoxFerry's consumer and six
@@ -60,8 +60,9 @@ markers cannot replace the new effect/ownership/cleanup proof. No IPv6, IPAM,
 static address, options, NAT or additional internal/external group is promoted.
 With current parameterized identity, health and port proof, future raw counts
 are Debian 26 capabilities/40 shapes and upstream 27/42; counts alone are not
-evidence. Historical JSON, reviewed-record schema root, and sealed 16/26
-catalogue remain unchanged; later admission/consumer gates stay mandatory.
+evidence. These were intermediate producer counts. ADR 0016 now selects only
+complete groups from the coherent source cohort; historical bytes and later
+final-candidate/consumer gates remain mandatory.
 
 Local/main/reviewed-PR/release native consumers share the same canonical harness.
 BoxFerry consumer/application acceptance remains separate, and other Lens
@@ -71,7 +72,7 @@ extraction path changes: the enabled Cargo manager and existing five-image,
 toolchain and Action managers retain unique ownership, grouping and approval
 rules. Historical evidence remains excluded from operational updates.
 
-The new producer remains unqualified until final complete gates, fresh exact-head
+The changed admission candidate remains unqualified until final complete gates, fresh exact-head
 native execution and authenticated independent review pass. No publication,
 deployment, platform/Swarm expansion or application acceptance is authorized.
 
@@ -81,7 +82,8 @@ The canonical native harness now additionally requires
 `native_health_metadata_tests::live_health_metadata_matches_engine` in every
 exact Debian/upstream rootful/rootless lane. See the independently specified
 [health-metadata-v1 contract](native-health-metadata-contract.md). This is a new
-source producer, not admission of the shapes into the sealed catalogue.
+source proof producer; ADR 0016 now selects only its independently reviewed
+complete groups together with the coherent application source cohort.
 
 Independent CLI/rendered pairs prove direct container-label retention, shell
 health execution, actual failed checks during positive grace, explicit zero
@@ -97,8 +99,9 @@ absence rounds before exclusive private proof publication.
 The emitter reads that complete owner-private bound proof and projects only
 `health-metadata-v1` plus the four closed source-shape names. Only the complete
 `ContainerLabels`, `HealthShell` and `HealthStartPeriod` groups are emitted;
-inherited/disabled controls grant no additional groups. Historical manifests,
-reviewed-record schema root and current 16/26 sealed catalogue stay unchanged.
+inherited/disabled controls grant no additional groups. Historical manifests
+stay immutable. ADR 0016 now selects these complete groups with the coherent
+application cohort; final-candidate/consumer gates remain mandatory.
 With parameterized identity and the currently prescribed Debian IPv6
 boundaries, future raw manifests contain Debian 23 groups/36 shapes and
 upstream 24/38. Counts are expectations, not substitutes for authentic proof.
@@ -114,7 +117,7 @@ see [dependency policy](dependency-policy.md). Existing ownership covers the
 unchanged five native image references, Cargo/toolchain and Action pins;
 historical evidence remains outside operational managers.
 
-The new producer is unqualified until complete gates, fresh exact-head native
+The changed admission candidate is unqualified until complete gates, fresh exact-head native
 execution and authenticated independent review pass. It does not establish
 application readiness, SELinux effects, release or deployment approval.
 
@@ -133,14 +136,12 @@ bind-only/colon/duplicate refusal, missing capability/API/mode boundaries,
 bounded source decoding and value-free unsupported capture findings. These
 also cover Mode/RW conflicts in both directions, unavailable-field controls,
 lexical destination collisions across all mount domains, preserved authored
-bytes and distinct-path positives. Supplementary unadmitted schema vocabulary
-is disjoint from the unchanged root reviewed-record contract, and its union
-with root vocabulary must exactly match the Rust enums. Closed parser
-recognition is separately checked without changing active admission. These
-facts cannot authorize production planning. Both new relabel capabilities
-remain absent from reviewed profiles; historical evidence is unchanged.
-Native harness/emitter integration is implemented; independent exact-candidate
-four-lane configured-retention qualification remains open. No SELinux effect proof was executed;
+bytes and distinct-path positives. The reviewed-record root vocabulary now recognizes both configured-retention
+bind capabilities and all four shapes. Vocabulary-only definitions grant no
+admission; root enum parity with Rust remains checked. ADR 0016 admits only
+the exact complete independently reviewed bind groups on all four candidate
+profiles. Historical evidence stays unchanged and fresh final-candidate
+four-lane configured-retention qualification remains required. No SELinux effect proof was executed;
 actual labeling/enforcement requires separately suitable host conditions and
 evidence, not a passing mode-inspection check on SELinux-disabled CI.
 
@@ -697,7 +698,8 @@ user/group syntax and defines the expanded parameterized proof required before
 identity capability admission. The historical proof described below remains
 numeric-only non-admission evidence. #86's expanded ten-pair source proof
 passed all four lanes in run `37439627551`, attempt 1. Candidate sealed
-selection is governed separately by ADR 0014 and the final-candidate gates.
+selection was governed by ADR 0014; ADR 0016 now selects the coherent
+application cohort and retains all final-candidate and consumer gates.
 
 The version-2 producer/consumer seam is documented in
 [parameterized identity proof](native-identity-contract.md). The canonical check
@@ -843,8 +845,9 @@ Legacy identity proof v1 adds no identity group: future raw output contains
 18/19 groups and 30/32 shapes without/with the complete IPv6 group. Complete
 parameterized identity proof v2 alone adds `ContainerUser`/`ContainerWorkdir`,
 giving 20/21 groups and 32/34 shapes. The baseline ten-group proof input,
-historical raw/reviewed JSON, schema root and sealed sixteen-group/twenty-six-
-shape catalogue remain unchanged. Tests cover both identity versions and all
+historical raw/reviewed JSON remain unchanged. These intermediate mappings
+did not themselves admit groups; ADR 0016 now selects the independently
+authenticated coherent application source cohort. Tests cover both identity versions and all
 four exact lanes, complete groups, prescribed negatives, and fail-closed
 counterfactuals. These are source-evidence definitions, not reviewed admission.
 Capability admission remains
@@ -1083,75 +1086,61 @@ evidence and all earlier worktrees remain unchanged.
 
 ## Reviewed target-profile records
 
-The #89 candidate catalogue selects four reviewed records from native run
-[`37439627551`, attempt 1](https://github.com/Strukturpiloten/docker-lens/actions/runs/37439627551/attempts/1),
-of #88 source candidate `032b1510524f391f08a795dab4da73f6fa8f7213`, under
-[ADR 0014](decisions/0014-reviewed-identity-cohort.md). The exact set is sixteen
-capabilities and twenty-six shapes: the #70 fourteen/twenty-four set plus only
-`ContainerUser` / `ContainerUser` and `ContainerWorkdir` / `ContainerWorkdir`.
-The ten independent CLI/renderer pairs and complete private v2 proof establish
-parameterized native fields, not arbitrary-image startup or host UID mapping.
+The candidate selects the fifth coherent source cohort from
+[run `37706460127`, attempt 1](https://github.com/Strukturpiloten/docker-lens/actions/runs/37706460127/attempts/1),
+executed source `6df951eb9e112becf8124fe9f8624b1df0dfbf2e`, under
+[ADR 0016](decisions/0016-reviewed-application-cohort.md). Trusted dispatcher
+`719aeedf58f81a578b27649a81a2f26065115374` is a distinct workflow identity.
+[Public provenance](evidence/application-cohort-37706460127.json) records the
+independently authenticated API run/job/artifact identities, ZIP digests,
+raw-member/reviewed-envelope hashes and independent source review. All fourteen
+exact tests passed per source lane, and strict public projections passed review.
+This establishes trusted harness execution and sanitized public projections,
+not direct private-proof inspection or SELinux effects.
 
-Production merge/main/release remain blocked until fresh exact-final-candidate
-four-lane native proof, complete gates and independently reviewed six actual
-authored-fixture volume-only consumer rehearsals pass. The retained
-[ADR 0012](decisions/0012-candidate-volume-label-admission.md) gate applies
-because this selection still admits `VolumeLabels`. Offline consumer tests
-exercise the sealed planner but do not replace isolated native rehearsal.
-The authenticated source run validates its source candidate, not a later
-candidate, release or six-application acceptance. The trusted dispatcher
-workflow head is distinct from the executed source SHA.
+The closed selection retains sixteen/twenty-six groups/shapes and adds only
+complete common port, health/metadata, network attachment and configured-bind
+retention groups: exactly Debian 28/44 and upstream 29/46. Only upstream adds
+the complete IPv6 port group; either prescribed Debian negative withholds it.
+Old twenty-two network markers, /info reports and health controls never admit
+IPAM/options/static addresses/network IPv6, resource/device/init, disabled
+health or start-interval groups. Identity is not arbitrary-image startup or
+host UID mapping; bind configuration is not relabel effect evidence.
 
-All earlier raw and reviewed cohorts remain immutable and retain their own
-admissions: original run `36451790131`, attempt 1, source
-`d51d7dbfda5ee6f8fefe92605afe8baea3dc504e` (ten/twenty);
-#68 run `37209363801`, attempt 1, source
-`702910b003daae58babd540d7ba3de4998275feb` (thirteen/twenty-three);
-and #70 run `37214738475`, attempt 1, source
-`0d8268155a5aacddaeb501adf7f8b2fe06a718ca` (fourteen/twenty-four).
-No prior record is relabeled, regenerated or rewritten. The active catalogue
-still has exactly four identities, selected only from #88.
+This is pre-merge candidate rehearsal admission. Production merge/main/release
+still require complete final-edit gates, fresh fourteen-test four-lane proof
+on the final candidate, all six actual authored fixture volume-only consumer
+rehearsals required by ADR 0012, and reviewed BoxFerry schema-2 consumption of
+the actual authored Nextcloud/Supabase binds. This source run cannot qualify a
+changed admission candidate. #31/#343/#366 and full migration remain open.
 
-Exact manifests and reviewed envelopes live under
-`docs/evidence/native/sha256/` and `docs/evidence/reviewed/sha256/`.
-Records conform to [the reviewed schema](native-evidence.schema.json) and bind
-lane, build/package provenance, reported Engine release, advertised maximum,
-acquisition and rendering APIs, daemon mode, actual source SHA and run attempt.
-The compiled catalogue requires exactly sixteen complete capability groups
-and twenty-six shapes per lane. Each `NativeCapabilityShape::required_for`
-group must match its linked raw manifest's exact available shape group.
-Missing/duplicate lanes, partial groups, wrong-group shapes or unavailable
-outcomes cannot authorize planning. Raw probe markers alone grant no claim.
+All four earlier raw/reviewed cohorts stay byte-exact: original run
+`36451790131` (10/20), #68 `37209363801` (13/23), #70 `37214738475` (14/24)
+and #88 `37439627551` (16/26), each attempt 1. The active catalogue still has
+four identities, now selecting only the new source cohort. Exactly four raw
+members and four reviewed envelopes are added under the existing digest paths.
 
-The four unmodified #88 artifacts are named `dockerlens-native-<lane>` and
-contain `<lane>.json`. Downloaded archive hashes matched authenticated GitHub
-artifact digests; the independently reviewed bounded projector verified the
-candidate/lane/image/package/API/probe/case bindings. Each exact manifest is
-retained verbatim under its content SHA-256. Its reviewed envelope derives
-build provenance from the observed lane/package, copies the native identity
-and APIs, binds the actual source/run above, and selects only the sixteen
-complete available groups. UTF-8 JSON with two-space indentation and a final
-newline has a separate SHA-256 naming the reviewed file and evidence key.
+Records conform to [the schema](native-evidence.schema.json) and bind lane,
+build/package, Engine, advertised/acquisition/rendering APIs, mode, source SHA
+and run attempt. Compiled exact per-lane sets, complete `required_for` groups,
+and linked raw available groups must agree. Missing/duplicate lanes, partial
+groups, wrong-group shapes, nonpositive outcomes and wrong source/mode/API/
+evidence fail closed. Schema/parser vocabulary, markers and caller facts alone
+grant no claim. Downloaded ZIP hashes matched independent API digests; each
+single named raw member is retained byte-for-byte under its SHA-256 name.
+Reviewed schema-1 envelopes use two-space UTF-8 JSON with a trailing newline;
+their separate content hashes become evidence keys without self-reference.
 
-`tests/test_reviewed_catalog.py` pins all four cohorts' raw/reviewed hashes,
-identity bindings and complete groups and checks the exact compiled selection.
-Identity admission additionally requires the exact ordered parameterized case
-and probe markers; legacy, omitted, partial, duplicated or reordered markers
-fail the linked-evidence regression checks.
-Public regressions use the real sealed catalogue, independently authored
-identity requests and complete labelled-volume artifacts on every profile.
-They check omission, canonical numeric/named/mixed users, protected Debug,
-malformed values, wrong evidence/mode/API, duplicate/oversized labels and
-external-volume non-mutation. Supplementary groups, host namespace, port and
-remaining runtime/network groups stay unadmitted. Offline assertions cannot
-replace fresh native or consumer proof.
+Python regressions pin all five cohorts, exact active selection, source
+projections, complete groups and Debian IPv6 negatives. Public Rust controls
+exercise every new group with sealed profiles, request order, protected values
+and all schema-2 source/SELinux obligations. Existing schema-1/request behavior
+stays unchanged apart from selected context/evidence keys.
 
-The #88 source run passed ten exact ignored proof tests per lane. Its raw
-manifests retain nineteen source, twenty-two network, six external-volume,
-four label and five identity probe markers plus the ten ordered identity
-cases and `container-identity-v1` contract. Test count is not probe count.
-No operational pin, manager ownership or Renovate extraction path changes;
-immutable historical evidence remains outside automatic update streams.
+No dependency, image, workflow, toolchain or extraction-path changes. Readback
+of `renovate.json` confirms unique existing Cargo/GitHub Actions ownership and
+toolchain/five-image regex managers. Grouping/approval rules stay unchanged;
+historical evidence remains outside operational update streams.
 
 `native_manifest_artifact_name` identifies the run's per-lane artifact;
 `native_manifest_sha256` is the SHA-256 of its sanitized JSON manifest
