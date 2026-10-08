@@ -124,6 +124,19 @@ internal_cleanup=$(grep -Eo '^DOCKERLENS_NATIVE_CLEANUP: internal_proof=(pass|fa
 # without disclosing its message, compared values, or an absolute build path.
 panic_site=
 case $target in
+  native_bind_relabel)
+    # The test catches its original assertion, then cleans up and may panic at
+    # a final aggregate assertion. Only the first selected-test site before the
+    # first exact cleanup marker identifies the causal assertion. Never export
+    # the panic message, thread text, private suffixes or an absolute build path.
+    panic_site=$(sed -nE \
+      -e '/^DOCKERLENS_NATIVE_CHECK: bind_relabel_cleanup(_unverified)?$/q' \
+      -e "s/^thread '${selected}'( \([0-9]{1,10}\))? panicked at src\/(native_bind_relabel_tests)\.rs:([1-9][0-9]{0,5}):([1-9][0-9]{0,3}):$/DOCKERLENS_NATIVE_PANIC: source=\2 line=\3 column=\4/p" \
+      <<<"$result" | sed -n '1p')
+    if [[ -z $panic_site ]]; then
+      panic_site='DOCKERLENS_NATIVE_PANIC: source=native_bind_relabel_tests location=unavailable'
+    fi
+    ;;
   native_port)
     # Optional IPv6 follow-ups catch panics before the original HTTP assertion.
     # Project only the first selected panic outside valid diagnostic scopes;

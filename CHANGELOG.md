@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Project the first bounded bind-test panic location before cleanup, preserving
+  causal stage and nonzero failure. Suppress later aggregate sites and private
+  messages; emit a fixed unavailable result when no causal location exists.
+  This is diagnostic instrumentation, not an underlying native-behavior fix.
+
 - Wire the separate external-network Internal source proof as the fifteenth
   canonical native test; require strict private proof before projecting its
   complete false/true raw group. Preserve emitter arguments, sealed admission
