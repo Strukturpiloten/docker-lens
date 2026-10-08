@@ -1992,6 +1992,7 @@ fn intent(backend: &str, edge: &str, external: &str, app: &str, image: &str) -> 
             role: NetworkRole::Declared,
             source: NetworkSource::External {
                 expected_driver: NetworkDriver::Bridge,
+                expected_internal: None,
             },
         }),
         container(

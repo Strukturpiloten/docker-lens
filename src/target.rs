@@ -10,6 +10,8 @@ mod graph;
 mod intent;
 #[path = "target_modules/network.rs"]
 mod network;
+#[path = "target_modules/prerequisite.rs"]
+mod prerequisite;
 #[path = "target_modules/render.rs"]
 mod render;
 #[path = "target_modules/volume.rs"]
@@ -35,6 +37,7 @@ pub use network::{
     NetworkCreate, NetworkDriver, NetworkIntent, NetworkIpam, NetworkIpamDriver, NetworkIpamPool,
     NetworkLabel, NetworkRole, NetworkSource, NetworkSubnet,
 };
+pub use prerequisite::NetworkPrerequisiteError;
 pub use render::{
     BindRelabelCondition, BindSourceCondition, BindSourcePrerequisite, CompleteArtifactError,
     DockerApiRenderer, NetworkPrerequisite, RenderError, RenderedArtifact, Renderer,
@@ -1109,6 +1112,7 @@ mod tests {
                 role: NetworkRole::Declared,
                 source: NetworkSource::External {
                     expected_driver: NetworkDriver::Bridge,
+                    expected_internal: None,
                 },
             }),
             TargetResource::Container(Box::new(ContainerIntent {
@@ -1298,6 +1302,7 @@ mod tests {
             role: NetworkRole::Declared,
             source: NetworkSource::External {
                 expected_driver: NetworkDriver::Overlay,
+                expected_internal: None,
             },
         });
         assert_eq!(
@@ -1311,6 +1316,7 @@ mod tests {
                 role: NetworkRole::ApplicationDefault,
                 source: NetworkSource::External {
                     expected_driver: NetworkDriver::Bridge,
+                    expected_internal: None,
                 },
             })
         };
@@ -1402,6 +1408,7 @@ mod tests {
             role: NetworkRole::Declared,
             source: NetworkSource::External {
                 expected_driver: NetworkDriver::Bridge,
+                expected_internal: None,
             },
         });
         assert_eq!(

@@ -188,7 +188,10 @@ impl TargetIntent {
         }
         for resource in &resources {
             if let TargetResource::Network(network) = resource {
-                if let NetworkSource::External { expected_driver } = &network.source {
+                if let NetworkSource::External {
+                    expected_driver, ..
+                } = &network.source
+                {
                     if *expected_driver != NetworkDriver::Bridge {
                         return Err(IntentError::InvalidNetworkDriver);
                     }

@@ -26,7 +26,13 @@ pub enum NetworkDriver {
 #[derive(Debug)]
 pub enum NetworkSource {
     Create(NetworkCreate),
-    External { expected_driver: NetworkDriver },
+    External {
+        expected_driver: NetworkDriver,
+        /// Optional consumer preflight requirement, not an observed fact.
+        /// `None` leaves internal-network behavior unconstrained; explicit false
+        /// and true require separate reviewed external-expectation evidence.
+        expected_internal: Option<bool>,
+    },
 }
 
 #[derive(Debug)]

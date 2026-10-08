@@ -96,6 +96,43 @@ or ephemeral allocation request. Values remain protected in Debug and
 diagnostics. The renderer still produces only inert request data.
 These modules define independent ownership boundaries for later native work.
 
+External network intent additionally retains an optional authored
+`expected_internal` requirement as `None`, explicit false, or explicit true.
+It is not an observed flag and creates no request. Both explicit values require
+the distinct, currently unadmitted `NetworkExternalInternalExpectation`
+capability, whose complete evidence group contains false and true external
+expectation shapes. Created-network `NetworkInternal` evidence is not reused.
+An explicit expectation selects complete-artifact schema 3; otherwise schema 1
+and bind-only schema 2 retain their bytes. Combined schema 3 keeps every bind
+obligation, protected identity and existing prerequisite order. Vocabulary and
+test-local positive cases do not alter sealed catalogue selection, counts
+or historical evidence. All sealed profiles refuse this new
+constraint pending independent native proof. `NetworkPrerequisite::assess`
+purely matches supplied inventory/daemon scope, canonical selected network ID,
+capture-local root binding and present correctly-originated required fields.
+It does not compare target-graph references with capture references. Native IDs
+are matched within the network kind; duplicate selected capture references or
+cross-kind collisions at that reference fail. Scanned collections retain the
+decoder's 4096 limit, with container/volume scans reading references only.
+Success validates only those snapshot fields and bindings, not a complete
+inventory, authenticated daemon, atomicity or current/future existence. Supplied
+snapshots remain caller assertions; no I/O or capability admission occurs. See
+[ADR 0017](decisions/0017-external-network-internal-expectation.md).
+
+The separate ignored external-network source producer and strict private reader
+are defined in [their contract](native-external-network-contract.md). They check
+independently CLI-created false/true bridges, actual explicit acquisition,
+empty-request schema-3 obligations and opposite snapshot refusals. The canonical
+harness now requires this fifteenth test after configured binds. Raw emission
+requires its fixed private proof against independently derived harness context
+and daemon UID, preserving the nineteen-argument emitter protocol. Only the
+complete false/true group and closed public projection are added; reviewed root
+schema, sealed catalogue and historical evidence remain unchanged. Prospective
+identity-v2 raw counts are Debian 29/46 and upstream 30/48, not sealed admission
+counts. Definitions or offline controls grant no native compatibility. Fresh
+authenticated exact-candidate four-lane execution, independent review and the
+separate ADR 0012/0016 consumer gates remain required.
+
 Created named volumes retain bounded protected authored labels and render a
 `Labels` object only when nonempty. The separate `VolumeLabels` capability
 gates that request branch; historical unlabelled volume evidence does not
@@ -130,7 +167,8 @@ remain unchanged. The graph requires separate shared/private
 configured-retention capabilities, admitted only through the exact complete
 groups selected by ADR 0016. The renderer adds protected destination-host bind-source
 review obligations and explicitly unverified SELinux conditions. Those complete
-artifacts use schema 2; all others retain schema 1. No component inspects host
+artifacts use schema 2 unless an explicit external-network internal expectation
+requires schema 3; artifacts with neither retain schema 1. No component inspects host
 paths or applies requests. See [ADR 0015](decisions/0015-bind-relabel-intent.md).
 
 `decode_capture` accepts only the closed acquisition request set. It checks

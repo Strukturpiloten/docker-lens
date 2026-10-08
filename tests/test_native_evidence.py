@@ -13,6 +13,7 @@ from pathlib import Path
 from test_native_health_metadata_proof import IMAGE as HEALTH_FIXTURE_IMAGE, proof as health_metadata_proof
 from test_native_network_attachment_proof import fixture as network_attachment_fixture
 from test_native_bind_relabel_proof import fixture as bind_relabel_fixture
+from test_native_external_network_proof import fixture as external_network_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/native-evidence.py"
@@ -49,6 +50,7 @@ EXPECTED_RAW_SHAPES = {
     "NetworkMultipleAttachment": ["NetworkSecondaryConnect"],
     "BindRelabelShared": ["BindMountSharedRelabelReadWrite", "BindMountSharedRelabelReadOnly"],
     "BindRelabelPrivate": ["BindMountPrivateRelabelReadWrite", "BindMountPrivateRelabelReadOnly"],
+    "NetworkExternalInternalExpectation": ["ExternalNetworkInternalFalse", "ExternalNetworkInternalTrue"],
 }
 EXPECTED_PORT_CAPABILITY_SHAPES = {
     "PortHostIpv4": ["FixedIpv4HostPort", "EphemeralIpv4HostPort"],
@@ -152,24 +154,27 @@ class NativeEvidenceTests(unittest.TestCase):
                                      "identity_container_v2", "identity_case_v2", "native_identity_proof_v2",
                                      "port_shape", "port_probe_entry", "port_probes",
                                      "native_port_probe_proof", "bind_relabel_capability_vocabulary",
-                                     "bind_relabel_shape_vocabulary"})
+                                     "bind_relabel_shape_vocabulary", "external_network_probes",
+                                     "external_network_projection"})
         unchanged = copy.deepcopy(schema)
         for name in ("identity_probes", "identity_container_proof", "native_identity_proof",
                      "identity_container_v2", "identity_case_v2", "native_identity_proof_v2",
                      "port_shape", "port_probe_entry", "port_probes", "native_port_probe_proof",
-                     "bind_relabel_capability_vocabulary", "bind_relabel_shape_vocabulary"):
+                     "bind_relabel_capability_vocabulary", "bind_relabel_shape_vocabulary",
+                     "external_network_probes", "external_network_projection"):
             del unchanged["$defs"][name]
-        # Preserve the exact historical #74 root projection: ADR 0016 adds only
-        # the closed bind vocabulary to this root; historical envelope bytes
-        # and admission remain immutable.
+        # Preserve the exact historical #74 root projection: later vocabulary
+        # additions do not rewrite historical envelope bytes or admission.
         root = unchanged["properties"]["capabilities"]["items"]["properties"]
         root["name"]["enum"] = [name for name in root["name"]["enum"]
-                                if name not in ("BindRelabelShared", "BindRelabelPrivate")]
+                                if name not in ("BindRelabelShared", "BindRelabelPrivate",
+                                                "NetworkExternalInternalExpectation")]
         root["admitted_shapes"]["items"]["enum"] = [
             name for name in root["admitted_shapes"]["items"]["enum"]
             if name not in (
                 "BindMountSharedRelabelReadWrite", "BindMountSharedRelabelReadOnly",
                 "BindMountPrivateRelabelReadWrite", "BindMountPrivateRelabelReadOnly",
+                "ExternalNetworkInternalFalse", "ExternalNetworkInternalTrue",
             )
         ]
         self.assertEqual(hashlib.sha256(json.dumps(unchanged, sort_keys=True,
@@ -282,6 +287,10 @@ class NativeEvidenceTests(unittest.TestCase):
         self.assertTrue(supplementary_shapes.issubset(shape_names))
         self.assertEqual(names, variants("pub enum Capability {"))
         self.assertEqual(shape_names, variants("pub(crate) enum NativeCapabilityShape {"))
+        self.assertIn("NetworkExternalInternalExpectation", names)
+        self.assertTrue({"ExternalNetworkInternalFalse", "ExternalNetworkInternalTrue"}.issubset(shape_names))
+        self.assertEqual(EXPECTED_FUTURE_RAW_SHAPES["NetworkExternalInternalExpectation"],
+                         ["ExternalNetworkInternalFalse", "ExternalNetworkInternalTrue"])
         root = copy.deepcopy(schema)
         del root["$defs"]
         root_text = json.dumps(root, sort_keys=True)
@@ -318,6 +327,8 @@ class NativeEvidenceTests(unittest.TestCase):
                  network_attachment_missing: bool = False,
                  bind_relabel: object = None,
                  bind_relabel_missing: bool = False,
+                 external_network: object = None,
+                 external_network_missing: bool = False,
                  port_proof_override: object = None) -> tuple[subprocess.CompletedProcess[str], Path]:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -333,6 +344,7 @@ class NativeEvidenceTests(unittest.TestCase):
         health_metadata_path = root / "health-metadata.json"
         network_attachment_path = root / "network-attachments-v1.json"
         bind_relabel_path = root / "bind-relabel-config-v1.json"
+        external_network_path = root / "external-network-internal-v1.json"
         destination = root / "out" / f"{lane}.json"
         version_path.write_text(json.dumps(version), encoding="utf-8")
         shapes_path.write_text(json.dumps(SHAPES if shapes is None else shapes), encoding="utf-8")
@@ -375,6 +387,11 @@ class NativeEvidenceTests(unittest.TestCase):
         if not bind_relabel_missing:
             bind_relabel_path.write_text(json.dumps(bind if bind_relabel is None else bind_relabel), encoding="utf-8")
             bind_relabel_path.chmod(0o600)
+        external = external_network_fixture(lane)
+        external["context"].update(network["context"])
+        if not external_network_missing:
+            external_network_path.write_text(json.dumps(external if external_network is None else external_network), encoding="utf-8")
+            external_network_path.chmod(0o600)
         result = subprocess.run(
             ["python3", str(SCRIPT), str(version_path), str(shapes_path), str(source_path),
              str(network_path), str(volume_path), str(volume_label_path), str(identity_path),
@@ -399,7 +416,7 @@ class NativeEvidenceTests(unittest.TestCase):
         self.assertEqual(evidence["acquisition_api"], "1.49")
         self.assertEqual(evidence["rendering_api"], "1.56")
         self.assertEqual(evidence["runtime_components"], {"containerd": "2.3.5", "runc": "1.5.1"})
-        self.assertEqual(len(evidence["capability_outcome"]), 27)
+        self.assertEqual(len(evidence["capability_outcome"]), 28)
         self.assertEqual(set(evidence["capability_outcome"].values()), {"available"})
         self.assertEqual(evidence["admitted_shapes"], EXPECTED_FUTURE_RAW_SHAPES)
         self.assertEqual(evidence["source_probes"], SOURCE_PROBES)
@@ -516,8 +533,8 @@ class NativeEvidenceTests(unittest.TestCase):
             shape for shapes in evidence["admitted_shapes"].values() for shape in shapes))
 
     def test_prerequisite_raw_groups_are_exact_on_all_four_lane_identities(self) -> None:
-        self.assertEqual(len(EXPECTED_RAW_SHAPES), 22)
-        self.assertEqual(sum(map(len, EXPECTED_RAW_SHAPES.values())), 36)
+        self.assertEqual(len(EXPECTED_RAW_SHAPES), 23)
+        self.assertEqual(sum(map(len, EXPECTED_RAW_SHAPES.values())), 38)
         for family, release, api, minimum, package in (
             ("upstream", "29.8.1", "1.56", "1.44", ""),
             ("debian11", "20.10.5+dfsg1", "1.41", "1.12", "20.10.5+dfsg1-1+deb11u2"),

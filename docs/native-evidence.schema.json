@@ -82,7 +82,7 @@
               "StandaloneContainer", "BindMount", "BindRelabelShared", "BindRelabelPrivate",
               "TmpfsMount", "NamedVolume",
               "VolumeLabels", "VolumeExternalReference", "BridgeNetwork",
-              "NetworkExternalReference", "NetworkInternal", "NetworkIpv6",
+              "NetworkExternalReference", "NetworkExternalInternalExpectation", "NetworkInternal", "NetworkIpv6",
               "NetworkIpam", "NetworkIpamDriver", "NetworkOptions", "NetworkLabels",
               "NetworkAliases", "NetworkStaticAddress", "NetworkMultipleAttachment",
               "HostNetwork", "PortPublish", "PortExposeOnly", "PortHostIpv4",
@@ -108,7 +108,7 @@
                 "StandaloneCreate", "NamedVolumeCreate", "VolumeCreateLabels",
                 "NamedVolumeMountReadWrite", "NamedVolumeMountReadOnly",
                 "ExternalVolumeReference", "BridgeNetworkCreate", "BridgeNetworkAttach",
-                "ExternalNetworkReference", "InternalBridgeNetworkCreate",
+                "ExternalNetworkReference", "ExternalNetworkInternalFalse", "ExternalNetworkInternalTrue", "InternalBridgeNetworkCreate",
                 "Ipv6BridgeNetworkCreate", "NetworkIpamV4", "NetworkIpamV6",
                 "NetworkIpamGateway", "NetworkIpamRange", "NetworkIpamAuxiliary",
                 "NetworkIpamDefaultDriver", "NetworkBridgeMtu", "NetworkBridgeIcc",
@@ -147,6 +147,28 @@
     }
   },
   "$defs": {
+    "external_network_probes": {
+      "description": "Ordered public projection after complete private external-network proof; never sealed admission.",
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "uniqueItems": true,
+      "prefixItems": [
+        { "const": "ExternalNetworkInternalFalse" },
+        { "const": "ExternalNetworkInternalTrue" }
+      ],
+      "items": false
+    },
+    "external_network_projection": {
+      "description": "Disconnected raw-manifest subset, not part of the reviewed-record root contract.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["external_network_contract", "external_network_probes"],
+      "properties": {
+        "external_network_contract": { "const": "external-network-internal-v1" },
+        "external_network_probes": { "$ref": "#/$defs/external_network_probes" }
+      }
+    },
     "api_version": { "type": "string", "pattern": "^[1-9][0-9]*\\.[0-9]+$" },
     "bind_relabel_capability_vocabulary": {
       "description": "Configured-retention vocabulary; only exact independently reviewed cohorts authorize admission.",

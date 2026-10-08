@@ -12,6 +12,10 @@ from native_identity_proof import CASES as IDENTITY_CASES, CONTRACT as IDENTITY_
 from native_health_metadata_proof import CONTRACT as HEALTH_METADATA_CONTRACT, read_health_metadata_proof
 from native_network_attachment_proof import CONTRACT as NETWORK_ATTACHMENT_CONTRACT, read_network_attachment_proof
 from native_bind_relabel_proof import CONTRACT as BIND_RELABEL_CONTRACT, read_bind_relabel_proof
+from native_external_network_proof import (
+    CONTRACT as EXTERNAL_NETWORK_CONTRACT, FILENAME as EXTERNAL_NETWORK_FILENAME,
+    read_external_network_proof,
+)
 
 
 CAPABILITIES = (
@@ -470,6 +474,11 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         "owner": run_id, "owner_uid": int(daemon_uid), "mode": "0700",
     }}
     bind_relabel_probes = list(read_bind_relabel_proof(bind_relabel_path, capture_dir, bind_context))
+    # The proof's own context is never its oracle. Keep the positional protocol;
+    # require the fixed direct child and the already independently observed UID.
+    external_context = {**network_context, "daemon_uid": int(daemon_uid)}
+    external_network_probes = list(read_external_network_proof(
+        capture_dir / EXTERNAL_NETWORK_FILENAME, capture_dir, external_context))
 
     # Only these closed mappings follow the complete, validated native proof
     # files above. They extend raw lane evidence, never the reviewed catalogue.
@@ -509,6 +518,7 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         "BindRelabelShared": ["BindMountSharedRelabelReadWrite", "BindMountSharedRelabelReadOnly"],
         "BindRelabelPrivate": ["BindMountPrivateRelabelReadWrite", "BindMountPrivateRelabelReadOnly"],
     })
+    proof_shapes["NetworkExternalInternalExpectation"] = external_network_probes
 
     record = {
         "schema_version": 1,
@@ -541,6 +551,8 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         "bind_relabel_contract": BIND_RELABEL_CONTRACT,
         "bind_relabel_probes": bind_relabel_probes,
         "bind_relabel_selinux_effect": "unverified",
+        "external_network_contract": EXTERNAL_NETWORK_CONTRACT,
+        "external_network_probes": external_network_probes,
     }
     if parameterized_identity:
         record["identity_contract"] = IDENTITY_CONTRACT
