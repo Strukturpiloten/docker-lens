@@ -575,7 +575,7 @@ fn mount_device_overlap_uses_the_same_lexical_destination_key() {
 }
 
 #[test]
-fn api_floor_unknown_mode_and_reviewed_catalog_cannot_admit_relabel() {
+fn api_floor_unknown_mode_remain_closed_while_reviewed_bind_groups_are_admitted() {
     let target = intent(
         ResourceRef::new(1),
         vec![
@@ -625,10 +625,26 @@ fn api_floor_unknown_mode_and_reviewed_catalog_cannot_admit_relabel() {
         .unwrap();
         for profile in catalog.profiles() {
             let resolved = catalog.resolve(profile).unwrap();
-            assert!(
-                matches!(DockerPlanner.plan(&target, &resolved), Err(PlanningError::MissingCapability {
-                field: TargetField::BindRelabel, capability: missing, ..
-            }) if missing == capability)
+            assert!(resolved.supports(capability));
+            let graph = DockerPlanner.plan(&target, &resolved).unwrap();
+            let artifact = DockerApiRenderer.render(&graph).unwrap();
+            let complete: Value =
+                serde_json::from_slice(&artifact.complete_bytes().unwrap()).unwrap();
+            assert_eq!(complete["schema_version"], 2);
+            assert_eq!(complete["prerequisites"][0]["selinux_effect"], "unverified");
+            assert_eq!(
+                complete["prerequisites"][0]["source_conditions"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                5
+            );
+            assert_eq!(
+                complete["prerequisites"][0]["selinux_conditions"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                4
             );
         }
     }

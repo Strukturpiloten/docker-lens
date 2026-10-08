@@ -151,16 +151,27 @@ class NativeEvidenceTests(unittest.TestCase):
                                      "identity_container_proof", "native_identity_proof",
                                      "identity_container_v2", "identity_case_v2", "native_identity_proof_v2",
                                      "port_shape", "port_probe_entry", "port_probes",
-                                     "native_port_probe_proof", "unadmitted_bind_relabel_capability",
-                                     "unadmitted_bind_relabel_shape"})
+                                     "native_port_probe_proof", "bind_relabel_capability_vocabulary",
+                                     "bind_relabel_shape_vocabulary"})
         unchanged = copy.deepcopy(schema)
         for name in ("identity_probes", "identity_container_proof", "native_identity_proof",
                      "identity_container_v2", "identity_case_v2", "native_identity_proof_v2",
                      "port_shape", "port_probe_entry", "port_probes", "native_port_probe_proof",
-                     "unadmitted_bind_relabel_capability", "unadmitted_bind_relabel_shape"):
+                     "bind_relabel_capability_vocabulary", "bind_relabel_shape_vocabulary"):
             del unchanged["$defs"][name]
-        # Canonical reviewed-record contract from the #74 clean base 946abb3;
-        # adding disconnected definitions cannot rewrite historical admission.
+        # Preserve the exact historical #74 root projection: ADR 0016 adds only
+        # the closed bind vocabulary to this root; historical envelope bytes
+        # and admission remain immutable.
+        root = unchanged["properties"]["capabilities"]["items"]["properties"]
+        root["name"]["enum"] = [name for name in root["name"]["enum"]
+                                if name not in ("BindRelabelShared", "BindRelabelPrivate")]
+        root["admitted_shapes"]["items"]["enum"] = [
+            name for name in root["admitted_shapes"]["items"]["enum"]
+            if name not in (
+                "BindMountSharedRelabelReadWrite", "BindMountSharedRelabelReadOnly",
+                "BindMountPrivateRelabelReadWrite", "BindMountPrivateRelabelReadOnly",
+            )
+        ]
         self.assertEqual(hashlib.sha256(json.dumps(unchanged, sort_keys=True,
                                                    separators=(",", ":")).encode()).hexdigest(),
                          "2ec0167732b28c917ad75137b64874b4b0b1ba64a9905ea0435673d4f4d744d9")
@@ -260,32 +271,31 @@ class NativeEvidenceTests(unittest.TestCase):
             body = version.split(declaration, 1)[1].split("\n}", 1)[0]
             return set(re.findall(r"^    ([A-Za-z0-9_]+),$", body, re.MULTILINE))
 
-        supplementary = set(schema["$defs"]["unadmitted_bind_relabel_capability"]["enum"])
-        supplementary_shapes = set(schema["$defs"]["unadmitted_bind_relabel_shape"]["enum"])
+        supplementary = set(schema["$defs"]["bind_relabel_capability_vocabulary"]["enum"])
+        supplementary_shapes = set(schema["$defs"]["bind_relabel_shape_vocabulary"]["enum"])
         self.assertEqual(supplementary, {"BindRelabelShared", "BindRelabelPrivate"})
         self.assertEqual(supplementary_shapes, {
             "BindMountSharedRelabelReadWrite", "BindMountSharedRelabelReadOnly",
             "BindMountPrivateRelabelReadWrite", "BindMountPrivateRelabelReadOnly",
         })
-        self.assertTrue(names.isdisjoint(supplementary))
-        self.assertTrue(shape_names.isdisjoint(supplementary_shapes))
-        self.assertEqual(names | supplementary, variants("pub enum Capability {"))
-        self.assertEqual(shape_names | supplementary_shapes,
-                         variants("pub(crate) enum NativeCapabilityShape {"))
+        self.assertTrue(supplementary.issubset(names))
+        self.assertTrue(supplementary_shapes.issubset(shape_names))
+        self.assertEqual(names, variants("pub enum Capability {"))
+        self.assertEqual(shape_names, variants("pub(crate) enum NativeCapabilityShape {"))
         root = copy.deepcopy(schema)
         del root["$defs"]
         root_text = json.dumps(root, sort_keys=True)
-        for name in ("unadmitted_bind_relabel_capability", "unadmitted_bind_relabel_shape"):
+        for name in ("bind_relabel_capability_vocabulary", "bind_relabel_shape_vocabulary"):
             self.assertNotIn(f"#/$defs/{name}", json.dumps(schema, sort_keys=True))
         for name in supplementary | supplementary_shapes:
-            self.assertNotIn(name, root_text)
+            self.assertIn(name, root_text)
         self.assertEqual(len(SHAPES), 10)
         self.assertEqual(sum(map(len, SHAPES.values())), 20)
         self.assertTrue(set(SHAPES).issubset(names))
         self.assertTrue({shape for values in SHAPES.values() for shape in values}.issubset(shape_names))
-        self.assertEqual(set(EXPECTED_RAW_SHAPES) - names, supplementary)
+        self.assertEqual(set(EXPECTED_RAW_SHAPES) - names, set())
         self.assertEqual({shape for values in EXPECTED_RAW_SHAPES.values()
-                          for shape in values} - shape_names, supplementary_shapes)
+                          for shape in values} - shape_names, set())
 
     def test_acquisition_cap_matches_manifest_calculation(self) -> None:
         acquisition = (ROOT / "src/acquisition.rs").read_text(encoding="utf-8")

@@ -119,6 +119,160 @@ IDENTITY_REVIEWED = {
     "upstream-rootful": "b6cebf2f71be5992b112661650e37e69270d45f7d1b8e89843e843bded325020",
     "upstream-rootless": "81a1ee33c3a02d83fe6cd0f1683e1bb9b6c8774dc8aa192b2160c6ee44ba0943",
 }
+APPLICATION_CANDIDATE = "6df951eb9e112becf8124fe9f8624b1df0dfbf2e"
+APPLICATION_RUN = "https://github.com/Strukturpiloten/docker-lens/actions/runs/37706460127/attempts/1"
+APPLICATION_SHAPES = {
+    "BindMount": [
+        "BindMountReadWrite",
+        "BindMountReadOnly"
+    ],
+    "BindRelabelPrivate": [
+        "BindMountPrivateRelabelReadWrite",
+        "BindMountPrivateRelabelReadOnly"
+    ],
+    "BindRelabelShared": [
+        "BindMountSharedRelabelReadWrite",
+        "BindMountSharedRelabelReadOnly"
+    ],
+    "BridgeNetwork": [
+        "BridgeNetworkCreate",
+        "BridgeNetworkAttach"
+    ],
+    "Command": [
+        "ExecCommand"
+    ],
+    "ContainerLabels": [
+        "ContainerCreateLabels"
+    ],
+    "ContainerUser": [
+        "ContainerUser"
+    ],
+    "ContainerWorkdir": [
+        "ContainerWorkdir"
+    ],
+    "Entrypoint": [
+        "ExecEntrypoint"
+    ],
+    "EnvironmentAssignment": [
+        "EnvironmentValue",
+        "EnvironmentEmptyValue"
+    ],
+    "HealthShell": [
+        "ShellHealthcheck"
+    ],
+    "HealthStartPeriod": [
+        "HealthStartPeriodZero",
+        "HealthStartPeriodPositive"
+    ],
+    "Healthcheck": [
+        "ExecHealthcheck"
+    ],
+    "NamedVolume": [
+        "NamedVolumeCreate",
+        "NamedVolumeMountReadWrite",
+        "NamedVolumeMountReadOnly"
+    ],
+    "NetworkAliases": [
+        "NetworkPrimaryAliases",
+        "NetworkSecondaryAliases"
+    ],
+    "NetworkExternalReference": [
+        "ExternalNetworkReference"
+    ],
+    "NetworkInternal": [
+        "InternalBridgeNetworkCreate"
+    ],
+    "NetworkLabels": [
+        "NetworkCreateLabels"
+    ],
+    "NetworkMultipleAttachment": [
+        "NetworkSecondaryConnect"
+    ],
+    "PortEphemeral": [
+        "EphemeralHostPort"
+    ],
+    "PortExposeOnly": [
+        "ExposedOnlyPort"
+    ],
+    "PortHostIpv4": [
+        "FixedIpv4HostPort",
+        "EphemeralIpv4HostPort"
+    ],
+    "PortMultipleBindings": [
+        "MultipleFixedPortBindings",
+        "MultipleEphemeralPortBindings"
+    ],
+    "PortPublish": [
+        "FixedTcpPort",
+        "FixedUdpPort"
+    ],
+    "RestartPolicy": [
+        "RestartNo",
+        "RestartAlways",
+        "RestartUnlessStopped",
+        "RestartOnFailureUnlimited",
+        "RestartOnFailureLimited"
+    ],
+    "StandaloneContainer": [
+        "StandaloneCreate"
+    ],
+    "VolumeExternalReference": [
+        "ExternalVolumeReference"
+    ],
+    "VolumeLabels": [
+        "VolumeCreateLabels"
+    ]
+}
+APPLICATION_UPSTREAM_SHAPES = {
+    **APPLICATION_SHAPES,
+    "PortHostIpv6": ["FixedIpv6HostPort", "EphemeralIpv6HostPort"],
+}
+APPLICATION_MANIFESTS = {
+    "debian11-rootful": "5cdef1c4f537d44d6dc6e0e9040a4cc98760bdc10d6c50296c7824e572e43a67",
+    "debian11-rootless": "c1838c7377d8a7aeed9606730dca813c6ec5c979b462bfd896d89bde7e53dd18",
+    "upstream-rootful": "a6c4511598db1625565439549f4ef00d7684ed6af0809634b0222b1d0f50fdd2",
+    "upstream-rootless": "cc4c7dd0045054cabdd43c222d9ef07470d3a702cc70e127931621359bae0268"
+}
+APPLICATION_REVIEWED = {
+    "debian11-rootful": "edc6276b2caf91be8057430159524563f59dae1528cda8f342f37c1336d2fdc2",
+    "debian11-rootless": "bf3b2374782342abda9bc13f07f273f22a262f1412afb16376efcf376dceac17",
+    "upstream-rootful": "7eacfd00927374220e2bbe6340b62595803e8db2842b29034dc6145f73401cac",
+    "upstream-rootless": "c2f380eaf9cbb8f4cdd8ca380afe350f6f97a39aeb98fc2211d531c3320d1d4a"
+}
+APPLICATION_ARCHIVES = {
+    "dockerlens-native-upstream-rootful": {
+        "id": 11520685056,
+        "digest": "sha256:30c3867535885773789942e74e7d635169c18ed2b04829ffaf673473e3c159ef",
+        "size": 1960
+    },
+    "dockerlens-native-debian11-rootful": {
+        "id": 11520286786,
+        "digest": "sha256:a44d43b34994516a8f5141f83d158b7dbea548ab8a415fefc846b9428f50c19c",
+        "size": 2015
+    },
+    "dockerlens-native-debian11-rootless": {
+        "id": 11520112925,
+        "digest": "sha256:267ead5ec1e6e70dea94f6bd1c89a453d641ad0b59f71e96bc72cf9c77ef4e72",
+        "size": 2014
+    },
+    "dockerlens-native-upstream-rootless": {
+        "id": 11520012210,
+        "digest": "sha256:091cb4f4318bb0e3965875632fe71c6746b9f18842d10d86f9850bbbe4b68d68",
+        "size": 1963
+    }
+}
+APPLICATION_CONTRACTS = {
+    "health_metadata": ("health-metadata-v1", [
+        "ContainerCreateLabels", "ShellHealthcheck", "HealthStartPeriodPositive", "HealthStartPeriodZero",
+    ]),
+    "network_attachment": ("network-attachments-v1", [
+        "NetworkCreateLabels", "NetworkPrimaryAliases", "NetworkSecondaryAliases", "NetworkSecondaryConnect",
+    ]),
+    "bind_relabel": ("bind-relabel-config-v1", [
+        "BindMountSharedRelabelReadWrite", "BindMountSharedRelabelReadOnly",
+        "BindMountPrivateRelabelReadWrite", "BindMountPrivateRelabelReadOnly",
+    ]),
+}
 # Every reviewed cohort must be deliberately added here with its exact run,
 # candidate, four identities, four envelope digests, four raw manifest digests,
 # and exact reviewed capability-to-shape admissions. A later new shape needs
@@ -142,6 +296,12 @@ COHORTS = {
     (IDENTITY_CANDIDATE, IDENTITY_RUN): {
         lane: (IDENTITY_REVIEWED[lane], IDENTITY_MANIFESTS[lane],
                EXPECTED_IDENTITIES[lane], IDENTITY_SHAPES)
+        for lane in LANES
+    },
+    (APPLICATION_CANDIDATE, APPLICATION_RUN): {
+        lane: (APPLICATION_REVIEWED[lane], APPLICATION_MANIFESTS[lane],
+               EXPECTED_IDENTITIES[lane], APPLICATION_SHAPES if lane.startswith("debian11-")
+               else APPLICATION_UPSTREAM_SHAPES)
         for lane in LANES
     },
 }
@@ -291,6 +451,28 @@ def bind_cohorts(
                         or manifest.get("identity_cases") != IDENTITY_CASES
                         or manifest.get("identity_probes") != IDENTITY_PROBES):
                     raise ValueError("identity admission requires complete parameterized proof markers")
+            if cohort_key == (APPLICATION_CANDIDATE, APPLICATION_RUN):
+                if (manifest["admitted_shapes"] != expected_admission
+                        or manifest["capability_outcome"] != dict.fromkeys(expected_admission, "available")
+                        or manifest.get("bind_relabel_selinux_effect") != "unverified"):
+                    raise ValueError("application admission requires exact raw groups and unverified SELinux effects")
+                for prefix, (contract, probes) in APPLICATION_CONTRACTS.items():
+                    if (manifest.get(f"{prefix}_contract") != contract
+                            or manifest.get(f"{prefix}_probes") != probes):
+                        raise ValueError("application admission requires complete source projection")
+                port_shapes = [
+                    "FixedIpv4HostPort", "EphemeralIpv4HostPort",
+                    "FixedIpv6HostPort", "EphemeralIpv6HostPort",
+                    "MultipleFixedPortBindings", "MultipleEphemeralPortBindings",
+                    "ExposedOnlyPort", "EphemeralHostPort",
+                ]
+                ports = [{"shape": shape, "outcome": "observed"} for shape in port_shapes]
+                if lane.startswith("debian11-"):
+                    for entry in ports[2:4]:
+                        entry.update(outcome="expected_negative",
+                                     reason="nested_default_bridge_ipv6_runtime_binding_absent")
+                if manifest.get("port_probes") != ports:
+                    raise ValueError("application admission requires exact per-lane port outcomes")
             if record["schema_version"] != 1 or record["native_manifest_artifact_name"] != f"dockerlens-native-{lane}":
                 raise ValueError("reviewed record schema or lane artifact differs")
             fields = (
@@ -342,14 +524,14 @@ class ReviewedCatalogTests(unittest.TestCase):
         self.assertEqual(section.count("NativeEvidenceLane::"), 4)
         reviewed = {
             lane: path.stem
-            for lane, (path, _) in indexed_cohorts(hashed_json("reviewed"), COHORTS)[IDENTITY_CANDIDATE, IDENTITY_RUN].items()
+            for lane, (path, _) in indexed_cohorts(hashed_json("reviewed"), COHORTS)[APPLICATION_CANDIDATE, APPLICATION_RUN].items()
         }
         self.assertEqual({match["variant"] for match in tuples}, set(LANE_VARIANTS))
         for match in tuples:
             lane = LANE_VARIANTS[match["variant"]]
             self.assertEqual(match["digest"], reviewed[lane])
             self.assertEqual(match["path_digest"], reviewed[lane])
-            self.assertEqual(match["digest"], IDENTITY_REVIEWED[lane])
+            self.assertEqual(match["digest"], APPLICATION_REVIEWED[lane])
 
     def test_four_records_bind_exact_manifest_bytes_and_shapes(self) -> None:
         native_records = hashed_json("native")
@@ -449,23 +631,157 @@ class ReviewedCatalogTests(unittest.TestCase):
                 self.assertEqual(len(manifest["network_probes"]), 22)
                 self.assertEqual(len(manifest["volume_probes"]), 6)
 
-    def test_compiled_candidate_has_only_sixteen_complete_capability_groups(self) -> None:
+    def test_compiled_candidate_has_exact_per_lane_complete_groups(self) -> None:
         source = (ROOT / "src/reviewed_catalog.rs").read_text(encoding="utf-8")
-        self.assertIn(f'const SOURCE_CANDIDATE: &str = "{IDENTITY_CANDIDATE}";', source)
-        self.assertIn(f'"{IDENTITY_RUN}";', source)
-        capabilities = source.split("const REVIEWED_CAPABILITIES:", 1)[1].split("];", 1)[0]
-        shapes = source.split("const REVIEWED_SHAPES:", 1)[1].split("];", 1)[0]
-        capability_names = re.findall(r"Capability::(\w+)", capabilities)
-        shape_names = re.findall(r"NativeCapabilityShape::(\w+)", shapes)
-        self.assertEqual(len(capability_names), 16)
-        self.assertEqual(set(capability_names), set(IDENTITY_SHAPES))
-        self.assertEqual(len(shape_names), 26)
-        self.assertEqual(set(shape_names), {shape for group in IDENTITY_SHAPES.values() for shape in group})
+        self.assertIn(f'const SOURCE_CANDIDATE: &str = "{APPLICATION_CANDIDATE}";', source)
+        self.assertIn(f'"{APPLICATION_RUN}";', source)
+        for prefix, expected, counts in (
+                ("REVIEWED", APPLICATION_SHAPES, (28, 44)),
+                ("UPSTREAM", APPLICATION_UPSTREAM_SHAPES, (29, 46))):
+            capabilities = source.split(f"const {prefix}_CAPABILITIES:", 1)[1].split("];", 1)[0]
+            shapes = source.split(f"const {prefix}_SHAPES:", 1)[1].split("];", 1)[0]
+            capability_names = re.findall(r"Capability::(\w+)", capabilities)
+            shape_names = re.findall(r"NativeCapabilityShape::(\w+)", shapes)
+            self.assertEqual(len(capability_names), counts[0])
+            self.assertEqual(set(capability_names), set(expected))
+            self.assertEqual(len(shape_names), counts[1])
+            self.assertEqual(set(shape_names), {shape for group in expected.values() for shape in group})
+        selection = source.split("fn expected_admission(", 1)[1].split("const RECORDS:", 1)[0]
+        self.assertRegex(selection, r"Debian11Rootful\s*\|\s*NativeEvidenceLane::Debian11Rootless\s*=>\s*\{\s*\(REVIEWED_CAPABILITIES, REVIEWED_SHAPES\)")
+        self.assertRegex(selection, r"UpstreamRootful\s*\|\s*NativeEvidenceLane::UpstreamRootless\s*=>\s*\{\s*\(UPSTREAM_CAPABILITIES, UPSTREAM_SHAPES\)")
+
+
+
+    def test_application_public_provenance_binds_independently_reviewed_api_receipt(self) -> None:
+        receipt = json.loads((ROOT / "docs/evidence/application-cohort-37706460127.json").read_text())
+        self.assertEqual(receipt["repository"], {"id": 1387403220, "full_name": "Strukturpiloten/docker-lens"})
+        self.assertEqual(receipt["candidate_sha"], APPLICATION_CANDIDATE)
+        self.assertEqual(receipt["run"]["id"], 37706460127)
+        self.assertEqual(receipt["run"]["attempt"], 1)
+        self.assertEqual(receipt["run"]["dispatcher_sha"], "719aeedf58f81a578b27649a81a2f26065115374")
+        self.assertNotEqual(receipt["candidate_sha"], receipt["run"]["dispatcher_sha"])
+        self.assertEqual(receipt["run"]["event"], "workflow_dispatch")
+        self.assertEqual(receipt["run"]["workflow_path"], ".github/workflows/native-validation.yml")
+        self.assertEqual(receipt["run"]["workflow_ref"], "refs/heads/main")
+        self.assertEqual(receipt["run"]["conclusion"], "success")
+        self.assertEqual(receipt["review"]["native_tests_each_lane"], 14)
+        self.assertEqual(receipt["review"]["public_artifact_controls"], 51)
+        self.assertEqual(receipt["review"]["acceptance_comment"],
+                         "https://github.com/Strukturpiloten/docker-lens/pull/99#issuecomment-6049645585")
+        self.assertEqual(receipt["selinux_effect"], "unverified")
+        artifacts = receipt["artifacts"]
+        self.assertEqual(len(artifacts), 4)
+        self.assertEqual({item["name"] for item in artifacts}, set(APPLICATION_ARCHIVES))
+        for artifact in artifacts:
+            expected = APPLICATION_ARCHIVES[artifact["name"]]
+            self.assertEqual(artifact["id"], expected["id"])
+            self.assertEqual(artifact["archive_api_digest"], expected["digest"])
+            self.assertEqual(artifact["size"], expected["size"])
+            self.assertFalse(artifact["expired"])
+            lane = artifact["name"].removeprefix("dockerlens-native-")
+            self.assertEqual(artifact["member_name"], f"{lane}.json")
+            self.assertEqual(artifact["native_manifest_sha256"], APPLICATION_MANIFESTS[lane])
+            self.assertEqual(artifact["reviewed_record_sha256"], APPLICATION_REVIEWED[lane])
+        jobs = receipt["jobs"]
+        self.assertEqual(len(jobs), 7)
+        self.assertEqual({job["id"] for job in jobs}, {
+            113081887680, 113081926043, 113083692059, 113083692072,
+            113083692073, 113083692171, 113084563786,
+        })
+        for job in jobs:
+            self.assertEqual(job["conclusion"], "success")
+            self.assertRegex(job["authenticated_log_sha256"], r"^[0-9a-f]{64}$")
+        forbidden = {"runtime_uid", "outer_id", "container_id", "network_id", "owner",
+                     "signed_url", "token", "credential", "private_proof", "log_body"}
+        def check_public(value: object) -> None:
+            if isinstance(value, dict):
+                self.assertTrue(set(value).isdisjoint(forbidden))
+                for child in value.values():
+                    check_public(child)
+            elif isinstance(value, list):
+                for child in value:
+                    check_public(child)
+        check_public(receipt)
+
+    def test_application_cohort_binds_exact_groups_and_preserves_all_history(self) -> None:
+        reviewed = bind_cohorts(hashed_json("reviewed"), hashed_json("native"), COHORTS)
+        self.assertEqual(len(reviewed), 5)
+        for lane, (path, record) in reviewed[APPLICATION_CANDIDATE, APPLICATION_RUN].items():
+            expected = APPLICATION_SHAPES if lane.startswith("debian11-") else APPLICATION_UPSTREAM_SHAPES
+            self.assertEqual(path.stem, APPLICATION_REVIEWED[lane])
+            self.assertEqual(record["native_manifest_sha256"], APPLICATION_MANIFESTS[lane])
+            self.assertEqual({entry["name"]: entry["admitted_shapes"] for entry in record["capabilities"]},
+                             expected)
+            self.assertEqual(len(expected), 28 if lane.startswith("debian11-") else 29)
+            self.assertEqual(sum(map(len, expected.values())), 44 if lane.startswith("debian11-") else 46)
+            self.assertEqual({name: expected[name] for name in IDENTITY_SHAPES}, IDENTITY_SHAPES)
+            self.assertEqual("PortHostIpv6" in expected, lane.startswith("upstream-"))
+            for name in ("NetworkIpv6", "NetworkIpam", "NetworkOptions", "NetworkStaticAddress",
+                         "ContainerInit", "MemoryLimit", "DeviceMappings", "HealthDisabled", "HealthStartInterval"):
+                self.assertNotIn(name, expected)
+
+    def test_application_groups_reject_partial_wrong_and_nonpositive_evidence(self) -> None:
+        reviewed_records = hashed_json("reviewed")
+        native_records = hashed_json("native")
+        for lane in LANES:
+            expected = APPLICATION_SHAPES if lane.startswith("debian11-") else APPLICATION_UPSTREAM_SHAPES
+            for name in set(expected) - set(IDENTITY_SHAPES):
+                for side in ("raw", "reviewed"):
+                    for fault in ("missing", "partial", "duplicate", "wrong", "unavailable", "unknown"):
+                        reviewed, native = deepcopy(reviewed_records), deepcopy(native_records)
+                        manifest = next(data for path, data in native if path.stem == APPLICATION_MANIFESTS[lane])
+                        record = next(data for path, data in reviewed if path.stem == APPLICATION_REVIEWED[lane])
+                        entry = next(entry for entry in record["capabilities"] if entry["name"] == name)
+                        if fault == "missing":
+                            if side == "raw":
+                                del manifest["admitted_shapes"][name]
+                            else:
+                                record["capabilities"].remove(entry)
+                        elif fault in ("unavailable", "unknown"):
+                            if side == "raw":
+                                manifest["capability_outcome"][name] = fault
+                            else:
+                                entry["state"] = fault
+                        else:
+                            shapes = expected[name][:-1] if fault == "partial" else (
+                                [*expected[name], expected[name][0]] if fault == "duplicate" else ["StandaloneCreate"])
+                            if side == "raw":
+                                manifest["admitted_shapes"][name] = shapes
+                            else:
+                                entry["admitted_shapes"] = shapes
+                        with self.subTest(lane=lane, name=name, side=side, fault=fault):
+                            with self.assertRaises(ValueError):
+                                bind_cohorts(reviewed, native, COHORTS)
+
+    def test_application_projection_cannot_promote_controls_or_selinux_effects(self) -> None:
+        reviewed = hashed_json("reviewed")
+        originals = hashed_json("native")
+        for lane in LANES:
+            for key, fault in [
+                ("bind_relabel_selinux_effect", "verified"),
+                ("port_probes", []),
+                *[(f"{prefix}_{field}", "" if field == "contract" else probes[:-1])
+                  for prefix, (_, probes) in APPLICATION_CONTRACTS.items()
+                  for field in ("contract", "probes")],
+            ]:
+                native = deepcopy(originals)
+                manifest = next(data for path, data in native if path.stem == APPLICATION_MANIFESTS[lane])
+                manifest[key] = fault
+                with self.subTest(lane=lane, key=key):
+                    with self.assertRaises(ValueError):
+                        bind_cohorts(reviewed, native, COHORTS)
+        for lane in LANES[:2]:
+            native = deepcopy(originals)
+            manifest = next(data for path, data in native if path.stem == APPLICATION_MANIFESTS[lane])
+            manifest["admitted_shapes"]["PortHostIpv6"] = APPLICATION_UPSTREAM_SHAPES["PortHostIpv6"]
+            manifest["capability_outcome"]["PortHostIpv6"] = "available"
+            with self.assertRaises(ValueError):
+                bind_cohorts(reviewed, native, COHORTS)
 
     def test_identity_cohort_adds_only_two_singleton_groups_and_preserves_history(self) -> None:
         reviewed = bind_cohorts(hashed_json("reviewed"), hashed_json("native"), COHORTS)
         raw = indexed_native_manifests(hashed_json("native"), COHORTS)
-        self.assertEqual(len(reviewed), 4)
+        self.assertEqual(len(reviewed), 5)
         self.assertEqual(len(IDENTITY_SHAPES), 16)
         self.assertEqual(sum(map(len, IDENTITY_SHAPES.values())), 26)
         self.assertEqual(set(IDENTITY_SHAPES) - set(LABEL_SHAPES),

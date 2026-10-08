@@ -13,10 +13,11 @@ external-reference prerequisites, independent per-container aliases and
 addresses, and ordered secondary connect requests. These are inert target
 contracts, not executed output. The original historical cohort admits no new
 network shape; the separately reviewed #68 cohort admits only the external
-bridge prerequisite and internal bridge creation singleton groups. Remaining
-network groups still require genuine passing exact-lane evidence and independent
-review, and BoxFerry's six-scenario consumer checks remain required before a full
-migration claim.
+bridge prerequisite and internal bridge creation singleton groups. ADR 0016
+now admits only complete network-label, primary/secondary-alias and
+multiple-attachment groups from the coherent application cohort. Other network
+groups still require independent exact-lane evidence, and BoxFerry's six-scenario
+consumer checks remain required before a full migration claim.
 
 The following authored topology anchors are read from BoxFerry's
 `fixtures/conformance/{forgejo,nextcloud,paperless-ngx,immich,observability,supabase}-application/compose.yaml`
@@ -52,14 +53,11 @@ renderer branch exists.
 
 DockerLens #94 adds closed bind-relabel source interpretation and optional
 shared/private target intent under [ADR 0015](decisions/0015-bind-relabel-intent.md).
-Relabelled binds alone use legacy `Binds` plus conditional schema-2 source-review
-and unverified SELinux obligations. Plain mounts remain unchanged. Shared and
-private capabilities each require both RO/RW configured-retention shapes and
-remain unadmitted; exact-candidate four-lane native proof, independent review,
-consumer schema handling and BoxFerry mapping/loss remain open. Nextcloud's
-authored private `Z` and Supabase's shared `z` binds cannot be silently stripped
-or treated as accepted application behavior. No source existence, host label,
-SELinux enforcement or full migration claim follows from this inert contract.
+ADR 0016 now admits only complete configured-retention groups on all four
+candidate profiles. Conditional schema-2 source/SELinux obligations remain
+unchanged. Fresh final-candidate native proof and reviewed actual authored
+Nextcloud/Supabase BoxFerry bind consumers remain required; no source existence,
+host label, SELinux enforcement or full migration claim follows from admission.
 
 DockerLens #44 adds an inert existing named-volume target contract:
 `TargetResource::ExternalVolume` binds a caller-supplied destination name to a
@@ -87,14 +85,15 @@ volume-only mappings and consumer rehearsal, and complete gates. A volume-only
 rehearsal cannot establish six-application or full migration acceptance; wider
 #31/#343/#366 evidence remains open.
 
-The #89 candidate selects the separately reviewed #88 source cohort and adds
-only parameterized user and working-directory singleton groups to the #70
-fourteen/twenty-four set. [ADR 0014](decisions/0014-reviewed-identity-cohort.md)
-requires fresh exact-final-candidate native and complete gates and retains
-the six-fixture volume-only rehearsal before merge/main/release. This is not
-arbitrary-image startup, host UID mapping or full application acceptance.
-Historical evidence stays immutable; the port and remaining runtime/network
-groups below remain separate unfinished work.
+ADR 0016 selects the fifth coherent application source cohort for candidate
+pre-merge rehearsal: exactly Debian 28/44 and upstream 29/46. It retains
+parameterized identity and labelled volumes, then adds only complete common
+port, health/metadata, network attachment and configured-bind retention groups.
+All four historical cohorts remain byte-exact. Production merge/main/release
+still require fresh complete and exact-final-candidate fourteen-test four-lane
+native gates, all six actual authored fixture volume-only consumer rehearsals,
+and reviewed actual Nextcloud/Supabase schema-2 bind consumers. No full application
+or migration acceptance is established; #31/#343/#366 remain open.
 
 | #30 target branch | Typed request contract | Remaining proof / owner |
 | --- | --- | --- |
@@ -176,9 +175,9 @@ required core support. The four historical profiles admit only their existing
 twenty closed renderer shapes, not any row above merely because it is listed.
 The later #68 cohort adds three complete singleton groups; this #49 candidate
 added the fourth, `VolumeLabels` / `VolumeCreateLabels`, through the
-pre-merge-only #70 cohort. The #89 candidate additionally selects only the
-two parameterized identity singleton groups from #88, under ADR 0014.
-None of these rows is a full migration claim.
+pre-merge-only #70 cohort. The #88 cohort added only two parameterized identity singleton groups under
+ADR 0014. ADR 0016 selects the coherent fifth cohort with the bounded application
+groups; none of these rows is a full migration claim.
 
 ## File ownership for parallel implementation
 

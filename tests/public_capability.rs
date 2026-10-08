@@ -3,10 +3,13 @@
 
 use docker_lens::observation::ResourceRef;
 use docker_lens::target::{
-    ContainerIntent, ContainerSettings, ContainerUser, DockerApiRenderer, DockerPlanner,
-    ImageCommand, ImageReference, IntentError, NetworkCreate, NetworkDriver, NetworkIntent,
-    NetworkRole, NetworkSource, Planner, PlanningContext, PlanningError, Renderer, TargetField,
-    TargetIdentity, TargetIntent, TargetResource, UserNamespaceMode, VolumeLabel, WorkingDirectory,
+    Argument, BindRelabel, ContainerIntent, ContainerLabel, ContainerSettings, ContainerUser,
+    DockerApiRenderer, DockerPlanner, HealthTest, Healthcheck, HostBinding, ImageCommand,
+    ImageReference, IntentError, Mount, NetworkAlias, NetworkAttachmentIntent, NetworkCreate,
+    NetworkDriver, NetworkIntent, NetworkLabel, NetworkRole, NetworkSource, Planner,
+    PlanningContext, PlanningError, PortHostIp, PortHostPort, PortPublication, Protocol, Renderer,
+    TargetField, TargetIdentity, TargetIntent, TargetResource, UserNamespaceMode, VolumeLabel,
+    WorkingDirectory,
 };
 use docker_lens::version::{
     ApiVersion, Capability, CapabilityError, CapabilityEvidenceKey, DaemonMode,
@@ -27,11 +30,11 @@ fn exact_profiles_admit_reviewed_prerequisites_but_keep_other_groups_closed() {
         let resolved = catalog.resolve(profile).unwrap();
         assert_eq!(
             resolved.evidence().candidate_sha(),
-            "032b1510524f391f08a795dab4da73f6fa8f7213"
+            "6df951eb9e112becf8124fe9f8624b1df0dfbf2e"
         );
         assert_eq!(
             resolved.evidence().run_url(),
-            "https://github.com/Strukturpiloten/docker-lens/actions/runs/37439627551/attempts/1"
+            "https://github.com/Strukturpiloten/docker-lens/actions/runs/37706460127/attempts/1"
         );
         for capability in [
             Capability::StandaloneContainer,
@@ -50,6 +53,18 @@ fn exact_profiles_admit_reviewed_prerequisites_but_keep_other_groups_closed() {
             Capability::VolumeLabels,
             Capability::ContainerUser,
             Capability::ContainerWorkdir,
+            Capability::PortHostIpv4,
+            Capability::PortMultipleBindings,
+            Capability::PortExposeOnly,
+            Capability::PortEphemeral,
+            Capability::ContainerLabels,
+            Capability::HealthShell,
+            Capability::HealthStartPeriod,
+            Capability::NetworkLabels,
+            Capability::NetworkAliases,
+            Capability::NetworkMultipleAttachment,
+            Capability::BindRelabelShared,
+            Capability::BindRelabelPrivate,
         ] {
             assert!(resolved.supports(capability));
         }
@@ -59,23 +74,12 @@ fn exact_profiles_admit_reviewed_prerequisites_but_keep_other_groups_closed() {
             Capability::NetworkIpam,
             Capability::NetworkIpamDriver,
             Capability::NetworkOptions,
-            Capability::NetworkLabels,
-            Capability::NetworkAliases,
             Capability::NetworkStaticAddress,
-            Capability::NetworkMultipleAttachment,
             Capability::HostNetwork,
-            Capability::PortExposeOnly,
-            Capability::PortHostIpv4,
-            Capability::PortHostIpv6,
-            Capability::PortMultipleBindings,
-            Capability::PortEphemeral,
             Capability::CommandClear,
             Capability::EntrypointClear,
-            Capability::HealthShell,
             Capability::HealthDisabled,
-            Capability::HealthStartPeriod,
             Capability::HealthStartInterval,
-            Capability::ContainerLabels,
             Capability::ContainerHostname,
             Capability::SupplementaryGroups,
             Capability::ReadOnlyRootfs,
@@ -102,7 +106,394 @@ fn exact_profiles_admit_reviewed_prerequisites_but_keep_other_groups_closed() {
         ] {
             assert!(!resolved.supports(capability));
         }
+        assert_eq!(
+            resolved.supports(Capability::PortHostIpv6),
+            matches!(profile.identity().build(), EngineBuild::Upstream)
+        );
     }
+}
+
+fn application_container() -> ContainerIntent {
+    ContainerIntent {
+        reference: ResourceRef::new(3),
+        identity: TargetIdentity::new(b"private-application".to_vec()).unwrap(),
+        image: ImageReference::new(b"unverified-image:fixture".to_vec()).unwrap(),
+        environment: vec![],
+        ports: vec![],
+        mounts: vec![],
+        networks: vec![],
+        entrypoint: ImageCommand::Inherit,
+        command: ImageCommand::Inherit,
+        healthcheck: None,
+        restart: None,
+        settings: ContainerSettings::default(),
+    }
+}
+
+fn container_target(container: ContainerIntent) -> TargetIntent {
+    TargetIntent::new(vec![TargetResource::Container(Box::new(container))]).unwrap()
+}
+
+fn complete_application(profile: &TargetProfile, intent: &TargetIntent) -> serde_json::Value {
+    let catalog = TargetCapabilityCatalog::reviewed();
+    let resolved = catalog.resolve(profile).unwrap();
+    let graph = DockerPlanner.plan(intent, &resolved).unwrap();
+    let artifact = DockerApiRenderer.render(&graph).unwrap();
+    let complete: serde_json::Value =
+        serde_json::from_slice(&artifact.complete_bytes().unwrap()).unwrap();
+    let requests: Vec<serde_json::Value> = artifact
+        .bytes()
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(|line| serde_json::from_slice(line).unwrap())
+        .collect();
+    assert_eq!(complete["requests"], serde_json::json!(requests));
+    assert_eq!(complete["context"], reviewed_prerequisite_context(profile));
+    complete
+}
+
+#[test]
+fn sealed_application_ports_preserve_each_complete_common_group() {
+    for profile in TargetCapabilityCatalog::reviewed().profiles() {
+        let mut container = application_container();
+        let host = |address: &str, port| HostBinding {
+            host_ip: PortHostIp::Address(address.parse().unwrap()),
+            host_port: port,
+        };
+        container.ports = vec![
+            PortPublication::published(
+                NonZeroU16::new(80).unwrap(),
+                Protocol::Tcp,
+                vec![
+                    host(
+                        "127.0.0.1",
+                        PortHostPort::Fixed(NonZeroU16::new(8080).unwrap()),
+                    ),
+                    host(
+                        "127.0.0.2",
+                        PortHostPort::Fixed(NonZeroU16::new(8081).unwrap()),
+                    ),
+                ],
+            )
+            .unwrap(),
+            PortPublication::published(
+                NonZeroU16::new(81).unwrap(),
+                Protocol::Tcp,
+                vec![
+                    host("127.0.0.1", PortHostPort::Ephemeral),
+                    host("127.0.0.2", PortHostPort::Ephemeral),
+                ],
+            )
+            .unwrap(),
+            PortPublication::published(
+                NonZeroU16::new(82).unwrap(),
+                Protocol::Udp,
+                vec![HostBinding {
+                    host_ip: PortHostIp::Unspecified,
+                    host_port: PortHostPort::Ephemeral,
+                }],
+            )
+            .unwrap(),
+            PortPublication::exposed(NonZeroU16::new(83).unwrap(), Protocol::Tcp),
+        ];
+        let complete = complete_application(profile, &container_target(container));
+        assert_eq!(complete["schema_version"], 1);
+        let body = &complete["requests"][0]["body"];
+        assert_eq!(
+            body["HostConfig"]["PortBindings"],
+            serde_json::json!({
+                "80/tcp": [{"HostIp":"127.0.0.1","HostPort":"8080"},{"HostIp":"127.0.0.2","HostPort":"8081"}],
+                "81/tcp": [{"HostIp":"127.0.0.1","HostPort":""},{"HostIp":"127.0.0.2","HostPort":""}],
+                "82/udp": [{"HostPort":""}],
+            })
+        );
+        assert_eq!(
+            body["ExposedPorts"],
+            serde_json::json!({"80/tcp":{},"81/tcp":{},"82/udp":{},"83/tcp":{}})
+        );
+        assert_eq!(complete["prerequisites"], serde_json::json!([]));
+    }
+}
+
+#[test]
+fn sealed_ipv6_ports_are_upstream_only_for_fixed_and_ephemeral_shapes() {
+    let catalog = TargetCapabilityCatalog::reviewed();
+    for profile in catalog.profiles() {
+        for port in [
+            PortHostPort::Fixed(NonZeroU16::new(8080).unwrap()),
+            PortHostPort::Ephemeral,
+        ] {
+            let mut container = application_container();
+            container.ports = vec![
+                PortPublication::published(
+                    NonZeroU16::new(80).unwrap(),
+                    Protocol::Tcp,
+                    vec![HostBinding {
+                        host_ip: PortHostIp::Address("::1".parse().unwrap()),
+                        host_port: port,
+                    }],
+                )
+                .unwrap(),
+            ];
+            let intent = container_target(container);
+            let resolved = catalog.resolve(profile).unwrap();
+            if matches!(profile.identity().build(), EngineBuild::DebianPackage(_)) {
+                assert!(matches!(
+                    DockerPlanner.plan(&intent, &resolved),
+                    Err(PlanningError::MissingCapability {
+                        field: TargetField::PortHostIpv6,
+                        ..
+                    })
+                ));
+            } else {
+                let complete = complete_application(profile, &intent);
+                assert_eq!(
+                    complete["requests"][0]["body"]["HostConfig"]["PortBindings"]["80/tcp"],
+                    serde_json::json!([{"HostIp":"::1","HostPort": match port {
+                        PortHostPort::Fixed(_) => "8080", PortHostPort::Ephemeral => "",
+                    }}])
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn sealed_shell_health_start_period_and_container_labels_keep_authored_bytes() {
+    for profile in TargetCapabilityCatalog::reviewed().profiles() {
+        for period in [0, 20_000_000_000] {
+            let mut container = application_container();
+            container.settings.labels = vec![
+                ContainerLabel::new(b"private-label".to_vec(), b"private-value".to_vec()).unwrap(),
+            ];
+            container.healthcheck = Some(
+                Healthcheck::configured(
+                    HealthTest::Shell(Argument::new(b"test -r /private-file".to_vec()).unwrap()),
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap()
+                .with_start_period(period)
+                .unwrap(),
+            );
+            let intent = container_target(container);
+            assert!(!format!("{intent:?}").contains("private-file"));
+            assert!(!format!("{intent:?}").contains("private-value"));
+            let complete = complete_application(profile, &intent);
+            let body = &complete["requests"][0]["body"];
+            assert_eq!(
+                body["Labels"],
+                serde_json::json!({"private-label":"private-value"})
+            );
+            assert_eq!(
+                body["Healthcheck"],
+                serde_json::json!({
+                    "Test":["CMD-SHELL","test -r /private-file"], "StartPeriod":period,
+                })
+            );
+            assert_eq!(complete["schema_version"], 1);
+        }
+    }
+}
+
+#[test]
+fn sealed_health_controls_do_not_admit_disabled_or_start_interval() {
+    let catalog = TargetCapabilityCatalog::reviewed();
+    for profile in catalog.profiles() {
+        for (check, field) in [
+            (
+                Healthcheck::configured(HealthTest::Disabled, None, None, None).unwrap(),
+                TargetField::HealthDisabled,
+            ),
+            (
+                Healthcheck::configured(
+                    HealthTest::Shell(Argument::new(b"true".to_vec()).unwrap()),
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap()
+                .with_start_interval(1_000_000)
+                .unwrap(),
+                TargetField::HealthStartInterval,
+            ),
+        ] {
+            let mut container = application_container();
+            container.healthcheck = Some(check);
+            assert!(
+                matches!(DockerPlanner.plan(&container_target(container), &catalog.resolve(profile).unwrap()),
+                Err(PlanningError::MissingCapability { field: actual, .. }) if actual == field)
+            );
+        }
+    }
+}
+
+#[test]
+fn sealed_application_network_labels_aliases_and_secondary_request_order() {
+    for profile in TargetCapabilityCatalog::reviewed().profiles() {
+        let network = |index, name: &[u8]| {
+            let mut create = NetworkCreate::bridge();
+            create.labels =
+                vec![NetworkLabel::new(b"owner".to_vec(), b"private-owner".to_vec()).unwrap()];
+            TargetResource::Network(NetworkIntent {
+                reference: ResourceRef::new(index),
+                identity: TargetIdentity::new(name.to_vec()).unwrap(),
+                role: NetworkRole::Declared,
+                source: NetworkSource::Create(create),
+            })
+        };
+        let mut container = application_container();
+        container.networks = vec![
+            NetworkAttachmentIntent {
+                network: ResourceRef::new(1),
+                aliases: vec![NetworkAlias::new(b"primary-alias".to_vec()).unwrap()],
+                ipv4_address: None,
+                ipv6_address: None,
+            },
+            NetworkAttachmentIntent {
+                network: ResourceRef::new(2),
+                aliases: vec![NetworkAlias::new(b"secondary-alias".to_vec()).unwrap()],
+                ipv4_address: None,
+                ipv6_address: None,
+            },
+        ];
+        let intent = TargetIntent::new(vec![
+            network(1, b"primary"),
+            network(2, b"secondary"),
+            TargetResource::Container(Box::new(container)),
+        ])
+        .unwrap();
+        let complete = complete_application(profile, &intent);
+        let requests = complete["requests"].as_array().unwrap();
+        assert_eq!(requests.len(), 4);
+        assert_eq!(requests[0]["body"]["Name"], "primary");
+        assert_eq!(requests[1]["body"]["Name"], "secondary");
+        for request in &requests[..2] {
+            assert_eq!(
+                request["body"]["Labels"],
+                serde_json::json!({"owner":"private-owner"})
+            );
+        }
+        assert_eq!(
+            requests[2]["body"]["NetworkingConfig"]["EndpointsConfig"],
+            serde_json::json!({"primary":{"Aliases":["primary-alias"]}})
+        );
+        assert_eq!(
+            requests[3]["path"],
+            format!(
+                "/v{}.{}/networks/secondary/connect",
+                profile.rendering_api_version().major,
+                profile.rendering_api_version().minor
+            )
+        );
+        assert_eq!(
+            requests[3]["body"],
+            serde_json::json!({
+                "Container":"private-application", "EndpointConfig":{"Aliases":["secondary-alias"]},
+            })
+        );
+        assert_eq!(complete["schema_version"], 1);
+    }
+}
+
+#[test]
+fn sealed_bind_retention_keeps_all_four_modes_and_conditional_source_obligations() {
+    for profile in TargetCapabilityCatalog::reviewed().profiles() {
+        let mut container = application_container();
+        container
+            .mounts
+            .push(Mount::bind(b"/plain".to_vec(), b"/plain-target".to_vec(), false).unwrap());
+        let modes = [
+            (BindRelabel::Shared, false, "rw,z", "shared"),
+            (BindRelabel::Shared, true, "ro,z", "shared"),
+            (BindRelabel::Private, false, "rw,Z", "private"),
+            (BindRelabel::Private, true, "ro,Z", "private"),
+        ];
+        for (index, (relabel, read_only, _, _)) in modes.iter().enumerate() {
+            container.mounts.push(
+                Mount::bind(
+                    format!("/source-{index}").into_bytes(),
+                    format!("/target-{index}").into_bytes(),
+                    *read_only,
+                )
+                .unwrap()
+                .with_bind_relabel(*relabel)
+                .unwrap(),
+            );
+        }
+        let complete = complete_application(profile, &container_target(container));
+        assert_eq!(complete["schema_version"], 2);
+        let body = &complete["requests"][0]["body"];
+        assert_eq!(
+            body["HostConfig"]["Mounts"],
+            serde_json::json!([
+                {"Type":"bind","Source":"/plain","Target":"/plain-target","ReadOnly":false},
+            ])
+        );
+        let binds = body["HostConfig"]["Binds"].as_array().unwrap();
+        let prerequisites = complete["prerequisites"].as_array().unwrap();
+        assert_eq!(prerequisites.len(), 4);
+        for (index, (_, read_only, mode, relabel)) in modes.iter().enumerate() {
+            assert_eq!(
+                binds[index],
+                format!("/source-{index}:/target-{index}:{mode}")
+            );
+            assert_eq!(
+                prerequisites[index],
+                serde_json::json!({
+                    "kind":"bind_source","reference":"3","identity":"private-application",
+                    "mount_index":(index + 1).to_string(), "source":format!("/source-{index}"),
+                    "target":format!("/target-{index}"), "read_only":read_only,"relabel":relabel,
+                    "source_conditions":["exists","type_reviewed","contents_reviewed","ownership_reviewed","permissions_reviewed"],
+                    "selinux_effect":"unverified",
+                    "selinux_conditions":["daemon_selinux_enabled","container_mount_label_present","policy_filesystem_support","relabel_authority"],
+                })
+            );
+        }
+    }
+}
+
+#[test]
+fn admitted_application_fields_still_reject_invalid_authored_values() {
+    assert!(
+        PortPublication::published(NonZeroU16::new(80).unwrap(), Protocol::Tcp, vec![]).is_err()
+    );
+    assert!(NetworkAlias::new(b"invalid/alias".to_vec()).is_err());
+    assert!(ContainerLabel::new(vec![], b"private-value".to_vec()).is_err());
+    assert!(NetworkLabel::new(vec![], b"private-value".to_vec()).is_err());
+    assert!(
+        Healthcheck::configured(
+            HealthTest::Shell(Argument::new(b"true".to_vec()).unwrap()),
+            None,
+            None,
+            None
+        )
+        .unwrap()
+        .with_start_period(1)
+        .is_err()
+    );
+    assert!(
+        Mount::bind(b"/private:source".to_vec(), b"/target".to_vec(), false)
+            .unwrap()
+            .with_bind_relabel(BindRelabel::Shared)
+            .is_err()
+    );
+    let mut container = application_container();
+    container.settings.labels = vec![
+        ContainerLabel::new(b"private-key".to_vec(), b"one".to_vec()).unwrap(),
+        ContainerLabel::new(b"private-key".to_vec(), b"two".to_vec()).unwrap(),
+    ];
+    assert!(TargetIntent::new(vec![TargetResource::Container(Box::new(container))]).is_err());
+    let mut container = application_container();
+    container.mounts = vec![
+        Mount::bind(b"/first".to_vec(), b"/data".to_vec(), false).unwrap(),
+        Mount::bind(b"/second".to_vec(), b"/x/../data".to_vec(), true)
+            .unwrap()
+            .with_bind_relabel(BindRelabel::Private)
+            .unwrap(),
+    ];
+    assert!(TargetIntent::new(vec![TargetResource::Container(Box::new(container))]).is_err());
 }
 
 fn identity_container(settings: ContainerSettings) -> TargetIntent {
@@ -298,16 +689,16 @@ fn reviewed_prerequisite_context(profile: &TargetProfile) -> serde_json::Value {
                 "20.10.5+dfsg1",
                 "1.41",
                 "1.41",
-                "24313f10b84b8a3410906d5ad4721d3ef389ad2e09be5b59416929ef57e86b78",
-                "c9800d722f1b505f5b1e5a54d9c60e68502fceaa0779f690c5504623ec473333",
+                "edc6276b2caf91be8057430159524563f59dae1528cda8f342f37c1336d2fdc2",
+                "bf3b2374782342abda9bc13f07f273f22a262f1412afb16376efcf376dceac17",
             ),
             EngineBuild::Upstream => (
                 serde_json::json!({"kind": "upstream"}),
                 "29.8.1",
                 "1.56",
                 "1.49",
-                "b6cebf2f71be5992b112661650e37e69270d45f7d1b8e89843e843bded325020",
-                "81a1ee33c3a02d83fe6cd0f1683e1bb9b6c8774dc8aa192b2160c6ee44ba0943",
+                "7eacfd00927374220e2bbe6340b62595803e8db2842b29034dc6145f73401cac",
+                "c2f380eaf9cbb8f4cdd8ca380afe350f6f97a39aeb98fc2211d531c3320d1d4a",
             ),
         };
     let (mode, evidence_key) = match profile.mode() {
@@ -407,16 +798,16 @@ fn literal_label_artifact(profile: &TargetProfile) -> &'static str {
     // Independently authored wire expectations, not bytes obtained from the renderer.
     match (profile.identity().build(), profile.mode()) {
         (EngineBuild::DebianPackage(_), DaemonMode::Rootful) => {
-            "{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"debian_package\",\"revision\":\"20.10.5+dfsg1-1+deb11u2\"},\"engine_release\":\"20.10.5+dfsg1\",\"advertised_api_version\":\"1.41\",\"acquisition_api_version\":\"1.41\",\"rendering_api_version\":\"1.41\",\"daemon_mode\":\"rootful\",\"evidence_sha256\":\"24313f10b84b8a3410906d5ad4721d3ef389ad2e09be5b59416929ef57e86b78\"},\"requests\":[{\"method\":\"POST\",\"path\":\"/v1.41/volumes/create\",\"body\":{\"Name\":\"candidate-volume\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"empty\":\"\",\"private-key\":\"Grüße\\\"\\\\\\n\"}}}],\"prerequisites\":[]}\n"
+            "{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"debian_package\",\"revision\":\"20.10.5+dfsg1-1+deb11u2\"},\"engine_release\":\"20.10.5+dfsg1\",\"advertised_api_version\":\"1.41\",\"acquisition_api_version\":\"1.41\",\"rendering_api_version\":\"1.41\",\"daemon_mode\":\"rootful\",\"evidence_sha256\":\"edc6276b2caf91be8057430159524563f59dae1528cda8f342f37c1336d2fdc2\"},\"requests\":[{\"method\":\"POST\",\"path\":\"/v1.41/volumes/create\",\"body\":{\"Name\":\"candidate-volume\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"empty\":\"\",\"private-key\":\"Grüße\\\"\\\\\\n\"}}}],\"prerequisites\":[]}\n"
         }
         (EngineBuild::Upstream, DaemonMode::Rootful) => {
-            "{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"upstream\"},\"engine_release\":\"29.8.1\",\"advertised_api_version\":\"1.56\",\"acquisition_api_version\":\"1.49\",\"rendering_api_version\":\"1.56\",\"daemon_mode\":\"rootful\",\"evidence_sha256\":\"b6cebf2f71be5992b112661650e37e69270d45f7d1b8e89843e843bded325020\"},\"requests\":[{\"method\":\"POST\",\"path\":\"/v1.56/volumes/create\",\"body\":{\"Name\":\"candidate-volume\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"empty\":\"\",\"private-key\":\"Grüße\\\"\\\\\\n\"}}}],\"prerequisites\":[]}\n"
+            "{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"upstream\"},\"engine_release\":\"29.8.1\",\"advertised_api_version\":\"1.56\",\"acquisition_api_version\":\"1.49\",\"rendering_api_version\":\"1.56\",\"daemon_mode\":\"rootful\",\"evidence_sha256\":\"7eacfd00927374220e2bbe6340b62595803e8db2842b29034dc6145f73401cac\"},\"requests\":[{\"method\":\"POST\",\"path\":\"/v1.56/volumes/create\",\"body\":{\"Name\":\"candidate-volume\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"empty\":\"\",\"private-key\":\"Grüße\\\"\\\\\\n\"}}}],\"prerequisites\":[]}\n"
         }
         (EngineBuild::DebianPackage(_), DaemonMode::Rootless) => {
-            "{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"debian_package\",\"revision\":\"20.10.5+dfsg1-1+deb11u2\"},\"engine_release\":\"20.10.5+dfsg1\",\"advertised_api_version\":\"1.41\",\"acquisition_api_version\":\"1.41\",\"rendering_api_version\":\"1.41\",\"daemon_mode\":\"rootless\",\"evidence_sha256\":\"c9800d722f1b505f5b1e5a54d9c60e68502fceaa0779f690c5504623ec473333\"},\"requests\":[{\"method\":\"POST\",\"path\":\"/v1.41/volumes/create\",\"body\":{\"Name\":\"candidate-volume\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"empty\":\"\",\"private-key\":\"Grüße\\\"\\\\\\n\"}}}],\"prerequisites\":[]}\n"
+            "{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"debian_package\",\"revision\":\"20.10.5+dfsg1-1+deb11u2\"},\"engine_release\":\"20.10.5+dfsg1\",\"advertised_api_version\":\"1.41\",\"acquisition_api_version\":\"1.41\",\"rendering_api_version\":\"1.41\",\"daemon_mode\":\"rootless\",\"evidence_sha256\":\"bf3b2374782342abda9bc13f07f273f22a262f1412afb16376efcf376dceac17\"},\"requests\":[{\"method\":\"POST\",\"path\":\"/v1.41/volumes/create\",\"body\":{\"Name\":\"candidate-volume\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"empty\":\"\",\"private-key\":\"Grüße\\\"\\\\\\n\"}}}],\"prerequisites\":[]}\n"
         }
         (EngineBuild::Upstream, DaemonMode::Rootless) => {
-            "{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"upstream\"},\"engine_release\":\"29.8.1\",\"advertised_api_version\":\"1.56\",\"acquisition_api_version\":\"1.49\",\"rendering_api_version\":\"1.56\",\"daemon_mode\":\"rootless\",\"evidence_sha256\":\"81a1ee33c3a02d83fe6cd0f1683e1bb9b6c8774dc8aa192b2160c6ee44ba0943\"},\"requests\":[{\"method\":\"POST\",\"path\":\"/v1.56/volumes/create\",\"body\":{\"Name\":\"candidate-volume\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"empty\":\"\",\"private-key\":\"Grüße\\\"\\\\\\n\"}}}],\"prerequisites\":[]}\n"
+            "{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"upstream\"},\"engine_release\":\"29.8.1\",\"advertised_api_version\":\"1.56\",\"acquisition_api_version\":\"1.49\",\"rendering_api_version\":\"1.56\",\"daemon_mode\":\"rootless\",\"evidence_sha256\":\"c2f380eaf9cbb8f4cdd8ca380afe350f6f97a39aeb98fc2211d531c3320d1d4a\"},\"requests\":[{\"method\":\"POST\",\"path\":\"/v1.56/volumes/create\",\"body\":{\"Name\":\"candidate-volume\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"empty\":\"\",\"private-key\":\"Grüße\\\"\\\\\\n\"}}}],\"prerequisites\":[]}\n"
         }
         (_, DaemonMode::Unknown) => panic!("reviewed profiles must bind a daemon mode"),
     }

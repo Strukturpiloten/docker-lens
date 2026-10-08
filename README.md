@@ -9,32 +9,31 @@ release must pass fresh complete and four-lane native gates before a
 compatibility claim.
 
 The planned native work is tracked in [DockerLens #3](https://github.com/Strukturpiloten/docker-lens/issues/3).
-Typed multi-network target intent, external prerequisites and secondary
-connect requests are available as inert data. The four exact profiles admit
-external volume/network prerequisites and internal bridge creation through the
-reviewed #68 cohort. Other topology shapes still await native admission.
-Typed container intent also distinguishes host-IP scoped, repeated and
-ephemeral publications, exposed-only ports, command clearing, shell and
-disabled health checks, and protected runtime settings. These new branches
-likewise remain capability-unadmitted pending exact native evidence.
-Bind mounts can carry closed shared/private relabel intent under
-[ADR 0015](docs/decisions/0015-bind-relabel-intent.md). Only those binds use
-legacy `Binds` and conditional schema-2 destination-source prerequisites;
-plain mounts and schema-1 artifacts retain their existing representation.
-The relabel capabilities remain unadmitted and prove no SELinux effects.
-Created named volumes can carry bounded protected labels in the inert target
-contract. The #89 candidate selects the independently reviewed #88 source
-cohort: sixteen capabilities and twenty-six shapes, including `VolumeLabels`
-and parameterized `ContainerUser` / `ContainerWorkdir`, under
-[ADR 0014](docs/decisions/0014-reviewed-identity-cohort.md).
+Typed networks, protected runtime settings and conditional bind-source review
+are available as inert data. The candidate selects the independently reviewed
+application source cohort from run `37706460127`, attempt 1, under
+[ADR 0016](docs/decisions/0016-reviewed-application-cohort.md). Exact Debian
+profiles admit 28 capabilities/44 shapes; upstream profiles add only the
+complete IPv6 port group, for 29/46. The machine records preserve all four
+earlier cohorts.
+
+The selection adds complete common IPv4/repeated/exposed-only/ephemeral port,
+container-label/shell-health/start-period, network-label/alias/multiple-attachment,
+and shared/private bind configured-retention groups. Other topology and runtime
+groups remain unadmitted. Bind prerequisites retain all source review and
+unverified SELinux conditions from [ADR 0015](docs/decisions/0015-bind-relabel-intent.md);
+configured retention does not prove relabel effects. Schema-1 and request
+representations retain their existing behavior.
+
+This is candidate pre-merge rehearsal admission. Production merge, main
+admission and release remain blocked until fresh exact-final-candidate complete
+and four-lane fourteen-test native gates, independently reviewed volume-only
+consumer rehearsals of all six actual authored fixtures under
+[ADR 0012](docs/decisions/0012-candidate-volume-label-admission.md), and reviewed
+BoxFerry schema-2 consumers of the actual Nextcloud/Supabase binds pass.
 Identity support does not promise arbitrary-image startup or host UID mapping.
-The [ADR 0012](docs/decisions/0012-candidate-volume-label-admission.md)
-six-fixture volume-only consumer gate remains effective.
-Production merge, main admission and release remain blocked until fresh exact-final-candidate
-four-lane native proof, independent review of all six actual authored fixtures'
-volume-only consumer rehearsal, and complete gates pass. No application or full
-migration acceptance is claimed. External-volume prerequisites cannot carry
-labels or mutate an existing volume.
+No application or full migration acceptance is claimed. External-volume
+prerequisites cannot carry labels or mutate an existing volume.
 The [standalone migration ledger](docs/standalone-migration-ledger.md) records
 the finite remaining shapes, evidence, and implementation owners; the current
 0.1.0 surface is the foundation, not completion of that ledger.

@@ -79,7 +79,8 @@
         "properties": {
           "name": {
             "enum": [
-              "StandaloneContainer", "BindMount", "TmpfsMount", "NamedVolume",
+              "StandaloneContainer", "BindMount", "BindRelabelShared", "BindRelabelPrivate",
+              "TmpfsMount", "NamedVolume",
               "VolumeLabels", "VolumeExternalReference", "BridgeNetwork",
               "NetworkExternalReference", "NetworkInternal", "NetworkIpv6",
               "NetworkIpam", "NetworkIpamDriver", "NetworkOptions", "NetworkLabels",
@@ -119,6 +120,8 @@
                 "EphemeralIpv4HostPort", "FixedIpv6HostPort", "EphemeralIpv6HostPort",
                 "MultipleFixedPortBindings", "MultipleEphemeralPortBindings",
                 "EphemeralHostPort", "BindMountReadWrite", "BindMountReadOnly",
+                "BindMountSharedRelabelReadWrite", "BindMountSharedRelabelReadOnly",
+                "BindMountPrivateRelabelReadWrite", "BindMountPrivateRelabelReadOnly",
                 "TmpfsMountReadWrite", "TmpfsMountReadOnly", "TmpfsMountOptions",
                 "EnvironmentValue", "EnvironmentEmptyValue", "ExecCommand", "ClearCommand",
                 "ExecEntrypoint", "ClearEntrypoint", "ExecHealthcheck", "ShellHealthcheck",
@@ -145,13 +148,13 @@
   },
   "$defs": {
     "api_version": { "type": "string", "pattern": "^[1-9][0-9]*\\.[0-9]+$" },
-    "unadmitted_bind_relabel_capability": {
-      "description": "Disconnected configured-retention vocabulary only; no reviewed record or sealed admission is authorized.",
+    "bind_relabel_capability_vocabulary": {
+      "description": "Configured-retention vocabulary; only exact independently reviewed cohorts authorize admission.",
       "type": "string",
       "enum": ["BindRelabelShared", "BindRelabelPrivate"]
     },
-    "unadmitted_bind_relabel_shape": {
-      "description": "Disconnected RO/RW configured-retention shapes; not SELinux effect evidence or reviewed admission.",
+    "bind_relabel_shape_vocabulary": {
+      "description": "RO/RW configured-retention vocabulary; schema recognition alone is not admission or SELinux effect evidence.",
       "type": "string",
       "enum": [
         "BindMountSharedRelabelReadWrite", "BindMountSharedRelabelReadOnly",

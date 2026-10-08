@@ -43,12 +43,14 @@
    from an exact Debian package revision, the reported Engine release,
    advertised maximum API, negotiated acquisition API, tested rendering API,
    and daemon mode. Catalog discovery returns its SHA-256 evidence key. The
-   candidate catalog contains four exact records from the reviewed #88 native
-   source cohort under ADR 0014: sixteen capabilities and twenty-six shapes,
-   including parameterized user and working-directory fields. The original,
-   #68 and #70 evidence cohorts are preserved separately. ADR 0012's six-fixture
-   volume-only consumer gate remains effective. Each
-   changed candidate and release needs fresh complete and four-lane
+   candidate catalog selects four exact records from independently reviewed
+   run `37706460127`, attempt 1, source
+   `6df951eb9e112becf8124fe9f8624b1df0dfbf2e`, under ADR 0016.
+   Debian admits exactly 28 capabilities/44 shapes; upstream adds only the
+   complete IPv6 port group for 29/46. All four historical cohorts remain
+   immutable. ADR 0012's six actual authored fixture volume-only consumer gate
+   and reviewed actual Nextcloud/Supabase schema-2 bind consumers remain required.
+   Each changed candidate and release needs fresh complete and four-lane
    native gates before a compatibility claim. The operation graph
    retains the chosen context and
    checks standalone containers, named volumes, bridge networks, and each
@@ -80,11 +82,13 @@ resources remain explicit `RequireExisting` graph steps and protected
 artifact prerequisites; they emit no create request and do not claim
 existence. A container's first attachment is in its create request, while
 each later attachment has its own step ID and inert network-connect request.
-The four exact profiles admit only the reviewed external-network prerequisite
-and internal-bridge singleton groups beyond baseline network capabilities.
-IPv6, IPAM, options, labels, aliases, static addresses and multiple attachments
-still await separate exact-lane native admission and consumer evidence.
-New container-setting facts are likewise absent. `StartInterval` is gated by
+The four exact profiles retain reviewed external-network and internal-bridge
+groups and now admit network labels, primary/secondary aliases and ordered
+multiple attachments under ADR 0016. Network IPv6, IPAM, options and static
+addresses still await separate exact-lane admission. Container labels, shell
+health and zero/positive start period are admitted; disabled health, start
+interval and other runtime groups stay unadmitted.
+`StartInterval` is gated by
 an exact capability claim; no generic Engine API introduction version is
 assumed from Compose metadata. Port rendering groups host bindings under one
 container port/protocol key and preserves an explicitly authored host address
@@ -97,14 +101,16 @@ Created named volumes retain bounded protected authored labels and render a
 gates that request branch; historical unlabelled volume evidence does not
 admit it. External-volume prerequisites have no label field and never emit a
 volume-create or relabel request. The external-volume prerequisite singleton
-is admitted by the #68 cohort. The #70 cohort added the complete labelled-create
-group; the #89 candidate retains it and adds only the independently proved
-parameterized identity groups from #88. [ADR 0012](decisions/0012-candidate-volume-label-admission.md)
+is admitted by the #68 cohort. The #70 cohort added complete labelled-create
+and #88 added parameterized identity groups; ADR 0016 retains both with the
+coherent application source groups.
+[ADR 0012](decisions/0012-candidate-volume-label-admission.md)
 explicitly supersedes only ADR 0010's admission sequencing: sealed positive
 candidate records enable pre-merge consumer rehearsal, not production
 admission. Merge/main/release remain blocked until fresh exact-final-candidate
 four-lane native proof, independently reviewed six-authored-fixture volume-only
-consumer rehearsal and complete gates pass. Neither branch applies requests,
+consumer rehearsal, reviewed actual Nextcloud/Supabase schema-2 bind consumers
+and complete gates pass. Neither branch applies requests,
 moves data, or claims application acceptance.
 
 ## Decoder evidence boundary
@@ -120,8 +126,9 @@ never invent that conflict. Neither interpretation nor coherence implies
 authored configuration. Destination duplicate checks use independent lexical
 Linux comparison keys without rewriting authored bytes or checking symlinks.
 Only relabelled target binds use legacy `Binds`; ordinary structured mounts
-remain unchanged. The graph requires separate shared/private capabilities,
-currently unadmitted. The renderer adds protected destination-host bind-source
+remain unchanged. The graph requires separate shared/private
+configured-retention capabilities, admitted only through the exact complete
+groups selected by ADR 0016. The renderer adds protected destination-host bind-source
 review obligations and explicitly unverified SELinux conditions. Those complete
 artifacts use schema 2; all others retain schema 1. No component inspects host
 paths or applies requests. See [ADR 0015](decisions/0015-bind-relabel-intent.md).

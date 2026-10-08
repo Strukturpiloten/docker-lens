@@ -164,7 +164,7 @@ class PortCapabilityEvidenceTests(unittest.TestCase):
                     with self.subTest(lane=lane, identity_version=identity_version, field=field):
                         self.assert_rejected(*self.emit_lane(lane, identity_version, proof_override=invalid))
 
-    def test_independent_port_groups_match_rust_required_for_without_admitting_catalogue(self):
+    def test_independent_port_groups_match_required_for_and_exact_lane_admission(self):
         source = (legacy.ROOT / "src/version.rs").read_text(encoding="utf-8")
         for capability, expected in PORT_GROUPS.items():
             match = re.search(rf"Capability::{capability}\s*=>\s*(?:\{{\s*)?Some\(&\[(.*?)\]\)",
@@ -176,9 +176,24 @@ class PortCapabilityEvidenceTests(unittest.TestCase):
         catalogue = (legacy.ROOT / "src/reviewed_catalog.rs").read_text(encoding="utf-8")
         capabilities = catalogue.split("const REVIEWED_CAPABILITIES:", 1)[1].split("];", 1)[0]
         shapes = catalogue.split("const REVIEWED_SHAPES:", 1)[1].split("];", 1)[0]
-        self.assertEqual(len(re.findall(r"Capability::(\w+)", capabilities)), 16)
-        self.assertEqual(len(re.findall(r"NativeCapabilityShape::(\w+)", shapes)), 26)
-        self.assertTrue(set(PORT_GROUPS).isdisjoint(re.findall(r"Capability::(\w+)", capabilities)))
+        common_names = re.findall(r"Capability::(\w+)", capabilities)
+        common_shapes = re.findall(r"NativeCapabilityShape::(\w+)", shapes)
+        self.assertEqual(len(common_names), 28)
+        self.assertEqual(len(common_shapes), 44)
+        self.assertEqual(set(PORT_GROUPS) - set(common_names), {"PortHostIpv6"})
+        self.assertNotIn("FixedIpv6HostPort", common_shapes)
+        self.assertNotIn("EphemeralIpv6HostPort", common_shapes)
+        for name, required in PORT_GROUPS.items():
+            if name != "PortHostIpv6":
+                self.assertTrue(set(required).issubset(common_shapes))
+        upstream = catalogue.split("const UPSTREAM_CAPABILITIES:", 1)[1].split("];", 1)[0]
+        upstream_shapes = catalogue.split("const UPSTREAM_SHAPES:", 1)[1].split("];", 1)[0]
+        upstream_names = re.findall(r"Capability::(\w+)", upstream)
+        upstream_shape_names = re.findall(r"NativeCapabilityShape::(\w+)", upstream_shapes)
+        self.assertEqual(len(upstream_names), 29)
+        self.assertEqual(len(upstream_shape_names), 46)
+        self.assertEqual(set(upstream_names), set(common_names) | {"PortHostIpv6"})
+        self.assertEqual(set(upstream_shape_names), set(common_shapes) | set(PORT_GROUPS["PortHostIpv6"]))
 
 
 if __name__ == "__main__":

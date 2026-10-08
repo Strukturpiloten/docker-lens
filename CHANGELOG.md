@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Select ADR 0016's coherent reviewed source cohort for pre-merge rehearsal:
+  Debian 28 capabilities/44 shapes and upstream 29/46, with IPv6 ports
+  upstream-only. Preserve historical evidence; fresh final-candidate gates,
+  all six authored-fixture volume rehearsals and actual Nextcloud/Supabase
+  bind-consumer review still gate merge/main/release.
+- Admit complete shared/private read-only and read-write bind configured-retention
+  groups. Schema-2 prerequisites preserve protected container association,
+  source-review obligations and unverified SELinux conditions; ordinary schema-1
+  and request representations remain unchanged. This does not claim relabel effects
+  or complete application acceptance.
 - Select the separately reviewed #88 parameterized identity source cohort:
   exactly sixteen capabilities and twenty-six shapes on four exact profiles,
   adding only user and working-directory singleton groups. Preserve all prior

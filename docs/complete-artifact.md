@@ -40,11 +40,12 @@ from a prerequisite. `prerequisites` retains the renderer's dependency order,
 including when there are no requests. A created-volume request includes its
 authored `Labels` object only when nonempty; an external-volume prerequisite
 never contains or applies labels. The labelled create branch remains
-admitted only in the #49 candidate for pre-merge consumer rehearsal under
+retained in ADR 0016's coherent candidate for pre-merge consumer rehearsal under
 [ADR 0012](decisions/0012-candidate-volume-label-admission.md). Production
 merge/main/release remain blocked on fresh exact-final-candidate four-lane
 native proof, independently reviewed six-authored-fixture volume-only consumer
-rehearsal and complete gates; the version 1 format and inert API are unchanged.
+rehearsal, reviewed actual Nextcloud/Supabase schema-2 bind consumers and complete
+gates; the version 1 format and inert API are unchanged.
 A `reference` is the exact unsigned
 decimal string of a caller-local `u64` target graph index, never a Docker
 resource ID. It is a string so even indices above 2^53, through
@@ -71,6 +72,9 @@ has no execution, transport, deployment, or file-writing method.
 
 ## Conditional version 2 bind-source prerequisites
 
+ADR 0016 admits shared/private configured retention on all four exact candidate
+profiles. This does not establish source suitability or SELinux effects; actual
+Nextcloud/Supabase consumer reviews and final-candidate native gates remain required.
 Only an artifact containing a relabelled bind emits `schema_version: 2`.
 The context, ordered request objects, and existing network/volume prerequisites
 keep their version 1 representation. Each relabelled bind adds this closed
