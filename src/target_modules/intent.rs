@@ -369,12 +369,10 @@ impl TargetIntent {
                 if !container
                     .mounts
                     .iter()
-                    .all(|mount| mounts.insert(mount.target()))
-                    || container
-                        .settings
-                        .devices
-                        .iter()
-                        .any(|device| mounts.contains(device.container_path.bytes()))
+                    .all(|mount| mounts.insert(lexical_absolute_path_key(mount.target())))
+                    || container.settings.devices.iter().any(|device| {
+                        mounts.contains(&lexical_absolute_path_key(device.container_path.bytes()))
+                    })
                 {
                     return Err(IntentError::DuplicateMount);
                 }
@@ -427,6 +425,22 @@ impl TargetIntent {
     pub fn resources(&self) -> &[TargetResource] {
         &self.resources
     }
+}
+
+// Linux mount destinations are compared lexically after slash/dot cleaning.
+// This key never rewrites authored bytes or resolves filesystem/symlink state.
+fn lexical_absolute_path_key(path: &[u8]) -> Vec<&[u8]> {
+    let mut components = Vec::new();
+    for component in path.split(|byte| *byte == b'/') {
+        match component {
+            b"" | b"." => {}
+            b".." => {
+                components.pop();
+            }
+            _ => components.push(component),
+        }
+    }
+    components
 }
 
 fn host_ip_overlaps(left: PortHostIp, right: PortHostIp) -> bool {

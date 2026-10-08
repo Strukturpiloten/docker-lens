@@ -3,6 +3,10 @@
 Status: accepted implementation contract; consumer rehearsal and fresh native
 evidence remain open.
 
+[ADR 0015](0015-bind-relabel-intent.md) amends the version-selection and
+prerequisite-kind contract for relabelled binds only. Existing artifacts without
+those prerequisites retain version 1 and their existing representation.
+
 ADR 0003's newline-delimited `RenderedArtifact::bytes()` is an ordered native
 request stream, not a complete migration plan. ADRs 0006 and 0008 added
 external network and volume prerequisites that deliberately emit no create

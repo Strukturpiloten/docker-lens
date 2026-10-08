@@ -50,6 +50,17 @@ TCP/UDP, exec command/entrypoint/health, bind/volume and restart shapes.
 No new container capability is positive merely because a target type and
 renderer branch exists.
 
+DockerLens #94 adds closed bind-relabel source interpretation and optional
+shared/private target intent under [ADR 0015](decisions/0015-bind-relabel-intent.md).
+Relabelled binds alone use legacy `Binds` plus conditional schema-2 source-review
+and unverified SELinux obligations. Plain mounts remain unchanged. Shared and
+private capabilities each require both RO/RW configured-retention shapes and
+remain unadmitted; exact-candidate four-lane native proof, independent review,
+consumer schema handling and BoxFerry mapping/loss remain open. Nextcloud's
+authored private `Z` and Supabase's shared `z` binds cannot be silently stripped
+or treated as accepted application behavior. No source existence, host label,
+SELinux enforcement or full migration claim follows from this inert contract.
+
 DockerLens #44 adds an inert existing named-volume target contract:
 `TargetResource::ExternalVolume` binds a caller-supplied destination name to a
 `RequireExisting(Volume)` graph step and protected `VolumePrerequisite`, with no

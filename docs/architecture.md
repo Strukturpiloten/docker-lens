@@ -109,6 +109,23 @@ moves data, or claims application acceptance.
 
 ## Decoder evidence boundary
 
+Bind-relabel intent uses the shared closed observation/target `BindRelabel`
+type. `decoder_mount_mode.rs` interprets protected native mount mode evidence
+without losing availability or effective origin; unsupported options produce
+value-free findings, while malformed, contradictory and overbound modes fail
+closed. Syntactically supported mode and independently observed `RW` are not
+silently reconciled: contrary explicit access yields a value-free
+`NativeConflict` finding, retaining both fields. Missing/null/redacted fields
+never invent that conflict. Neither interpretation nor coherence implies
+authored configuration. Destination duplicate checks use independent lexical
+Linux comparison keys without rewriting authored bytes or checking symlinks.
+Only relabelled target binds use legacy `Binds`; ordinary structured mounts
+remain unchanged. The graph requires separate shared/private capabilities,
+currently unadmitted. The renderer adds protected destination-host bind-source
+review obligations and explicitly unverified SELinux conditions. Those complete
+artifacts use schema 2; all others retain schema 1. No component inspects host
+paths or applies requests. See [ADR 0015](decisions/0015-bind-relabel-intent.md).
+
 `decode_capture` accepts only the closed acquisition request set. It checks
 HTTP status, retains opaque resource references, and records the request URL
 API versions; it does not contact or authenticate a daemon. Discovery lists

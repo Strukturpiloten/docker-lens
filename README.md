@@ -17,6 +17,11 @@ Typed container intent also distinguishes host-IP scoped, repeated and
 ephemeral publications, exposed-only ports, command clearing, shell and
 disabled health checks, and protected runtime settings. These new branches
 likewise remain capability-unadmitted pending exact native evidence.
+Bind mounts can carry closed shared/private relabel intent under
+[ADR 0015](docs/decisions/0015-bind-relabel-intent.md). Only those binds use
+legacy `Binds` and conditional schema-2 destination-source prerequisites;
+plain mounts and schema-1 artifacts retain their existing representation.
+The relabel capabilities remain unadmitted and prove no SELinux effects.
 Created named volumes can carry bounded protected labels in the inert target
 contract. The #89 candidate selects the independently reviewed #88 source
 cohort: sixteen capabilities and twenty-six shapes, including `VolumeLabels`

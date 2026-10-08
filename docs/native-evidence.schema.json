@@ -145,6 +145,19 @@
   },
   "$defs": {
     "api_version": { "type": "string", "pattern": "^[1-9][0-9]*\\.[0-9]+$" },
+    "unadmitted_bind_relabel_capability": {
+      "description": "Disconnected configured-retention vocabulary only; no reviewed record or sealed admission is authorized.",
+      "type": "string",
+      "enum": ["BindRelabelShared", "BindRelabelPrivate"]
+    },
+    "unadmitted_bind_relabel_shape": {
+      "description": "Disconnected RO/RW configured-retention shapes; not SELinux effect evidence or reviewed admission.",
+      "type": "string",
+      "enum": [
+        "BindMountSharedRelabelReadWrite", "BindMountSharedRelabelReadOnly",
+        "BindMountPrivateRelabelReadWrite", "BindMountPrivateRelabelReadOnly"
+      ]
+    },
     "identity_container_v2": {
       "type": "object", "additionalProperties": false,
       "required": ["role", "id", "name", "owner", "configured", "outcome", "rejection_phase",

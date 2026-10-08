@@ -5,6 +5,9 @@ use crate::version::{ApiVersion, DaemonMode, EngineBuild};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
+#[cfg(test)]
+#[path = "render/bind_relabel_tests.rs"]
+mod bind_relabel_tests;
 #[path = "render/container.rs"]
 mod container;
 #[path = "render/network.rs"]
@@ -19,6 +22,7 @@ pub struct RenderedArtifact {
     bytes: Vec<u8>,
     network_prerequisites: Vec<NetworkPrerequisite>,
     volume_prerequisites: Vec<VolumePrerequisite>,
+    bind_source_prerequisites: Vec<BindSourcePrerequisite>,
     native: Option<NativeRenderState>,
 }
 
@@ -31,6 +35,101 @@ struct NativeRenderState {
 enum PrerequisiteOrder {
     Network(usize),
     Volume(usize),
+    BindSource(usize),
+}
+
+/// Consumer obligations for a destination-host source, not satisfied facts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BindSourceCondition {
+    Exists,
+    TypeReviewed,
+    ContentsReviewed,
+    OwnershipReviewed,
+    PermissionsReviewed,
+}
+
+/// Conditions required for real relabel effects; configured retention proves none.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BindRelabelCondition {
+    DaemonSelinuxEnabled,
+    ContainerMountLabelPresent,
+    PolicyFilesystemSupport,
+    RelabelAuthority,
+}
+
+/// A relabelled legacy bind must not auto-create an absent destination-host source.
+///
+/// The consumer must establish every source obligation before use and reject a
+/// known missing or unsuitable source. Conditions are requirements, not observed
+/// satisfaction. Source type, contents, ownership and permissions are application
+/// decisions; this artifact does not learn them from a path or claim verification.
+/// SELinux effects remain unverified even when configured mode is retained.
+pub struct BindSourcePrerequisite {
+    pub reference: ResourceRef,
+    pub mount_index: usize,
+    identity: ProtectedValue,
+    source: ProtectedValue,
+    target: ProtectedValue,
+    read_only: bool,
+    relabel: super::BindRelabel,
+    source_conditions: [BindSourceCondition; 5],
+    selinux_conditions: [BindRelabelCondition; 4],
+}
+
+impl BindSourcePrerequisite {
+    /// Explicit protected-data read of the authored container target name.
+    /// This identity binds the obligation to its container-create request;
+    /// the caller-local reference is not a serialized request identifier.
+    #[must_use]
+    pub fn identity(&self) -> &[u8] {
+        self.identity.as_bytes()
+    }
+
+    /// Explicit protected-data read; this path has not been inspected.
+    #[must_use]
+    pub fn source(&self) -> &[u8] {
+        self.source.as_bytes()
+    }
+
+    /// Explicit protected-data read of the authored in-container path.
+    #[must_use]
+    pub fn target(&self) -> &[u8] {
+        self.target.as_bytes()
+    }
+
+    #[must_use]
+    pub const fn read_only(&self) -> bool {
+        self.read_only
+    }
+
+    #[must_use]
+    pub const fn relabel(&self) -> super::BindRelabel {
+        self.relabel
+    }
+
+    #[must_use]
+    pub const fn source_conditions(&self) -> &[BindSourceCondition] {
+        &self.source_conditions
+    }
+
+    #[must_use]
+    pub const fn selinux_conditions(&self) -> &[BindRelabelCondition] {
+        &self.selinux_conditions
+    }
+}
+
+impl std::fmt::Debug for BindSourcePrerequisite {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BindSourcePrerequisite")
+            .field("reference", &self.reference)
+            .field("mount_index", &self.mount_index)
+            .field("identity", &"[redacted]")
+            .field("source", &"[redacted]")
+            .field("target", &"[redacted]")
+            .field("read_only", &self.read_only)
+            .field("relabel", &self.relabel)
+            .finish()
+    }
 }
 
 /// A declared external network must be checked by the consumer before use.
@@ -88,6 +187,7 @@ impl RenderedArtifact {
             bytes,
             network_prerequisites: Vec::new(),
             volume_prerequisites: Vec::new(),
+            bind_source_prerequisites: Vec::new(),
             native: None,
         }
     }
@@ -108,6 +208,12 @@ impl RenderedArtifact {
         &self.volume_prerequisites
     }
 
+    /// Destination-host review obligations; none are verified by rendering.
+    #[must_use]
+    pub fn bind_source_prerequisites(&self) -> &[BindSourcePrerequisite] {
+        &self.bind_source_prerequisites
+    }
+
     /// The validated planning context retained by the native renderer.
     /// Caller-created opaque request bytes have no such context.
     #[must_use]
@@ -123,7 +229,12 @@ impl RenderedArtifact {
             .native
             .as_ref()
             .ok_or(CompleteArtifactError::MissingNativeProvenance)?;
-        let mut document = String::from("{\"schema_version\":1,\"context\":");
+        let schema = if self.bind_source_prerequisites.is_empty() {
+            1
+        } else {
+            2
+        };
+        let mut document = format!("{{\"schema_version\":{schema},\"context\":");
         append_context(&mut document, &native.context);
         document.push_str(",\"requests\":[");
         for (index, request) in native.requests.iter().enumerate() {
@@ -162,6 +273,9 @@ impl RenderedArtifact {
                     );
                     document.push_str(",\"identity\":");
                     json_string(&mut document, volume.identity());
+                }
+                PrerequisiteOrder::BindSource(index) => {
+                    append_bind_source(&mut document, &self.bind_source_prerequisites[*index]);
                 }
             }
             document.push('}');
@@ -213,6 +327,7 @@ impl Renderer for DockerApiRenderer {
         let mut requests = Vec::new();
         let mut network_prerequisites = Vec::new();
         let mut volume_prerequisites = Vec::new();
+        let mut bind_source_prerequisites = Vec::new();
         let mut prerequisite_order = Vec::new();
         while emitted.len() < graph.nodes().len() {
             let node = graph
@@ -277,13 +392,48 @@ impl Renderer for DockerApiRenderer {
                     });
                     None
                 }
-                TargetResource::Container(container) => Some((
-                    format!(
-                        "{prefix}containers/create?name={}",
-                        percent_encode(container.identity.bytes())
-                    ),
-                    container::render_container(container, &resources)?,
-                )),
+                TargetResource::Container(container) => {
+                    for (mount_index, mount) in container.mounts.iter().enumerate() {
+                        let Some(relabel) = mount.bind_relabel() else {
+                            continue;
+                        };
+                        let super::MountSource::Bind(source) = mount.source() else {
+                            return Err(RenderError::InvalidGraph);
+                        };
+                        prerequisite_order.push(PrerequisiteOrder::BindSource(
+                            bind_source_prerequisites.len(),
+                        ));
+                        bind_source_prerequisites.push(BindSourcePrerequisite {
+                            reference: container.reference,
+                            mount_index,
+                            identity: ProtectedValue::new(container.identity.bytes().to_vec()),
+                            source: ProtectedValue::new(source.as_bytes().to_vec()),
+                            target: ProtectedValue::new(mount.target().to_vec()),
+                            read_only: mount.read_only(),
+                            relabel,
+                            source_conditions: [
+                                BindSourceCondition::Exists,
+                                BindSourceCondition::TypeReviewed,
+                                BindSourceCondition::ContentsReviewed,
+                                BindSourceCondition::OwnershipReviewed,
+                                BindSourceCondition::PermissionsReviewed,
+                            ],
+                            selinux_conditions: [
+                                BindRelabelCondition::DaemonSelinuxEnabled,
+                                BindRelabelCondition::ContainerMountLabelPresent,
+                                BindRelabelCondition::PolicyFilesystemSupport,
+                                BindRelabelCondition::RelabelAuthority,
+                            ],
+                        });
+                    }
+                    Some((
+                        format!(
+                            "{prefix}containers/create?name={}",
+                            percent_encode(container.identity.bytes())
+                        ),
+                        container::render_container(container, &resources)?,
+                    ))
+                }
             };
             if let Some((path, body)) = request {
                 append_request(&mut lines, &mut requests, &path, &body);
@@ -314,6 +464,7 @@ impl Renderer for DockerApiRenderer {
             bytes: lines.into_bytes(),
             network_prerequisites,
             volume_prerequisites,
+            bind_source_prerequisites,
             native: Some(NativeRenderState {
                 context: graph.context().clone(),
                 requests,
@@ -321,6 +472,37 @@ impl Renderer for DockerApiRenderer {
             }),
         })
     }
+}
+
+fn append_bind_source(document: &mut String, bind: &BindSourcePrerequisite) {
+    document.push_str("{\"kind\":\"bind_source\",\"reference\":");
+    json_string(
+        document,
+        bind.reference.local_index().to_string().as_bytes(),
+    );
+    document.push_str(",\"identity\":");
+    json_string(document, bind.identity());
+    document.push_str(",\"mount_index\":");
+    json_string(document, bind.mount_index.to_string().as_bytes());
+    document.push_str(",\"source\":");
+    json_string(document, bind.source());
+    document.push_str(",\"target\":");
+    json_string(document, bind.target());
+    document.push_str(if bind.read_only() {
+        ",\"read_only\":true"
+    } else {
+        ",\"read_only\":false"
+    });
+    document.push_str(",\"relabel\":");
+    json_string(
+        document,
+        match bind.relabel() {
+            super::BindRelabel::Shared => b"shared",
+            super::BindRelabel::Private => b"private",
+        },
+    );
+    document.push_str(",\"source_conditions\":[\"exists\",\"type_reviewed\",\"contents_reviewed\",\"ownership_reviewed\",\"permissions_reviewed\"]");
+    document.push_str(",\"selinux_effect\":\"unverified\",\"selinux_conditions\":[\"daemon_selinux_enabled\",\"container_mount_label_present\",\"policy_filesystem_support\",\"relabel_authority\"]");
 }
 
 fn append_request(lines: &mut String, requests: &mut Vec<String>, path: &str, body: &str) {

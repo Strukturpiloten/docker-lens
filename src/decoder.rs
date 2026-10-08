@@ -16,6 +16,9 @@ use crate::observation::{Availability, FieldPath, Observed, Origin, ResourceRef}
 use crate::resource_support::ResourceSupportObservation;
 use crate::version::{ApiVersion, DaemonFacts, DaemonMode, EngineRelease, ObservationId};
 
+#[path = "decoder_mount_mode.rs"]
+mod mount_mode;
+
 const MAX_JSON_BYTES: usize = 8 * 1024 * 1024;
 const MAX_COLLECTION_ITEMS: usize = 4096;
 
@@ -220,6 +223,26 @@ pub enum MountKind {
     Other,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MountAccess {
+    ReadOnly,
+    ReadWrite,
+}
+
+/// Finite native mode interpretation. Unsupported mode evidence remains in
+/// `MountObservation::mode`; this branch never invents absent relabel intent.
+/// `Supported` classifies mode syntax only: a conflicting independently
+/// observed `RW` receives a value-free native-conflict finding during capture
+/// decoding. Neither syntax nor coherence establishes authorship or effects.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MountModeInterpretation {
+    Supported {
+        access: Option<MountAccess>,
+        relabel: Option<crate::observation::BindRelabel>,
+    },
+    Unsupported,
+}
+
 pub struct MountObservation {
     pub kind: MountKind,
     pub source: Observed<ProtectedValue>,
@@ -227,6 +250,8 @@ pub struct MountObservation {
     pub name: Observed<ProtectedValue>,
     pub read_write: Observed<bool>,
     pub mode: Observed<ProtectedValue>,
+    /// Same availability/origin as `mode`; unavailable fields stay unavailable.
+    pub mode_interpretation: Observed<MountModeInterpretation>,
     pub propagation: Observed<ProtectedValue>,
 }
 
@@ -795,13 +820,16 @@ fn mounts(value: &Value) -> Result<Vec<MountObservation>, DecodeError> {
                 Some("tmpfs") => MountKind::Tmpfs,
                 _ => MountKind::Other,
             };
+            let mode = string_field(item, &["Mode"], field, Origin::Effective)?;
+            let mode_interpretation = mount_mode::interpret(&mode, field)?;
             Ok(MountObservation {
                 kind,
                 source: string_field(item, &["Source"], field, Origin::Effective)?,
                 destination: string_field(item, &["Destination"], field, Origin::Effective)?,
                 name: string_field(item, &["Name"], field, Origin::Effective)?,
                 read_write: bool_field(item, &["RW"], field, Origin::Effective)?,
-                mode: string_field(item, &["Mode"], field, Origin::Effective)?,
+                mode,
+                mode_interpretation,
                 propagation: string_field(item, &["Propagation"], field, Origin::Effective)?,
             })
         })
@@ -1636,10 +1664,26 @@ pub fn decode_capture(capture: &Capture) -> Result<DecodedInventory, DecodeError
                         let container = container(&body, reference)?;
                         if let Some(mounts) = container.mounts.value() {
                             for (index, mount) in mounts.iter().enumerate() {
-                                if mount.kind == MountKind::Other {
+                                if mount.kind == MountKind::Other
+                                    || matches!(
+                                        mount.mode_interpretation.value(),
+                                        Some(MountModeInterpretation::Unsupported)
+                                    )
+                                {
                                     result.findings.push(Finding {
                                         severity: Severity::Warning,
                                         code: FindingCode::UnsupportedValue,
+                                        resource: Some(reference),
+                                        field: Some(FieldPath::Mount { index }),
+                                    });
+                                }
+                                if mount_mode::access_conflicts(
+                                    &mount.mode_interpretation,
+                                    &mount.read_write,
+                                ) {
+                                    result.findings.push(Finding {
+                                        severity: Severity::Warning,
+                                        code: FindingCode::NativeConflict,
                                         resource: Some(reference),
                                         field: Some(FieldPath::Mount { index }),
                                     });

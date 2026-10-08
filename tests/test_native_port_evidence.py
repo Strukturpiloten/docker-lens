@@ -58,9 +58,9 @@ class PortCapabilityEvidenceTests(unittest.TestCase):
         expected = self.expected_groups(identity_version, ipv6)
         self.assertEqual(record["admitted_shapes"], expected)
         self.assertEqual(record["capability_outcome"], {name: "available" for name in expected})
-        self.assertEqual(len(expected), (27 if identity_version == 2 else 25) - (not ipv6))
+        self.assertEqual(len(expected), (29 if identity_version == 2 else 27) - (not ipv6))
         self.assertEqual(sum(map(len, expected.values())),
-                         (42 if identity_version == 2 else 40) - (0 if ipv6 else 2))
+                         (46 if identity_version == 2 else 44) - (0 if ipv6 else 2))
         self.assertEqual("identity_contract" in record, identity_version == 2)
         self.assertEqual("identity_cases" in record, identity_version == 2)
         for private in (legacy.RUN_ID, "dl-identity-", "configured_user", "cleanup"):
@@ -172,7 +172,7 @@ class PortCapabilityEvidenceTests(unittest.TestCase):
             self.assertIsNotNone(match, capability)
             self.assertEqual(re.findall(r"Self::(\w+)", match.group(1)), expected)
         self.assertEqual(len(legacy.SHAPES), 10)
-        self.assertEqual(len(legacy.EXPECTED_RAW_SHAPES), 20)
+        self.assertEqual(len(legacy.EXPECTED_RAW_SHAPES), 22)
         catalogue = (legacy.ROOT / "src/reviewed_catalog.rs").read_text(encoding="utf-8")
         capabilities = catalogue.split("const REVIEWED_CAPABILITIES:", 1)[1].split("];", 1)[0]
         shapes = catalogue.split("const REVIEWED_SHAPES:", 1)[1].split("];", 1)[0]

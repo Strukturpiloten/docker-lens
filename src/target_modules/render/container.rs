@@ -144,12 +144,56 @@ pub(super) fn render_container(
         body.push('}');
         host_field = true;
     }
-    if !container.mounts.is_empty() {
+    if container
+        .mounts
+        .iter()
+        .any(|mount| mount.bind_relabel().is_some())
+    {
+        if host_field {
+            body.push(',');
+        }
+        body.push_str("\"Binds\":[");
+        for (index, mount) in container
+            .mounts
+            .iter()
+            .filter(|mount| mount.bind_relabel().is_some())
+            .enumerate()
+        {
+            if index != 0 {
+                body.push(',');
+            }
+            let MountSource::Bind(source) = mount.source() else {
+                return Err(RenderError::InvalidGraph);
+            };
+            let mut binding = source.as_bytes().to_vec();
+            binding.push(b':');
+            binding.extend_from_slice(mount.target());
+            binding.extend_from_slice(if mount.read_only() { b":ro," } else { b":rw," });
+            binding.extend_from_slice(match mount.bind_relabel() {
+                Some(super::super::BindRelabel::Shared) => b"z",
+                Some(super::super::BindRelabel::Private) => b"Z",
+                None => return Err(RenderError::InvalidGraph),
+            });
+            json_string(&mut body, &binding);
+        }
+        body.push(']');
+        host_field = true;
+    }
+    if container
+        .mounts
+        .iter()
+        .any(|mount| mount.bind_relabel().is_none())
+    {
         if host_field {
             body.push(',');
         }
         body.push_str("\"Mounts\":[");
-        for (index, mount) in container.mounts.iter().enumerate() {
+        for (index, mount) in container
+            .mounts
+            .iter()
+            .filter(|mount| mount.bind_relabel().is_none())
+            .enumerate()
+        {
             if index != 0 {
                 body.push(',');
             }
