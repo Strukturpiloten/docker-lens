@@ -93,6 +93,10 @@ pub enum CapabilityState {
 pub enum Capability {
     StandaloneContainer,
     BindMount,
+    /// Configured shared bind-relabel retention only; no SELinux effect claim.
+    BindRelabelShared,
+    /// Configured private bind-relabel retention only; no SELinux effect claim.
+    BindRelabelPrivate,
     TmpfsMount,
     NamedVolume,
     VolumeLabels,
@@ -580,6 +584,10 @@ pub(crate) enum NativeCapabilityShape {
     EphemeralHostPort,
     BindMountReadWrite,
     BindMountReadOnly,
+    BindMountSharedRelabelReadWrite,
+    BindMountSharedRelabelReadOnly,
+    BindMountPrivateRelabelReadWrite,
+    BindMountPrivateRelabelReadOnly,
     TmpfsMountReadWrite,
     TmpfsMountReadOnly,
     TmpfsMountOptions,
@@ -681,6 +689,12 @@ impl NativeCapabilityShape {
             }
             Self::EphemeralHostPort => Capability::PortEphemeral,
             Self::BindMountReadWrite | Self::BindMountReadOnly => Capability::BindMount,
+            Self::BindMountSharedRelabelReadWrite | Self::BindMountSharedRelabelReadOnly => {
+                Capability::BindRelabelShared
+            }
+            Self::BindMountPrivateRelabelReadWrite | Self::BindMountPrivateRelabelReadOnly => {
+                Capability::BindRelabelPrivate
+            }
             Self::TmpfsMountReadWrite | Self::TmpfsMountReadOnly | Self::TmpfsMountOptions => {
                 Capability::TmpfsMount
             }
@@ -791,6 +805,14 @@ impl NativeCapabilityShape {
             ]),
             Capability::PortEphemeral => Some(&[Self::EphemeralHostPort]),
             Capability::BindMount => Some(&[Self::BindMountReadWrite, Self::BindMountReadOnly]),
+            Capability::BindRelabelShared => Some(&[
+                Self::BindMountSharedRelabelReadWrite,
+                Self::BindMountSharedRelabelReadOnly,
+            ]),
+            Capability::BindRelabelPrivate => Some(&[
+                Self::BindMountPrivateRelabelReadWrite,
+                Self::BindMountPrivateRelabelReadOnly,
+            ]),
             Capability::TmpfsMount => Some(&[
                 Self::TmpfsMountReadWrite,
                 Self::TmpfsMountReadOnly,

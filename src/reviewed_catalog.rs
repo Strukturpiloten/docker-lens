@@ -275,6 +275,8 @@ fn capability(name: &str) -> Capability {
         Capability,
         StandaloneContainer,
         BindMount,
+        BindRelabelShared,
+        BindRelabelPrivate,
         TmpfsMount,
         NamedVolume,
         VolumeLabels,
@@ -382,6 +384,10 @@ fn native_shape(name: &str) -> NativeCapabilityShape {
         EphemeralHostPort,
         BindMountReadWrite,
         BindMountReadOnly,
+        BindMountSharedRelabelReadWrite,
+        BindMountSharedRelabelReadOnly,
+        BindMountPrivateRelabelReadWrite,
+        BindMountPrivateRelabelReadOnly,
         TmpfsMountReadWrite,
         TmpfsMountReadOnly,
         TmpfsMountOptions,
@@ -446,8 +452,12 @@ fn native_shape(name: &str) -> NativeCapabilityShape {
 
 #[cfg(test)]
 mod tests {
-    use super::{RECORDS, record};
-    use crate::version::{CapabilityError, TargetCapabilityCatalog};
+    use super::{
+        RECORDS, REVIEWED_CAPABILITIES, REVIEWED_SHAPES, capability, native_shape, record,
+    };
+    use crate::version::{
+        Capability, CapabilityError, NativeCapabilityShape, TargetCapabilityCatalog,
+    };
     use serde_json::Value;
 
     fn rejected(mut change: impl FnMut(&mut Value)) {
@@ -456,6 +466,70 @@ mod tests {
         change(&mut value);
         let changed = serde_json::to_string(&value).unwrap();
         assert!(std::panic::catch_unwind(|| record(lane, digest, &changed)).is_err());
+    }
+
+    #[test]
+    fn bind_relabel_vocabulary_parses_without_reviewed_admission() {
+        for (name, expected, shapes) in [
+            (
+                "BindRelabelShared",
+                Capability::BindRelabelShared,
+                [
+                    "BindMountSharedRelabelReadWrite",
+                    "BindMountSharedRelabelReadOnly",
+                ],
+            ),
+            (
+                "BindRelabelPrivate",
+                Capability::BindRelabelPrivate,
+                [
+                    "BindMountPrivateRelabelReadWrite",
+                    "BindMountPrivateRelabelReadOnly",
+                ],
+            ),
+        ] {
+            assert_eq!(capability(name), expected);
+            assert!(!REVIEWED_CAPABILITIES.contains(&expected));
+            rejected(|value| {
+                value["capabilities"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(serde_json::json!({
+                        "name":name, "state":"available", "admitted_shapes":[],
+                    }))
+            });
+            rejected(|value| {
+                let bind = value["capabilities"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|entry| entry["name"] == "BindMount")
+                    .unwrap();
+                *bind =
+                    serde_json::json!({"name":name,"state":"available","admitted_shapes":shapes});
+            });
+        }
+        for (name, expected) in [
+            (
+                "BindMountSharedRelabelReadWrite",
+                NativeCapabilityShape::BindMountSharedRelabelReadWrite,
+            ),
+            (
+                "BindMountSharedRelabelReadOnly",
+                NativeCapabilityShape::BindMountSharedRelabelReadOnly,
+            ),
+            (
+                "BindMountPrivateRelabelReadWrite",
+                NativeCapabilityShape::BindMountPrivateRelabelReadWrite,
+            ),
+            (
+                "BindMountPrivateRelabelReadOnly",
+                NativeCapabilityShape::BindMountPrivateRelabelReadOnly,
+            ),
+        ] {
+            assert_eq!(native_shape(name), expected);
+            assert!(!REVIEWED_SHAPES.contains(&expected));
+        }
     }
 
     #[test]

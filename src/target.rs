@@ -15,6 +15,7 @@ mod render;
 #[path = "target_modules/volume.rs"]
 mod volume;
 
+pub use crate::observation::BindRelabel;
 pub use container::{
     Argument, ContainerHostname, ContainerIntent, ContainerLabel, ContainerSettings,
     ContainerToken, ContainerUser, DeviceMapping, DevicePermissions, EnvironmentAssignment,
@@ -35,8 +36,9 @@ pub use network::{
     NetworkLabel, NetworkRole, NetworkSource, NetworkSubnet,
 };
 pub use render::{
-    CompleteArtifactError, DockerApiRenderer, NetworkPrerequisite, RenderError, RenderedArtifact,
-    Renderer, VolumePrerequisite,
+    BindRelabelCondition, BindSourceCondition, BindSourcePrerequisite, CompleteArtifactError,
+    DockerApiRenderer, NetworkPrerequisite, RenderError, RenderedArtifact, Renderer,
+    VolumePrerequisite,
 };
 pub use volume::VolumeLabel;
 

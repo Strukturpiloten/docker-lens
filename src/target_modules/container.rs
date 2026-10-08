@@ -235,6 +235,7 @@ pub struct Mount {
     source: MountSource,
     target: ProtectedValue,
     read_only: bool,
+    bind_relabel: Option<super::BindRelabel>,
 }
 
 impl std::fmt::Debug for Mount {
@@ -243,6 +244,7 @@ impl std::fmt::Debug for Mount {
             .field("source", &self.source)
             .field("target", &"[redacted]")
             .field("read_only", &self.read_only)
+            .field("bind_relabel", &self.bind_relabel)
             .finish()
     }
 }
@@ -256,6 +258,7 @@ impl Mount {
             source: MountSource::Bind(ProtectedValue::new(source)),
             target: ProtectedValue::new(target),
             read_only,
+            bind_relabel: None,
         })
     }
 
@@ -271,6 +274,7 @@ impl Mount {
             source: MountSource::Volume(source),
             target: ProtectedValue::new(target),
             read_only,
+            bind_relabel: None,
         })
     }
 
@@ -291,6 +295,7 @@ impl Mount {
             source: MountSource::Tmpfs(options),
             target: ProtectedValue::new(target),
             read_only,
+            bind_relabel: None,
         })
     }
 
@@ -307,6 +312,29 @@ impl Mount {
     #[must_use]
     pub const fn read_only(&self) -> bool {
         self.read_only
+    }
+
+    /// Add bind-only relabel intent. Its host effects remain conditional.
+    ///
+    /// Legacy Engine `Binds` uses unescaped colons, so only this branch rejects
+    /// colon-containing paths. Ordinary structured mounts keep their path domain.
+    pub fn with_bind_relabel(mut self, relabel: super::BindRelabel) -> Result<Self, IntentError> {
+        let MountSource::Bind(source) = &self.source else {
+            return Err(IntentError::InvalidMount);
+        };
+        if self.bind_relabel.is_some()
+            || source.as_bytes().contains(&b':')
+            || self.target().contains(&b':')
+        {
+            return Err(IntentError::InvalidMount);
+        }
+        self.bind_relabel = Some(relabel);
+        Ok(self)
+    }
+
+    #[must_use]
+    pub const fn bind_relabel(&self) -> Option<super::BindRelabel> {
+        self.bind_relabel
     }
 }
 

@@ -154,6 +154,7 @@ pub enum TargetField {
     PortMultipleBindings,
     PortEphemeral,
     BindMount,
+    BindRelabel,
     TmpfsMount,
     NamedVolume,
     VolumeLabels,
@@ -454,6 +455,13 @@ impl<'a> OperationGraph<'a> {
                             MountSource::Tmpfs(_) => {
                                 require(TargetField::TmpfsMount, Capability::TmpfsMount)?
                             }
+                        }
+                        if let Some(relabel) = mount.bind_relabel() {
+                            let capability = match relabel {
+                                super::BindRelabel::Shared => Capability::BindRelabelShared,
+                                super::BindRelabel::Private => Capability::BindRelabelPrivate,
+                            };
+                            require(TargetField::BindRelabel, capability)?;
                         }
                     }
                     if !container.networks.is_empty() {

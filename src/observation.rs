@@ -72,6 +72,15 @@ pub enum Origin {
     Unknown,
 }
 
+/// Native bind-relabel intent, not evidence of host labeling or enforcement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BindRelabel {
+    /// Shared label intent, represented by the case-sensitive native `z` mode.
+    Shared,
+    /// Private label intent, represented by the case-sensitive native `Z` mode.
+    Private,
+}
+
 /// Values remain private; `Debug` never prints them.
 pub struct ObservedField {
     pub resource: ResourceRef,

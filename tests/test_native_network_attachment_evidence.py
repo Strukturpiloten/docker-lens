@@ -69,7 +69,7 @@ class NetworkAttachmentEvidenceTests(unittest.TestCase):
                 path.unlink()
                 rejected = subprocess.run(result.args, capture_output=True, text=True, check=False, timeout=5,
                                           env={**os.environ, "NATIVE_FIXTURE_IMAGE": legacy.HEALTH_FIXTURE_IMAGE,
-                                               "NATIVE_OUTER_CONTAINER_ID": "f" * 64})
+                                               "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"})
                 self.assertNotEqual(rejected.returncode, 0)
                 self.assertFalse(path.exists())
                 self.assertIn("native evidence rejected", rejected.stderr)

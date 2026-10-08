@@ -1,5 +1,37 @@
 # Verification
 
+## Mandatory configured-bind source proof
+
+The canonical local/main/reviewed-PR/release harness additionally requires
+`native_bind_relabel_tests::live_bind_relabel_configuration_matches_engine`
+as its fourteenth mandatory test. The
+[bind-relabel-config-v1 contract](native-bind-relabel-contract.md) independently
+checks CLI/rendered shared/private read-write/read-only configuration, fresh
+explicit capture/typed decoding, and exact owned-container/source cleanup.
+Synthetic sources stay inside the run-owned outer data volume, never host binds
+or shared fixtures. The configured mode proves no SELinux effect or enforcement.
+
+The canonical harness observes the single dockerd effective UID separately,
+through a fixed read-only query with a root-owned eight-second timeout, bounded
+stdout/stderr and closed failure handling. Its UID is private context, not a
+software pin; it cannot be supplied by the proof itself. The emitter derives
+all expected context from those harness facts and requires the complete private
+four-case/two-role proof before emitting only two configured-retention groups,
+four ordered markers and an explicitly unverified SELinux effect. With preceding
+source producers, future raw counts are Debian 28/44 and upstream 29/46; this is
+not sealed admission. Historical evidence, reviewed-record root schema and
+the 16/26 catalogue remain unchanged.
+
+Conditional complete-artifact schema 2 retains bind-source and SELinux
+obligations; default schema-1 bytes stay unchanged. BoxFerry's consumer and six
+application gates remain separate, and no Lens depends on it. Other Lens
+products/website do not consume this Docker-only private protocol. No package,
+image, Action, toolchain or extraction path changes; existing unique Renovate
+ownership/grouping/approval rules remain effective. Python/core utilities are
+existing runner tools, not newly downloaded dependencies. No native or consumer
+qualification is claimed until final complete gates and fresh independently
+authenticated exact-head four-lane execution pass.
+
 ## Mandatory network attachment source proof
 
 The canonical harness adds
@@ -89,8 +121,28 @@ application readiness, SELinux effects, release or deployment approval.
 The complete inert review artifact has offline exact-byte, schema, order,
 privacy, context-binding, and fail-closed opaque-artifact tests. These verify
 serialization, not destination existence, data migration, or native Engine
-compatibility. See [the version 1 format](complete-artifact.md) and
-[ADR 0009](decisions/0009-complete-inert-artifact.md).
+compatibility. See [the conditional version 1/2 format](complete-artifact.md),
+[ADR 0009](decisions/0009-complete-inert-artifact.md) and
+[ADR 0015](decisions/0015-bind-relabel-intent.md).
+
+DockerLens #94's authored offline bind-relabel controls cover all four literal
+`ro,z`/`rw,z`/`ro,Z`/`rw,Z` request forms at API 1.41 and 1.56 with test-local
+rootful/rootless facts. They also cover unchanged schema-1 bytes, conditional
+schema-2 obligations, mixed structured mounts and external-volume ordering,
+bind-only/colon/duplicate refusal, missing capability/API/mode boundaries,
+bounded source decoding and value-free unsupported capture findings. These
+also cover Mode/RW conflicts in both directions, unavailable-field controls,
+lexical destination collisions across all mount domains, preserved authored
+bytes and distinct-path positives. Supplementary unadmitted schema vocabulary
+is disjoint from the unchanged root reviewed-record contract, and its union
+with root vocabulary must exactly match the Rust enums. Closed parser
+recognition is separately checked without changing active admission. These
+facts cannot authorize production planning. Both new relabel capabilities
+remain absent from reviewed profiles; historical evidence is unchanged.
+Native harness/emitter integration is implemented; independent exact-candidate
+four-lane configured-retention qualification remains open. No SELinux effect proof was executed;
+actual labeling/enforcement requires separately suitable host conditions and
+evidence, not a passing mode-inspection check on SELinux-disabled CI.
 
 Run `./scripts/format-lint.sh --fix` for local formatting and lint feedback.
 The target-module checkpoint has an exact network request regression alongside

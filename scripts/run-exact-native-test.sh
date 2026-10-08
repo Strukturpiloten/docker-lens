@@ -7,7 +7,7 @@ if [[ $# != 2 || ! $1 =~ ^[a-z_]+$ || ! $2 =~ ^[a-z_]+$ ]]; then
 fi
 target=$1
 test_name=$2
-if [[ $target == native_target || $target == native_volume || $target == native_network || $target == native_volume_label || $target == native_identity || $target == native_port || $target == native_health_metadata || $target == native_network_attachment ]]; then
+if [[ $target == native_target || $target == native_volume || $target == native_network || $target == native_volume_label || $target == native_identity || $target == native_port || $target == native_health_metadata || $target == native_network_attachment || $target == native_bind_relabel ]]; then
   # Native target tests need crate-private, test-only capability claims.
   # It is a library unit test; no public constructor is exposed for the harness.
   cargo_target=(--lib)
@@ -59,6 +59,12 @@ if [[ -n $network_attachment_marker ]]; then marker=$network_attachment_marker; 
 network_attachment_causal_marker=
 if [[ $target == native_network_attachment ]]; then
   network_attachment_causal_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: network_attachment_(context|oracle|rendered|cleanup|cleanup_unverified|evidence)$' <<<"$result" | awk '/^DOCKERLENS_NATIVE_CHECK: network_attachment_cleanup(_unverified)?$/ { exit } { last=$0 } END { if (last != "") print last }' || true)
+fi
+bind_relabel_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: bind_relabel_(context|oracle|rendered|cleanup|cleanup_unverified|evidence)$' <<<"$result" | tail -n 1 || true)
+if [[ -n $bind_relabel_marker ]]; then marker=$bind_relabel_marker; fi
+bind_relabel_causal_marker=
+if [[ $target == native_bind_relabel ]]; then
+  bind_relabel_causal_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: bind_relabel_(context|oracle|rendered|cleanup|cleanup_unverified|evidence)$' <<<"$result" | awk '/^DOCKERLENS_NATIVE_CHECK: bind_relabel_cleanup(_unverified)?$/ { exit } { last=$0 } END { if (last != "") print last }' || true)
 fi
 health_metadata_causal_marker=
 if [[ $target == native_health_metadata ]]; then
@@ -150,6 +156,7 @@ if (( run_status != 0 )); then
   if [[ -n $marker ]]; then echo "$marker" >&2; fi
   if [[ -n $health_metadata_causal_marker && $health_metadata_causal_marker != "$marker" ]]; then echo "$health_metadata_causal_marker" >&2; fi
   if [[ -n $network_attachment_causal_marker && $network_attachment_causal_marker != "$marker" ]]; then echo "$network_attachment_causal_marker" >&2; fi
+  if [[ -n $bind_relabel_causal_marker && $bind_relabel_causal_marker != "$marker" ]]; then echo "$bind_relabel_causal_marker" >&2; fi
   if [[ -n $port_diagnostics ]]; then printf '%s' "$port_diagnostics" >&2; fi
   if [[ -n $dns_diag ]]; then echo "$dns_diag" >&2; fi
   if [[ -n $collision_dns_diag ]]; then echo "$collision_dns_diag" >&2; fi
