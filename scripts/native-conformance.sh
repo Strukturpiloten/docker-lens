@@ -340,6 +340,9 @@ fi
 # Keep the image's native daemon launcher. Its second Unix listener is bind-mounted
 # for explicit local test capture; neither listener is exposed over TCP.
 start=(/usr/local/bin/start-dockerd --host=unix:///dockerlens-native/docker.sock)
+if [[ $lane == debian11-rootless ]]; then
+  start+=(--storage-driver=vfs)
+fi
 run_flags=(--image-volume=ignore)
 if [[ $lane == debian11-rootless ]]; then
   run_flags+=(--oom-score-adj=0 --security-opt apparmor=unconfined)
@@ -665,13 +668,15 @@ if [[ $lane == debian11-* ]]; then
 else
   installed_docker_package=
 fi
-python3 - "$run_dir/info.json" "$expected_mode" <<'PY'
+python3 - "$run_dir/info.json" "$expected_mode" "$lane" <<'PY'
 import json, sys
 with open(sys.argv[1], encoding='utf-8') as stream:
     info = json.load(stream)
 rootless = info.get('Rootless') is True or 'name=rootless' in info.get('SecurityOptions', [])
 if rootless != (sys.argv[2] == 'rootless'):
     raise SystemExit('inner daemon mode differs from native lane')
+if sys.argv[3] == 'debian11-rootless' and info.get('Driver') != 'vfs':
+    raise SystemExit('Debian rootless daemon storage driver differs from native lane')
 PY
 
 inner_docker=("${podman_cmd[@]}" exec "$container" docker -H unix:///dockerlens-native/docker.sock)

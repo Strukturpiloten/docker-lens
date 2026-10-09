@@ -1425,6 +1425,59 @@ fi
             self.assertIn("DOCKERLENS_NATIVE_ERROR: selection", result.stderr)
             self.assertNotIn("private", result.stdout + result.stderr)
 
+    def test_vfs_launch_argument_is_isolated_to_debian_rootless(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text()
+        block = "start=(/usr/local/bin/start-dockerd" + source.split(
+            "start=(/usr/local/bin/start-dockerd", 1
+        )[1].split("\nrun_flags=", 1)[0]
+        for lane in (
+            "debian11-rootful",
+            "debian11-rootless",
+            "upstream-rootful",
+            "upstream-rootless",
+        ):
+            with self.subTest(lane=lane):
+                result = subprocess.run(
+                    ["bash", "-c", "set -euo pipefail\nlane=$1\n" + block
+                     + '\nprintf \'%s\\n\' "${start[@]}"\n', "launch-args", lane],
+                    capture_output=True, text=True, timeout=5, check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                expected = [
+                    "/usr/local/bin/start-dockerd",
+                    "--host=unix:///dockerlens-native/docker.sock",
+                ]
+                if lane == "debian11-rootless":
+                    expected.append("--storage-driver=vfs")
+                self.assertEqual(result.stdout.splitlines(), expected)
+
+    def test_vfs_driver_evidence_is_positive_only_for_debian_rootless(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text()
+        marker = 'python3 - "$run_dir/info.json" "$expected_mode" "$lane" <<\'PY\'\n'
+        block = source.split(marker, 1)[1].split("\nPY\n\ninner_docker=", 1)[0]
+        cases = (
+            ("debian11-rootless", "rootless", {"Driver": "vfs"}, True),
+            ("debian11-rootless", "rootless", {"Driver": "overlay2"}, False),
+            ("debian11-rootless", "rootless", {}, False),
+            ("debian11-rootful", "rootful", {"Driver": "overlay2"}, True),
+            ("upstream-rootless", "rootless", {"Driver": "overlay2"}, True),
+            ("upstream-rootful", "rootful", {"Driver": "overlay2"}, True),
+        )
+        for lane, mode, driver, admitted in cases:
+            with self.subTest(lane=lane, driver=driver):
+                with tempfile.TemporaryDirectory() as temporary:
+                    info_path = Path(temporary) / "info.json"
+                    info_path.write_text(json.dumps({
+                        **driver,
+                        "Rootless": mode == "rootless",
+                        "SecurityOptions": [],
+                    }))
+                    result = subprocess.run(
+                        [sys.executable, "-", str(info_path), mode, lane],
+                        input=block, capture_output=True, text=True, timeout=5, check=False,
+                    )
+                    self.assertEqual(result.returncode == 0, admitted, result.stderr)
+
     def test_effective_storage_check_fails_closed_before_native_work(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         block = source.split("\n\napi_get() {", 1)[0].rsplit(
@@ -2052,6 +2105,8 @@ esac
                     self.assertEqual("--security-opt apparmor=unconfined" in args,
                                      lane == "debian11-rootless")
                     self.assertEqual("--oom-score-adj=0" in args, lane == "debian11-rootless")
+                    self.assertEqual("--storage-driver=vfs" in args,
+                                     lane == "debian11-rootless")
                     self.assertIn("/usr/local/bin/start-dockerd", args)
                     self.assertIn("--host=unix:///dockerlens-native/docker.sock", args)
                     self.assertIn(":/dockerlens-native", args)
