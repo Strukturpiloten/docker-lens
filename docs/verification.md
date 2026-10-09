@@ -509,6 +509,9 @@ do not authorize broadening the other lanes' configuration.
 Only `debian11-rootless` passes `--storage-driver=vfs` to its inner Docker
 launcher, and the harness requires `Driver=vfs` in the existing bounded
 `/info` capture. The other three lanes receive no driver override. This is a
+test-store choice, not a production recommendation. VFS deep-copies layer
+contents instead of using copy-on-write, increasing storage and execution costs;
+the existing disk, memory, CPU and time limits still fail closed. This is a
 historical storage-harness baseline, not HTTP-404, host-transport, or BoxFerry
 readiness/product evidence; a separate removal control requires positive
 exact-full-ID CLI inventory, successful native `rm`, successful empty exact-ID
