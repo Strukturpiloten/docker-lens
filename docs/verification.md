@@ -506,6 +506,17 @@ their default volume and AppArmor options. Their independent native runs
 must pass with that unchanged setup; the historical lane's requirements
 do not authorize broadening the other lanes' configuration.
 
+Only `debian11-rootless` passes `--storage-driver=vfs` to its inner Docker
+launcher, and the harness requires `Driver=vfs` in the existing bounded
+`/info` capture. The other three lanes receive no driver override. This is a
+test-store choice, not a production recommendation. VFS deep-copies layer
+contents instead of using copy-on-write, increasing storage and execution costs;
+the existing disk, memory, CPU and time limits still fail closed. This is a
+historical storage-harness baseline, not HTTP-404, host-transport, or BoxFerry
+readiness/product evidence; a separate removal control requires positive
+exact-full-ID CLI inventory, successful native `rm`, successful empty exact-ID
+re-inventory, and fresh server version/API facts.
+
 Run one lane with ./scripts/native-conformance.sh <lane> on Linux with
 rootful Podman through passwordless sudo, at least 8 GiB free, and access
 to the pinned GHCR and BusyBox manifests. The script caps the nested daemon
