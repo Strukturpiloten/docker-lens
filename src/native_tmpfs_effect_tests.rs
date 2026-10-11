@@ -107,6 +107,60 @@ fn create_tmpfs(run: &mut HealthRun, index: usize) {
     );
 }
 
+fn configured_read_only_matches(mount: &Value, expected: bool) -> bool {
+    let Some(mount) = mount.as_object() else {
+        return false;
+    };
+    match mount.get("ReadOnly") {
+        // Engine Mount.ReadOnly uses omitempty: only absent false is equivalent.
+        None => !expected,
+        Some(Value::Bool(actual)) => *actual == expected,
+        Some(_) => false,
+    }
+}
+
+#[test]
+fn configured_read_only_accepts_only_matching_booleans_or_absent_false() {
+    for (mount, expected, accepted) in [
+        (json!({}), false, true),
+        (json!({}), true, false),
+        (json!({"ReadOnly": false}), false, true),
+        (json!({"ReadOnly": false}), true, false),
+        (json!({"ReadOnly": true}), false, false),
+        (json!({"ReadOnly": true}), true, true),
+    ] {
+        assert_eq!(configured_read_only_matches(&mount, expected), accepted);
+    }
+}
+
+#[test]
+fn configured_read_only_rejects_null_nonbooleans_and_nonobjects() {
+    for expected in [false, true] {
+        for field in [
+            Value::Null,
+            json!(0),
+            json!(1),
+            json!("false"),
+            json!([]),
+            json!({}),
+        ] {
+            assert!(!configured_read_only_matches(
+                &json!({"ReadOnly": field}),
+                expected
+            ));
+        }
+        for mount in [
+            Value::Null,
+            json!(false),
+            json!(0),
+            json!("mount"),
+            json!([]),
+        ] {
+            assert!(!configured_read_only_matches(&mount, expected));
+        }
+    }
+}
+
 fn configured_tmpfs(run: &HealthRun, index: usize, base: &Value) -> Value {
     let (size, mode, read_only) = OPTIONS[index / 2];
     let id = run.ids[index].as_deref().unwrap();
@@ -123,7 +177,7 @@ fn configured_tmpfs(run: &HealthRun, index: usize, base: &Value) -> Value {
     assert_eq!(configured.len(), 1);
     assert_eq!(configured[0]["Type"], "tmpfs");
     assert_eq!(configured[0]["Target"], TARGET);
-    assert_eq!(configured[0]["ReadOnly"], read_only);
+    assert!(configured_read_only_matches(&configured[0], read_only));
     assert_eq!(configured[0]["TmpfsOptions"]["SizeBytes"], size);
     assert_eq!(configured[0]["TmpfsOptions"]["Mode"], mode);
     assert!(configured[0]["Source"].is_null() || configured[0]["Source"] == "");

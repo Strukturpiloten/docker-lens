@@ -31,6 +31,15 @@ read-only controls require native EROFS and no file. Defaults/omitted options,
 size-only/mode-only, other numeric values, special permission bits, mixed pairs,
 alternate paths and broader permission/interactions remain unproved.
 
+Configured `HostConfig.Mounts[].ReadOnly` accepts a missing key only for an
+expected false value, matching Moby v20.10.5's `api/types/mount/mount.go`
+`ReadOnly bool` with `json:",omitempty"` (Apache-2.0 upstream source; no source
+copied). A present value must be the matching JSON boolean; null, malformed
+values, or absence for expected true refuse. This serialization distinction
+does not change literal rendered-request equality, active `RW`, or any actual
+filesystem/write/cleanup assertion. The failed run's fixed panic marker alone
+does not establish which value was returned; fresh native lanes remain required.
+
 Both borrow only the unchanged harness-pinned BusyBox image and the lifecycle
 owner/cleanup ledger. The six- and eight-slot ledgers use dynamic exact-name/ID
 allowlists and borrowed-image ownership, not historical derived-image slots.
