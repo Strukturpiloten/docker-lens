@@ -21,6 +21,21 @@ the trap process, exact exits 41/42, full-ID equality, ownership and timing chec
 are unchanged. Only a fresh independently reviewed native run can resolve the
 remaining hypotheses. No failed run or diagnostic marker grants admission.
 
+The second attempt, run `38104683718`, also failed all four lanes. Each retained
+last operation marker named rendered SIGINT causality, followed by cleanup
+without a cleanup-unverified marker or proof. This neither proves completion
+of causality checks nor identifies their failure: the earlier wrapper stopped
+source-location extraction at cleanup and could hide post-cleanup attestation
+failures. Static inspection found that final image/outer
+snapshots used the cleanup read class despite being ordinary proof work. Its
+8-KiB stdout cap differed from the identical initial reads' 65,550-byte cap.
+Both final snapshots now use the initial ordinary-work class, retaining all
+shared stream caps and cleanup reserves. A synthetic 9-KiB stream/reserve
+regression covers this mismatch, and closed lifecycle diagnostics distinguish
+post-observation failures while preserving the first failure and native privacy.
+The actual native payload sizes and second run's root cause remain unconfirmed;
+only fresh exact-head execution and independent review can establish them.
+
 Only complete private proof adds the existing StopSignal singleton to future raw
 emission: identity-v2 Debian lanes then expect 30/47 capability/shape counts and
 upstream lanes 31/49. The current sealed 29/46 and 30/48 catalogue and every

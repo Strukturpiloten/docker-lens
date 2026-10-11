@@ -114,6 +114,108 @@ class StopSignalWiringTests(unittest.TestCase):
         self.assertIn("trap 'exit 41' TERM; trap 'exit 42' INT;", source)
         self.assertEqual(set(re.findall(r'StopStage::\w+ => "(\w+)"', source)), set(STAGES))
 
+    def test_completed_observations_allow_first_post_cleanup_location(self):
+        for phase in ("observations_complete", "cleanup_verified", "borrowed_image", "outer_context", "publication"):
+            for source in ("native_stop_signal_tests", "native_health_metadata_tests"):
+                marker = f"DOCKERLENS_NATIVE_STOP_SIGNAL_LIFECYCLE: {phase}"
+                output = ("DOCKERLENS_NATIVE_STOP_SIGNAL_LIFECYCLE: observations_complete\n"
+                          "DOCKERLENS_NATIVE_CHECK: stop_signal_cleanup\n"
+                          + ("" if phase == "observations_complete" else marker + "\n")
+                          + f"thread '{SELECTED}' (123) panicked at src/{source}.rs:123:4:\nPRIVATE_CANARY\n"
+                          "DOCKERLENS_NATIVE_STOP_SIGNAL_LIFECYCLE: publication\n"
+                          f"thread '{SELECTED}' panicked at src/native_stop_signal_tests.rs:456:8:\n{FAILURE}")
+                result, _ = self.wrapper(output, 101)
+                with self.subTest(phase=phase, source=source):
+                    self.assertIn(marker + "\n", result.stderr)
+                    self.assertEqual(result.stderr.count("DOCKERLENS_NATIVE_STOP_SIGNAL_LIFECYCLE:"), 1)
+                    self.assertIn(f"source={source} line=123 column=4", result.stderr)
+                    self.assertNotIn("line=456", result.stderr)
+                    self.assertNotIn("PRIVATE_CANARY", result.stdout + result.stderr)
+
+    def test_pre_cleanup_failure_cannot_be_replaced_by_lifecycle_or_cleanup_panic(self):
+        marker = "DOCKERLENS_NATIVE_STOP_SIGNAL_STAGE: case=int role=rendered stage=causality"
+        for thread, source in ((SELECTED, "src/native_stop_signal_tests"),
+                               (SELECTED, "src/native_health_metadata_tests"), ("<unnamed>", "private-worker")):
+            for complete_before_panic in (False, True):
+                output = (marker + "\n"
+                          + ("DOCKERLENS_NATIVE_STOP_SIGNAL_LIFECYCLE: observations_complete\n" if complete_before_panic else "")
+                          + f"thread '{thread}' panicked at {source}.rs:123:4:\nPRIVATE_CANARY\n"
+                          f"thread '{SELECTED}' panicked at src/native_stop_signal_tests.rs:234:5:\n"
+                          "DOCKERLENS_NATIVE_STOP_SIGNAL_LIFECYCLE: observations_complete\n"
+                          "DOCKERLENS_NATIVE_CHECK: stop_signal_cleanup\n"
+                          "DOCKERLENS_NATIVE_STOP_SIGNAL_LIFECYCLE: outer_context\n"
+                          f"thread '{SELECTED}' panicked at src/native_stop_signal_tests.rs:456:8:\n{FAILURE}")
+                result, _ = self.wrapper(output, 101)
+                with self.subTest(thread=thread, complete_before_panic=complete_before_panic):
+                    expected = "line=123 column=4" if thread == SELECTED else "location=unavailable"
+                    self.assertIn(expected, result.stderr)
+                    self.assertIn(marker + "\n", result.stderr)
+                    self.assertNotIn("line=234", result.stderr)
+                    self.assertNotIn("line=456", result.stderr)
+                    self.assertNotIn("DOCKERLENS_NATIVE_STOP_SIGNAL_LIFECYCLE:", result.stderr)
+                    self.assertNotIn("PRIVATE_CANARY", result.stdout + result.stderr)
+                    self.assertNotIn("private-worker", result.stdout + result.stderr)
+
+    def test_lifecycle_requires_exact_early_completion_and_closed_values(self):
+        completion = "DOCKERLENS_NATIVE_STOP_SIGNAL_LIFECYCLE: observations_complete"
+        cleanup = "DOCKERLENS_NATIVE_CHECK: stop_signal_cleanup"
+        for prefix in (cleanup, f"{cleanup}\n{completion}", f"{completion} PRIVATE_CANARY\n{cleanup}",
+                       f"{completion}\rPRIVATE_CANARY\n{cleanup}", f"{completion}\n{cleanup} PRIVATE_CANARY"):
+            output = (f"{prefix}\nDOCKERLENS_NATIVE_STOP_SIGNAL_LIFECYCLE: outer_context\n"
+                      f"thread '{SELECTED}' panicked at src/native_health_metadata_tests.rs:456:8:\n{FAILURE}")
+            result, _ = self.wrapper(output, 101)
+            with self.subTest(prefix=prefix):
+                self.assertNotIn("DOCKERLENS_NATIVE_STOP_SIGNAL_LIFECYCLE:", result.stderr)
+                self.assertNotIn("PRIVATE_CANARY", result.stdout + result.stderr)
+                # A malformed cleanup is not a boundary; existing pre-cleanup
+                # exact-source extraction remains independent of lifecycle.
+                if not prefix.endswith(cleanup + " PRIVATE_CANARY"):
+                    self.assertIn("location=unavailable", result.stderr)
+                    self.assertNotIn("line=456", result.stderr)
+        output = (f"{completion}\n{cleanup}\nDOCKERLENS_NATIVE_STOP_SIGNAL_LIFECYCLE: borrowed_image\n"
+                  "DOCKERLENS_NATIVE_STOP_SIGNAL_LIFECYCLE: outer_context PRIVATE_CANARY\n"
+                  "DOCKERLENS_NATIVE_STOP_SIGNAL_LIFECYCLE: outer_context\rPRIVATE_CANARY\n"
+                  "DOCKERLENS_NATIVE_STOP_SIGNAL_LIFECYCLE: PRIVATE_CANARY\n"
+                  f"thread '{SELECTED}' panicked at src/native_stop_signal_tests.rs:123:4:\n{FAILURE}")
+        result, _ = self.wrapper(output, 101)
+        self.assertIn("DOCKERLENS_NATIVE_STOP_SIGNAL_LIFECYCLE: borrowed_image\n", result.stderr)
+        self.assertNotIn("outer_context", result.stderr)
+        self.assertNotIn("PRIVATE_CANARY", result.stdout + result.stderr)
+
+    def test_first_post_cleanup_unknown_panic_stays_unavailable(self):
+        for panic in ("thread '<unnamed>' panicked at private-worker.rs:123:4:",
+                      f"thread '{SELECTED}' panicked at src/private-worker.rs:123:4:",
+                      f"thread '{SELECTED}' panicked at src/native_stop_signal_tests.rs:123:4: PRIVATE_CANARY"):
+            output = ("DOCKERLENS_NATIVE_STOP_SIGNAL_LIFECYCLE: observations_complete\n"
+                      "DOCKERLENS_NATIVE_CHECK: stop_signal_cleanup\n"
+                      "DOCKERLENS_NATIVE_STOP_SIGNAL_LIFECYCLE: outer_context\n"
+                      f"{panic}\nPRIVATE_CANARY\nDOCKERLENS_NATIVE_STOP_SIGNAL_LIFECYCLE: publication\n"
+                      f"thread '{SELECTED}' panicked at src/native_stop_signal_tests.rs:456:8:\n{FAILURE}")
+            result, _ = self.wrapper(output, 101)
+            with self.subTest(panic=panic):
+                self.assertIn("DOCKERLENS_NATIVE_STOP_SIGNAL_LIFECYCLE: outer_context\n", result.stderr)
+                self.assertIn("location=unavailable", result.stderr)
+                self.assertNotIn("line=456", result.stderr)
+                self.assertNotIn("publication", result.stderr)
+                self.assertNotIn("PRIVATE_CANARY", result.stdout + result.stderr)
+                self.assertNotIn("private-worker", result.stdout + result.stderr)
+
+    def test_final_attestations_use_ordinary_work_and_preserve_shared_reserves(self):
+        source = (ROOT / "src/native_stop_signal_tests.rs").read_text()
+        final = source.split('assert!(clean, "verified stop fixture cleanup");', 1)[1]
+        self.assertIn("assert_eq!(image_snapshot(&run, false), base);", final)
+        self.assertIn("assert_eq!(outer_context(&run, false), outer);", final)
+        self.assertNotIn("image_snapshot(&run, true)", source)
+        self.assertNotIn("outer_context(&run, true)", source)
+        self.assertIn("fn final_attestation_stream_requires_ordinary_work_without_spending_cleanup_reserve()", source)
+        self.assertIn("9 * 1024", source)
+        self.assertRegex(source, r'if result\.is_ok\(\) \{\s+eprintln!\("DOCKERLENS_NATIVE_STOP_SIGNAL_LIFECYCLE: observations_complete"\);\s+\}')
+        shared = (ROOT / "src/native_health_metadata_tests.rs").read_text()
+        self.assertIn("stream(stdout, if cleanup { 8192 } else { 65550 })", shared)
+        self.assertIn("stream(stderr, if cleanup { 2048 } else { 8192 })", shared)
+        self.assertIn("const CLEANUP_CALLS: usize = 100;", shared)
+        self.assertIn("const CLEANUP_BYTES: usize = 2 * 1024 * 1024;", shared)
+
 
 if __name__ == "__main__":
     unittest.main()

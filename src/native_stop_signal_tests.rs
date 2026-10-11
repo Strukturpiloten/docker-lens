@@ -430,6 +430,9 @@ fn live_stop_signal_matches_engine() {
         }
         (outer, daemon_uid, base, cases)
     }));
+    if result.is_ok() {
+        eprintln!("DOCKERLENS_NATIVE_STOP_SIGNAL_LIFECYCLE: observations_complete");
+    }
     eprintln!("DOCKERLENS_NATIVE_CHECK: stop_signal_cleanup");
     let clean =
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run.cleanup())).unwrap_or(false);
@@ -440,14 +443,20 @@ fn live_stop_signal_matches_engine() {
         std::panic::resume_unwind(error);
     }
     assert!(clean, "verified stop fixture cleanup");
+    eprintln!("DOCKERLENS_NATIVE_STOP_SIGNAL_LIFECYCLE: cleanup_verified");
     let (outer, daemon_uid, base, cases) = result.unwrap_or_else(|_| unreachable!());
     // The shared base was only borrowed. The image mutation ledger stays empty.
+    eprintln!("DOCKERLENS_NATIVE_STOP_SIGNAL_LIFECYCLE: borrowed_image");
     assert!(
         !run.image_attempted && run.derived_id.is_none(),
         "borrowed image is never owned"
     );
-    assert_eq!(image_snapshot(&run, true), base);
-    assert_eq!(outer_context(&run, true), outer);
+    // Final attestations are ordinary proof work, not removal operations. Use
+    // the same bounded streams as the initial snapshots and retain the ordinary
+    // 46-second, 100-command and 2-MiB cleanup reserves; never reset the budgets.
+    assert_eq!(image_snapshot(&run, false), base);
+    eprintln!("DOCKERLENS_NATIVE_STOP_SIGNAL_LIFECYCLE: outer_context");
+    assert_eq!(outer_context(&run, false), outer);
     let proof = json!({"schema_version":1,"contract":CONTRACT,"context":{
         "candidate_sha":run.candidate,"run_id":run.run,"lane":run.lane,"engine_release":run.engine,
         "rendering_api":run.api,"acquisition_api":if run.lane.starts_with("debian11-") {"1.41"} else {"1.49"},
@@ -456,6 +465,7 @@ fn live_stop_signal_matches_engine() {
         "fixture_image":run.base,"daemon_uid":daemon_uid,"outer":outer},
         "shapes":["StopSignal"],"borrowed_image":{"id":base["id"],"identity":"unchanged","removal":"not_owned"},
         "cases":cases,"cleanup":{"containers":"absent","rounds":2,"outstanding":0,"uncertain":false}});
+    eprintln!("DOCKERLENS_NATIVE_STOP_SIGNAL_LIFECYCLE: publication");
     eprintln!("DOCKERLENS_NATIVE_CHECK: stop_signal_evidence");
     target.publish(&proof);
 }
@@ -497,4 +507,22 @@ fn stop_signal_requires_distinct_trap_exit_and_stopped_state() {
             && PROCESS.contains("while :;")
             && !PROCESS.contains("exit 0")
     );
+}
+
+#[test]
+fn final_attestation_stream_requires_ordinary_work_without_spending_cleanup_reserve() {
+    let response = vec![b'x'; 9 * 1024];
+    let (ordinary, ordinary_overflow) = stream(std::io::Cursor::new(&response), 65550);
+    assert_eq!(ordinary, response);
+    assert!(!ordinary_overflow);
+    let (cleanup, cleanup_overflow) = stream(std::io::Cursor::new(&response), 8192);
+    assert_eq!(cleanup.len(), 8192);
+    assert!(
+        cleanup_overflow,
+        "cleanup streams must still refuse overflow"
+    );
+    assert!(!capture_room(MAX_CALLS - CLEANUP_CALLS, 0, false));
+    assert!(capture_room(MAX_CALLS - CLEANUP_CALLS, 0, true));
+    assert!(!capture_room(0, MAX_BYTES - CLEANUP_BYTES, false));
+    assert!(capture_room(0, MAX_BYTES - CLEANUP_BYTES, true));
 }

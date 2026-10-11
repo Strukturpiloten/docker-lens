@@ -59,6 +59,7 @@ health_metadata_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: health_metadata_(co
 if [[ -n $health_metadata_marker ]]; then marker=$health_metadata_marker; fi
 stop_signal_causal_marker=
 stop_signal_stage=
+stop_signal_lifecycle=
 if [[ $target == native_stop_signal ]]; then
   stop_signal_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: stop_signal_(context|term|int|cleanup|cleanup_unverified|evidence)$' <<<"$result" | tail -n 1 || true)
   if [[ -n $stop_signal_marker ]]; then marker=$stop_signal_marker; fi
@@ -66,6 +67,15 @@ if [[ $target == native_stop_signal ]]; then
   # Retain the last fixed-only operation before the first cleanup, even when a
   # shared/worker-thread panic has no selected-test location. Never copy values.
   stop_signal_stage=$(sed -E '/^DOCKERLENS_NATIVE_CHECK: stop_signal_cleanup(_unverified)?$/q' <<<"$result" | grep -Eo '^DOCKERLENS_NATIVE_STOP_SIGNAL_STAGE: case=(term|int) role=(oracle|rendered) stage=(create|created|start|readiness|running|clock|stop|elapsed|output|inspect|exit|state|causality)$' | tail -n 1 || true)
+  # Only a successful observation boundary before cleanup permits a later
+  # lifecycle diagnostic. Stop at the first panic, including worker panics.
+  stop_signal_lifecycle=$(awk '
+    /^thread .* panicked at / { exit }
+    !cleanup && /^DOCKERLENS_NATIVE_STOP_SIGNAL_LIFECYCLE: observations_complete$/ { complete=1; last=$0; next }
+    /^DOCKERLENS_NATIVE_CHECK: stop_signal_cleanup(_unverified)?$/ { cleanup=1; next }
+    complete && cleanup && /^DOCKERLENS_NATIVE_STOP_SIGNAL_LIFECYCLE: (cleanup_verified|borrowed_image|outer_context|publication)$/ { last=$0 }
+    END { if (complete && cleanup) print last }
+  ' <<<"$result")
 fi
 network_attachment_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: network_attachment_(context|oracle|rendered|cleanup|cleanup_unverified|evidence)$' <<<"$result" | tail -n 1 || true)
 if [[ -n $network_attachment_marker ]]; then marker=$network_attachment_marker; fi
@@ -138,9 +148,14 @@ internal_cleanup=$(grep -Eo '^DOCKERLENS_NATIVE_CLEANUP: internal_proof=(pass|fa
 panic_site=
 case $target in
   native_stop_signal)
-    panic_site=$(sed -nE \
-      -e '/^DOCKERLENS_NATIVE_CHECK: stop_signal_cleanup(_unverified)?$/q' \
-      -e "s/^thread '${selected}'( \([0-9]{1,10}\))? panicked at src\/(native_stop_signal_tests|native_health_metadata_tests)\.rs:([1-9][0-9]{0,5}):([1-9][0-9]{0,3}):$/DOCKERLENS_NATIVE_PANIC: source=\2 line=\3 column=\4/p" <<<"$result" | sed -n '1p')
+    # Select the first panic of any thread before projecting an allowed site;
+    # never substitute a later selected-thread join/resume panic for a worker.
+    panic_site=$(awk '/^DOCKERLENS_NATIVE_CHECK: stop_signal_cleanup(_unverified)?$/ { exit } /^thread .* panicked at / { print; exit }' <<<"$result" | sed -nE \
+      "s/^thread '${selected}'( \([0-9]{1,10}\))? panicked at src\/(native_stop_signal_tests|native_health_metadata_tests)\.rs:([1-9][0-9]{0,5}):([1-9][0-9]{0,3}):$/DOCKERLENS_NATIVE_PANIC: source=\2 line=\3 column=\4/p")
+    if [[ -z $panic_site && -n $stop_signal_lifecycle ]]; then
+      panic_site=$(awk '/^DOCKERLENS_NATIVE_CHECK: stop_signal_cleanup(_unverified)?$/ { cleanup=1 } cleanup && /^thread .* panicked at / { print; exit }' <<<"$result" | sed -nE \
+        "s/^thread '${selected}'( \([0-9]{1,10}\))? panicked at src\/(native_stop_signal_tests|native_health_metadata_tests)\.rs:([1-9][0-9]{0,5}):([1-9][0-9]{0,3}):$/DOCKERLENS_NATIVE_PANIC: source=\2 line=\3 column=\4/p" | sed -n '1p')
+    fi
     if [[ -z $panic_site ]]; then panic_site='DOCKERLENS_NATIVE_PANIC: source=native_stop_signal_tests location=unavailable'; fi
     ;;
   native_bind_relabel)
@@ -195,6 +210,7 @@ if (( run_status != 0 )); then
   if [[ -n $health_metadata_causal_marker && $health_metadata_causal_marker != "$marker" ]]; then echo "$health_metadata_causal_marker" >&2; fi
   if [[ -n $stop_signal_causal_marker && $stop_signal_causal_marker != "$marker" ]]; then echo "$stop_signal_causal_marker" >&2; fi
   if [[ -n $stop_signal_stage ]]; then echo "$stop_signal_stage" >&2; fi
+  if [[ -n $stop_signal_lifecycle ]]; then echo "$stop_signal_lifecycle" >&2; fi
   if [[ -n $network_attachment_causal_marker && $network_attachment_causal_marker != "$marker" ]]; then echo "$network_attachment_causal_marker" >&2; fi
   if [[ -n $bind_relabel_causal_marker && $bind_relabel_causal_marker != "$marker" ]]; then echo "$bind_relabel_causal_marker" >&2; fi
   if [[ -n $external_network_causal_marker && $external_network_causal_marker != "$marker" ]]; then echo "$external_network_causal_marker" >&2; fi

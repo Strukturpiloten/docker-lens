@@ -55,6 +55,14 @@ dimensions, Debian package and daemon mode. Immutable outer ID, owner, image
 digest, bounded setup, volume/socket mounts and owned network are checked before
 and after. Positive test-local capability facts are scaffolding, not admission.
 
+Final borrowed-image and outer-context snapshots are ordinary proof work, using
+the same 65,550-byte stdout/8,192-byte stderr caps as their initial snapshots.
+They are not removals and cannot spend the reserved cleanup calls, bytes or time.
+Actual cleanup retains its smaller 8,192-byte stdout/2,048-byte stderr caps;
+no shared cap or reserve is increased. A synthetic 9-KiB response regression
+distinguishes the read classes and checks that ordinary work still refuses the
+reserved call/byte boundary. This does not establish actual native response sizes.
+
 Only the four owned containers enter the deletion ledger. Removal rechecks ID,
 name, pinned image and owner, deletes by ID and requires two final direct name/ID
 404 rounds. BusyBox is **borrowed**: its image-creation ledger stays empty and its
@@ -75,6 +83,14 @@ Failures reveal only closed stages and bounded source locations, never native te
 The wrapper also retains the last fixed case/role/operation marker before the
 first cleanup marker, including when a shared or worker-thread panic has no
 selected-test location. It never publishes panic payloads or native values.
+An exact successful-observations marker before cleanup additionally enables a
+closed lifecycle diagnostic: observations complete, cleanup verified, borrowed
+image, outer context or publication. This parser stops at the first panic,
+including worker panics. An earlier observation failure remains primary; only
+with that completion boundary may the first post-cleanup panic expose a bounded
+selected-test location in the stop-signal or shared health source. Unknown or
+malformed locations remain unavailable; later cleanup failures cannot replace
+the first failure. These markers diagnose progress, never count as proof.
 
 Root keys are exactly `schema_version` (integer 1), `contract`, `context`, `shapes`
 (`["StopSignal"]`), `borrowed_image`, `cases`, `cleanup`. Context is the existing
