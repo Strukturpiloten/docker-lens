@@ -16,6 +16,10 @@ from native_stop_signal_proof import (
 from native_lifecycle_proof import (
     CONTRACT as LIFECYCLE_CONTRACT, FILENAME as LIFECYCLE_FILENAME, read_lifecycle_proof,
 )
+from native_lifecycle_default_effect_proof import (
+    CONTRACT as LIFECYCLE_DEFAULT_EFFECT_CONTRACT, FILENAME as LIFECYCLE_DEFAULT_EFFECT_FILENAME,
+    read_lifecycle_default_effect_proof,
+)
 from native_runtime_filesystem_proof import (
     CONTRACT as RUNTIME_FILESYSTEM_CONTRACT, FILENAME as RUNTIME_FILESYSTEM_FILENAME,
     read_runtime_filesystem_proof,
@@ -510,6 +514,8 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         read_tmpfs_effect_proof(capture_dir / TMPFS_EFFECT_FILENAME), external_context)
     health_boundary = read_health_start_interval_boundary_proof(
         capture_dir / HEALTH_START_INTERVAL_BOUNDARY_FILENAME, capture_dir, external_context)
+    lifecycle_default_effect_outcomes = list(read_lifecycle_default_effect_proof(
+        capture_dir / LIFECYCLE_DEFAULT_EFFECT_FILENAME, capture_dir, external_context))
 
     # Only these closed mappings follow the complete, validated native proof
     # files above. They extend raw lane evidence, never the reviewed catalogue.
@@ -591,6 +597,10 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         # capability nor shape enters capability_outcome/admitted_shapes.
         "lifecycle_contract": LIFECYCLE_CONTRACT,
         "lifecycle_outcomes": {"admission": "unadmitted", "probes": lifecycle_outcomes},
+        "lifecycle_default_effect_contract": LIFECYCLE_DEFAULT_EFFECT_CONTRACT,
+        "lifecycle_default_effect_outcomes": {
+            "admission": "unadmitted", "probes": lifecycle_default_effect_outcomes,
+        },
         "runtime_filesystem_contract": RUNTIME_FILESYSTEM_CONTRACT,
         "runtime_filesystem_outcomes": {
             "admission": "unadmitted", "init_effect_scope": "pid1_indirection_only",

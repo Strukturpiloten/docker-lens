@@ -41,6 +41,7 @@ class NativeHarnessTests(unittest.TestCase):
             ("native_runtime_filesystem", "live_runtime_filesystem_matches_engine"),
             ("native_tmpfs_effect", "live_tmpfs_effects_match_engine"),
             ("native_health_start_interval_boundary", "live_health_start_interval_boundary_matches_engine"),
+            ("native_lifecycle_default_effect", "live_lifecycle_default_effects_match_engine"),
         ])
         self.assertLess(source.index('native_port live_port_publications_match_engine'),
                         source.index('python3 "$script_dir/native-evidence.py"'))

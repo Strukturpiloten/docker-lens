@@ -2,6 +2,9 @@
 
 use super::*;
 
+#[path = "native_lifecycle_default_effect_tests.rs"]
+mod default_effect;
+
 #[path = "native_runtime_filesystem_tests.rs"]
 mod runtime_filesystem;
 
