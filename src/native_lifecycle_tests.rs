@@ -8,6 +8,9 @@ mod runtime_filesystem;
 #[path = "native_tmpfs_effect_tests.rs"]
 mod tmpfs_effect;
 
+#[path = "native_health_start_interval_boundary_tests.rs"]
+mod health_start_interval_boundary;
+
 const CONTRACT: &str = "lifecycle-v1";
 const FILENAME: &str = "lifecycle-v1.json";
 const CLEANUP_OWNER: &str = "native_conformance_outer_v1";

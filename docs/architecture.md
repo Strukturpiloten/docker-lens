@@ -145,7 +145,7 @@ and historical evidence remain unchanged. ADR 0018 selects authenticated source
 run `37788762974` at Debian 29/46 and upstream 30/48 for candidate rehearsal;
 ADR 0019 retains those groups and adds only the StopSignal singleton.
 Definitions or offline controls grant no native compatibility. Fresh
-authenticated exact-final-candidate sixteen-test four-lane execution,
+authenticated exact-final-candidate twenty-test four-lane execution,
 independent review and the separate ADR 0012/0016/0018/0019 consumer gates remain
 required before ready/merge. No source run qualifies a changed candidate.
 
