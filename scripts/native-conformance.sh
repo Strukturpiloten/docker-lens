@@ -970,6 +970,7 @@ export NATIVE_HEALTH_METADATA_PROOF_PATH="$run_dir/health-metadata.json"
 export NATIVE_NETWORK_ATTACHMENT_PROOF_PATH="$run_dir/network-attachments-v1.json"
 export NATIVE_BIND_RELABEL_PROOF_PATH="$run_dir/bind-relabel-config-v1.json"
 export NATIVE_EXTERNAL_NETWORK_PROOF_PATH="$run_dir/external-network-internal-v1.json"
+export NATIVE_STOP_SIGNAL_PROOF_PATH="$run_dir/stop-signal-v1.json"
 export NATIVE_PORT_START_DIAGNOSTIC_PATH="$run_dir/diagnostics/port-start-window.json"
 export NATIVE_IDENTITY_CANDIDATE_SHA
 NATIVE_IDENTITY_CANDIDATE_SHA=$(git -C "$script_dir/.." rev-parse HEAD)
@@ -979,6 +980,7 @@ export NATIVE_HEALTH_METADATA_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 export NATIVE_NETWORK_ATTACHMENT_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 export NATIVE_BIND_RELABEL_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 export NATIVE_EXTERNAL_NETWORK_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
+export NATIVE_STOP_SIGNAL_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 if [[ $EUID == 0 ]]; then export NATIVE_PODMAN_USE_SUDO=0; else export NATIVE_PODMAN_USE_SUDO=1; fi
 
 port_start_failure_diagnostic() {
@@ -1040,6 +1042,7 @@ fi
 "$(dirname "$0")/run-exact-native-test.sh" native_network_attachment live_network_attachments_match_engine
 "$(dirname "$0")/run-exact-native-test.sh" native_bind_relabel live_bind_relabel_configuration_matches_engine
 "$(dirname "$0")/run-exact-native-test.sh" native_external_network live_external_network_internal_matches_engine
+"$(dirname "$0")/run-exact-native-test.sh" native_stop_signal live_stop_signal_matches_engine
 
 if [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]; then
   candidate_sha=$(git -C "$script_dir/.." rev-parse HEAD)

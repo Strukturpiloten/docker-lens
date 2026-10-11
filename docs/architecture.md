@@ -97,6 +97,16 @@ or ephemeral allocation request. Values remain protected in Debug and
 diagnostics. The renderer still produces only inert request data.
 These modules define independent ownership boundaries for later native work.
 
+The separate [stop-signal-v1 source proof](native-stop-signal-contract.md) adds a
+sixteenth canonical ignored test, not capability admission. CLI/rendered symbolic
+TERM/INT settings must cause distinct actual PID1 trap exits after positive
+readiness, with finite stopping, exact ownership and two cleanup absence rounds.
+It borrows the unchanged pinned BusyBox image and verifies that identity without
+creating or deleting an image. Existing health proof/context/transport/cleanup
+defaults and historical records are preserved. Future raw StopSignal emission
+requires the complete strict private proof; sealed catalogue selection remains
+unchanged until separately reviewed authentic evidence and admission work.
+
 External network intent additionally retains an optional authored
 `expected_internal` requirement as `None`, explicit false, or explicit true.
 It is not an observed flag and creates no request. Both explicit values require
@@ -132,7 +142,7 @@ complete false/true group and closed public projection are added; root schema
 and historical evidence remain unchanged. ADR 0018 selects authenticated source
 run `37788762974` at Debian 29/46 and upstream 30/48 for candidate rehearsal.
 Definitions or offline controls grant no native compatibility. Fresh
-authenticated exact-final-candidate fifteen-test four-lane execution,
+authenticated exact-final-candidate sixteen-test four-lane execution,
 independent review and the separate ADR 0012/0016/0018 consumer gates remain
 required before ready/merge. No source run qualifies a changed candidate.
 

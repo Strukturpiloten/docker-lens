@@ -1,5 +1,31 @@
 # Verification
 
+## Mandatory configured stop-signal source proof
+
+DockerLens #112 adds the separate sixteenth exact ignored test defined by
+[stop-signal-v1](native-stop-signal-contract.md). Independent CLI/rendered explicit
+SIGTERM/SIGINT pairs require actual ready PID1 traps, distinct exits 41/42,
+bounded stop without a per-stop signal override, exact inspected configuration
+and stopped state, native timing, owned-container cleanup with two absence rounds,
+and unchanged borrowed pinned BusyBox identity. No derived image is created or
+deleted. Shared health transport/context/cleanup limits and the historical
+health-metadata-v1 contract remain unchanged.
+
+Only complete private proof adds the existing StopSignal singleton to future raw
+emission: identity-v2 Debian lanes then expect 30/47 capability/shape counts and
+upstream lanes 31/49. The current sealed 29/46 and 30/48 catalogue and every
+historical record remain unchanged. Definitions/offline controls are not evidence:
+fresh full gates, exact-head native lanes and independent authenticated review
+must precede a separate admission change, which still requires fresh final-candidate
+and application-consumer gates. No native compatibility is claimed here.
+
+All local/main/dispatch/release consumers retain the canonical harness and
+nineteen-argument emitter protocol. Read-only Renovate review confirms unchanged
+five-image extraction, Cargo/toolchain/Action ownership, grouping and approvals;
+no pin, dependency, manager or extraction path changed. Other Lens products and
+the website have no consumer of this private Docker proof. BoxFerry owns its
+separate admission/producer-receipt and application-consumer boundaries.
+
 ## Mandatory external-network prerequisite source proof
 
 [The new private contract](native-external-network-contract.md) defines an ignored
@@ -46,7 +72,7 @@ aggregate assertions cannot replace that causal site. If unavailable, a fixed
 `location=unavailable` diagnostic is emitted. Thread labels/IDs, panic messages,
 asserted values, absolute paths and private native output remain suppressed.
 Modern optional thread IDs are recognized but never printed. Failure, causal
-stage, all fifteen test invocations, timeout and cleanup semantics stay unchanged;
+stage, all preceding fifteen test invocations, timeout and cleanup semantics stay unchanged;
 these diagnostics grant no capability or successful result.
 
 This addresses diagnostic incompleteness after main run `37796227350` at
@@ -1201,7 +1227,7 @@ health or start-interval groups. Identity is not arbitrary-image startup or
 host UID mapping; bind configuration is not relabel effect evidence.
 
 This is pre-merge candidate rehearsal admission. Production merge/main/release
-still require complete final-edit gates, fresh fifteen-test four-lane proof
+still require complete final-edit gates, fresh sixteen-test four-lane proof
 on the final candidate, fresh all six actual authored fixture volume-only consumer
 rehearsals required by ADR 0012, and fresh reviewed BoxFerry consumption of
 the actual authored Nextcloud/Supabase binds and desired external expectations.

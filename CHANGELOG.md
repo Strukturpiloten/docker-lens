@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Implement a separate `stop-signal-v1` source-proof producer, strict private
+  validator and mandatory native-harness check for CLI/rendered symbolic TERM/INT
+  PID1 trap effects. Preserve historical health proof, borrowed BusyBox identity
+  and sealed admission. Offline definitions do not establish native support;
+  genuine four-lane evidence, independent review and separate admission are pending.
+
 - Project the first bounded bind-test panic location before cleanup, preserving
   causal stage and nonzero failure. Suppress later aggregate sites and private
   messages; emit a fixed unavailable result when no causal location exists.
