@@ -145,7 +145,7 @@ and historical evidence remain unchanged. ADR 0018 selects authenticated source
 run `37788762974` at Debian 29/46 and upstream 30/48 for candidate rehearsal;
 ADR 0019 retains those groups and adds only the StopSignal singleton.
 Definitions or offline controls grant no native compatibility. Fresh
-authenticated exact-final-candidate sixteen-test four-lane execution,
+authenticated exact-final-candidate twenty-one-test four-lane execution,
 independent review and the separate ADR 0012/0016/0018/0019 consumer gates remain
 required before ready/merge. No source run qualifies a changed candidate.
 
@@ -165,6 +165,15 @@ four-lane native proof, independently reviewed six-authored-fixture volume-only
 consumer rehearsal, reviewed actual Nextcloud/Supabase schema-2 bind consumers
 and complete gates pass. Neither branch applies requests,
 moves data, or claims application acceptance.
+
+The [default/zero lifecycle source-effect contract](native-lifecycle-default-effects-contract.md)
+defines a separate mandatory twenty-first test-only invocation and private proof.
+It starts six actual borrowed-image containers, keeps legacy CLI parser refusal
+separate, and observes stop and health effects under the existing scoped owner
+and original deadline. Debian unknown-member acceptance/legacy scheduling is
+explicitly unsupported/unproven, not modern zero/default equivalence. The emitter
+projects only closed unadmitted dispositions; native qualification remains pending
+and no product capability, shape catalogue or historical record changes.
 
 ## Decoder evidence boundary
 

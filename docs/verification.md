@@ -2,11 +2,21 @@
 
 ## Mandatory unadmitted runtime-cohort source observations
 
-The canonical harness requires nineteen exact ignored invocations, retaining the
+The canonical harness requires twenty-one exact ignored invocations, retaining the
 original first seventeen in order and adding the separate eighteenth
 `native_health_metadata_tests::lifecycle::runtime_filesystem::live_runtime_filesystem_matches_engine`
 and nineteenth
 `native_health_metadata_tests::lifecycle::tmpfs_effect::live_tmpfs_effects_match_engine`.
+The separate twentieth
+`native_health_metadata_tests::lifecycle::health_start_interval_boundary::live_health_start_interval_boundary_matches_engine`
+is defined by the [omitted/zero representation contract](native-health-start-interval-boundary-contract.md).
+It adds no capability, starts no container and does not claim health-scheduler effects.
+The separate twenty-first
+`native_health_metadata_tests::lifecycle::default_effect::live_lifecycle_default_effects_match_engine`
+is defined in the [default/zero source-effect contract](native-lifecycle-default-effects-contract.md).
+It actually starts six containers, but its source/inert validation is not genuine
+native qualification. Legacy unknown-member acceptance is explicitly unsupported,
+never health-zero/default semantic proof; modern equivalence is a separate outcome.
 They are test-only lifecycle children, not product executors. Each receives its
 explicit candidate SHA and fixed private proof path, with its own original
 once-created 180-second invocation deadline. No retry or counter/deadline reset
@@ -51,7 +61,7 @@ off to the bound outer container/storage owner; there is no unsafe Drop retry.
 Final borrowed-image and outer snapshots are ordinary proof work, not cleanup
 reads or renewed budgets. Genuine lanes must retain room for those reads.
 
-All three fixed owner-private proofs are mandatory before any manifest can be
+All five lifecycle-family fixed owner-private proofs are mandatory before any manifest can be
 written. The emitter keeps its nineteen-positional-argument protocol, derives
 fixed filenames from the existing private capture directory and supplies context
 independently from trusted canonical harness facts and observed daemon UID; a
@@ -81,8 +91,11 @@ Readback requires a Config.Healthcheck object: only an absent StartInterval fiel
 or integer zero counts as zero; explicit null and malformed values are rejected.
 Refusal, partial evidence, clock disagreement or jitter ambiguity fails closed.
 
-This is partial shape coverage: StopTimeout explicit zero and omitted values,
-and HealthStartInterval explicit zero are **not proven**. The omitted health
+This existing positive probe is partial shape coverage: StopTimeout explicit zero
+and omitted values, and HealthStartInterval explicit zero are not covered by it.
+The separate twenty-first source probe defines those observations without native
+qualification or capability admission; Debian zero semantics remain unproven.
+The omitted health
 control is comparative evidence, not independent shape admission. The emitter
 adds only `lifecycle_contract` and closed `lifecycle_outcomes`, explicitly marked
 `admission: unadmitted`; capability/shape maps and historical records are
@@ -91,7 +104,7 @@ generic version support and cannot close the larger required-contract issue.
 
 The wrapper retains its nineteen-argument emitter protocol and original
 180-second invocation deadline, exposes only fixed lifecycle diagnostics, and
-preserves the first observation failure. Only the three lifecycle-family invocations
+preserves the first observation failure. Only the five lifecycle-family invocations
 receive the canonical outer-cleanup owner token. An uncertain inner cleanup requests
 outer teardown and fails; its marker never proves completed teardown. The EXIT
 owner now binds outer/sidecar creation IDs, rechecks ID/name/run ownership, removes
@@ -106,7 +119,7 @@ finite binding/readback requests are not a renewed inner cleanup budget.
 
 This integration has source-only Python/mocked-transport and syntax coverage;
 native qualification is pending. Full final-edit gates, fresh authenticated
-exact-head nineteen-test four-lane evidence, independent review, and required
+exact-head twenty-one-test four-lane evidence, independent review, and required
 BoxFerry consumer rehearsals remain mandatory. No runtime cleanup completion,
 capability admission, full migration acceptance or release is claimed.
 
@@ -165,7 +178,7 @@ sanitized receipt establishes trusted-harness assertions/closed success logs,
 not direct private-proof inspection, independent host inventory or separately
 retained effect values. Every historical record remains byte-exact. This is
 candidate rehearsal only: fresh final-edit complete gates, authenticated
-exact-final-candidate nineteen-test four-lane proof and independent review,
+exact-final-candidate twenty-one-test four-lane proof and independent review,
 all six actual authored-fixture volume-only rehearsals and actual
 Nextcloud/Supabase bind/desired-external consumers remain required before
 ready/merge/main admission or release. Old source/consumer receipts grant no
@@ -1393,7 +1406,7 @@ health or start-interval groups. Identity is not arbitrary-image startup or
 host UID mapping; bind configuration is not relabel effect evidence.
 
 This is pre-merge candidate rehearsal admission. Production merge/main/release
-still require complete final-edit gates, fresh nineteen-test four-lane proof
+still require complete final-edit gates, fresh twenty-one-test four-lane proof
 on the final candidate, fresh all six actual authored fixture volume-only consumer
 rehearsals required by ADR 0012, and fresh reviewed BoxFerry consumption of
 the actual authored Nextcloud/Supabase binds and desired external expectations.

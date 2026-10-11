@@ -1,4 +1,4 @@
-"""Closed nineteen-test wiring and emitter controls; no real native calls."""
+"""Closed twenty-one-test wiring and emitter controls; no real native calls."""
 
 import copy
 import json
@@ -41,6 +41,8 @@ EXPECTED_CALLS = [
     ("native_lifecycle", "live_lifecycle_matches_engine"),
     ("native_runtime_filesystem", "live_runtime_filesystem_matches_engine"),
     ("native_tmpfs_effect", "live_tmpfs_effects_match_engine"),
+    ("native_health_start_interval_boundary", "live_health_start_interval_boundary_matches_engine"),
+    ("native_lifecycle_default_effect", "live_lifecycle_default_effects_match_engine"),
 ]
 
 
@@ -77,14 +79,14 @@ sys.exit(int(os.environ["STATUS"]))
             ended = time.time()
             return result, [json.loads(line) for line in calls.read_text().splitlines()], started, ended
 
-    def test_original_seventeen_plus_two_are_exact_and_owner_scope_is_only_three(self):
+    def test_twenty_one_invocations_are_exact_and_owner_scope_is_only_five(self):
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         calls = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source, re.M)
         self.assertEqual(calls, EXPECTED_CALLS)
         owner = source.index('(\n  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1\n')
         end = source.index('\n)\n', owner)
         scoped = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source[owner:end], re.M)
-        self.assertEqual(scoped, EXPECTED_CALLS[-3:])
+        self.assertEqual(scoped, EXPECTED_CALLS[-5:])
         self.assertEqual(source.count('export NATIVE_LIFECYCLE_CLEANUP_OWNER='), 1)
         self.assertLess(source.index('unset NATIVE_LIFECYCLE_CLEANUP_OWNER'), source.index('run-exact-native-test.sh" native_capture'))
         emission = source.index('python3 "$script_dir/native-evidence.py"')
@@ -93,7 +95,9 @@ sys.exit(int(os.environ["STATUS"]))
         self.assertEqual(len(shlex.split(protocol)) - 2, 19)
         for prefix, filename in (("LIFECYCLE", "lifecycle-v1.json"),
                                  ("RUNTIME_FILESYSTEM", "runtime-filesystem-v1.json"),
-                                 ("TMPFS_EFFECT", "tmpfs-effect-v1.json")):
+                                 ("TMPFS_EFFECT", "tmpfs-effect-v1.json"),
+                                 ("HEALTH_START_INTERVAL_BOUNDARY", "health-start-interval-boundary-v1.json"),
+                                 ("LIFECYCLE_DEFAULT_EFFECT", "lifecycle-default-effects-v1.json")):
             self.assertIn(f'export NATIVE_{prefix}_PROOF_PATH="$run_dir/{filename}"', source)
             self.assertIn(f'export NATIVE_{prefix}_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA', source)
             self.assertNotIn(f'"$NATIVE_{prefix}_PROOF_PATH"', protocol)

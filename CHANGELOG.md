@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Implement a separate twenty-first mandatory default/zero lifecycle source probe,
+  strict private reader and closed unadmitted emitter projection. Six actual
+  borrowed-image container slots cover omitted/zero stops and health observations;
+  Debian unknown StartInterval acceptance remains explicitly unsupported/unproven,
+  separate from modern default-equivalence. Preserve positive lifecycle evidence,
+  original deadlines/cleanup owner, catalogue and historical receipts. Source and
+  inert validation do not claim genuine four-lane qualification or admission.
+
 - Select ADR 0019's authenticated configured stop-signal source cohort for
   candidate rehearsal only: add the complete StopSignal singleton while retaining
   every prior group and historical byte, at Debian 30 capabilities/47 shapes and

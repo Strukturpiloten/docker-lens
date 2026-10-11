@@ -82,7 +82,9 @@ class ParameterizedIdentityTests(unittest.TestCase):
                     self.assertEqual(evidence["admitted_shapes"][capability], [capability])
                     self.assertEqual(evidence["capability_outcome"][capability], "available")
                 self.assertNotIn("SupplementaryGroups", evidence["admitted_shapes"])
-                for private in ("dl-identity", RUN_ID, "runtime_uid", "rejection_phase", "configured"):
+                # The closed boundary outcome names may contain "configured";
+                # the private configured-value object must never be published.
+                for private in ("dl-identity", RUN_ID, "runtime_uid", "rejection_phase", '"configured":'):
                     self.assertNotIn(private, destination.read_text())
                 for case in proof_v2()["cases"]:
                     for record in case["containers"]:

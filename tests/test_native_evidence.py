@@ -16,8 +16,10 @@ from test_native_bind_relabel_proof import fixture as bind_relabel_fixture
 from test_native_external_network_proof import fixture as external_network_fixture
 from test_native_stop_signal_proof import fixture as stop_signal_fixture
 from test_native_lifecycle_proof import fixture as lifecycle_fixture
+from test_native_lifecycle_default_effect_proof import fixture as lifecycle_default_effect_fixture
 from test_native_runtime_filesystem_proof import fixture as runtime_filesystem_fixture
 from test_native_tmpfs_effect_proof import fixture as tmpfs_effect_fixture
+from test_native_health_start_interval_boundary_proof import fixture as health_boundary_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/native-evidence.py"
@@ -342,6 +344,10 @@ class NativeEvidenceTests(unittest.TestCase):
                  runtime_filesystem_missing: bool = False,
                  tmpfs_effect: object = None,
                  tmpfs_effect_missing: bool = False,
+                 health_boundary: object = None,
+                 health_boundary_missing: bool = False,
+        lifecycle_default_effect: object = None,
+        lifecycle_default_effect_missing: bool = False,
                  port_proof_override: object = None) -> tuple[subprocess.CompletedProcess[str], Path]:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -362,6 +368,8 @@ class NativeEvidenceTests(unittest.TestCase):
         lifecycle_path = root / "lifecycle-v1.json"
         runtime_filesystem_path = root / "runtime-filesystem-v1.json"
         tmpfs_effect_path = root / "tmpfs-effect-v1.json"
+        health_boundary_path = root / "health-start-interval-boundary-v1.json"
+        lifecycle_default_effect_path = root / "lifecycle-default-effects-v1.json"
         destination = root / "out" / f"{lane}.json"
         version_path.write_text(json.dumps(version), encoding="utf-8")
         shapes_path.write_text(json.dumps(SHAPES if shapes is None else shapes), encoding="utf-8")
@@ -440,6 +448,21 @@ class NativeEvidenceTests(unittest.TestCase):
         if not tmpfs_effect_missing:
             tmpfs_effect_path.write_text(json.dumps(tmpfs if tmpfs_effect is None else tmpfs_effect), encoding="utf-8")
             tmpfs_effect_path.chmod(0o600)
+        boundary = health_boundary_fixture(lane)
+        boundary["context"].update(external["context"])
+        for case in boundary["cases"]:
+            for record in case["records"]:
+                record["image"] = HEALTH_FIXTURE_IMAGE
+        if not health_boundary_missing:
+            health_boundary_path.write_text(json.dumps(boundary if health_boundary is None else health_boundary), encoding="utf-8")
+            health_boundary_path.chmod(0o600)
+        defaults = lifecycle_default_effect_fixture(lane)
+        defaults["context"].update(external["context"])
+        for record in defaults["stop_timeout"] + defaults["health_start_interval"]["containers"]:
+            record["image"] = HEALTH_FIXTURE_IMAGE
+        if not lifecycle_default_effect_missing:
+            lifecycle_default_effect_path.write_text(json.dumps(defaults if lifecycle_default_effect is None else lifecycle_default_effect), encoding="utf-8")
+            lifecycle_default_effect_path.chmod(0o600)
         result = subprocess.run(
             ["python3", str(SCRIPT), str(version_path), str(shapes_path), str(source_path),
              str(network_path), str(volume_path), str(volume_label_path), str(identity_path),
