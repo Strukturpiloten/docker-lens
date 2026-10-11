@@ -44,10 +44,11 @@
    advertised maximum API, negotiated acquisition API, tested rendering API,
    and daemon mode. Catalog discovery returns its SHA-256 evidence key. The
    candidate catalog selects four exact records from independently reviewed
-   run `37788762974`, attempt 1, source
-   `133f2857dac77c60aa79eab1a473c5749fd459ab`, under ADR 0018.
-   Debian admits exactly 29 capabilities/46 shapes; upstream adds only the
-   complete IPv6 port group for 30/48. All five historical cohorts remain
+   run `38106164571`, attempt 1, source
+   `ef8b40c2d392c3983a3ebdc54730812352fe6b39`, under ADR 0019.
+   Only StopSignal is added beyond ADR 0018's retained complete groups.
+   Debian admits exactly 30 capabilities/47 shapes; upstream adds only the
+   complete IPv6 port group for 31/49. All six historical cohorts remain
    immutable. ADR 0012's six actual authored fixture volume-only consumer gate
    and fresh reviewed actual Nextcloud/Supabase bind and desired external
    expectation consumers remain required.
@@ -98,14 +99,15 @@ diagnostics. The renderer still produces only inert request data.
 These modules define independent ownership boundaries for later native work.
 
 The separate [stop-signal-v1 source proof](native-stop-signal-contract.md) adds a
-sixteenth canonical ignored test, not capability admission. CLI/rendered symbolic
+sixteenth canonical ignored test; the proof itself is not capability admission. CLI/rendered symbolic
 TERM/INT settings must cause distinct actual PID1 trap exits after positive
 readiness, with finite stopping, exact ownership and two cleanup absence rounds.
 It borrows the unchanged pinned BusyBox image and verifies that identity without
 creating or deleting an image. Existing health proof/context/transport/cleanup
-defaults and historical records are preserved. Future raw StopSignal emission
-requires the complete strict private proof; sealed catalogue selection remains
-unchanged until separately reviewed authentic evidence and admission work.
+defaults and historical records are preserved. Raw StopSignal emission requires
+the complete strict private proof. ADR 0019 separately selects authenticated
+four-lane source evidence for candidate rehearsal only, not arbitrary-image
+signal effects, fresh final-candidate qualification or application acceptance.
 
 External network intent additionally retains an optional authored
 `expected_internal` requirement as `None`, explicit false, or explicit true.
@@ -140,10 +142,11 @@ requires its fixed private proof against independently derived harness context
 and daemon UID, preserving the nineteen-argument emitter protocol. Only the
 complete false/true group and closed public projection are added; root schema
 and historical evidence remain unchanged. ADR 0018 selects authenticated source
-run `37788762974` at Debian 29/46 and upstream 30/48 for candidate rehearsal.
+run `37788762974` at Debian 29/46 and upstream 30/48 for candidate rehearsal;
+ADR 0019 retains those groups and adds only the StopSignal singleton.
 Definitions or offline controls grant no native compatibility. Fresh
 authenticated exact-final-candidate sixteen-test four-lane execution,
-independent review and the separate ADR 0012/0016/0018 consumer gates remain
+independent review and the separate ADR 0012/0016/0018/0019 consumer gates remain
 required before ready/merge. No source run qualifies a changed candidate.
 
 Created named volumes retain bounded protected authored labels and render a

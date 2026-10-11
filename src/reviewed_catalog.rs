@@ -14,9 +14,9 @@ use crate::version::{
     TargetProfileIdentity,
 };
 
-const SOURCE_CANDIDATE: &str = "133f2857dac77c60aa79eab1a473c5749fd459ab";
+const SOURCE_CANDIDATE: &str = "ef8b40c2d392c3983a3ebdc54730812352fe6b39";
 const SOURCE_RUN: &str =
-    "https://github.com/Strukturpiloten/docker-lens/actions/runs/37788762974/attempts/1";
+    "https://github.com/Strukturpiloten/docker-lens/actions/runs/38106164571/attempts/1";
 
 // This is the exact admission set for the currently compiled cohort. A later
 // reviewed cohort must explicitly replace the set for each lane; extending the
@@ -51,6 +51,7 @@ const REVIEWED_CAPABILITIES: &[Capability] = &[
     Capability::NetworkMultipleAttachment,
     Capability::BindRelabelShared,
     Capability::BindRelabelPrivate,
+    Capability::StopSignal,
 ];
 const REVIEWED_SHAPES: &[NativeCapabilityShape] = &[
     NativeCapabilityShape::StandaloneCreate,
@@ -99,6 +100,7 @@ const REVIEWED_SHAPES: &[NativeCapabilityShape] = &[
     NativeCapabilityShape::BindMountSharedRelabelReadOnly,
     NativeCapabilityShape::BindMountPrivateRelabelReadWrite,
     NativeCapabilityShape::BindMountPrivateRelabelReadOnly,
+    NativeCapabilityShape::StopSignal,
 ];
 const UPSTREAM_CAPABILITIES: &[Capability] = &[
     Capability::StandaloneContainer,
@@ -131,6 +133,7 @@ const UPSTREAM_CAPABILITIES: &[Capability] = &[
     Capability::BindRelabelShared,
     Capability::BindRelabelPrivate,
     Capability::PortHostIpv6,
+    Capability::StopSignal,
 ];
 const UPSTREAM_SHAPES: &[NativeCapabilityShape] = &[
     NativeCapabilityShape::StandaloneCreate,
@@ -181,6 +184,7 @@ const UPSTREAM_SHAPES: &[NativeCapabilityShape] = &[
     NativeCapabilityShape::BindMountPrivateRelabelReadOnly,
     NativeCapabilityShape::FixedIpv6HostPort,
     NativeCapabilityShape::EphemeralIpv6HostPort,
+    NativeCapabilityShape::StopSignal,
 ];
 
 fn expected_admission(
@@ -199,30 +203,30 @@ fn expected_admission(
 const RECORDS: [(NativeEvidenceLane, &str, &str); 4] = [
     (
         NativeEvidenceLane::Debian11Rootful,
-        "60d1a2a4892eb47bc95244194113a1d0fd24c52a1e057ce3469be433106b3d12",
+        "ae366c50cb7213cf62f75b0cee002ec1f81c7ec56b0518053575c0c2f2c74033",
         include_str!(
-            "../docs/evidence/reviewed/sha256/60d1a2a4892eb47bc95244194113a1d0fd24c52a1e057ce3469be433106b3d12.json"
+            "../docs/evidence/reviewed/sha256/ae366c50cb7213cf62f75b0cee002ec1f81c7ec56b0518053575c0c2f2c74033.json"
         ),
     ),
     (
         NativeEvidenceLane::Debian11Rootless,
-        "e014e47b24643055f01349e5a3296a938d4d88f34415f0f9bb4f1286709be29a",
+        "3f207baae9a2fd58f1a02b4f2c0cc282f10ab36b70e1497ed36e7a5c58a954fd",
         include_str!(
-            "../docs/evidence/reviewed/sha256/e014e47b24643055f01349e5a3296a938d4d88f34415f0f9bb4f1286709be29a.json"
+            "../docs/evidence/reviewed/sha256/3f207baae9a2fd58f1a02b4f2c0cc282f10ab36b70e1497ed36e7a5c58a954fd.json"
         ),
     ),
     (
         NativeEvidenceLane::UpstreamRootful,
-        "727db2b40c56df2f03d26b9134a35d31f2837db8ed00d5887371896ab336635e",
+        "1a128e59871f6a22c69618c5c01d5909bf928d3de4f1eb03957af6cd12c6464b",
         include_str!(
-            "../docs/evidence/reviewed/sha256/727db2b40c56df2f03d26b9134a35d31f2837db8ed00d5887371896ab336635e.json"
+            "../docs/evidence/reviewed/sha256/1a128e59871f6a22c69618c5c01d5909bf928d3de4f1eb03957af6cd12c6464b.json"
         ),
     ),
     (
         NativeEvidenceLane::UpstreamRootless,
-        "f951bf1919e7dc039c8900f3c2144e4b71ad05e675ec54fa64406963b37dba35",
+        "90d64a85ec81af3a1b69520555c6c160b70c8631b14519fec28e1b1fb742c95b",
         include_str!(
-            "../docs/evidence/reviewed/sha256/f951bf1919e7dc039c8900f3c2144e4b71ad05e675ec54fa64406963b37dba35.json"
+            "../docs/evidence/reviewed/sha256/90d64a85ec81af3a1b69520555c6c160b70c8631b14519fec28e1b1fb742c95b.json"
         ),
     ),
 ];
@@ -687,6 +691,49 @@ mod tests {
         });
         rejected(|value| {
             value["capabilities"][1]["admitted_shapes"][0] = "NotAShape".into();
+        });
+    }
+
+    #[test]
+    fn stop_signal_requires_the_exact_positive_singleton_on_every_lane() {
+        for (lane, digest, source) in RECORDS {
+            let admitted = record(lane, digest, source);
+            assert!(
+                admitted
+                    .capabilities
+                    .iter()
+                    .any(|fact| fact.capability == Capability::StopSignal)
+            );
+        }
+        assert!(REVIEWED_CAPABILITIES.contains(&Capability::StopSignal));
+        assert!(REVIEWED_SHAPES.contains(&NativeCapabilityShape::StopSignal));
+        rejected(|value| {
+            value["capabilities"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|entry| entry["name"] != "StopSignal");
+        });
+        for shapes in [
+            serde_json::json!([]),
+            serde_json::json!(["StopSignal", "StopSignal"]),
+            serde_json::json!(["HealthStartInterval"]),
+        ] {
+            rejected(|value| {
+                value["capabilities"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|entry| entry["name"] == "StopSignal")
+                    .unwrap()["admitted_shapes"] = shapes.clone();
+            });
+        }
+        rejected(|value| {
+            value["capabilities"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|entry| entry["name"] == "StopSignal")
+                .unwrap()["state"] = "unavailable".into();
         });
     }
 

@@ -36,13 +36,21 @@ post-observation failures while preserving the first failure and native privacy.
 The actual native payload sizes and second run's root cause remain unconfirmed;
 only fresh exact-head execution and independent review can establish them.
 
-Only complete private proof adds the existing StopSignal singleton to future raw
-emission: identity-v2 Debian lanes then expect 30/47 capability/shape counts and
-upstream lanes 31/49. The current sealed 29/46 and 30/48 catalogue and every
-historical record remain unchanged. Definitions/offline controls are not evidence:
-fresh full gates, exact-head native lanes and independent authenticated review
-must precede a separate admission change, which still requires fresh final-candidate
-and application-consumer gates. No native compatibility is claimed here.
+Only complete private proof adds the existing StopSignal singleton to raw
+emission: Debian lanes expect 30/47 capability/shape counts and upstream 31/49.
+Authenticated source run `38106164571`, attempt 1, passed all sixteen exact tests
+once/in-order on all four lanes and independent strict public-projection review.
+[ADR 0019](decisions/0019-reviewed-stop-signal-cohort.md) selects only that
+singleton beyond the retained groups, at those exact sealed counts. The
+sanitized receipt establishes trusted-harness assertions/closed success logs,
+not direct private-proof inspection, independent host inventory or separately
+retained effect values. Every historical record remains byte-exact. This is
+candidate rehearsal only: fresh final-edit complete gates, authenticated
+exact-final-candidate sixteen-test four-lane proof and independent review,
+all six actual authored-fixture volume-only rehearsals and actual
+Nextcloud/Supabase bind/desired-external consumers remain required before
+ready/merge/main admission or release. Old source/consumer receipts grant no
+exemption; no application or full migration acceptance follows.
 
 All local/main/dispatch/release consumers retain the canonical harness and
 nineteen-argument emitter protocol. Read-only Renovate review confirms unchanged
@@ -70,9 +78,10 @@ refuses the whole manifest. Only the complete false/true raw group and fixed
 contract/ordered-probes public projection are added; disconnected schema
 definitions leave the reviewed root and historical records unchanged.
 Authenticated source run `37788762974`, attempt 1, passed all fifteen exact tests
-on all four lanes and strict public projection review. ADR 0018 selects only its
-complete external expectation group beyond the prior admissions: sealed counts
-are Debian 29/46 and upstream 30/48. This source enables candidate rehearsal,
+on all four lanes and strict public projection review. ADR 0018 selected only its
+complete external expectation group beyond the prior admissions: historical
+counts were Debian 29/46 and upstream 30/48. ADR 0019 retains every group/field
+and adds only StopSignal. This source enables candidate rehearsal,
 not final-candidate qualification. Fresh final-edit complete and authenticated
 exact-final-candidate four-lane native gates, independent review and fresh
 ADR 0012/0016/0018 six actual authored-fixture volume rehearsals plus actual
@@ -1212,7 +1221,20 @@ evidence and all earlier worktrees remain unchanged.
 
 ## Reviewed target-profile records
 
-The candidate selects the sixth source cohort from
+The candidate selects the seventh source cohort from
+[run `38106164571`, attempt 1](https://github.com/Strukturpiloten/docker-lens/actions/runs/38106164571/attempts/1),
+source `ef8b40c2d392c3983a3ebdc54730812352fe6b39`, under
+[ADR 0019](decisions/0019-reviewed-stop-signal-cohort.md). Trusted-main dispatcher
+`dd8c29435ff7734a567eb1ed4cda7d422d946bcb` is a separate identity. Its
+[sanitized provenance](evidence/stop-signal-cohort-38106164571.json) binds four
+authenticated archive/raw/envelope digests, seven successful jobs and the
+independently supplied review receipt. Every lane passed sixteen exact tests
+once/in-order. Only the complete StopSignal singleton is added: Debian 30/47
+and upstream 31/49. Debian IPv6 negatives, HealthStartInterval withholding and
+unverified SELinux effects remain unchanged. All six earlier cohorts remain
+byte-exact; fresh final-candidate and actual consumer gates remain mandatory.
+
+The historical sixth source cohort came from
 [run `37788762974`, attempt 1](https://github.com/Strukturpiloten/docker-lens/actions/runs/37788762974/attempts/1),
 source `133f2857dac77c60aa79eab1a473c5749fd459ab`, under
 [ADR 0018](decisions/0018-reviewed-external-network-cohort.md). Dispatcher
@@ -1263,7 +1285,7 @@ All four earlier raw/reviewed cohorts stay byte-exact: original run
 `36451790131` (10/20), #68 `37209363801` (13/23), #70 `37214738475` (14/24)
 and #88 `37439627551` (16/26), each attempt 1. Together with application source
 `37706460127`, these are the five retained historical cohorts. The active catalogue
-still has four identities, selecting only the ADR 0018 source cohort. Four raw
+still has four identities, selecting only the ADR 0019 source cohort. Four raw
 members and four reviewed envelopes are added under the existing digest paths.
 
 Records conform to [the schema](native-evidence.schema.json) and bind lane,
@@ -1274,10 +1296,10 @@ groups, wrong-group shapes, nonpositive outcomes and wrong source/mode/API/
 evidence fail closed. Schema/parser vocabulary, markers and caller facts alone
 grant no claim. Downloaded ZIP hashes matched independent API digests; each
 single named raw member is retained byte-for-byte under its SHA-256 name.
-Reviewed schema-1 envelopes use two-space UTF-8 JSON with a trailing newline;
+New reviewed schema-1 envelopes use compact UTF-8 JSON with a trailing newline;
 their separate content hashes become evidence keys without self-reference.
 
-Python regressions pin all six cohorts, exact active selection, source
+Python regressions pin all seven cohorts, exact active selection, source
 projections, complete groups and Debian IPv6 negatives. Public Rust controls
 exercise every new group with sealed profiles, request order, protected values
 and all mixed schema-3/source/SELinux obligations. Existing schema-1/2/request behavior

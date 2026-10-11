@@ -1,10 +1,12 @@
 # Native configured stop-signal contract
 
 `stop-signal-v1` is a separate DockerLens #112 test-only source proof. It neither
-changes `health-metadata-v1` nor admits a sealed capability. Existing `StopSignal`
+changes `health-metadata-v1` nor itself admits a sealed capability. Existing `StopSignal`
 target/evidence vocabulary is reused; no health/start-interval, timeout, init or
 other runtime capability is promoted. Product planning/rendering stays inert.
-Historical raw/reviewed records and active catalogue selection stay exact.
+Historical raw/reviewed records stay byte-exact. ADR 0019 separately selects
+authenticated four-lane source run `38106164571`, attempt 1, for candidate
+rehearsal only; final-candidate and actual consumer gates remain required.
 
 ## Independent effect oracle
 
@@ -108,9 +110,10 @@ cryptographic attestation against a privileged writer.
 The nineteen-argument emitter remains unchanged. After sixteen required tests,
 the fixed new private file permits only `stop_signal_contract`,
 `stop_signal_probes` and the complete raw StopSignal singleton. With identity-v2
-and prescribed Debian IPv6 boundaries, future raw counts are Debian **30/47**
-capabilities/shapes and upstream **31/49**. Current sealed counts stay **29/46**
-and **30/48**. Counts and offline controls are expectations, never native proof.
+and prescribed Debian IPv6 boundaries, raw counts are Debian **30/47**
+capabilities/shapes and upstream **31/49**. ADR 0019 admits those exact sealed
+counts, retaining all prior fields/groups and adding only StopSignal. Counts
+and offline controls alone are expectations, never native proof.
 
 Local/main/reviewed-dispatch/release share `scripts/native-conformance.sh`; no
 consumer workflow or nineteen-argument caller changes. Other Lens products and
@@ -128,8 +131,12 @@ upstream implementation was copied or translated. Existing pinned CLI/Engine
 versions, image provenance and licenses remain under ADR 0004 and dependency
 policy; no external source or binary is redistributed by this change.
 
-Fresh complete gates, genuine exact-head four-lane execution and independent
-authenticated evidence review must precede any separate admission change. That
-change still needs fresh final-candidate and BoxFerry consumer gates. Historical
-health evidence and the original #112 observation cannot substitute for this
-proof. This infrastructure claims no native compatibility, release or deployment.
+Authenticated source run `38106164571` and independent sanitized review establish
+trusted-harness/public-projection source evidence, not direct private-proof or
+host-inventory inspection. ADR 0019's changed admission candidate still needs
+fresh final-edit complete gates, genuine authenticated exact-final-candidate
+sixteen-test four-lane execution and independent review, all six actual authored
+volume-only rehearsals, and actual Nextcloud/Supabase bind/desired-external
+consumer gates. Historical health/source evidence, the failed #112 observations
+and old consumer receipts cannot substitute. No application/native-final-candidate,
+release, publication or deployment qualification follows from source admission.

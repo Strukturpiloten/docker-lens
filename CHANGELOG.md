@@ -2,11 +2,21 @@
 
 ## Unreleased
 
+- Select ADR 0019's authenticated configured stop-signal source cohort for
+  candidate rehearsal only: add the complete StopSignal singleton while retaining
+  every prior group and historical byte, at Debian 30 capabilities/47 shapes and
+  upstream 31/49. Preserve absent-field rendering, Debian IPv6 negatives,
+  HealthStartInterval withholding and unverified SELinux obligations. Fresh
+  final-candidate complete/sixteen-test four-lane and all actual volume/bind/
+  desired-external consumer gates still block ready/merge/main admission/release;
+  no application or native-final-candidate qualification is claimed.
+
 - Implement a separate `stop-signal-v1` source-proof producer, strict private
   validator and mandatory native-harness check for CLI/rendered symbolic TERM/INT
   PID1 trap effects. Preserve historical health proof, borrowed BusyBox identity
-  and sealed admission. Offline definitions do not establish native support;
-  genuine four-lane evidence, independent review and separate admission are pending.
+  and historical admission. Offline definitions do not establish native support;
+  ADR 0019 separately selects independently authenticated source evidence for
+  candidate rehearsal, with fresh final-candidate and consumer gates still pending.
 
 - Project the first bounded bind-test panic location before cleanup, preserving
   causal stage and nonzero failure. Suppress later aggregate sites and private

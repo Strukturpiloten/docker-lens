@@ -315,6 +315,46 @@ EXTERNAL_ARCHIVES = {
     }
 }
 
+STOP_SIGNAL_CANDIDATE = "ef8b40c2d392c3983a3ebdc54730812352fe6b39"
+STOP_SIGNAL_RUN = "https://github.com/Strukturpiloten/docker-lens/actions/runs/38106164571/attempts/1"
+STOP_SIGNAL_SHAPES = {**EXTERNAL_SHAPES, "StopSignal": ["StopSignal"]}
+STOP_SIGNAL_UPSTREAM_SHAPES = {**EXTERNAL_UPSTREAM_SHAPES, "StopSignal": ["StopSignal"]}
+STOP_SIGNAL_MANIFESTS = {
+    "debian11-rootful": "27053783c2ad3dc4b28bdcd2a5a0411c859d9dcf51d4d9317f73bde8b3cb4898",
+    "debian11-rootless": "e8c453818f346d606175d474805ea3d3757b0eb8729e7f566ef1fc27a89dbf57",
+    "upstream-rootful": "7237f2381503997226970a2038ca43e569959b6175ce3aa69906245e41138d67",
+    "upstream-rootless": "04173f9bf854c4e3b8a6e19f3fb58d5155dd75bf69076893397ae55e5983f216"
+}
+STOP_SIGNAL_REVIEWED = {
+    "debian11-rootful": "ae366c50cb7213cf62f75b0cee002ec1f81c7ec56b0518053575c0c2f2c74033",
+    "debian11-rootless": "3f207baae9a2fd58f1a02b4f2c0cc282f10ab36b70e1497ed36e7a5c58a954fd",
+    "upstream-rootful": "1a128e59871f6a22c69618c5c01d5909bf928d3de4f1eb03957af6cd12c6464b",
+    "upstream-rootless": "90d64a85ec81af3a1b69520555c6c160b70c8631b14519fec28e1b1fb742c95b"
+}
+STOP_SIGNAL_ARCHIVES = {
+    "dockerlens-native-debian11-rootful": {
+        "id": 11689868005,
+        "digest": "sha256:1c2682b644c05ea8cb430d9680058faa5ba777173f3a8a726ff46c0d623ed2ca",
+        "size": 2117
+    },
+    "dockerlens-native-debian11-rootless": {
+        "id": 11689927730,
+        "digest": "sha256:8c126a3fb99b7ad3295de776686cd7b26e365187f438d0a8123914b485dcbe17",
+        "size": 2117
+    },
+    "dockerlens-native-upstream-rootful": {
+        "id": 11689318158,
+        "digest": "sha256:0e6eaea917364e744aa81ba92e51a9fc51d5f374c8f76915164e66557fe357cd",
+        "size": 2063
+    },
+    "dockerlens-native-upstream-rootless": {
+        "id": 11689542993,
+        "digest": "sha256:61ddf6969bc8cfba8b77c598f0959e08765a69a86747adb8eda0ea6e48b2013d",
+        "size": 2064
+    }
+}
+STOP_SIGNAL_REVIEW_RECEIPT_SHA256 = "02485e90a14b0ab44c03388931a0532b904fa963e1b90c05f03113b892637cb1"
+
 # Every reviewed cohort must be deliberately added here with its exact run,
 # candidate, four identities, four envelope digests, four raw manifest digests,
 # and exact reviewed capability-to-shape admissions. A later new shape needs
@@ -350,6 +390,12 @@ COHORTS = {
         lane: (EXTERNAL_REVIEWED[lane], EXTERNAL_MANIFESTS[lane],
                EXPECTED_IDENTITIES[lane], EXTERNAL_SHAPES if lane.startswith("debian11-")
                else EXTERNAL_UPSTREAM_SHAPES)
+        for lane in LANES
+    },
+    (STOP_SIGNAL_CANDIDATE, STOP_SIGNAL_RUN): {
+        lane: (STOP_SIGNAL_REVIEWED[lane], STOP_SIGNAL_MANIFESTS[lane],
+               EXPECTED_IDENTITIES[lane], STOP_SIGNAL_SHAPES if lane.startswith("debian11-")
+               else STOP_SIGNAL_UPSTREAM_SHAPES)
         for lane in LANES
     },
 }
@@ -429,7 +475,25 @@ def hashed_json(kind: str) -> list[tuple[Path, dict]]:
         content = path.read_bytes()
         if path.stem != hashlib.sha256(content).hexdigest():
             raise ValueError(f"content digest does not match filename: {path}")
-        result.append((path, json.loads(content)))
+        result.append((path, strict_public_json(content)))
+    return result
+
+
+def strict_public_json(raw: bytes) -> dict:
+    def pairs(rows):
+        result = {}
+        for key, value in rows:
+            if key in result:
+                raise ValueError("duplicate public key")
+            result[key] = value
+        return result
+
+    def nonfinite(_value):
+        raise ValueError("nonfinite public value")
+
+    result = json.loads(raw, object_pairs_hook=pairs, parse_constant=nonfinite)
+    if type(result) is not dict:
+        raise ValueError("public root")
     return result
 
 
@@ -499,7 +563,8 @@ def bind_cohorts(
                         or manifest.get("identity_cases") != IDENTITY_CASES
                         or manifest.get("identity_probes") != IDENTITY_PROBES):
                     raise ValueError("identity admission requires complete parameterized proof markers")
-            if cohort_key in ((APPLICATION_CANDIDATE, APPLICATION_RUN), (EXTERNAL_CANDIDATE, EXTERNAL_RUN)):
+            if cohort_key in ((APPLICATION_CANDIDATE, APPLICATION_RUN), (EXTERNAL_CANDIDATE, EXTERNAL_RUN),
+                              (STOP_SIGNAL_CANDIDATE, STOP_SIGNAL_RUN)):
                 if (manifest["admitted_shapes"] != expected_admission
                         or manifest["capability_outcome"] != dict.fromkeys(expected_admission, "available")
                         or manifest.get("bind_relabel_selinux_effect") != "unverified"):
@@ -521,10 +586,14 @@ def bind_cohorts(
                                      reason="nested_default_bridge_ipv6_runtime_binding_absent")
                 if manifest.get("port_probes") != ports:
                     raise ValueError("application admission requires exact per-lane port outcomes")
-            if cohort_key == (EXTERNAL_CANDIDATE, EXTERNAL_RUN):
+            if cohort_key in ((EXTERNAL_CANDIDATE, EXTERNAL_RUN), (STOP_SIGNAL_CANDIDATE, STOP_SIGNAL_RUN)):
                 if (manifest.get("external_network_contract") != "external-network-internal-v1"
                         or manifest.get("external_network_probes") != EXTERNAL_EXPECTATION_SHAPES):
                     raise ValueError("external admission requires complete independent source projection")
+            if cohort_key == (STOP_SIGNAL_CANDIDATE, STOP_SIGNAL_RUN):
+                if (manifest.get("stop_signal_contract") != "stop-signal-v1"
+                        or manifest.get("stop_signal_probes") != ["StopSignal"]):
+                    raise ValueError("stop signal admission requires complete independent source projection")
             if record["schema_version"] != 1 or record["native_manifest_artifact_name"] != f"dockerlens-native-{lane}":
                 raise ValueError("reviewed record schema or lane artifact differs")
             fields = (
@@ -576,14 +645,14 @@ class ReviewedCatalogTests(unittest.TestCase):
         self.assertEqual(section.count("NativeEvidenceLane::"), 4)
         reviewed = {
             lane: path.stem
-            for lane, (path, _) in indexed_cohorts(hashed_json("reviewed"), COHORTS)[EXTERNAL_CANDIDATE, EXTERNAL_RUN].items()
+            for lane, (path, _) in indexed_cohorts(hashed_json("reviewed"), COHORTS)[STOP_SIGNAL_CANDIDATE, STOP_SIGNAL_RUN].items()
         }
         self.assertEqual({match["variant"] for match in tuples}, set(LANE_VARIANTS))
         for match in tuples:
             lane = LANE_VARIANTS[match["variant"]]
             self.assertEqual(match["digest"], reviewed[lane])
             self.assertEqual(match["path_digest"], reviewed[lane])
-            self.assertEqual(match["digest"], EXTERNAL_REVIEWED[lane])
+            self.assertEqual(match["digest"], STOP_SIGNAL_REVIEWED[lane])
 
     def test_four_records_bind_exact_manifest_bytes_and_shapes(self) -> None:
         native_records = hashed_json("native")
@@ -685,11 +754,11 @@ class ReviewedCatalogTests(unittest.TestCase):
 
     def test_compiled_candidate_has_exact_per_lane_complete_groups(self) -> None:
         source = (ROOT / "src/reviewed_catalog.rs").read_text(encoding="utf-8")
-        self.assertIn(f'const SOURCE_CANDIDATE: &str = "{EXTERNAL_CANDIDATE}";', source)
-        self.assertIn(f'"{EXTERNAL_RUN}";', source)
+        self.assertIn(f'const SOURCE_CANDIDATE: &str = "{STOP_SIGNAL_CANDIDATE}";', source)
+        self.assertIn(f'"{STOP_SIGNAL_RUN}";', source)
         for prefix, expected, counts in (
-                ("REVIEWED", EXTERNAL_SHAPES, (29, 46)),
-                ("UPSTREAM", EXTERNAL_UPSTREAM_SHAPES, (30, 48))):
+                ("REVIEWED", STOP_SIGNAL_SHAPES, (30, 47)),
+                ("UPSTREAM", STOP_SIGNAL_UPSTREAM_SHAPES, (31, 49))):
             capabilities = source.split(f"const {prefix}_CAPABILITIES:", 1)[1].split("];", 1)[0]
             shapes = source.split(f"const {prefix}_SHAPES:", 1)[1].split("];", 1)[0]
             capability_names = re.findall(r"Capability::(\w+)", capabilities)
@@ -757,7 +826,7 @@ class ReviewedCatalogTests(unittest.TestCase):
 
     def test_application_cohort_binds_exact_groups_and_preserves_all_history(self) -> None:
         reviewed = bind_cohorts(hashed_json("reviewed"), hashed_json("native"), COHORTS)
-        self.assertEqual(len(reviewed), 6)
+        self.assertEqual(len(reviewed), 7)
         for lane, (path, record) in reviewed[APPLICATION_CANDIDATE, APPLICATION_RUN].items():
             expected = APPLICATION_SHAPES if lane.startswith("debian11-") else APPLICATION_UPSTREAM_SHAPES
             self.assertEqual(path.stem, APPLICATION_REVIEWED[lane])
@@ -833,7 +902,7 @@ class ReviewedCatalogTests(unittest.TestCase):
     def test_identity_cohort_adds_only_two_singleton_groups_and_preserves_history(self) -> None:
         reviewed = bind_cohorts(hashed_json("reviewed"), hashed_json("native"), COHORTS)
         raw = indexed_native_manifests(hashed_json("native"), COHORTS)
-        self.assertEqual(len(reviewed), 6)
+        self.assertEqual(len(reviewed), 7)
         self.assertEqual(len(IDENTITY_SHAPES), 16)
         self.assertEqual(sum(map(len, IDENTITY_SHAPES.values())), 26)
         self.assertEqual(set(IDENTITY_SHAPES) - set(LABEL_SHAPES),
@@ -1147,7 +1216,7 @@ class ReviewedCatalogTests(unittest.TestCase):
     def test_external_cohort_is_exact_append_only_and_publicly_authenticated(self) -> None:
         native = hashed_json("native")
         reviewed = bind_cohorts(hashed_json("reviewed"), native, COHORTS)
-        self.assertEqual(len(reviewed), 6)
+        self.assertEqual(len(reviewed), 7)
         raw = indexed_native_manifests(native, COHORTS)
         for lane, (path, record) in reviewed[EXTERNAL_CANDIDATE, EXTERNAL_RUN].items():
             expected = EXTERNAL_SHAPES if lane.startswith("debian11-") else EXTERNAL_UPSTREAM_SHAPES
@@ -1202,6 +1271,130 @@ class ReviewedCatalogTests(unittest.TestCase):
                 for child in value:
                     closed_public(child)
         closed_public(provenance)
+
+    def test_stop_signal_cohort_retains_every_prior_field_and_adds_only_singleton(self) -> None:
+        native = hashed_json("native")
+        raw = indexed_native_manifests(native, COHORTS)
+        reviewed = bind_cohorts(hashed_json("reviewed"), native, COHORTS)
+        self.assertEqual(len(reviewed), 7)
+        for lane in LANES:
+            manifest = deepcopy(raw[STOP_SIGNAL_MANIFESTS[lane]][1])
+            prior_manifest = raw[EXTERNAL_MANIFESTS[lane]][1]
+            self.assertEqual(manifest.pop("stop_signal_contract"), "stop-signal-v1")
+            self.assertEqual(manifest.pop("stop_signal_probes"), ["StopSignal"])
+            self.assertEqual(manifest["admitted_shapes"].pop("StopSignal"), ["StopSignal"])
+            self.assertEqual(manifest["capability_outcome"].pop("StopSignal"), "available")
+            manifest["candidate_sha"] = prior_manifest["candidate_sha"]
+            self.assertEqual(manifest, prior_manifest)
+
+            path, record = reviewed[STOP_SIGNAL_CANDIDATE, STOP_SIGNAL_RUN][lane]
+            prior_record = reviewed[EXTERNAL_CANDIDATE, EXTERNAL_RUN][lane][1]
+            expected = STOP_SIGNAL_SHAPES if lane.startswith("debian11-") else STOP_SIGNAL_UPSTREAM_SHAPES
+            self.assertEqual(path.stem, STOP_SIGNAL_REVIEWED[lane])
+            self.assertEqual(record["native_manifest_sha256"], STOP_SIGNAL_MANIFESTS[lane])
+            self.assertEqual({entry["name"]: entry["admitted_shapes"] for entry in record["capabilities"]}, expected)
+            self.assertEqual((len(expected), sum(map(len, expected.values()))),
+                             (30, 47) if lane.startswith("debian11-") else (31, 49))
+            self.assertNotIn("HealthStartInterval", expected)
+            retained = deepcopy(record)
+            retained["capabilities"] = [entry for entry in retained["capabilities"] if entry["name"] != "StopSignal"]
+            for field in ("candidate_sha", "run_url", "native_manifest_sha256"):
+                retained[field] = prior_record[field]
+            self.assertEqual(retained, prior_record)
+
+    def test_stop_signal_public_provenance_binds_independent_sanitized_receipt(self) -> None:
+        path = ROOT / "docs/evidence/stop-signal-cohort-38106164571.json"
+        provenance = strict_public_json(path.read_bytes())
+        receipt = provenance["independent_source_review"]
+        self.assertEqual(receipt["receipt_sha256"], STOP_SIGNAL_REVIEW_RECEIPT_SHA256)
+        self.assertEqual(receipt["receipt_path"], "docs/evidence/stop-signal-independent-review-38106164571.json")
+        raw = (ROOT / receipt["receipt_path"]).read_bytes()
+        metadata = strict_public_json(raw)
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), STOP_SIGNAL_REVIEW_RECEIPT_SHA256)
+        self.assertEqual(metadata["candidate_sha"], STOP_SIGNAL_CANDIDATE)
+        self.assertEqual(provenance["candidate_sha"], STOP_SIGNAL_CANDIDATE)
+        self.assertEqual(provenance["run"], metadata["run"])
+        self.assertEqual(provenance["run"]["id"], 38106164571)
+        self.assertEqual(provenance["run"]["attempt"], 1)
+        self.assertEqual(provenance["run"]["dispatcher_sha"], "dd8c29435ff7734a567eb1ed4cda7d422d946bcb")
+        self.assertNotEqual(provenance["candidate_sha"], provenance["run"]["dispatcher_sha"])
+        self.assertEqual(provenance["repository"], {"id": 1387403220, "full_name": "Strukturpiloten/docker-lens"})
+        self.assertEqual(provenance["pull_request"], 113)
+        self.assertEqual(provenance["review"]["native_tests_each_lane"], 16)
+        self.assertEqual(provenance["selinux_effect"], "unverified")
+        self.assertEqual(provenance["admission_counts"],
+                         {"debian": {"capabilities": 30, "shapes": 47},
+                          "upstream": {"capabilities": 31, "shapes": 49}})
+        self.assertTrue(all(metadata["independent_api_authentication"].values()))
+        closed = metadata["closed_log_observations"]
+        self.assertTrue(closed["all_sixteen_required_tests_passed_once_in_order_each_lane"])
+        self.assertTrue(closed["native_success_emitted_after_outer_cleanup_each_lane"])
+        self.assertFalse(closed["raw_logs_saved"])
+        self.assertFalse(closed["raw_logs_printed"])
+        self.assertEqual(provenance["jobs"], metadata["jobs"])
+        self.assertEqual({job["id"] for job in provenance["jobs"]},
+                         {114372045090, 114372068304, 114373096696, 114373096727,
+                          114373096744, 114373096796, 114373578811})
+        self.assertTrue(all(job["conclusion"] == "success" for job in provenance["jobs"]))
+        self.assertEqual(len(provenance["artifacts"]), 4)
+        for artifact in provenance["artifacts"]:
+            lane = artifact["name"].removeprefix("dockerlens-native-")
+            independent = STOP_SIGNAL_ARCHIVES[artifact["name"]]
+            self.assertEqual((artifact["id"], artifact["archive_api_digest"], artifact["size"]),
+                             (independent["id"], independent["digest"], independent["size"]))
+            self.assertFalse(artifact["expired"])
+            self.assertEqual(artifact["member_name"], lane + ".json")
+            self.assertEqual(artifact["native_manifest_sha256"], STOP_SIGNAL_MANIFESTS[lane])
+            self.assertEqual(artifact["reviewed_record_sha256"], STOP_SIGNAL_REVIEWED[lane])
+        self.assertIn("sixteen", provenance["remaining_gates"][1])
+        self.assertIn("six", provenance["remaining_gates"][2])
+        self.assertIn("Nextcloud and Supabase", provenance["remaining_gates"][3])
+        self.assertFalse(provenance["maintenance"]["pin_changes"])
+        for source, digest in metadata["source_sha256"].items():
+            if source.startswith(("scripts/", "src/")):
+                self.assertEqual(hashlib.sha256((ROOT / source).read_bytes()).hexdigest(), digest)
+
+    def test_stop_signal_refuses_missing_duplicate_unrelated_and_nonpositive_evidence(self) -> None:
+        for lane in LANES:
+            for side in ("raw", "reviewed"):
+                for fault in ("missing", "empty", "duplicate", "health_interval", "unavailable", "unknown"):
+                    reviewed = deepcopy(hashed_json("reviewed"))
+                    native = deepcopy(hashed_json("native"))
+                    manifest = next(value for path, value in native if path.stem == STOP_SIGNAL_MANIFESTS[lane])
+                    record = next(value for path, value in reviewed if path.stem == STOP_SIGNAL_REVIEWED[lane])
+                    entry = next(value for value in record["capabilities"] if value["name"] == "StopSignal")
+                    if fault == "missing":
+                        if side == "raw":
+                            del manifest["admitted_shapes"]["StopSignal"]
+                        else:
+                            record["capabilities"].remove(entry)
+                    elif fault in ("unavailable", "unknown"):
+                        if side == "raw":
+                            manifest["capability_outcome"]["StopSignal"] = fault
+                        else:
+                            entry["state"] = fault
+                    else:
+                        shapes = {"empty": [], "duplicate": ["StopSignal", "StopSignal"],
+                                  "health_interval": ["HealthStartInterval"]}[fault]
+                        if side == "raw":
+                            manifest["admitted_shapes"]["StopSignal"] = shapes
+                        else:
+                            entry["admitted_shapes"] = shapes
+                    with self.subTest(lane=lane, side=side, fault=fault), self.assertRaises(ValueError):
+                        bind_cohorts(reviewed, native, COHORTS)
+            for key, value in (("stop_signal_contract", None), ("stop_signal_contract", "other-v1"),
+                               ("stop_signal_probes", []), ("stop_signal_probes", ["StopSignal"] * 2)):
+                native = deepcopy(hashed_json("native"))
+                manifest = next(value for path, value in native if path.stem == STOP_SIGNAL_MANIFESTS[lane])
+                manifest[key] = value
+                with self.subTest(lane=lane, key=key, value=value), self.assertRaises(ValueError):
+                    bind_cohorts(hashed_json("reviewed"), native, COHORTS)
+
+    def test_stop_signal_public_reader_refuses_duplicate_and_nonfinite_metadata(self) -> None:
+        for raw in (b'{"x":1,"x":1}', b'{"x":{"a":1,"a":2}}', b'{"x":NaN}',
+                    b'{"x":Infinity}', b'{"x":-Infinity}', b'[]'):
+            with self.subTest(raw=raw), self.assertRaises(ValueError):
+                strict_public_json(raw)
 
     def test_external_group_rejects_partial_created_bridge_and_nonpositive_evidence(self) -> None:
         for lane in LANES:
