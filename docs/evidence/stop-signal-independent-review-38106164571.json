@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "kind": "independent-native-source-evidence-review",
+  "repository": "Strukturpiloten/docker-lens",
+  "repository_id": 1387403220,
+  "decision": "GO for later candidate source-cohort admission review only",
+  "material_findings": [],
+  "candidate_sha": "ef8b40c2d392c3983a3ebdc54730812352fe6b39",
+  "pull_request": {"number": 113, "state": "open", "draft": true, "same_repository": true, "head_matches_candidate": true},
+  "run": {"id": 38106164571, "attempt": 1, "event": "workflow_dispatch", "workflow_path": ".github/workflows/native-validation.yml", "workflow_ref": "refs/heads/main", "dispatcher_sha": "dd8c29435ff7734a567eb1ed4cda7d422d946bcb", "status": "completed", "conclusion": "success"},
+  "actors": {"actor_id": 1497405, "triggering_actor_id": 1497405, "login": "TheRealBecks", "current_permission": "admin"},
+  "independent_api_authentication": {"run_and_attempt": true, "seven_jobs_successful": true, "every_job_step_successful": true, "four_exact_artifact_names": true, "archive_digests_match_api": true, "current_source_pr_head_verified": true},
+  "jobs": [
+    {"id": 114372045090, "role": "admission", "conclusion": "success", "closed_candidate_binding": true, "closed_admission_success": true},
+    {"id": 114372068304, "role": "exact_candidate_offline_gate", "conclusion": "success", "closed_candidate_binding": true},
+    {"id": 114373096696, "role": "upstream-rootful", "conclusion": "success", "closed_candidate_binding": true, "closed_admission_success": true},
+    {"id": 114373096727, "role": "upstream-rootless", "conclusion": "success", "closed_candidate_binding": true, "closed_admission_success": true},
+    {"id": 114373096744, "role": "debian11-rootless", "conclusion": "success", "closed_candidate_binding": true, "closed_admission_success": true},
+    {"id": 114373096796, "role": "debian11-rootful", "conclusion": "success", "closed_candidate_binding": true, "closed_admission_success": true},
+    {"id": 114373578811, "role": "aggregate", "conclusion": "success", "closed_candidate_binding": true, "closed_admission_success": true}
+  ],
+  "artifacts": [
+    {"lane": "debian11-rootful", "id": 11689868005, "name": "dockerlens-native-debian11-rootful", "archive_sha256": "1c2682b644c05ea8cb430d9680058faa5ba777173f3a8a726ff46c0d623ed2ca", "raw_sha256": "27053783c2ad3dc4b28bdcd2a5a0411c859d9dcf51d4d9317f73bde8b3cb4898", "size": 2117, "member": "debian11-rootful.json", "capabilities": 30, "shapes": 47},
+    {"lane": "debian11-rootless", "id": 11689927730, "name": "dockerlens-native-debian11-rootless", "archive_sha256": "8c126a3fb99b7ad3295de776686cd7b26e365187f438d0a8123914b485dcbe17", "raw_sha256": "e8c453818f346d606175d474805ea3d3757b0eb8729e7f566ef1fc27a89dbf57", "size": 2117, "member": "debian11-rootless.json", "capabilities": 30, "shapes": 47},
+    {"lane": "upstream-rootful", "id": 11689318158, "name": "dockerlens-native-upstream-rootful", "archive_sha256": "0e6eaea917364e744aa81ba92e51a9fc51d5f374c8f76915164e66557fe357cd", "raw_sha256": "7237f2381503997226970a2038ca43e569959b6175ce3aa69906245e41138d67", "size": 2063, "member": "upstream-rootful.json", "capabilities": 31, "shapes": 49},
+    {"lane": "upstream-rootless", "id": 11689542993, "name": "dockerlens-native-upstream-rootless", "archive_sha256": "61ddf6969bc8cfba8b77c598f0959e08765a69a86747adb8eda0ea6e48b2013d", "raw_sha256": "04173f9bf854c4e3b8a6e19f3fb58d5155dd75bf69076893397ae55e5983f216", "size": 2064, "member": "upstream-rootless.json", "capabilities": 31, "shapes": 49}
+  ],
+  "artifact_reader": {"held_no_follow_bounded_stable_reads": true, "exact_one_member_per_archive": true, "archive_member_equals_raw_file": true, "duplicate_keys_and_nonfinite_numbers_rejected": true, "canonical_public_bytes_verified": true, "exact_public_root_keys_verified": true},
+  "retained_cohort_comparison": {"run_id": 37788762974, "attempt": 1, "provenance_sha256": "e78b026be1dde356c9bded600be9e3228a40b9e21654cc66df8fc9782d69829b", "historical_raw_digests_verified": true, "all_retained_fields_identical_on_all_four_lanes": true, "excluded_identity_field": "candidate_sha", "added_public_fields": ["stop_signal_contract", "stop_signal_probes"], "only_added_capability_and_complete_shape": "StopSignal", "debian_ipv6_negative_boundary_unchanged": true, "health_start_interval_withheld": true},
+  "exact_profiles": {"debian_engine": "20.10.5+dfsg1", "debian_package": "20.10.5+dfsg1-1+deb11u2", "debian_acquisition_and_rendering_api": "1.41", "upstream_engine": "29.8.1", "upstream_acquisition_api": "1.49", "upstream_rendering_and_advertised_api": "1.56", "rootful_and_rootless_lanes": true},
+  "closed_log_observations": {"all_sixteen_required_tests_passed_once_in_order_each_lane": true, "native_success_emitted_after_outer_cleanup_each_lane": true, "private_presence_retention_marker_absent_each_lane": true, "raw_logs_saved": false, "raw_logs_printed": false, "terminal_escape_sequences_suppressed_before_closed_extraction": true},
+  "source_contract_review": {"literal_cli_and_rendered_wire_oracles": true, "positive_pid1_readiness_before_stop": true, "term_exit_41_and_int_exit_42_asserted": true, "no_per_stop_signal_override_or_forced_kill_positive": true, "finite_monotonic_and_native_timing_asserted": true, "observation_completion_requires_caught_success": true, "exact_id_name_image_owner_cleanup_asserted": true, "two_absence_rounds_before_private_publication": true, "borrowed_busybox_not_owned_and_unchanged_asserted": true, "immutable_outer_context_initial_and_final_binding_asserted": true, "original_shared_budgets_and_deadlines_unchanged": true, "private_schema_and_public_projection_reviewed": true},
+  "source_sha256": {
+    "scripts/native-conformance.sh": "668d0e65ad4219f39f65f6acc5cad161a5ee6e78e84b1652fe57b23b3479ca3d",
+    "scripts/run-exact-native-test.sh": "009ecf8dcb8b190a970078a15db6f8117351039f98f3876c0ef7df453a0b8887",
+    "src/native_stop_signal_tests.rs": "842a5949ef4d3bba473ec74a8fe08d9669ce129f28f1ee3bf1521a1c5032cd4e",
+    "src/native_health_metadata_tests.rs": "367342e248885c489506052f45b7c772effa15cb2eef380bbe74fb78d325004a",
+    "scripts/native_stop_signal_proof.py": "986a21809632c4c9913be55b8692cd2c9628aff15a808fe5471ec5feb4d9c218",
+    "scripts/native-evidence.py": "2865232387bf7913eced53c7d13ecfedfb3b15c3b9b6d8245bcd6e031e065c6f",
+    "trusted_dispatcher_workflow": "bafd6f7c74dbe0353ce0dae0fc65129ef4258e143628daf0e38e41fb8b6137ec",
+    "trusted_dispatcher_admission": "dc60f867bcf648b18d32f90481582c6a6ca0e5319290aefabdb09a1485851e3a"
+  },
+  "limitations": [
+    "Trusted harness execution and public projection review, not direct private-proof inspection or cryptographic daemon attestation.",
+    "Inner two-round cleanup and image/outer readback are established by reviewed source assertions and successful exact tests; no independent host resource inventory was performed.",
+    "Successful test execution establishes source assertions, not separately retained private effect timestamps, IDs, UIDs or payload measurements.",
+    "This source run does not qualify a changed admission/final candidate, authorize merge/release/deployment, or establish full application/migration acceptance."
+  ],
+  "remaining_gates": [
+    "Separately reviewed source-cohort/catalogue admission change.",
+    "Complete final-edit gates and fresh authenticated exact-final-candidate sixteen-test four-lane native proof.",
+    "ADR 0018 and ADR 0012 fresh all-six-authored-fixture volume-only consumer rehearsals.",
+    "Fresh reviewed actual Nextcloud/Supabase bind and desired external-expectation consumers, retaining privacy and unverified SELinux obligations.",
+    "BoxFerry source-bound admission/producer receipts and separate application acceptance."
+  ]
+}

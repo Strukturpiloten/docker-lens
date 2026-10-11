@@ -30,11 +30,11 @@ fn exact_profiles_admit_reviewed_prerequisites_but_keep_other_groups_closed() {
         let resolved = catalog.resolve(profile).unwrap();
         assert_eq!(
             resolved.evidence().candidate_sha(),
-            "133f2857dac77c60aa79eab1a473c5749fd459ab"
+            "ef8b40c2d392c3983a3ebdc54730812352fe6b39"
         );
         assert_eq!(
             resolved.evidence().run_url(),
-            "https://github.com/Strukturpiloten/docker-lens/actions/runs/37788762974/attempts/1"
+            "https://github.com/Strukturpiloten/docker-lens/actions/runs/38106164571/attempts/1"
         );
         for capability in [
             Capability::StandaloneContainer,
@@ -66,6 +66,7 @@ fn exact_profiles_admit_reviewed_prerequisites_but_keep_other_groups_closed() {
             Capability::NetworkMultipleAttachment,
             Capability::BindRelabelShared,
             Capability::BindRelabelPrivate,
+            Capability::StopSignal,
         ] {
             assert!(resolved.supports(capability));
         }
@@ -85,7 +86,6 @@ fn exact_profiles_admit_reviewed_prerequisites_but_keep_other_groups_closed() {
             Capability::SupplementaryGroups,
             Capability::ReadOnlyRootfs,
             Capability::ContainerInit,
-            Capability::StopSignal,
             Capability::StopTimeout,
             Capability::MemoryLimit,
             Capability::PidsLimit,
@@ -356,6 +356,58 @@ fn complete_application(profile: &TargetProfile, intent: &TargetIntent) -> serde
     assert_eq!(complete["requests"], serde_json::json!(requests));
     assert_eq!(complete["context"], reviewed_prerequisite_context(profile));
     complete
+}
+
+#[test]
+fn sealed_stop_signal_renders_exact_symbolic_values_and_preserves_absence() {
+    let catalog = TargetCapabilityCatalog::reviewed();
+    for profile in catalog.profiles() {
+        for signal in [None, Some("SIGTERM"), Some("SIGINT")] {
+            let mut container = application_container();
+            container.settings.stop_signal =
+                signal.map(|value| Argument::new(value.as_bytes().to_vec()).unwrap());
+            let intent = container_target(container);
+            let resolved = catalog.resolve(profile).unwrap();
+            let graph = DockerPlanner.plan(&intent, &resolved).unwrap();
+            let artifact = DockerApiRenderer.render(&graph).unwrap();
+            let mut body = serde_json::json!({
+                "Image": "unverified-image:fixture",
+                "HostConfig": {},
+            });
+            if let Some(value) = signal {
+                body["StopSignal"] = value.into();
+            }
+            let request: serde_json::Value = serde_json::from_slice(artifact.bytes()).unwrap();
+            assert_eq!(
+                request,
+                serde_json::json!({
+                    "method": "POST",
+                    "path": format!(
+                        "/v{}.{}/containers/create?name=private-application",
+                        profile.rendering_api_version().major,
+                        profile.rendering_api_version().minor
+                    ),
+                    "body": body,
+                })
+            );
+            let complete: serde_json::Value =
+                serde_json::from_slice(&artifact.complete_bytes().unwrap()).unwrap();
+            assert_eq!(complete["schema_version"], 1);
+            assert_eq!(complete["requests"], serde_json::json!([request]));
+            assert_eq!(complete["prerequisites"], serde_json::json!([]));
+            assert_eq!(complete["context"], reviewed_prerequisite_context(profile));
+            for debug in [
+                format!("{intent:?}"),
+                format!("{graph:?}"),
+                format!("{artifact:?}"),
+            ] {
+                assert!(!debug.contains("private-application"));
+                for value in ["SIGTERM", "SIGINT"] {
+                    assert!(!debug.contains(value));
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -895,16 +947,16 @@ fn reviewed_prerequisite_context(profile: &TargetProfile) -> serde_json::Value {
                 "20.10.5+dfsg1",
                 "1.41",
                 "1.41",
-                "60d1a2a4892eb47bc95244194113a1d0fd24c52a1e057ce3469be433106b3d12",
-                "e014e47b24643055f01349e5a3296a938d4d88f34415f0f9bb4f1286709be29a",
+                "ae366c50cb7213cf62f75b0cee002ec1f81c7ec56b0518053575c0c2f2c74033",
+                "3f207baae9a2fd58f1a02b4f2c0cc282f10ab36b70e1497ed36e7a5c58a954fd",
             ),
             EngineBuild::Upstream => (
                 serde_json::json!({"kind": "upstream"}),
                 "29.8.1",
                 "1.56",
                 "1.49",
-                "727db2b40c56df2f03d26b9134a35d31f2837db8ed00d5887371896ab336635e",
-                "f951bf1919e7dc039c8900f3c2144e4b71ad05e675ec54fa64406963b37dba35",
+                "1a128e59871f6a22c69618c5c01d5909bf928d3de4f1eb03957af6cd12c6464b",
+                "90d64a85ec81af3a1b69520555c6c160b70c8631b14519fec28e1b1fb742c95b",
             ),
         };
     let (mode, evidence_key) = match profile.mode() {
@@ -1005,16 +1057,16 @@ fn literal_label_artifact(profile: &TargetProfile) -> &'static str {
     // Independently authored wire expectations, not bytes obtained from the renderer.
     match (profile.identity().build(), profile.mode()) {
         (EngineBuild::DebianPackage(_), DaemonMode::Rootful) => {
-            "{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"debian_package\",\"revision\":\"20.10.5+dfsg1-1+deb11u2\"},\"engine_release\":\"20.10.5+dfsg1\",\"advertised_api_version\":\"1.41\",\"acquisition_api_version\":\"1.41\",\"rendering_api_version\":\"1.41\",\"daemon_mode\":\"rootful\",\"evidence_sha256\":\"60d1a2a4892eb47bc95244194113a1d0fd24c52a1e057ce3469be433106b3d12\"},\"requests\":[{\"method\":\"POST\",\"path\":\"/v1.41/volumes/create\",\"body\":{\"Name\":\"candidate-volume\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"empty\":\"\",\"private-key\":\"Grüße\\\"\\\\\\n\"}}}],\"prerequisites\":[]}\n"
+            "{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"debian_package\",\"revision\":\"20.10.5+dfsg1-1+deb11u2\"},\"engine_release\":\"20.10.5+dfsg1\",\"advertised_api_version\":\"1.41\",\"acquisition_api_version\":\"1.41\",\"rendering_api_version\":\"1.41\",\"daemon_mode\":\"rootful\",\"evidence_sha256\":\"ae366c50cb7213cf62f75b0cee002ec1f81c7ec56b0518053575c0c2f2c74033\"},\"requests\":[{\"method\":\"POST\",\"path\":\"/v1.41/volumes/create\",\"body\":{\"Name\":\"candidate-volume\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"empty\":\"\",\"private-key\":\"Grüße\\\"\\\\\\n\"}}}],\"prerequisites\":[]}\n"
         }
         (EngineBuild::Upstream, DaemonMode::Rootful) => {
-            "{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"upstream\"},\"engine_release\":\"29.8.1\",\"advertised_api_version\":\"1.56\",\"acquisition_api_version\":\"1.49\",\"rendering_api_version\":\"1.56\",\"daemon_mode\":\"rootful\",\"evidence_sha256\":\"727db2b40c56df2f03d26b9134a35d31f2837db8ed00d5887371896ab336635e\"},\"requests\":[{\"method\":\"POST\",\"path\":\"/v1.56/volumes/create\",\"body\":{\"Name\":\"candidate-volume\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"empty\":\"\",\"private-key\":\"Grüße\\\"\\\\\\n\"}}}],\"prerequisites\":[]}\n"
+            "{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"upstream\"},\"engine_release\":\"29.8.1\",\"advertised_api_version\":\"1.56\",\"acquisition_api_version\":\"1.49\",\"rendering_api_version\":\"1.56\",\"daemon_mode\":\"rootful\",\"evidence_sha256\":\"1a128e59871f6a22c69618c5c01d5909bf928d3de4f1eb03957af6cd12c6464b\"},\"requests\":[{\"method\":\"POST\",\"path\":\"/v1.56/volumes/create\",\"body\":{\"Name\":\"candidate-volume\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"empty\":\"\",\"private-key\":\"Grüße\\\"\\\\\\n\"}}}],\"prerequisites\":[]}\n"
         }
         (EngineBuild::DebianPackage(_), DaemonMode::Rootless) => {
-            "{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"debian_package\",\"revision\":\"20.10.5+dfsg1-1+deb11u2\"},\"engine_release\":\"20.10.5+dfsg1\",\"advertised_api_version\":\"1.41\",\"acquisition_api_version\":\"1.41\",\"rendering_api_version\":\"1.41\",\"daemon_mode\":\"rootless\",\"evidence_sha256\":\"e014e47b24643055f01349e5a3296a938d4d88f34415f0f9bb4f1286709be29a\"},\"requests\":[{\"method\":\"POST\",\"path\":\"/v1.41/volumes/create\",\"body\":{\"Name\":\"candidate-volume\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"empty\":\"\",\"private-key\":\"Grüße\\\"\\\\\\n\"}}}],\"prerequisites\":[]}\n"
+            "{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"debian_package\",\"revision\":\"20.10.5+dfsg1-1+deb11u2\"},\"engine_release\":\"20.10.5+dfsg1\",\"advertised_api_version\":\"1.41\",\"acquisition_api_version\":\"1.41\",\"rendering_api_version\":\"1.41\",\"daemon_mode\":\"rootless\",\"evidence_sha256\":\"3f207baae9a2fd58f1a02b4f2c0cc282f10ab36b70e1497ed36e7a5c58a954fd\"},\"requests\":[{\"method\":\"POST\",\"path\":\"/v1.41/volumes/create\",\"body\":{\"Name\":\"candidate-volume\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"empty\":\"\",\"private-key\":\"Grüße\\\"\\\\\\n\"}}}],\"prerequisites\":[]}\n"
         }
         (EngineBuild::Upstream, DaemonMode::Rootless) => {
-            "{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"upstream\"},\"engine_release\":\"29.8.1\",\"advertised_api_version\":\"1.56\",\"acquisition_api_version\":\"1.49\",\"rendering_api_version\":\"1.56\",\"daemon_mode\":\"rootless\",\"evidence_sha256\":\"f951bf1919e7dc039c8900f3c2144e4b71ad05e675ec54fa64406963b37dba35\"},\"requests\":[{\"method\":\"POST\",\"path\":\"/v1.56/volumes/create\",\"body\":{\"Name\":\"candidate-volume\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"empty\":\"\",\"private-key\":\"Grüße\\\"\\\\\\n\"}}}],\"prerequisites\":[]}\n"
+            "{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"upstream\"},\"engine_release\":\"29.8.1\",\"advertised_api_version\":\"1.56\",\"acquisition_api_version\":\"1.49\",\"rendering_api_version\":\"1.56\",\"daemon_mode\":\"rootless\",\"evidence_sha256\":\"90d64a85ec81af3a1b69520555c6c160b70c8631b14519fec28e1b1fb742c95b\"},\"requests\":[{\"method\":\"POST\",\"path\":\"/v1.56/volumes/create\",\"body\":{\"Name\":\"candidate-volume\",\"Labels\":{\"io.boxferry.owner\":\"fixture\",\"empty\":\"\",\"private-key\":\"Grüße\\\"\\\\\\n\"}}}],\"prerequisites\":[]}\n"
         }
         (_, DaemonMode::Unknown) => panic!("reviewed profiles must bind a daemon mode"),
     }

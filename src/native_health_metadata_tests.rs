@@ -59,6 +59,11 @@ macro_rules! assert_eq {
     };
 }
 
+// Declare after the closed assertion macro so child assertions cannot format
+// captured native values. Historical health proof behavior is unchanged.
+#[path = "native_stop_signal_tests.rs"]
+mod stop_signal;
+
 fn required(name: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| panic!("closed health metadata environment"))
 }
@@ -297,6 +302,13 @@ struct HealthExpectation {
 
 impl HealthRun {
     fn new() -> Self {
+        Self::new_for(
+            "NATIVE_HEALTH_METADATA_CANDIDATE_SHA",
+            "NATIVE_HEALTH_METADATA_DEADLINE_EPOCH",
+        )
+    }
+
+    fn new_for(candidate_key: &str, deadline_key: &str) -> Self {
         let outer = required("NATIVE_OUTER_CONTAINER");
         let run = outer
             .strip_prefix("dl-native-")
@@ -336,7 +348,7 @@ impl HealthRun {
                 "rootful"
             })
         );
-        let candidate = required("NATIVE_HEALTH_METADATA_CANDIDATE_SHA");
+        let candidate = required(candidate_key);
         assert!(
             candidate.len() == 40
                 && candidate
@@ -344,7 +356,7 @@ impl HealthRun {
                     .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()),
             "exact candidate"
         );
-        let cutoff = required("NATIVE_HEALTH_METADATA_DEADLINE_EPOCH")
+        let cutoff = required(deadline_key)
             .parse::<u64>()
             .unwrap_or_else(|_| panic!("shared suite cutoff"));
         let remaining = (UNIX_EPOCH + Duration::from_secs(cutoff))
@@ -911,7 +923,7 @@ impl HealthRun {
 }
 
 impl HealthRun {
-    fn context(&mut self) {
+    fn context(&mut self) -> u32 {
         eprintln!("DOCKERLENS_NATIVE_CHECK: health_metadata_context");
         let (status, version) = self.api("GET", "/version", None, false);
         assert_eq!(status, 200);
@@ -1102,6 +1114,7 @@ impl HealthRun {
         .collect();
         self.engine = engine;
         self.facts = Some(facts);
+        uid
     }
 
     fn owned_image(&self, image: &Value, id: Option<&str>) -> bool {
@@ -1492,16 +1505,21 @@ struct ProofTarget {
     directory: PathBuf,
     path: PathBuf,
     held: File,
+    filename: &'static str,
 }
 
 impl ProofTarget {
     fn new() -> Self {
+        Self::new_for("NATIVE_HEALTH_METADATA_PROOF_PATH", "health-metadata.json")
+    }
+
+    fn new_for(path_key: &str, filename: &'static str) -> Self {
         let directory = PathBuf::from(required("NATIVE_CAPTURE_DIR"));
-        let path = PathBuf::from(required("NATIVE_HEALTH_METADATA_PROOF_PATH"));
+        let path = PathBuf::from(required(path_key));
         assert!(
             directory.is_absolute()
                 && directory.canonicalize().is_ok_and(|real| real == directory)
-                && path == directory.join("health-metadata.json"),
+                && path == directory.join(filename),
             "exact private proof location"
         );
         assert!(
@@ -1518,6 +1536,7 @@ impl ProofTarget {
             directory,
             path,
             held,
+            filename,
         };
         target.check();
         target
@@ -1556,8 +1575,9 @@ impl ProofTarget {
             "bounded private proof"
         );
         let relative = PathBuf::from(format!(
-            "/proc/self/fd/{}/health-metadata.json",
-            std::os::fd::AsRawFd::as_raw_fd(&self.held)
+            "/proc/self/fd/{}/{}",
+            std::os::fd::AsRawFd::as_raw_fd(&self.held),
+            self.filename
         ));
         let mut file = OpenOptions::new()
             .write(true)

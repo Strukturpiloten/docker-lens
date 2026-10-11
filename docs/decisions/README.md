@@ -20,8 +20,10 @@ Durable native boundaries and evidence/admission contracts:
 - [0016: Reviewed application cohort](0016-reviewed-application-cohort.md)
 - [0017: External-network internal expectation](0017-external-network-internal-expectation.md)
 - [0018: Reviewed external-network cohort](0018-reviewed-external-network-cohort.md)
+- [0019: Reviewed configured stop-signal cohort](0019-reviewed-stop-signal-cohort.md)
 
-ADR 0018 selects only the complete external expectation group for candidate
-rehearsal. ADR 0017's None/false/true, conditional schema-3 and pure snapshot
-boundaries remain; fresh final-candidate native and actual consumer gates still
-block ready/merge. Historical evidence and earlier obligations are preserved.
+ADR 0019 selects only the complete StopSignal singleton beyond ADR 0018's
+retained groups for candidate rehearsal. ADR 0017's None/false/true, conditional
+schema-3 and pure snapshot boundaries remain; fresh final-candidate sixteen-test
+native and actual consumer gates still block ready/merge/main admission and
+release. Historical evidence and earlier obligations are preserved.
