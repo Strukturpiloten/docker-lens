@@ -11,16 +11,18 @@ compatibility claim.
 The planned native work is tracked in [DockerLens #3](https://github.com/Strukturpiloten/docker-lens/issues/3).
 Typed networks, protected runtime settings and conditional bind-source review
 are available as inert data. The candidate selects the independently reviewed
-external-network source cohort from run `37788762974`, attempt 1, under
-[ADR 0018](docs/decisions/0018-reviewed-external-network-cohort.md). Exact Debian
-profiles admit 29 capabilities/46 shapes; upstream profiles add only the
-complete IPv6 port group, for 30/48. The machine records preserve all five
-earlier cohorts.
+configured stop-signal source cohort from run `38106164571`, attempt 1, under
+[ADR 0019](docs/decisions/0019-reviewed-stop-signal-cohort.md). Exact Debian
+profiles admit 30 capabilities/47 shapes; upstream profiles add only the
+complete IPv6 port group, for 31/49. The machine records preserve all six
+earlier cohorts byte-exact.
 
 The selection retains complete common IPv4/repeated/exposed-only/ephemeral port,
 container-label/shell-health/start-period, network-label/alias/multiple-attachment,
-and shared/private bind configured-retention groups, adding only the complete
-external-network Internal false/true expectation group. None remains
+and shared/private bind configured-retention groups and the complete
+external-network Internal false/true expectation group, adding only StopSignal.
+Native symbolic TERM/INT trap effects are bounded source evidence, not a promise
+of arbitrary-image or application shutdown behavior. None remains
 unconstrained; explicit booleans select inert schema 3 and never network mutation.
 Other topology and runtime
 groups remain unadmitted. Bind prerequisites retain all source review and
@@ -30,7 +32,7 @@ representations retain their existing behavior.
 
 This is candidate pre-merge rehearsal admission. Production merge, main
 admission and release remain blocked until fresh exact-final-candidate complete
-and four-lane fifteen-test native gates, fresh independently reviewed volume-only
+and four-lane sixteen-test native gates, fresh independently reviewed volume-only
 consumer rehearsals of all six actual authored fixtures under
 [ADR 0012](docs/decisions/0012-candidate-volume-label-admission.md), and reviewed
 BoxFerry consumers of the actual Nextcloud/Supabase binds and desired external

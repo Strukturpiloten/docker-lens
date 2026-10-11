@@ -135,12 +135,17 @@ def fingerprint(info):
 
 
 def read_network_attachment_proof(path, capture_dir, expected_context):
+    return read_private_proof(path, capture_dir, FILENAME, expected_context, validate_network_attachment_proof)
+
+
+def read_private_proof(path, capture_dir, filename, expected_context, validator):
     """Read one stable, bounded, exclusive caller-private direct child."""
     directory = Path(os.path.abspath(capture_dir))
     path = Path(path)
     descriptors = []
     try:
-        if directory.resolve(strict=True) != directory or path != directory / FILENAME:
+        if (type(filename) is not str or not filename or filename in (".", "..") or Path(filename).name != filename
+                or directory.resolve(strict=True) != directory or path != directory / filename):
             fail()
         parent = os.lstat(directory)
         uid = os.geteuid()
@@ -153,7 +158,7 @@ def read_network_attachment_proof(path, capture_dir, expected_context):
         descriptors.append(held)
         if fingerprint(os.fstat(held)) != fingerprint(parent):
             fail()
-        source = os.open(FILENAME, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW, dir_fd=held)
+        source = os.open(filename, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW, dir_fd=held)
         descriptors.append(source)
         before = os.fstat(source)
         if (not stat.S_ISREG(before.st_mode) or before.st_uid != uid or before.st_nlink != 1
@@ -162,13 +167,13 @@ def read_network_attachment_proof(path, capture_dir, expected_context):
         payload = os.read(source, LIMIT + 1)
         if (len(payload) != before.st_size or len(payload) > LIMIT
                 or fingerprint(os.fstat(source)) != fingerprint(before)
-                or fingerprint(os.stat(FILENAME, dir_fd=held, follow_symlinks=False)) != fingerprint(before)
+                or fingerprint(os.stat(filename, dir_fd=held, follow_symlinks=False)) != fingerprint(before)
                 or fingerprint(os.stat(directory.name, dir_fd=ancestor, follow_symlinks=False)) != fingerprint(parent)
                 or fingerprint(os.lstat(directory)) != fingerprint(parent)
                 or directory.resolve(strict=True) != directory):
             fail()
         proof = json.loads(payload, object_pairs_hook=unique_object)
-        return validate_network_attachment_proof(proof, expected_context)
+        return validator(proof, expected_context)
     except (OSError, ValueError, TypeError, KeyError, OverflowError, RecursionError):
         raise ValueError("invalid private network attachment proof") from None
     finally:

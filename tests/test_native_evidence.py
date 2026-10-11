@@ -14,6 +14,7 @@ from test_native_health_metadata_proof import IMAGE as HEALTH_FIXTURE_IMAGE, pro
 from test_native_network_attachment_proof import fixture as network_attachment_fixture
 from test_native_bind_relabel_proof import fixture as bind_relabel_fixture
 from test_native_external_network_proof import fixture as external_network_fixture
+from test_native_stop_signal_proof import fixture as stop_signal_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/native-evidence.py"
@@ -51,6 +52,7 @@ EXPECTED_RAW_SHAPES = {
     "BindRelabelShared": ["BindMountSharedRelabelReadWrite", "BindMountSharedRelabelReadOnly"],
     "BindRelabelPrivate": ["BindMountPrivateRelabelReadWrite", "BindMountPrivateRelabelReadOnly"],
     "NetworkExternalInternalExpectation": ["ExternalNetworkInternalFalse", "ExternalNetworkInternalTrue"],
+    "StopSignal": ["StopSignal"],
 }
 EXPECTED_PORT_CAPABILITY_SHAPES = {
     "PortHostIpv4": ["FixedIpv4HostPort", "EphemeralIpv4HostPort"],
@@ -329,6 +331,8 @@ class NativeEvidenceTests(unittest.TestCase):
                  bind_relabel_missing: bool = False,
                  external_network: object = None,
                  external_network_missing: bool = False,
+                 stop_signal: object = None,
+                 stop_signal_missing: bool = False,
                  port_proof_override: object = None) -> tuple[subprocess.CompletedProcess[str], Path]:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -345,6 +349,7 @@ class NativeEvidenceTests(unittest.TestCase):
         network_attachment_path = root / "network-attachments-v1.json"
         bind_relabel_path = root / "bind-relabel-config-v1.json"
         external_network_path = root / "external-network-internal-v1.json"
+        stop_signal_path = root / "stop-signal-v1.json"
         destination = root / "out" / f"{lane}.json"
         version_path.write_text(json.dumps(version), encoding="utf-8")
         shapes_path.write_text(json.dumps(SHAPES if shapes is None else shapes), encoding="utf-8")
@@ -392,6 +397,14 @@ class NativeEvidenceTests(unittest.TestCase):
         if not external_network_missing:
             external_network_path.write_text(json.dumps(external if external_network is None else external_network), encoding="utf-8")
             external_network_path.chmod(0o600)
+        stop = stop_signal_fixture(lane)
+        stop["context"].update(external["context"])
+        for case in stop["cases"]:
+            for role in case["containers"]:
+                role["image"] = HEALTH_FIXTURE_IMAGE
+        if not stop_signal_missing:
+            stop_signal_path.write_text(json.dumps(stop if stop_signal is None else stop_signal), encoding="utf-8")
+            stop_signal_path.chmod(0o600)
         result = subprocess.run(
             ["python3", str(SCRIPT), str(version_path), str(shapes_path), str(source_path),
              str(network_path), str(volume_path), str(volume_label_path), str(identity_path),
@@ -416,7 +429,7 @@ class NativeEvidenceTests(unittest.TestCase):
         self.assertEqual(evidence["acquisition_api"], "1.49")
         self.assertEqual(evidence["rendering_api"], "1.56")
         self.assertEqual(evidence["runtime_components"], {"containerd": "2.3.5", "runc": "1.5.1"})
-        self.assertEqual(len(evidence["capability_outcome"]), 28)
+        self.assertEqual(len(evidence["capability_outcome"]), 29)
         self.assertEqual(set(evidence["capability_outcome"].values()), {"available"})
         self.assertEqual(evidence["admitted_shapes"], EXPECTED_FUTURE_RAW_SHAPES)
         self.assertEqual(evidence["source_probes"], SOURCE_PROBES)
@@ -533,8 +546,8 @@ class NativeEvidenceTests(unittest.TestCase):
             shape for shapes in evidence["admitted_shapes"].values() for shape in shapes))
 
     def test_prerequisite_raw_groups_are_exact_on_all_four_lane_identities(self) -> None:
-        self.assertEqual(len(EXPECTED_RAW_SHAPES), 23)
-        self.assertEqual(sum(map(len, EXPECTED_RAW_SHAPES.values())), 38)
+        self.assertEqual(len(EXPECTED_RAW_SHAPES), 24)
+        self.assertEqual(sum(map(len, EXPECTED_RAW_SHAPES.values())), 39)
         for family, release, api, minimum, package in (
             ("upstream", "29.8.1", "1.56", "1.44", ""),
             ("debian11", "20.10.5+dfsg1", "1.41", "1.12", "20.10.5+dfsg1-1+deb11u2"),

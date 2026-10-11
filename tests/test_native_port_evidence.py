@@ -58,9 +58,9 @@ class PortCapabilityEvidenceTests(unittest.TestCase):
         expected = self.expected_groups(identity_version, ipv6)
         self.assertEqual(record["admitted_shapes"], expected)
         self.assertEqual(record["capability_outcome"], {name: "available" for name in expected})
-        self.assertEqual(len(expected), (30 if identity_version == 2 else 28) - (not ipv6))
+        self.assertEqual(len(expected), (31 if identity_version == 2 else 29) - (not ipv6))
         self.assertEqual(sum(map(len, expected.values())),
-                         (48 if identity_version == 2 else 46) - (0 if ipv6 else 2))
+                         (49 if identity_version == 2 else 47) - (0 if ipv6 else 2))
         self.assertEqual("identity_contract" in record, identity_version == 2)
         self.assertEqual("identity_cases" in record, identity_version == 2)
         for private in (legacy.RUN_ID, "dl-identity-", "configured_user", "cleanup"):
@@ -172,14 +172,18 @@ class PortCapabilityEvidenceTests(unittest.TestCase):
             self.assertIsNotNone(match, capability)
             self.assertEqual(re.findall(r"Self::(\w+)", match.group(1)), expected)
         self.assertEqual(len(legacy.SHAPES), 10)
-        self.assertEqual(len(legacy.EXPECTED_RAW_SHAPES), 23)
+        self.assertEqual(len(legacy.EXPECTED_RAW_SHAPES), 24)
         catalogue = (legacy.ROOT / "src/reviewed_catalog.rs").read_text(encoding="utf-8")
         capabilities = catalogue.split("const REVIEWED_CAPABILITIES:", 1)[1].split("];", 1)[0]
         shapes = catalogue.split("const REVIEWED_SHAPES:", 1)[1].split("];", 1)[0]
         common_names = re.findall(r"Capability::(\w+)", capabilities)
         common_shapes = re.findall(r"NativeCapabilityShape::(\w+)", shapes)
-        self.assertEqual(len(common_names), 29)
-        self.assertEqual(len(common_shapes), 46)
+        # The reviewed StopSignal singleton extends the catalogue, not the
+        # independently authored port groups or Debian IPv6 boundary.
+        self.assertEqual(len(common_names), 30)
+        self.assertEqual(len(common_shapes), 47)
+        self.assertEqual(common_names.count("StopSignal"), 1)
+        self.assertEqual(common_shapes.count("StopSignal"), 1)
         self.assertEqual(set(PORT_GROUPS) - set(common_names), {"PortHostIpv6"})
         self.assertNotIn("FixedIpv6HostPort", common_shapes)
         self.assertNotIn("EphemeralIpv6HostPort", common_shapes)
@@ -190,8 +194,10 @@ class PortCapabilityEvidenceTests(unittest.TestCase):
         upstream_shapes = catalogue.split("const UPSTREAM_SHAPES:", 1)[1].split("];", 1)[0]
         upstream_names = re.findall(r"Capability::(\w+)", upstream)
         upstream_shape_names = re.findall(r"NativeCapabilityShape::(\w+)", upstream_shapes)
-        self.assertEqual(len(upstream_names), 30)
-        self.assertEqual(len(upstream_shape_names), 48)
+        self.assertEqual(len(upstream_names), 31)
+        self.assertEqual(len(upstream_shape_names), 49)
+        self.assertEqual(upstream_names.count("StopSignal"), 1)
+        self.assertEqual(upstream_shape_names.count("StopSignal"), 1)
         self.assertEqual(set(upstream_names), set(common_names) | {"PortHostIpv6"})
         self.assertEqual(set(upstream_shape_names), set(common_shapes) | set(PORT_GROUPS["PortHostIpv6"]))
 
