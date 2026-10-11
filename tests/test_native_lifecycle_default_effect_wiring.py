@@ -134,6 +134,39 @@ sys.exit(int(os.environ["STATUS"]))
         self.assertNotIn(HANDOFF, result.stderr)
         self.assertNotIn(SECRET, result.stdout + result.stderr)
 
+    def test_shared_allowlist_failure_preserves_bound_source_and_private_request_suppression(self):
+        output = (f"thread '{SELECTED}' panicked at src/native_health_metadata_tests.rs:543:9:\n"
+                  f"allowlisted exact native request: /v1.41/containers/{SECRET}/json\n"
+                  f"{HANDOFF}\n"
+                  f"thread '{SELECTED}' panicked at src/native_lifecycle_default_effect_tests.rs:999:8:\n{FAILED}")
+        result, calls, _, _ = self.wrapper(output, 101)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("source=native_health_metadata_tests line=543 column=9", result.stderr)
+        self.assertIn(HANDOFF, result.stderr)
+        self.assertNotIn("line=999", result.stderr)
+        self.assertNotIn(SECRET, result.stdout + result.stderr)
+        self.assertNotIn("/containers/", result.stdout + result.stderr)
+
+    def test_composed_allowlist_controls_are_nonignored_inert_rust_unit_tests(self):
+        # This checks registration of controls for the primary offline Rust gate,
+        # not Rust semantics: the controls themselves call request_allowed(), the
+        # actual predicate enforced by api(). Never substitute a Python model.
+        source = (ROOT / "src/native_lifecycle_default_effect_tests.rs").read_text()
+        names = (
+            "legacy_absence_composed_allowlist_adds_only_the_exact_get",
+            "legacy_absence_binding_refuses_other_invocations_and_changed_context",
+            "legacy_absence_composition_preserves_the_six_owned_request_ledgers",
+        )
+        for name in names:
+            self.assertIn(f"#[test]\nfn {name}()", source)
+            self.assertNotRegex(source, r'#\[ignore[^\n]*\]\s*fn ' + name)
+        controls = source.split("fn allowlist_fixture(", 1)[1]
+        self.assertIn("cleaned: true", controls)
+        self.assertNotIn("run.api(", controls)
+        self.assertNotIn("run.inspect(", controls)
+        self.assertNotIn("run.outer(", controls)
+
 
 class DefaultEffectEvidenceTests(unittest.TestCase):
     # Use the central authored whole-emitter fixture, not isolated reader mocks.

@@ -209,7 +209,14 @@ fn configured(run: &HealthRun, index: usize, base: &Value) -> (Value, &'static s
 }
 
 fn refusal_name(run: &HealthRun) -> String {
-    format!("dl-def-{}-zero-cli-refusal", run.run)
+    let name = format!("dl-def-{}-zero-cli-refusal", run.run);
+    if run.lane.starts_with("debian11-") {
+        // The same closed lookup binding is required before mutation and in
+        // final cleanup. The deterministic name never enters names/ids and
+        // therefore gains no create/start/delete authorization.
+        assert_eq!(run.legacy_default_absence_name(), Some(name.clone()));
+    }
+    name
 }
 
 fn legacy_refusal(run: &HealthRun) -> Value {
@@ -542,4 +549,237 @@ fn default_raw_availability_refuses_normalizing_malformed_values() {
             "malformed raw default rejected"
         );
     }
+}
+
+// Pure controls call the SAME composed predicate used by api(), not a mirrored
+// authorization model. cleaned=true makes even unwinding entirely inert.
+fn allowlist_fixture(lane: &str) -> HealthRun {
+    let run = "A1B2C3D4";
+    let api = if lane.starts_with("debian11-") {
+        "1.41"
+    } else {
+        "1.56"
+    };
+    HealthRun {
+        run: run.into(),
+        lane: lane.into(),
+        candidate: "a".repeat(40),
+        api: api.into(),
+        engine: String::new(),
+        mode: if lane.ends_with("-rootless") {
+            DaemonMode::Rootless
+        } else {
+            DaemonMode::Rootful
+        },
+        socket: String::new(),
+        outer: String::new(),
+        base: "borrowed-fixture".into(),
+        derived_tag: "not-owned".into(),
+        derived_id: None,
+        image_attempted: false,
+        names: [
+            "timeout-omitted-oracle",
+            "timeout-omitted-rendered",
+            "timeout-zero-oracle",
+            "timeout-zero-rendered",
+            "health-control",
+            "health-candidate",
+        ]
+        .map(|suffix| format!("dl-def-{run}-{suffix}"))
+        .into(),
+        ids: vec![None; 6],
+        attempted: vec![false; 6],
+        absence_lookup: HealthAbsenceLookup::for_invocation(
+            "NATIVE_LIFECYCLE_DEFAULT_EFFECT_CANDIDATE_SHA",
+            "NATIVE_LIFECYCLE_DEFAULT_EFFECT_DEADLINE_EPOCH",
+            run,
+            lane,
+            api,
+        ),
+        deadline: Instant::now() + Duration::from_secs(180),
+        calls: Cell::new(0),
+        bytes: Cell::new(0),
+        facts: None,
+        cleaned: true,
+    }
+}
+
+#[test]
+fn legacy_absence_composed_allowlist_adds_only_the_exact_get() {
+    for lane in ["debian11-rootful", "debian11-rootless"] {
+        let run = allowlist_fixture(lane);
+        let name = "dl-def-A1B2C3D4-zero-cli-refusal";
+        let exact = format!("/v1.41/containers/{name}/json");
+        assert_eq!(run.legacy_default_absence_name(), Some(name.to_owned()));
+        assert!(
+            run.request_allowed("GET", &exact),
+            "exact independently named absence GET"
+        );
+        for method in ["POST", "DELETE", "PUT", "PATCH", "HEAD", "get"] {
+            assert!(
+                !run.request_allowed(method, &exact),
+                "absence lookup cannot authorize mutations"
+            );
+        }
+        for path in [
+            format!("/v1.41/containers/create?name={name}"),
+            format!("/v1.41/containers/{name}/start"),
+            format!("/v1.41/containers/{name}?force=1"),
+            exact.replace("A1B2C3D4", "E5F6G7H8"),
+            exact.replace("zero-cli-refusal", "health-candidate-other"),
+            exact.replace("1.41", "1.56"),
+            exact.replace("1.41", "1.49"),
+            format!("{exact}?all=1"),
+            format!("{exact}/"),
+            format!("{exact}-other"),
+            "/v1.41/containers/unregistered-id/json".into(),
+        ] {
+            for method in ["GET", "POST", "DELETE"] {
+                assert!(
+                    !run.request_allowed(method, &path),
+                    "closed absence method/path composition"
+                );
+            }
+        }
+        assert_eq!(run.names.len(), 6);
+        assert_eq!(run.ids.len(), 6);
+        assert_eq!(run.attempted, vec![false; 6]);
+        assert!(
+            !run.names.iter().any(|owned| owned == name),
+            "absence name stays outside owned slots"
+        );
+        assert!(
+            run.ids.iter().all(Option::is_none),
+            "absence control owns no ID"
+        );
+        assert_eq!(run.calls.get(), 0);
+        assert_eq!(run.bytes.get(), 0);
+    }
+}
+
+#[test]
+fn legacy_absence_binding_refuses_other_invocations_and_changed_context() {
+    let exact = "/v1.41/containers/dl-def-A1B2C3D4-zero-cli-refusal/json";
+    for (candidate, deadline, token, lane, api) in [
+        (
+            "NATIVE_LIFECYCLE_CANDIDATE_SHA",
+            "NATIVE_LIFECYCLE_DEFAULT_EFFECT_DEADLINE_EPOCH",
+            "A1B2C3D4",
+            "debian11-rootful",
+            "1.41",
+        ),
+        (
+            "NATIVE_LIFECYCLE_DEFAULT_EFFECT_CANDIDATE_SHA",
+            "NATIVE_LIFECYCLE_DEADLINE_EPOCH",
+            "A1B2C3D4",
+            "debian11-rootful",
+            "1.41",
+        ),
+        (
+            "NATIVE_LIFECYCLE_DEFAULT_EFFECT_CANDIDATE_SHA",
+            "NATIVE_LIFECYCLE_DEFAULT_EFFECT_DEADLINE_EPOCH",
+            "A1B2C3D4",
+            "upstream-rootful",
+            "1.41",
+        ),
+        (
+            "NATIVE_LIFECYCLE_DEFAULT_EFFECT_CANDIDATE_SHA",
+            "NATIVE_LIFECYCLE_DEFAULT_EFFECT_DEADLINE_EPOCH",
+            "A1B2C3D4",
+            "debian11-rootful",
+            "1.56",
+        ),
+        (
+            "NATIVE_LIFECYCLE_DEFAULT_EFFECT_CANDIDATE_SHA",
+            "NATIVE_LIFECYCLE_DEFAULT_EFFECT_DEADLINE_EPOCH",
+            "A1B2/../",
+            "debian11-rootful",
+            "1.41",
+        ),
+    ] {
+        let mut run = allowlist_fixture("debian11-rootful");
+        run.absence_lookup =
+            HealthAbsenceLookup::for_invocation(candidate, deadline, token, lane, api);
+        assert!(
+            !run.request_allowed("GET", exact),
+            "unrelated or malformed invocation cannot opt in"
+        );
+    }
+    let mut run = allowlist_fixture("debian11-rootful");
+    run.run = "E5F6G7H8".into();
+    assert!(
+        !run.request_allowed("GET", exact),
+        "original bound run cannot be replaced"
+    );
+    assert!(
+        !run.request_allowed("GET", &exact.replace("A1B2C3D4", "E5F6G7H8")),
+        "changed run cannot mint another absence name"
+    );
+    let mut run = allowlist_fixture("debian11-rootful");
+    run.lane = "debian11-rootless".into();
+    assert!(
+        !run.request_allowed("GET", exact),
+        "original exact lane cannot be replaced"
+    );
+    for lane in ["upstream-rootful", "upstream-rootless"] {
+        let run = allowlist_fixture(lane);
+        assert!(
+            run.legacy_default_absence_name().is_none(),
+            "modern context has no absence exception"
+        );
+        assert!(
+            !run.request_allowed("GET", exact),
+            "modern invocation cannot use legacy exception"
+        );
+    }
+}
+
+#[test]
+fn legacy_absence_composition_preserves_the_six_owned_request_ledgers() {
+    let mut run = allowlist_fixture("debian11-rootful");
+    for name in &run.names {
+        assert!(
+            run.request_allowed("GET", &format!("/v1.41/containers/{name}/json")),
+            "ordinary owned-name read unchanged"
+        );
+        assert!(
+            run.request_allowed("POST", &format!("/v1.41/containers/create?name={name}")),
+            "ordinary once-create ledger unchanged"
+        );
+        assert!(
+            !run.request_allowed("DELETE", &format!("/v1.41/containers/{name}?force=1")),
+            "owned names never authorize deletion"
+        );
+    }
+    let id = "1".repeat(64);
+    run.ids[0] = Some(id.clone());
+    assert!(
+        run.request_allowed("GET", &format!("/v1.41/containers/{id}/json")),
+        "bound owned ID read unchanged"
+    );
+    assert!(
+        run.request_allowed("POST", &format!("/v1.41/containers/{id}/start")),
+        "bound owned ID start unchanged"
+    );
+    assert!(
+        run.request_allowed("DELETE", &format!("/v1.41/containers/{id}?force=1")),
+        "bound owned ID cleanup unchanged"
+    );
+    for path in [
+        "/version",
+        "/v1.41/info",
+        "/v1.41/images/borrowed-fixture/json",
+    ] {
+        assert!(
+            run.request_allowed("GET", path),
+            "existing context/image read unchanged"
+        );
+    }
+    assert_eq!(run.names.len(), 6);
+    assert_eq!(run.ids.len(), 6);
+    assert_eq!(run.attempted, vec![false; 6]);
+    assert!(
+        !run.image_attempted && run.derived_id.is_none(),
+        "no owned image authorization added"
+    );
 }

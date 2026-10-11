@@ -272,6 +272,54 @@ fn capture_room(calls: usize, bytes: usize, cleanup: bool) -> bool {
             .is_some_and(|total| total <= bytes_limit)
 }
 
+// A read-only absence control is not an owned mutation slot. Binding is closed
+// to this one invocation, exact legacy profile, and the original run token; no
+// caller-supplied path/name or arbitrary authorization callback is accepted.
+enum HealthAbsenceLookup {
+    Disabled,
+    LifecycleDefaultLegacy {
+        original_run: String,
+        original_lane: String,
+    },
+}
+
+impl HealthAbsenceLookup {
+    fn for_invocation(
+        candidate_key: &str,
+        deadline_key: &str,
+        run: &str,
+        lane: &str,
+        api: &str,
+    ) -> Self {
+        if candidate_key == "NATIVE_LIFECYCLE_DEFAULT_EFFECT_CANDIDATE_SHA"
+            && deadline_key == "NATIVE_LIFECYCLE_DEFAULT_EFFECT_DEADLINE_EPOCH"
+            && matches!(lane, "debian11-rootful" | "debian11-rootless")
+            && api == "1.41"
+            && run.len() == 8
+            && run.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        {
+            Self::LifecycleDefaultLegacy {
+                original_run: run.to_owned(),
+                original_lane: lane.to_owned(),
+            }
+        } else {
+            Self::Disabled
+        }
+    }
+
+    fn name(&self, run: &str, lane: &str, api: &str) -> Option<String> {
+        match self {
+            Self::LifecycleDefaultLegacy {
+                original_run,
+                original_lane,
+            } if run == original_run && lane == original_lane && api == "1.41" => {
+                Some(format!("dl-def-{original_run}-zero-cli-refusal"))
+            }
+            _ => None,
+        }
+    }
+}
+
 struct HealthRun {
     run: String,
     lane: String,
@@ -288,6 +336,7 @@ struct HealthRun {
     names: Vec<String>,
     ids: Vec<Option<String>>,
     attempted: Vec<bool>,
+    absence_lookup: HealthAbsenceLookup,
     deadline: Instant,
     calls: Cell<usize>,
     bytes: Cell<usize>,
@@ -392,6 +441,8 @@ impl HealthRun {
             })
             .collect::<Vec<_>>();
         names.push(format!("dl-health-{run}-seed"));
+        let absence_lookup =
+            HealthAbsenceLookup::for_invocation(candidate_key, deadline_key, &run, &lane, &api);
         Self {
             derived_tag: format!("dl-health-{}:inherited", run.to_ascii_lowercase()),
             run,
@@ -408,6 +459,7 @@ impl HealthRun {
             names,
             ids: vec![None; 9],
             attempted: vec![false; 9],
+            absence_lookup,
             deadline: Instant::now() + remaining,
             calls: Cell::new(0),
             bytes: Cell::new(0),
@@ -508,7 +560,11 @@ impl HealthRun {
         self.outer(&command, cleanup)
     }
 
-    fn api(&self, method: &str, path: &str, body: Option<&Value>, cleanup: bool) -> (u16, Value) {
+    fn legacy_default_absence_name(&self) -> Option<String> {
+        self.absence_lookup.name(&self.run, &self.lane, &self.api)
+    }
+
+    fn request_allowed(&self, method: &str, path: &str) -> bool {
         let prefix = format!("/v{}", self.api);
         let keys = self
             .names
@@ -518,6 +574,9 @@ impl HealthRun {
         let container_read = keys
             .clone()
             .any(|key| path == format!("{prefix}/containers/{key}/json"));
+        let legacy_absence_read = self
+            .legacy_default_absence_name()
+            .is_some_and(|name| path == format!("{prefix}/containers/{name}/json"));
         let container_start = self
             .ids
             .iter()
@@ -540,14 +599,19 @@ impl HealthRun {
             .derived_id
             .as_ref()
             .is_some_and(|id| path == format!("{prefix}/images/{id}?force=0"));
+        method == "GET"
+            && (path == "/version"
+                || path == format!("{prefix}/info")
+                || container_read
+                || legacy_absence_read
+                || image_read)
+            || method == "POST" && (create || container_start)
+            || method == "DELETE" && (container_delete || image_delete)
+    }
+
+    fn api(&self, method: &str, path: &str, body: Option<&Value>, cleanup: bool) -> (u16, Value) {
         assert!(
-            method == "GET"
-                && (path == "/version"
-                    || path == format!("{prefix}/info")
-                    || container_read
-                    || image_read)
-                || method == "POST" && (create || container_start)
-                || method == "DELETE" && (container_delete || image_delete),
+            self.request_allowed(method, path),
             "allowlisted exact native request"
         );
         let input = body.map(|body| {
