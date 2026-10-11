@@ -10,6 +10,48 @@ const FILENAME: &str = "stop-signal-v1.json";
 const PROCESS: &str = "[ \"$$\" -eq 1 ] || exit 43; trap 'exit 41' TERM; trap 'exit 42' INT; printf 'pid1-traps-ready\\n' > /tmp/dl-stop-ready; while :; do sleep 1 & wait $!; done";
 const READY: &str = "for n in 1 2 3 4 5 6 7 8 9 10; do if [ -f /tmp/dl-stop-ready ]; then cat /tmp/dl-stop-ready; exit 0; fi; sleep 0.2; done; exit 1";
 
+enum StopStage {
+    Create,
+    Created,
+    Start,
+    Readiness,
+    Running,
+    Clock,
+    Stop,
+    Elapsed,
+    Output,
+    Inspect,
+    Exit,
+    State,
+    Causality,
+}
+
+fn stop_stage(index: usize, stage: StopStage) {
+    let (signal, role) = match index {
+        0 => ("term", "oracle"),
+        1 => ("term", "rendered"),
+        2 => ("int", "oracle"),
+        3 => ("int", "rendered"),
+        _ => panic!("closed stop fixture index"),
+    };
+    let stage = match stage {
+        StopStage::Create => "create",
+        StopStage::Created => "created",
+        StopStage::Start => "start",
+        StopStage::Readiness => "readiness",
+        StopStage::Running => "running",
+        StopStage::Clock => "clock",
+        StopStage::Stop => "stop",
+        StopStage::Elapsed => "elapsed",
+        StopStage::Output => "output",
+        StopStage::Inspect => "inspect",
+        StopStage::Exit => "exit",
+        StopStage::State => "state",
+        StopStage::Causality => "causality",
+    };
+    eprintln!("DOCKERLENS_NATIVE_STOP_SIGNAL_STAGE: case={signal} role={role} stage={stage}");
+}
+
 fn outer_context(run: &HealthRun, cleanup: bool) -> Value {
     let id = required("NATIVE_OUTER_CONTAINER_ID");
     assert!(identifier(&id), "closed immutable outer ID");
@@ -240,10 +282,13 @@ fn stopped(value: &Value, expected_exit: i64) -> bool {
 }
 
 fn observe(run: &mut HealthRun, index: usize, base_id: &Value) -> Value {
+    stop_stage(index, StopStage::Create);
     create(run, index);
+    stop_stage(index, StopStage::Created);
     let before = configured(run, index, base_id);
     assert_eq!(before["State"]["Status"], "created");
     let id = run.ids[index].as_deref().unwrap().to_owned();
+    stop_stage(index, StopStage::Start);
     assert_eq!(
         run.api(
             "POST",
@@ -254,6 +299,7 @@ fn observe(run: &mut HealthRun, index: usize, base_id: &Value) -> Value {
         .0,
         204
     );
+    stop_stage(index, StopStage::Readiness);
     let output = run.docker(
         &[
             "exec".into(),
@@ -265,6 +311,7 @@ fn observe(run: &mut HealthRun, index: usize, base_id: &Value) -> Value {
         false,
     );
     assert_eq!(output.as_slice(), b"pid1-traps-ready\n".as_slice());
+    stop_stage(index, StopStage::Running);
     let ready = configured(run, index, base_id);
     assert_eq!(ready["State"]["Running"], true);
     assert_eq!(ready["State"]["Status"], "running");
@@ -272,29 +319,36 @@ fn observe(run: &mut HealthRun, index: usize, base_id: &Value) -> Value {
         ready["State"]["Pid"].as_u64().is_some_and(|pid| pid > 0),
         "actual running PID1"
     );
+    stop_stage(index, StopStage::Clock);
     let started = ready["State"]["StartedAt"]
         .as_str()
         .unwrap_or_else(|| panic!("native start time"));
     let ready_at = native_time(run);
     let requested_at = native_time(run);
+    stop_stage(index, StopStage::Stop);
     let clock = Instant::now();
-    // --time is the supported common spelling on 20.10 and 29. No --signal:
+    // -t is the common 20.10/29 spelling without the deprecated --time alias.
+    // No --signal:
     // the independently inspected configured signal must drive PID1's trap.
-    let output = run.docker(
-        &["stop".into(), "--time".into(), "3".into(), id.clone()],
-        false,
-    );
+    let output = run.docker(&["stop".into(), "-t".into(), "3".into(), id.clone()], false);
     let elapsed = clock.elapsed();
+    stop_stage(index, StopStage::Elapsed);
     assert!(
         elapsed < Duration::from_secs(5),
         "bounded actual stop completion"
     );
+    stop_stage(index, StopStage::Output);
     assert_eq!(output.as_slice(), format!("{id}\n").as_bytes());
+    stop_stage(index, StopStage::Inspect);
     let after = configured(run, index, base_id);
+    stop_stage(index, StopStage::Exit);
+    assert_eq!(after["State"]["ExitCode"], SIGNALS[index / 2].1);
+    stop_stage(index, StopStage::State);
     assert!(
         stopped(&after, SIGNALS[index / 2].1),
         "exact trap exit, never forced-kill success"
     );
+    stop_stage(index, StopStage::Causality);
     assert_eq!(after["State"]["StartedAt"], started);
     let finished = after["State"]["FinishedAt"]
         .as_str()

@@ -10,6 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SELECTED = "native_health_metadata_tests::stop_signal::live_stop_signal_matches_engine"
 SUCCESS = "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 100 filtered out;"
 FAILURE = "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 100 filtered out;"
+STAGES = ("create", "created", "start", "readiness", "running", "clock", "stop", "elapsed",
+          "output", "inspect", "exit", "state", "causality")
 
 
 class StopSignalWiringTests(unittest.TestCase):
@@ -66,6 +68,51 @@ class StopSignalWiringTests(unittest.TestCase):
         source = (ROOT / "src/native_stop_signal_tests.rs").read_text()
         self.assertNotIn('"--signal"', source)
         self.assertIn("!run.image_attempted && run.derived_id.is_none()", source)
+
+    def test_closed_operation_stage_survives_missing_panic_location(self):
+        for signal in ("term", "int"):
+            for role in ("oracle", "rendered"):
+                for stage in STAGES:
+                    marker = f"DOCKERLENS_NATIVE_STOP_SIGNAL_STAGE: case={signal} role={role} stage={stage}"
+                    output = (f"DOCKERLENS_NATIVE_CHECK: stop_signal_{signal}\n{marker}\n"
+                              "thread '<unnamed>' panicked at private-worker.rs:123:4:\nPRIVATE_CANARY\n"
+                              f"DOCKERLENS_NATIVE_CHECK: stop_signal_cleanup\n{FAILURE}")
+                    result, _ = self.wrapper(output, 101)
+                    with self.subTest(signal=signal, role=role, stage=stage):
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn(marker + "\n", result.stderr)
+                        self.assertIn("source=native_stop_signal_tests location=unavailable", result.stderr)
+                        self.assertNotIn("PRIVATE_CANARY", result.stdout + result.stderr)
+                        self.assertNotIn("private-worker", result.stdout + result.stderr)
+
+    def test_operation_stage_rejects_values_and_stops_at_first_cleanup(self):
+        marker = "DOCKERLENS_NATIVE_STOP_SIGNAL_STAGE: case=int role=oracle stage=exit"
+        for cleanup in ("cleanup", "cleanup_unverified"):
+            output = (f"DOCKERLENS_NATIVE_CHECK: stop_signal_int\n{marker}\n"
+                      f"{marker} PRIVATE_CANARY\n{marker}\rPRIVATE_CANARY\n"
+                      "DOCKERLENS_NATIVE_STOP_SIGNAL_STAGE: case=PRIVATE_CANARY role=oracle stage=exit\n"
+                      "DOCKERLENS_NATIVE_STOP_SIGNAL_STAGE: case=int role=PRIVATE_CANARY stage=exit\n"
+                      "DOCKERLENS_NATIVE_STOP_SIGNAL_STAGE: case=int role=oracle stage=PRIVATE_CANARY\n"
+                      f"DOCKERLENS_NATIVE_CHECK: stop_signal_{cleanup}\n"
+                      "DOCKERLENS_NATIVE_STOP_SIGNAL_STAGE: case=term role=rendered stage=causality\n"
+                      f"{FAILURE}")
+            result, _ = self.wrapper(output, 101)
+            self.assertIn(marker + "\n", result.stderr)
+            self.assertEqual(result.stderr.count("DOCKERLENS_NATIVE_STOP_SIGNAL_STAGE:"), 1)
+            self.assertNotIn("PRIVATE_CANARY", result.stdout + result.stderr)
+            self.assertNotIn("stage=causality", result.stdout + result.stderr)
+
+    def test_common_timeout_spelling_keeps_full_identity_and_effect_assertions(self):
+        source = (ROOT / "src/native_stop_signal_tests.rs").read_text()
+        self.assertIn('["stop".into(), "-t".into(), "3".into(), id.clone()]', source)
+        self.assertNotIn('"--time".into()', source)
+        self.assertIn('assert_eq!(output.as_slice(), format!("{id}\\n").as_bytes());', source)
+        self.assertIn('assert_eq!(after["State"]["ExitCode"], SIGNALS[index / 2].1);', source)
+        self.assertIn('stopped(&after, SIGNALS[index / 2].1)', source)
+        self.assertIn('run.owned(&value, index, Some(id))', source)
+        self.assertIn('elapsed < Duration::from_secs(5)', source)
+        self.assertIn("trap 'exit 41' TERM; trap 'exit 42' INT;", source)
+        self.assertEqual(set(re.findall(r'StopStage::\w+ => "(\w+)"', source)), set(STAGES))
 
 
 if __name__ == "__main__":

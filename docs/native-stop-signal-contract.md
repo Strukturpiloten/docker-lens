@@ -20,9 +20,11 @@ Actual shell PID1 verifies its PID, registers TERM exit **41** and INT exit **42
 traps, then writes a fixed readiness marker. Otherwise it loops indefinitely.
 A bounded independent exec reads that marker; an inspect requires a running PID
 before stopping. This exec does not signal the process or substitute its own
-exit status. `docker stop --time 3 ID` has no per-stop signal override, so the
-container setting must select the trap. Both exact CLI families support `--time`;
-current Docker documents it as a deprecated but functional `--timeout` alias.
+exit status. `docker stop -t 3 ID` has no per-stop signal override, so the
+container setting must select the trap. The common short option avoids `--time`,
+which Docker deprecated and hid in version 28 in favor of `--timeout`. Stop stdout
+must still equal the complete submitted ID and newline; warnings, shortened IDs
+or other output are not accepted as identity evidence.
 
 Stop must complete in less than five monotonic seconds. Native inspect requires
 the corresponding 41/42 exit, exited/not-running state, PID zero, no restart,
@@ -70,6 +72,9 @@ held-directory/no-follow/stable-file 16-KiB boundary with attachment-proof defau
 unchanged. Duplicate/extra keys, links, wrong types, partial/swapped cases, context
 drift, reused IDs, invalid times or uncertain cleanup refuse the whole manifest.
 Failures reveal only closed stages and bounded source locations, never native text.
+The wrapper also retains the last fixed case/role/operation marker before the
+first cleanup marker, including when a shared or worker-thread panic has no
+selected-test location. It never publishes panic payloads or native values.
 
 Root keys are exactly `schema_version` (integer 1), `contract`, `context`, `shapes`
 (`["StopSignal"]`), `borrowed_image`, `cases`, `cleanup`. Context is the existing

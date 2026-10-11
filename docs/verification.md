@@ -11,6 +11,16 @@ and unchanged borrowed pinned BusyBox identity. No derived image is created or
 deleted. Shared health transport/context/cleanup limits and the historical
 health-metadata-v1 contract remain unchanged.
 
+The first #112 source attempt, run `38102515211`, failed every lane and establishes
+no native proof. Upstream stopped at the strict full-ID stdout assertion; Debian
+reached the SIGINT case without an available sanitized panic location. The common
+`docker stop -t 3 ID` spelling avoids Docker 28+'s deprecated `--time` alias, but
+the retained log does not establish the differing stdout or Debian root cause.
+Fixed case/role/operation diagnostics now retain the last step before cleanup;
+the trap process, exact exits 41/42, full-ID equality, ownership and timing checks
+are unchanged. Only a fresh independently reviewed native run can resolve the
+remaining hypotheses. No failed run or diagnostic marker grants admission.
+
 Only complete private proof adds the existing StopSignal singleton to future raw
 emission: identity-v2 Debian lanes then expect 30/47 capability/shape counts and
 upstream lanes 31/49. The current sealed 29/46 and 30/48 catalogue and every
