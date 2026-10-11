@@ -15,6 +15,9 @@ from test_native_network_attachment_proof import fixture as network_attachment_f
 from test_native_bind_relabel_proof import fixture as bind_relabel_fixture
 from test_native_external_network_proof import fixture as external_network_fixture
 from test_native_stop_signal_proof import fixture as stop_signal_fixture
+from test_native_lifecycle_proof import fixture as lifecycle_fixture
+from test_native_runtime_filesystem_proof import fixture as runtime_filesystem_fixture
+from test_native_tmpfs_effect_proof import fixture as tmpfs_effect_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/native-evidence.py"
@@ -333,6 +336,12 @@ class NativeEvidenceTests(unittest.TestCase):
                  external_network_missing: bool = False,
                  stop_signal: object = None,
                  stop_signal_missing: bool = False,
+                 lifecycle: object = None,
+                 lifecycle_missing: bool = False,
+                 runtime_filesystem: object = None,
+                 runtime_filesystem_missing: bool = False,
+                 tmpfs_effect: object = None,
+                 tmpfs_effect_missing: bool = False,
                  port_proof_override: object = None) -> tuple[subprocess.CompletedProcess[str], Path]:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -350,6 +359,9 @@ class NativeEvidenceTests(unittest.TestCase):
         bind_relabel_path = root / "bind-relabel-config-v1.json"
         external_network_path = root / "external-network-internal-v1.json"
         stop_signal_path = root / "stop-signal-v1.json"
+        lifecycle_path = root / "lifecycle-v1.json"
+        runtime_filesystem_path = root / "runtime-filesystem-v1.json"
+        tmpfs_effect_path = root / "tmpfs-effect-v1.json"
         destination = root / "out" / f"{lane}.json"
         version_path.write_text(json.dumps(version), encoding="utf-8")
         shapes_path.write_text(json.dumps(SHAPES if shapes is None else shapes), encoding="utf-8")
@@ -405,6 +417,29 @@ class NativeEvidenceTests(unittest.TestCase):
         if not stop_signal_missing:
             stop_signal_path.write_text(json.dumps(stop if stop_signal is None else stop_signal), encoding="utf-8")
             stop_signal_path.chmod(0o600)
+        life = lifecycle_fixture(lane, negative=lane.startswith("debian11-"), control_age=8)
+        life["context"].update(external["context"])
+        for case in life["stop_timeout"]:
+            for role in case["containers"]:
+                role["image"] = HEALTH_FIXTURE_IMAGE
+        for role in life["health_start_interval"]["containers"]:
+            role["image"] = HEALTH_FIXTURE_IMAGE
+        if not lifecycle_missing:
+            lifecycle_path.write_text(json.dumps(life if lifecycle is None else lifecycle), encoding="utf-8")
+            lifecycle_path.chmod(0o600)
+        runtime = runtime_filesystem_fixture(lane)
+        runtime["context"].update(external["context"])
+        for case in runtime["cases"]:
+            for role in case["containers"]:
+                role["image"] = HEALTH_FIXTURE_IMAGE
+        if not runtime_filesystem_missing:
+            runtime_filesystem_path.write_text(json.dumps(runtime if runtime_filesystem is None else runtime_filesystem), encoding="utf-8")
+            runtime_filesystem_path.chmod(0o600)
+        tmpfs, _ = tmpfs_effect_fixture(lane)
+        tmpfs["context"].update(external["context"])
+        if not tmpfs_effect_missing:
+            tmpfs_effect_path.write_text(json.dumps(tmpfs if tmpfs_effect is None else tmpfs_effect), encoding="utf-8")
+            tmpfs_effect_path.chmod(0o600)
         result = subprocess.run(
             ["python3", str(SCRIPT), str(version_path), str(shapes_path), str(source_path),
              str(network_path), str(volume_path), str(volume_label_path), str(identity_path),

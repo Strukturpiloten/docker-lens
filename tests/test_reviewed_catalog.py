@@ -636,6 +636,27 @@ def bind_cohorts(
     return reviewed
 
 
+# Immutable executed-source bindings, independently rechecked against the
+# source and trusted-dispatcher commits. They are historical provenance, not
+# a demand that every future candidate retain those exact harness bytes.
+STOP_SIGNAL_SOURCE_SHA256 = {
+    "scripts/native-conformance.sh": "668d0e65ad4219f39f65f6acc5cad161a5ee6e78e84b1652fe57b23b3479ca3d",
+    "scripts/run-exact-native-test.sh": "009ecf8dcb8b190a970078a15db6f8117351039f98f3876c0ef7df453a0b8887",
+    "src/native_stop_signal_tests.rs": "842a5949ef4d3bba473ec74a8fe08d9669ce129f28f1ee3bf1521a1c5032cd4e",
+    "src/native_health_metadata_tests.rs": "367342e248885c489506052f45b7c772effa15cb2eef380bbe74fb78d325004a",
+    "scripts/native_stop_signal_proof.py": "986a21809632c4c9913be55b8692cd2c9628aff15a808fe5471ec5feb4d9c218",
+    "scripts/native-evidence.py": "2865232387bf7913eced53c7d13ecfedfb3b15c3b9b6d8245bcd6e031e065c6f",
+    "trusted_dispatcher_workflow": "bafd6f7c74dbe0353ce0dae0fc65129ef4258e143628daf0e38e41fb8b6137ec",
+    "trusted_dispatcher_admission": "dc60f867bcf648b18d32f90481582c6a6ca0e5319290aefabdb09a1485851e3a",
+}
+
+
+def bind_stop_signal_source_provenance(metadata):
+    if (metadata.get("candidate_sha") != STOP_SIGNAL_CANDIDATE
+            or metadata.get("source_sha256") != STOP_SIGNAL_SOURCE_SHA256):
+        raise ValueError("historical source provenance mismatch")
+
+
 class ReviewedCatalogTests(unittest.TestCase):
     def test_rust_record_tuples_pair_exact_lane_digest_and_file(self) -> None:
         source = (ROOT / "src/reviewed_catalog.rs").read_text(encoding="utf-8")
@@ -1350,9 +1371,31 @@ class ReviewedCatalogTests(unittest.TestCase):
         self.assertIn("six", provenance["remaining_gates"][2])
         self.assertIn("Nextcloud and Supabase", provenance["remaining_gates"][3])
         self.assertFalse(provenance["maintenance"]["pin_changes"])
-        for source, digest in metadata["source_sha256"].items():
-            if source.startswith(("scripts/", "src/")):
-                self.assertEqual(hashlib.sha256((ROOT / source).read_bytes()).hexdigest(), digest)
+        # The receipt hash above binds the historical whole document. Comparing
+        # its source digests to today's checkout would incorrectly prohibit
+        # later harness work or treat old native runs as fresh candidate proof.
+        bind_stop_signal_source_provenance(metadata)
+
+    def test_stop_signal_historical_source_bindings_reject_changed_or_extra_sources(self) -> None:
+        metadata = strict_public_json((ROOT / "docs/evidence/stop-signal-independent-review-38106164571.json").read_bytes())
+        bind_stop_signal_source_provenance(metadata)
+        for source in STOP_SIGNAL_SOURCE_SHA256:
+            for fault in ("missing", "wrong_digest"):
+                changed = deepcopy(metadata)
+                if fault == "missing":
+                    del changed["source_sha256"][source]
+                else:
+                    changed["source_sha256"][source] = "0" * 64
+                with self.subTest(source=source, fault=fault), self.assertRaises(ValueError):
+                    bind_stop_signal_source_provenance(changed)
+        changed = deepcopy(metadata)
+        changed["source_sha256"]["unrelated_source"] = "0" * 64
+        with self.assertRaises(ValueError):
+            bind_stop_signal_source_provenance(changed)
+        changed = deepcopy(metadata)
+        changed["candidate_sha"] = "dd8c29435ff7734a567eb1ed4cda7d422d946bcb"
+        with self.assertRaises(ValueError):
+            bind_stop_signal_source_provenance(changed)
 
     def test_stop_signal_refuses_missing_duplicate_unrelated_and_nonpositive_evidence(self) -> None:
         for lane in LANES:

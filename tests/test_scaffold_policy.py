@@ -91,13 +91,14 @@ class ScaffoldPolicyTests(unittest.TestCase):
         self.assertIn('timeout --signal=TERM --kill-after=2s 8s "${podman_cmd[@]}" "$@"', native)
         self.assertIn('"${podman_cmd[@]:0:2}" timeout --signal=TERM --kill-after=2s 8s "${podman_cmd[@]:2}" "$@"', native)
         for owned_cleanup in (
-            'cleanup_container "$container" container',
-            'cleanup_container "$sidecar" sidecar',
-            'cleanup_remove "$role" rm --force --time 0 "$name"',
+            'cleanup_container "$container" container "$outer_container_id" "$outer_attempted"',
+            'cleanup_container "$sidecar" sidecar "$sidecar_container_id" "$sidecar_attempted"',
+            'cleanup_remove "$role" rm --force --time 0 "$id"',
             'cleanup_remove network network rm "$outer_network"',
             'cleanup_remove volume volume rm "$volume"',
         ):
             self.assertIn(owned_cleanup, native)
+        self.assertNotIn('cleanup_remove "$role" rm --force --time 0 "$name"', native)
         self.assertIn("run-exact-native-test.sh\" acquisition live_read_only_acquisition_matches_oracle", native)
         self.assertIn("run-exact-native-test.sh\" native_target live_target_render_matches_engine", native)
         exact = (ROOT / "scripts/run-exact-native-test.sh").read_text()

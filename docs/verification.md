@@ -1,5 +1,124 @@
 # Verification
 
+## Mandatory unadmitted runtime-cohort source observations
+
+The canonical harness requires nineteen exact ignored invocations, retaining the
+original first seventeen in order and adding the separate eighteenth
+`native_health_metadata_tests::lifecycle::runtime_filesystem::live_runtime_filesystem_matches_engine`
+and nineteenth
+`native_health_metadata_tests::lifecycle::tmpfs_effect::live_tmpfs_effects_match_engine`.
+They are test-only lifecycle children, not product executors. Each receives its
+explicit candidate SHA and fixed private proof path, with its own original
+once-created 180-second invocation deadline. No retry or counter/deadline reset
+is added; the outer watchdog and existing command/resource limits remain.
+
+The six-container `runtime-filesystem-v1` proof pairs independent CLI and literal
+rendered requests for both Init/ReadonlyRootfs omitted, both false and both true.
+Its init claim is only actual PID1 indirection: the authored worker is PID1/PPID0
+without init, and PID>1/PPID1 with init. It proves neither zombie reaping nor
+general signal behavior. Actual rootfs writes outside mounts must roundtrip a
+fixed canary for omitted/false; true requires native C-locale EROFS and no file.
+Cross-combinations of the flags and arbitrary images remain unproved. The
+producer's explicit exec intent uses the existing test-local Command fact,
+alongside the independently observed context; no product capability is added.
+
+The eight-container `tmpfs-effect-v1` proof covers only explicit 1 MiB/0700 and
+2 MiB/0750 tuples, each rw and ro, with independent CLI/rendered roles. Configured
+and active mount type/options/access are inspected, while BusyBox statfs, inode
+mode/owner, /proc/mounts and actual writes independently check effects. Writable
+controls require exact canary readback, exact-size saturation and native ENOSPC;
+read-only controls require native EROFS and no file. Defaults/omitted options,
+size-only/mode-only, other numeric values, special permission bits, mixed pairs,
+alternate paths and broader permission/interactions remain unproved.
+
+Configured `HostConfig.Mounts[].ReadOnly` accepts a missing key only for an
+expected false value, matching Moby v20.10.5's `api/types/mount/mount.go`
+`ReadOnly bool` with `json:",omitempty"` (Apache-2.0 upstream source; no source
+copied). A present value must be the matching JSON boolean; null, malformed
+values, or absence for expected true refuse. This serialization distinction
+does not change literal rendered-request equality, active `RW`, or any actual
+filesystem/write/cleanup assertion. The failed run's fixed panic marker alone
+does not establish which value was returned; fresh native lanes remain required.
+
+Both borrow only the unchanged harness-pinned BusyBox image and the lifecycle
+owner/cleanup ledger. The six- and eight-slot ledgers use dynamic exact-name/ID
+allowlists and borrowed-image ownership, not historical derived-image slots.
+Eight-container terminal cleanup uses at most 72 reserved calls (40 owner/removal
+operations and 32 reads across two ID/name absence rounds), below the unchanged
+100-call reserve. Actual completion within the 46-second cleanup reserve is not
+established by this arithmetic. Cleanup ambiguity remains nonpositive and hands
+off to the bound outer container/storage owner; there is no unsafe Drop retry.
+Final borrowed-image and outer snapshots are ordinary proof work, not cleanup
+reads or renewed budgets. Genuine lanes must retain room for those reads.
+
+All three fixed owner-private proofs are mandatory before any manifest can be
+written. The emitter keeps its nineteen-positional-argument protocol, derives
+fixed filenames from the existing private capture directory and supplies context
+independently from trusted canonical harness facts and observed daemon UID; a
+proof never supplies its own oracle. New raw-only fields are closed
+`runtime_filesystem_contract`/`runtime_filesystem_outcomes` and
+`tmpfs_effect_contract`/`tmpfs_effect_outcomes`, explicitly `admission: unadmitted`.
+Only literal omitted/false/true labels, PID1/diagonal scope and the fixed tmpfs
+coverage string are projected, never IDs, native bytes, timestamps or payloads.
+Capabilities, admitted shapes, historical evidence and sealed catalogues remain
+unchanged. Missing/failed/ambiguous proof is refusal, not unsupported-native
+evidence. Definitions and synthetic controls are not four-lane qualification.
+
+## Mandatory unadmitted lifecycle source observations
+
+DockerLens #114 wires `lifecycle-v1` as the seventeenth mandatory exact ignored
+test. Its six unique owned BusyBox containers borrow the existing pinned image;
+they neither build nor remove an image. Positive StopTimeout values 1s and 5s
+each have independent CLI/rendered cases: ready PID1 TERM traps delay 3s, ordinary
+`docker stop ID` has no timeout/signal override, and native stopped state, marker,
+exit 137/41 and monotonic/native timing must agree. HealthStartInterval compares
+a rendered explicit positive 1s request with an omitted CLI control. Each
+container's own StartedAt anchors an early [3.3,4)s and later [9,12)s snapshot;
+genuine failing marker/exit-1 health attempts, not inspect values alone, prove
+the effect. The Debian-only bounded negative requires accepted literal request,
+absent/zero readback, zero early attempts and real later attempts on both cases.
+Readback requires a Config.Healthcheck object: only an absent StartInterval field
+or integer zero counts as zero; explicit null and malformed values are rejected.
+Refusal, partial evidence, clock disagreement or jitter ambiguity fails closed.
+
+This is partial shape coverage: StopTimeout explicit zero and omitted values,
+and HealthStartInterval explicit zero are **not proven**. The omitted health
+control is comparative evidence, not independent shape admission. The emitter
+adds only `lifecycle_contract` and closed `lifecycle_outcomes`, explicitly marked
+`admission: unadmitted`; capability/shape maps and historical records are
+unchanged. An effective or `not_effective_on_selected_api` observation is not
+generic version support and cannot close the larger required-contract issue.
+
+The wrapper retains its nineteen-argument emitter protocol and original
+180-second invocation deadline, exposes only fixed lifecycle diagnostics, and
+preserves the first observation failure. Only the three lifecycle-family invocations
+receive the canonical outer-cleanup owner token. An uncertain inner cleanup requests
+outer teardown and fails; its marker never proves completed teardown. The EXIT
+owner now binds outer/sidecar creation IDs, rechecks ID/name/run ownership, removes
+only those IDs with immediate stop, and verifies both ID/name absence. Data-volume
+cleanup rechecks the original Name/Driver/Mountpoint/CreatedAt/run-label fingerprint.
+Unknown ownership, presence, mutation or readback retains private evidence and
+fails without retry. Unverified container removal also retains its network/data
+volume; failed provisioning with no trustworthy creation identity is deliberately
+reported for operator review rather than deleted by a recovered name. Existing
+privilege-correct eight-second command timers and watchdog remain; additional
+finite binding/readback requests are not a renewed inner cleanup budget.
+
+This integration has source-only Python/mocked-transport and syntax coverage;
+native qualification is pending. Full final-edit gates, fresh authenticated
+exact-head nineteen-test four-lane evidence, independent review, and required
+BoxFerry consumer rehearsals remain mandatory. No runtime cleanup completion,
+capability admission, full migration acceptance or release is claimed.
+
+Local execution and `.github/workflows/check.yml`, `native-validation.yml` and
+`release-validation.yml` all consume the same canonical harness. BoxFerry derives
+reviewed pins but does not invoke this private harness; other Lens products and
+the website have no consumer. Read-only Renovate review confirms the unchanged
+five image version/digest references, `scripts/native-conformance.sh` extraction,
+`DockerLens native conformance images` grouping and disabled automerge. Cargo,
+toolchain and Action managers remain unchanged. No software/dependency/pin or
+manager is added, changed, moved or removed by this integration.
+
 ## Mandatory configured stop-signal source proof
 
 DockerLens #112 adds the separate sixteenth exact ignored test defined by
@@ -46,7 +165,7 @@ sanitized receipt establishes trusted-harness assertions/closed success logs,
 not direct private-proof inspection, independent host inventory or separately
 retained effect values. Every historical record remains byte-exact. This is
 candidate rehearsal only: fresh final-edit complete gates, authenticated
-exact-final-candidate sixteen-test four-lane proof and independent review,
+exact-final-candidate nineteen-test four-lane proof and independent review,
 all six actual authored-fixture volume-only rehearsals and actual
 Nextcloud/Supabase bind/desired-external consumers remain required before
 ready/merge/main admission or release. Old source/consumer receipts grant no
@@ -1274,7 +1393,7 @@ health or start-interval groups. Identity is not arbitrary-image startup or
 host UID mapping; bind configuration is not relabel effect evidence.
 
 This is pre-merge candidate rehearsal admission. Production merge/main/release
-still require complete final-edit gates, fresh sixteen-test four-lane proof
+still require complete final-edit gates, fresh nineteen-test four-lane proof
 on the final candidate, fresh all six actual authored fixture volume-only consumer
 rehearsals required by ADR 0012, and fresh reviewed BoxFerry consumption of
 the actual authored Nextcloud/Supabase binds and desired external expectations.

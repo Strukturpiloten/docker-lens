@@ -60,8 +60,8 @@ class StopSignalWiringTests(unittest.TestCase):
     def test_canonical_harness_adds_one_proof_without_changing_emitter_protocol(self):
         harness = (ROOT / "scripts/native-conformance.sh").read_text()
         invocations = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', harness, re.M)
-        self.assertEqual(len(invocations), 16)
-        self.assertEqual(invocations[-1], ("native_stop_signal", "live_stop_signal_matches_engine"))
+        self.assertEqual(len(invocations), 19)
+        self.assertEqual(invocations[15], ("native_stop_signal", "live_stop_signal_matches_engine"))
         self.assertIn('export NATIVE_STOP_SIGNAL_PROOF_PATH="$run_dir/stop-signal-v1.json"', harness)
         self.assertIn("export NATIVE_STOP_SIGNAL_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA", harness)
         self.assertNotIn('"$NATIVE_STOP_SIGNAL_PROOF_PATH"', harness.split('python3 "$script_dir/native-evidence.py"', 1)[1])
