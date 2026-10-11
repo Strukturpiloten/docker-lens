@@ -64,6 +64,9 @@ macro_rules! assert_eq {
 #[path = "native_stop_signal_tests.rs"]
 mod stop_signal;
 
+#[path = "native_lifecycle_tests.rs"]
+mod lifecycle;
+
 fn required(name: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| panic!("closed health metadata environment"))
 }

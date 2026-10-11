@@ -37,6 +37,9 @@ class NativeHarnessTests(unittest.TestCase):
             ("native_bind_relabel", "live_bind_relabel_configuration_matches_engine"),
             ("native_external_network", "live_external_network_internal_matches_engine"),
             ("native_stop_signal", "live_stop_signal_matches_engine"),
+            ("native_lifecycle", "live_lifecycle_matches_engine"),
+            ("native_runtime_filesystem", "live_runtime_filesystem_matches_engine"),
+            ("native_tmpfs_effect", "live_tmpfs_effects_match_engine"),
         ])
         self.assertLess(source.index('native_port live_port_publications_match_engine'),
                         source.index('python3 "$script_dir/native-evidence.py"'))
@@ -183,12 +186,13 @@ case "$1" in
     fi
     [[ -e $FAKE_RESOURCE ]] ;;
   inspect)
-    if [[ $FAKE_MODE == mismatched_owner ]]; then echo foreign-run; else echo owned-run; fi ;;
+    if [[ $FAKE_MODE == mismatched_owner ]]; then echo foreign-run;
+    else printf '%s|dl-native-synthetic|owned-run\n' "$FAKE_ID"; fi ;;
   rm)
     printf '%s\\n' "$*" > "$FAKE_REMOVE_ARGS"
     # Independent CLI semantics: default stop grace is ten seconds. A client
     # deadline of eight seconds cannot reach removal without explicit time 0.
-    if [[ $* != 'rm --force --time 0 dl-native-synthetic' ]]; then
+    if [[ $* != "rm --force --time 0 $FAKE_ID" ]]; then
       (( FAKE_CLIENT_BOUND < 10 )) && exit 124
       exit 44
     fi
@@ -203,7 +207,7 @@ esac
 ''')
             env = os.environ.copy()
             env.update(PATH=f"{root}:{env['PATH']}", FAKE_RESOURCE=str(root / "resource"),
-                       FAKE_REMOVE_ARGS=str(root / "remove-args"))
+                       FAKE_REMOVE_ARGS=str(root / "remove-args"), FAKE_ID="a" * 64)
             for mode, original in (
                 ("success", False), ("success", True), ("query_error", False),
                 ("mismatched_owner", False), ("remove_error", False),
@@ -220,18 +224,18 @@ esac
                          "run_id=owned-run\nstatus=0\npreserve_run_dir=0\n"
                          f"script_dir={shlex.quote(str(ROOT / 'scripts'))}\nrun_dir={shlex.quote(str(root))}\n"
                          + helpers + selected
-                         + '\ncleanup_container dl-native-synthetic container\nexit "$status"\n'],
+                         + '\ncleanup_container dl-native-synthetic container "$FAKE_ID" 1\nexit "$status"\n'],
                         env=env, capture_output=True, text=True, timeout=5, check=False,
                     )
                     self.assertEqual(result.returncode, 0 if mode == "success" and not original else 1)
                     self.assertEqual(
                         (root / "resource").exists(),
-                        original or mode in ("mismatched_owner", "remove_error", "remove_cancelled", "leftover"),
+                        original or mode in ("query_error", "mismatched_owner", "remove_error", "remove_cancelled", "leftover"),
                     )
-                    self.assertEqual((root / "remove-args").exists(), mode != "mismatched_owner")
-                    if mode != "mismatched_owner" and not original:
+                    self.assertEqual((root / "remove-args").exists(), mode not in ("query_error", "mismatched_owner"))
+                    if mode not in ("query_error", "mismatched_owner") and not original:
                         self.assertEqual((root / "remove-args").read_text().strip(),
-                                         "rm --force --time 0 dl-native-synthetic")
+                                         "rm --force --time 0 " + "a" * 64)
                     if original or mode in ("remove_error", "remove_cancelled"):
                         category = "timeout" if original else "cancelled" if mode == "remove_cancelled" else "error"
                         self.assertIn(
@@ -240,7 +244,7 @@ esac
                         )
                     self.assertNotIn("private-canary", result.stdout + result.stderr)
                     if mode in ("leftover", "readback_error"):
-                        self.assertIn("owned container cleanup readback failed", result.stderr)
+                        self.assertIn("role=container operation=retain category=readback_unknown", result.stderr)
 
     def test_cleanup_success_summary_requires_dependency_cleanup(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
@@ -255,6 +259,8 @@ esac
 set -eu
 for name; do :; done
 case "$name" in
+  "$FAKE_OUTER_ID") role=container ;;
+  "$FAKE_SIDECAR_ID") role=sidecar ;;
   dl-native-synthetic) role=container ;;
   dl-native-egress-synthetic) role=sidecar ;;
   dl-native-net-synthetic) role=network ;;
@@ -262,7 +268,15 @@ case "$name" in
   *) exit 44 ;;
 esac
 [[ ${2:-} == exists ]] || echo 'private-canary native-resource-id' >&2
-if [[ $1 == inspect || ${2:-} == inspect ]]; then echo synthetic; exit 0; fi
+if [[ $1 == inspect || ${2:-} == inspect ]]; then
+  case $role in
+    container) printf '%s|dl-native-synthetic|synthetic\n' "$FAKE_OUTER_ID" ;;
+    sidecar) printf '%s|dl-native-egress-synthetic|synthetic\n' "$FAKE_SIDECAR_ID" ;;
+    volume) echo 'dl-native-data-synthetic|local|/mock/volume|created|synthetic' ;;
+    network) echo synthetic ;;
+  esac
+  exit 0
+fi
 if [[ ${2:-} == exists ]]; then [[ -e $FAKE_STATE/$role ]]; exit; fi
 if [[ $1 == rm || ${2:-} == rm ]]; then
   printf '%s\\n' "$*" >> "$FAKE_STATE/removals"
@@ -282,7 +296,8 @@ if [[ $1 == rm || ${2:-} == rm ]]; then
 else exit 50; fi
 ''')
             env = os.environ.copy()
-            env.update(PATH=f"{root}:{env['PATH']}", FAKE_STATE=str(root))
+            env.update(PATH=f"{root}:{env['PATH']}", FAKE_STATE=str(root),
+                       FAKE_OUTER_ID="a" * 64, FAKE_SIDECAR_ID="b" * 64)
             for mode in ("success", "container_leftover", "network_error"):
                 with self.subTest(mode=mode), tempfile.TemporaryDirectory(
                     prefix="dockerlens-native.", dir="/tmp",
@@ -297,6 +312,9 @@ else exit 50; fi
                         "container=dl-native-synthetic\nsidecar=dl-native-egress-synthetic\n"
                         "outer_network=dl-native-net-synthetic\nvolume=dl-native-data-synthetic\n"
                         "native_success_summary='native conformance passed: synthetic'\npreserve_run_dir=0\n"
+                        "outer_attempted=1; sidecar_attempted=1; network_attempted=1; network_created=1; volume_attempted=1\n"
+                        "outer_container_id=$FAKE_OUTER_ID; sidecar_container_id=$FAKE_SIDECAR_ID\n"
+                        "volume_identity='dl-native-data-synthetic|local|/mock/volume|created|synthetic'\n"
                         f"script_dir={shlex.quote(str(ROOT / 'scripts'))}\n"
                         f"run_dir={shlex.quote(temporary)}\n"
                         + helpers + "cleanup\n"
@@ -310,18 +328,18 @@ else exit 50; fi
                                      if mode == "success" else "")
                     self.assertEqual(
                         (root / "removals").read_text().splitlines(),
-                        ["rm --force --time 0 dl-native-synthetic",
-                         "rm --force --time 0 dl-native-egress-synthetic",
+                        ["rm --force --time 0 " + "a" * 64,
+                         "rm --force --time 0 " + "b" * 64] + ([] if mode == "container_leftover" else [
                          "network rm dl-native-net-synthetic",
-                         "volume rm dl-native-data-synthetic"],
+                         "volume rm dl-native-data-synthetic"]),
                     )
                     self.assertNotIn("private-canary", result.stdout + result.stderr)
                     self.assertNotIn("native-resource-id", result.stdout + result.stderr)
-                    self.assertFalse(Path(temporary).exists())
+                    self.assertEqual(Path(temporary).exists(), mode != "success")
                     if mode == "network_error":
                         self.assertIn("role=network operation=remove category=error", result.stderr)
                     if mode == "container_leftover":
-                        self.assertIn("owned container cleanup readback failed", result.stderr)
+                        self.assertIn("role=container operation=retain category=readback_unknown", result.stderr)
 
     def test_sidecar_failure_source_requires_successful_classification(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
@@ -631,7 +649,7 @@ else exit 50; fi
     def test_sidecar_command_marks_write_stage_before_httpd(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
         quoted_command = source.split('  "$FIXTURE_IMAGE" sh -c \\\n  ', 1)[1].split(
-            " 2>&1 >/dev/null |", 1
+            ' 2>&1 >"$run_dir/sidecar-create.id" |', 1
         )[0]
         command = shlex.split(quoted_command)
         self.assertEqual(len(command), 1)
@@ -720,7 +738,7 @@ else exit 50; fi
     def test_sidecar_httpd_stderr_is_outside_served_root(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
         quoted_command = source.split('  "$FIXTURE_IMAGE" sh -c \\\n  ', 1)[1].split(
-            " 2>&1 >/dev/null |", 1
+            ' 2>&1 >"$run_dir/sidecar-create.id" |', 1
         )[0]
         command = shlex.split(quoted_command)[0]
         with tempfile.TemporaryDirectory() as directory:
@@ -765,7 +783,7 @@ else exit 50; fi
     def test_sidecar_httpd_capture_limit_is_checked_and_bounds_overflow(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
         quoted_command = source.split('  "$FIXTURE_IMAGE" sh -c \\\n  ', 1)[1].split(
-            " 2>&1 >/dev/null |", 1
+            ' 2>&1 >"$run_dir/sidecar-create.id" |', 1
         )[0]
         command = shlex.split(quoted_command)[0]
         with tempfile.TemporaryDirectory() as directory:
@@ -1725,12 +1743,12 @@ case "$command" in
       *) exit 3 ;;
     esac ;;
  container)
- if [[ $1 == exists && $FAKE_NATIVE_FAULT == container_query_error && -e $state/ran ]]; then exit 125; fi
  if [[ $1 != exists ]]; then exit 4; fi
  case $2 in
- dl-native-egress-*) [[ $FAKE_NATIVE_FAULT == sidecar_query_error && -e $state/sidecar ]] && exit 125
+ dl-native-egress-*|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb) [[ $FAKE_NATIVE_FAULT == sidecar_query_error && -e $state/sidecar ]] && exit 125
  [[ -e $state/sidecar ]] ;;
- *) [[ -e $state/container ]] ;;
+ *) [[ $FAKE_NATIVE_FAULT == container_query_error && -e $state/ran ]] && exit 125
+ [[ -e $state/container ]] ;;
  esac ;;
  network)
  action=$1; shift
@@ -1768,7 +1786,7 @@ case "$command" in
       inspect)
         if [[ $* == *Labels* ]]; then
           for name; do :; done
-          echo "$name" | sed 's/^dl-native-data-//'
+          printf '%s|local|%s|2026-10-11T00:00:00Z|%s\n' "$name" "$state" "${name#dl-native-data-}"
           [[ $FAKE_NATIVE_FAULT == volume_inspect_partial ]] && exit 42
           true
         else echo "$state"; fi ;;
@@ -1790,6 +1808,7 @@ case "$command" in
  prior=$item
  done
  if [[ $name == dl-native-egress-* ]]; then
+   printf '%s\n' "$name" > "$state/expected-sidecar"
    printf '%s\n' "$*" > "$state/sidecar-run-args"
    touch "$state/sidecar"
    if [[ $FAKE_NATIVE_FAULT == sidecar_start || $FAKE_NATIVE_FAULT == sidecar_start_classifier_failure ]]; then
@@ -1797,11 +1816,17 @@ case "$command" in
      exit 42
    fi
    if [[ $FAKE_NATIVE_FAULT == cancel_after_sidecar ]]; then sleep 2; fi
+   printf '%s\n' bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+   if [[ $FAKE_NATIVE_FAULT == sidecar_identity_bad ]]; then printf '\n'; fi
  else
    printf '%s\n' "$*" > "$state/run-args"
    printf '%s\n' "$name" > "$state/expected-container"
    touch "$state/ran" "$state/container"
    [[ $FAKE_NATIVE_FAULT == run ]] && exit 42
+   if [[ $FAKE_NATIVE_FAULT == run_partial ]]; then
+     printf '%s\n' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+     exit 42
+   fi
    printf '%s\n' "$log_path" > "$state/daemon-log-path"
    printf '%s\n' "$daemon_image" > "$state/daemon-image"
    printf '1970-01-01T00:00:00.000000000Z stdout F private-startup-canary\n' >> "$log_path"
@@ -1848,9 +1873,15 @@ logs)
   printf '{"Id":"%s","Name":"%s","ImageName":"normalized-display-name","ImageDigest":%s,"Config":{"Labels":{"io.dockerlens.native-run":"%s"}},"HostConfig":{"Privileged":true,"LogConfig":{"Type":"k8s-file","Path":"%s"}}}\n' \
     "$outer_id" "$name" "$digest_json" "${name#dl-native-}" "$log_path"
  elif [[ $* == *Labels* ]]; then
- for name; do :; done
+ for id; do :; done
+ case $id in
+ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) read -r name < "$state/expected-container" ;;
+ bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb) read -r name < "$state/expected-sidecar" ;;
+ *) exit 66 ;;
+ esac
  if [[ $name == dl-native-egress-* && $FAKE_NATIVE_FAULT == sidecar_inspect_hang ]]; then sleep 30; fi
- echo "$name" | sed -e 's/^dl-native-egress-//' -e 's/^dl-native-//'
+ owner=${name#dl-native-egress-}; owner=${owner#dl-native-}
+ printf '%s|%s|%s\n' "$id" "$name" "$owner"
  if [[ $name == dl-native-egress-* && $FAKE_NATIVE_FAULT == sidecar_inspect_partial ]]; then exit 42; fi
  if [[ $name == dl-native-* && $name != dl-native-egress-* && $FAKE_NATIVE_FAULT == container_inspect_partial ]]; then exit 42; fi
  elif [[ $* == *NetworkSettings.Networks* ]]; then
@@ -1893,12 +1924,11 @@ logs)
  echo proof-egress ;;
  rm)
  for name; do :; done
- if [[ $name == dl-native-egress-* ]]; then
+ if [[ $name == bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ]]; then
    touch "$state/sidecar_removal_attempted"
    [[ $FAKE_NATIVE_FAULT == sidecar_remains ]] || rm -f "$state/sidecar"
  else
-   read -r expected < "$state/expected-container"
-   [[ $name == "$expected" ]] || exit 66
+   [[ $name == aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ]] || exit 66
    touch "$state/container_removal_attempted"
    [[ $FAKE_NATIVE_FAULT == container_remains ]] || rm -f "$state/container"
  fi ;;
@@ -1911,6 +1941,7 @@ esac
             ("debian11-rootful", "network_create"),
             ("debian11-rootful", "sidecar_start"),
             ("debian11-rootful", "sidecar_start_classifier_failure"),
+            ("debian11-rootful", "sidecar_identity_bad"),
             ("debian11-rootful", "sidecar_health_dead"),
             ("debian11-rootful", "sidecar_health_race"),
             ("debian11-rootful", "sidecar_exited_empty_ip"),
@@ -1923,6 +1954,7 @@ esac
             ("debian11-rootful", "sidecar_state_unavailable"),
             ("debian11-rootful", "cancel_after_sidecar"),
             ("debian11-rootful", "run"),
+            ("debian11-rootful", "run_partial"),
             ("debian11-rootless", "unexpected_mount"),
             ("debian11-rootless", "log_registration_id"),
             ("debian11-rootless", "log_registration_digest"),
@@ -1969,7 +2001,7 @@ esac
                            f'exec "{sys.executable}" "$@"\n')
                 env = os.environ.copy()
                 env.update(PATH=f"{bin_dir}:{env['PATH']}",
-                           FAKE_NATIVE_STATE=str(state), FAKE_NATIVE_FAULT=fault)
+                           FAKE_NATIVE_STATE=str(state), FAKE_NATIVE_FAULT=fault, TMPDIR=str(root))
                 command = ["bash", str(ROOT / "scripts/native-conformance.sh"), lane]
                 if fault == "cancel_after_sidecar":
                     process = subprocess.Popen(
@@ -1998,39 +2030,52 @@ esac
                     self.assertEqual(observed["status"], "registered" if fault in ("unexpected_mount", "legacy_podman_json") else "prepared")
                     self.assertIn("outer container has unexpected image or data-root volumes", result.stderr)
                     self.assertFalse((state / "go-field-projection-rejected").exists())
-                self.assertEqual((state / "volume").exists(), fault in ("volume_remains", "volume_inspect_partial"))
-                self.assertEqual((state / "container").exists(), fault in ("container_remains", "container_inspect_partial"))
-                self.assertEqual((state / "sidecar").exists(), fault in ("sidecar_remains", "sidecar_inspect_partial", "sidecar_inspect_hang"))
-                self.assertEqual((state / "network").exists(), fault in ("network_remains", "network_inspect_partial"))
+                container_unverified = fault in (
+                    "sidecar_start", "sidecar_start_classifier_failure", "cancel_after_sidecar",
+                    "sidecar_identity_bad", "run", "run_partial", "container_query_error", "container_remains", "container_inspect_partial",
+                    "sidecar_query_error", "sidecar_remains", "sidecar_inspect_partial", "sidecar_inspect_hang",
+                )
+                self.assertEqual((state / "volume").exists(), container_unverified or fault in (
+                    "volume", "volume_remains", "volume_inspect_partial", "volume_query_error"))
+                self.assertEqual((state / "container").exists(), fault in (
+                    "run", "run_partial", "container_query_error", "container_remains", "container_inspect_partial"))
+                self.assertEqual((state / "sidecar").exists(), fault in (
+                    "sidecar_start", "sidecar_start_classifier_failure", "cancel_after_sidecar",
+                    "sidecar_identity_bad", "sidecar_query_error", "sidecar_remains", "sidecar_inspect_partial", "sidecar_inspect_hang"))
+                self.assertEqual((state / "network").exists(), container_unverified or fault in (
+                    "network_create", "network_query_error", "network_remains", "network_inspect_partial"))
                 self.assertEqual((state / "foreign-resource").read_text(), "untouched")
-                if fault in ("container_query_error", "container_remains"):
+                if fault == "container_remains":
                     self.assertTrue((state / "container_removal_attempted").exists())
-                if fault in ("volume_query_error", "volume_remains"):
+                if fault == "volume_remains":
                     self.assertTrue((state / "volume_removal_attempted").exists())
-                if fault in ("sidecar_query_error", "sidecar_remains"):
+                if fault == "sidecar_remains":
                     self.assertTrue((state / "sidecar_removal_attempted").exists())
-                if fault in ("network_query_error", "network_remains"):
+                if fault == "network_remains":
                     self.assertTrue((state / "network_removal_attempted").exists())
                 if fault == "container_query_error":
-                    self.assertIn("could not verify whether owned container", result.stderr)
+                    self.assertIn("role=container operation=retain category=presence_unknown", result.stderr)
                 if fault == "volume_query_error":
-                    self.assertIn("could not verify whether owned volume", result.stderr)
+                    self.assertIn("role=volume operation=retain category=presence_unknown", result.stderr)
                 if fault == "container_remains":
-                    self.assertIn("owned container cleanup readback failed", result.stderr)
+                    self.assertIn("role=container operation=retain category=readback_unknown", result.stderr)
                 if fault == "volume_remains":
-                    self.assertIn("owned volume cleanup readback failed", result.stderr)
+                    self.assertIn("role=volume operation=retain category=readback_unknown", result.stderr)
                 if fault == "sidecar_remains":
-                    self.assertIn("owned sidecar cleanup readback failed", result.stderr)
+                    self.assertIn("role=sidecar operation=retain category=readback_unknown", result.stderr)
                 if fault == "sidecar_inspect_hang":
-                    self.assertIn("refusing to remove sidecar", result.stderr)
+                    self.assertIn("role=sidecar operation=retain category=identity_unknown", result.stderr)
                     self.assertFalse((state / "sidecar_removal_attempted").exists())
-                    self.assertTrue((state / "network_removal_attempted").exists())
-                    self.assertTrue((state / "volume_removal_attempted").exists())
+                    self.assertFalse((state / "network_removal_attempted").exists())
+                    self.assertFalse((state / "volume_removal_attempted").exists())
                 if fault == "network_remains":
-                    self.assertIn("owned network cleanup readback failed", result.stderr)
+                    self.assertIn("role=network operation=retain category=readback_unknown", result.stderr)
                 for role in ("container", "sidecar", "network", "volume"):
                     if fault == f"{role}_inspect_partial":
-                        self.assertIn(f"refusing to remove {role}", result.stderr)
+                        category = "identity_unbound" if role == "volume" else "identity_unknown"
+                        self.assertIn(f"role={role} operation=retain category={category}", result.stderr)
+                        self.assertFalse((state / f"{role}_removal_attempted").exists())
+                    if fault == f"{role}_query_error":
                         self.assertFalse((state / f"{role}_removal_attempted").exists())
                 if fault == "sidecar_health_dead":
                     self.assertIn("DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=sidecar_health", result.stderr)
@@ -2077,8 +2122,8 @@ esac
                 if fault == "sidecar_start_classifier_failure":
                     self.assertIn("phase=sidecar_failure category=unknown", result.stderr)
                     self.assertIn("phase=sidecar_start", result.stderr)
-                    self.assertFalse((state / "sidecar").exists())
-                    self.assertTrue((state / "sidecar_removal_attempted").exists())
+                    self.assertTrue((state / "sidecar").exists())
+                    self.assertFalse((state / "sidecar_removal_attempted").exists())
                 self.assertNotIn("private-canary", result.stdout + result.stderr)
                 if fault == "sidecar_running_empty_ip":
                     self.assertTrue((state / "health-attempted").exists())

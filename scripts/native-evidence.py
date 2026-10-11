@@ -13,6 +13,17 @@ from native_health_metadata_proof import CONTRACT as HEALTH_METADATA_CONTRACT, r
 from native_stop_signal_proof import (
     CONTRACT as STOP_SIGNAL_CONTRACT, FILENAME as STOP_SIGNAL_FILENAME, read_stop_signal_proof,
 )
+from native_lifecycle_proof import (
+    CONTRACT as LIFECYCLE_CONTRACT, FILENAME as LIFECYCLE_FILENAME, read_lifecycle_proof,
+)
+from native_runtime_filesystem_proof import (
+    CONTRACT as RUNTIME_FILESYSTEM_CONTRACT, FILENAME as RUNTIME_FILESYSTEM_FILENAME,
+    read_runtime_filesystem_proof,
+)
+from native_tmpfs_effect_proof import (
+    CONTRACT as TMPFS_EFFECT_CONTRACT, FILENAME as TMPFS_EFFECT_FILENAME,
+    read_proof as read_tmpfs_effect_proof, validate as validate_tmpfs_effect_proof,
+)
 from native_network_attachment_proof import CONTRACT as NETWORK_ATTACHMENT_CONTRACT, read_network_attachment_proof
 from native_bind_relabel_proof import CONTRACT as BIND_RELABEL_CONTRACT, read_bind_relabel_proof
 from native_external_network_proof import (
@@ -484,6 +495,14 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         capture_dir / EXTERNAL_NETWORK_FILENAME, capture_dir, external_context))
     stop_signal_probes = list(read_stop_signal_proof(
         capture_dir / STOP_SIGNAL_FILENAME, capture_dir, external_context))
+    lifecycle_outcomes = list(read_lifecycle_proof(
+        capture_dir / LIFECYCLE_FILENAME, capture_dir, external_context))
+    # Both exact producers are mandatory, including when no new capability is
+    # admitted. Context remains independently constructed from harness facts.
+    read_runtime_filesystem_proof(
+        capture_dir / RUNTIME_FILESYSTEM_FILENAME, capture_dir, external_context)
+    tmpfs_effect = validate_tmpfs_effect_proof(
+        read_tmpfs_effect_proof(capture_dir / TMPFS_EFFECT_FILENAME), external_context)
 
     # Only these closed mappings follow the complete, validated native proof
     # files above. They extend raw lane evidence, never the reviewed catalogue.
@@ -561,6 +580,20 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         "external_network_probes": external_network_probes,
         "stop_signal_contract": STOP_SIGNAL_CONTRACT,
         "stop_signal_probes": stop_signal_probes,
+        # Source observations remain explicitly unadmitted. Neither lifecycle
+        # capability nor shape enters capability_outcome/admitted_shapes.
+        "lifecycle_contract": LIFECYCLE_CONTRACT,
+        "lifecycle_outcomes": {"admission": "unadmitted", "probes": lifecycle_outcomes},
+        "runtime_filesystem_contract": RUNTIME_FILESYSTEM_CONTRACT,
+        "runtime_filesystem_outcomes": {
+            "admission": "unadmitted", "init_effect_scope": "pid1_indirection_only",
+            "rootfs_effect_scope": "diagonal_omitted_false_true_only",
+            "controls": ["omitted", "false", "true"],
+        },
+        "tmpfs_effect_contract": TMPFS_EFFECT_CONTRACT,
+        "tmpfs_effect_outcomes": {
+            "admission": "unadmitted", "coverage": tmpfs_effect["coverage"],
+        },
     }
     if parameterized_identity:
         record["identity_contract"] = IDENTITY_CONTRACT

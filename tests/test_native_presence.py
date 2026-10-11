@@ -135,7 +135,7 @@ from pathlib import Path
 args=sys.argv[1:]
 state=Path(os.environ["PRESENCE_STATE"])
 name=args[-1]
-role=name.removeprefix("r_")
+role={"a"*64: "container", "b"*64: "sidecar"}.get(name, name.removeprefix("r_"))
 if "exists" in args:
     present=(state/role).exists()
     inject=role==os.environ["PRESENCE_ROLE"] and (
@@ -151,7 +151,11 @@ if "exists" in args:
         if fault=="error": sys.exit(125)
     sys.exit(0 if present else 1)
 if "inspect" in args:
-    print("owner"); sys.exit(0)
+    if role in ("container", "sidecar"):
+        print(("a" if role=="container" else "b")*64+"|r_"+role+"|owner")
+    elif role=="volume": print("r_volume|local|/mock/volume|created|owner")
+    else: print("owner")
+    sys.exit(0)
 if "rm" in args:
     (state/(role+"-removed")).touch()
     (state/role).unlink(missing_ok=True)
@@ -172,6 +176,9 @@ run_dir={shlex.quote(str(run_dir))}
 podman_cmd=({podman})
 container=r_container; sidecar=r_sidecar; outer_network=r_network; volume=r_volume
 run_id=owner; lane=mock; watchdog_pid=; native_success_summary=passed; preserve_run_dir=0
+outer_attempted=1; sidecar_attempted=1; network_attempted=1; network_created=1; volume_attempted=1
+outer_container_id={'a' * 64}; sidecar_container_id={'b' * 64}
+volume_identity='r_volume|local|/mock/volume|created|owner'
 '''
             body = preflight if phase == "preflight" else "true\ncleanup\n"
             environment = os.environ.copy()
