@@ -2,6 +2,8 @@
 
 Status: accepted harness contract; historical four-lane source evidence reviewed.
 Each changed candidate and release requires fresh complete and native gates.
+Host Engine Unix-HTTP transport is amended by [ADR 0020](0020-harness-unix-http-transport.md);
+its test-only helper does not change images, launchers, privileges or native oracles.
 
 The four independent native lanes use the published, version-tagged and
 digest-pinned containers#260 GHCR images: Debian 11 packaged Engine in

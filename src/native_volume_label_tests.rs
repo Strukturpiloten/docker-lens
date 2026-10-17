@@ -201,23 +201,24 @@ impl LabelRun {
         command.args([
             "--kill-after=1",
             "20",
-            "curl",
-            "-sS",
-            "--max-time",
+            "python3",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/native-unix-http.py"),
+            "--timeout",
             "15",
-            "--max-filesize",
+            "--max-response-bytes",
             "65536",
-            "--unix-socket",
+            "--socket",
             &self.socket,
-            "-X",
+            "--method",
             method,
-            "-H",
-            "Content-Type: application/json",
+            "--max-request-bytes",
+            "8388608",
+            "--json-content-type",
         ]);
         if input.is_some() {
-            command.args(["--data-binary", "@-"]);
+            command.args(["--body-stdin"]);
         }
-        command.args(["-w", "\n%{http_code}", &format!("http://localhost{path}")]);
+        command.args(["--path", path]);
         let (status, stdout) = bounded_command(&mut command, input.as_deref(), 65_550);
         assert!(
             status.success(),

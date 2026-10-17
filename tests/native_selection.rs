@@ -403,12 +403,34 @@ fn membership_cli_ok(args: &[&str]) -> Vec<u8> {
 
 fn direct_network_membership(socket: &Path, api: &str, network_id: &str) -> Value {
     let mut command = Command::new("timeout");
-    command.args(["--kill-after=1s", "18s", "curl", "-fsS", "--max-time", "15"]);
-    command.arg("--unix-socket").arg(socket);
-    command.arg(format!("http://localhost/v{api}/networks/{network_id}"));
+    command.args([
+        "--kill-after=1s",
+        "18s",
+        "python3",
+        concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/native-unix-http.py"),
+        "--timeout",
+        "15",
+        "--method",
+        "GET",
+        "--max-response-bytes",
+        "10485756",
+    ]);
+    command.arg("--socket").arg(socket);
+    command
+        .arg("--path")
+        .arg(format!("/v{api}/networks/{network_id}"));
     let (success, body) = bounded_output(&mut command);
     assert!(success, "bounded direct network GET failed");
-    let direct: Value = serde_json::from_slice(&body).expect("direct network GET is JSON");
+    let split = body
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .expect("direct HTTP frame");
+    assert_eq!(
+        &body[split + 1..],
+        b"200",
+        "direct network GET requires HTTP 200"
+    );
+    let direct: Value = serde_json::from_slice(&body[..split]).expect("direct network GET is JSON");
     assert!(
         direct["Id"].as_str() == Some(network_id),
         "direct network identity changed"

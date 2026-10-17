@@ -2169,14 +2169,16 @@ esac
                     if fault == "unexpected_mount":
                         self.assertIn("unexpected image or data-root volumes", result.stderr)
 
-    def test_native_curl_readiness_sites_keep_exact_argv_counts_and_final_fallback(self) -> None:
+    def test_native_unix_http_readiness_checks_actual_status_and_request_counts(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text()
-        self.assertEqual(len(re.findall(r"\bcurl\b", source)), 4)  # Preflight and three sites.
+        self.assertEqual(len(re.findall(r"\bcurl\b", source)), 1)  # Separate network probe prerequisite.
         readiness = "deadline=$((SECONDS + 360))" + source.split(
             "deadline=$((SECONDS + 360))", 1
         )[1].split("\nif [[ $lane == debian11-rootless ]]; then", 1)[0]
         cases = (
             ("ready", [0, 0], False, True, 2, 0, 0),
+            ("http-404-retry", [0, 0, 0], False, True, 3, 1, 0),
+            ("http-404-not-ready", [0, 0], True, True, 2, 1, 1),
             ("poll-retry", [7, 0, 0], False, True, 3, 1, 0),
             ("final-failure", [0, 7], False, True, 2, 0, 1),
             ("deadline-fallback", [7, 7], True, True, 2, 1, 1),
@@ -2188,11 +2190,14 @@ esac
                 socket_path = directory / "docker.sock"
                 # Exercise the real -S guard without creating a transport or listener.
                 os.mknod(socket_path, stat.S_IFSOCK | 0o600)
-                calls, env = self._native_curl_client(directory, exits, "000")
+                http_status = (["404", "200", "200"] if case == "http-404-retry" else
+                               "404" if case == "http-404-not-ready" else "200")
+                calls, env = self._native_unix_client(directory, exits, http_status)
                 sleeps = directory / "sleep-calls"
                 preface = f"""set -euo pipefail
 SECONDS=0
 socket=$1
+script_dir=$PWD
 container=synthetic-owned-daemon
 podman_cmd=(podman)
 chmod() {{ :; }}
@@ -2202,13 +2207,13 @@ sleep() {{ printf '%s\\n' "$*" >> {shlex.quote(str(sleeps))}; {'SECONDS=360' if 
 diagnose_native_startup() {{ printf '%s\\n' startup-diagnostic >&2; }}
 """
                 result = subprocess.run(
-                    ["bash", "-c", preface + readiness, "curl-readiness-test", str(socket_path)],
+                    ["bash", "-c", preface + readiness, "unix-http-readiness-test", str(socket_path)],
                     cwd=directory, env=env, capture_output=True, text=True, timeout=10, check=False,
                 )
                 self.assertEqual(result.returncode, status, result.stderr)
                 self.assertTrue(calls.exists())
-                expected = ["-q", "--noproxy", "*", "-fs", "--max-time", "5", "--unix-socket",
-                            str(socket_path), "http://localhost/_ping"]
+                expected = ["--socket", str(socket_path), "--method", "GET", "--path", "/_ping",
+                            "--timeout", "5", "--max-response-bytes", "65536", "--discard-body"]
                 observed = [json.loads(line) for line in calls.read_text().splitlines()]
                 self.assertEqual(observed, [{"argv": expected, "canary": "synthetic-client-boundary"}]
                                  * expected_count)
@@ -2217,28 +2222,28 @@ diagnose_native_startup() {{ printf '%s\\n' startup-diagnostic >&2; }}
                 self.assertEqual(result.stdout, "")
                 self.assertNotIn("synthetic-client-boundary", result.stderr)
 
-    def test_native_curl_api_get_keeps_exact_argv_count_limits_and_failure_status(self) -> None:
+    def test_native_unix_http_api_get_preserves_limits_and_failure_status(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         api_get = "api_get() {" + source.split("api_get() {", 1)[1].split("\njson_key() {", 1)[0]
-        self.assertIn("status=$(timeout 20 curl -q --noproxy '*' -fsS --max-time 15", api_get)
+        self.assertIn('status=$(timeout 20 python3 "$script_dir/native-unix-http.py"', api_get)
         for http_status, native_exit, expected_exit in (("200", 0, 0), ("404", 0, 1),
-                                                       ("000", 7, 7), ("404", 22, 22)):
+                                                       ("unused", 4, 4), ("unused", 3, 3)):
             with self.subTest(http_status=http_status, native_exit=native_exit), \
                     tempfile.TemporaryDirectory() as temporary:
                 directory = Path(temporary)
                 socket_path = directory / "docker.sock"
                 target = directory / "container.json"
-                calls, env = self._native_curl_client(directory, [native_exit], http_status)
+                calls, env = self._native_unix_client(directory, [native_exit], http_status)
                 request = "/v1.41/containers/synthetic/json"
-                script = 'set -euo pipefail\nsocket=$1\n' + api_get + '\napi_get "$2" "$3"'
+                script = 'set -euo pipefail\nsocket=$1\nscript_dir=$PWD\n' + api_get + '\napi_get "$2" "$3"'
                 result = subprocess.run(
-                    ["bash", "-c", script, "curl-api-test", str(socket_path), request, str(target)],
+                    ["bash", "-c", script, "unix-http-api-test", str(socket_path), request, str(target)],
                     cwd=directory, env=env, capture_output=True, text=True, timeout=10, check=False,
                 )
                 self.assertEqual(result.returncode, expected_exit, result.stderr)
                 self.assertTrue(calls.exists())
-                expected = ["-q", "--noproxy", "*", "-fsS", "--max-time", "15", "--unix-socket",
-                            str(socket_path), "http://localhost" + request, "-o", str(target), "-w", "%{http_code}"]
+                expected = ["--socket", str(socket_path), "--method", "GET", "--path", request,
+                            "--timeout", "15", "--max-response-bytes", "8388608", "--response-body-file", str(target)]
                 self.assertEqual([json.loads(line) for line in calls.read_text().splitlines()],
                                  [{"argv": expected, "canary": "synthetic-client-boundary"}])
                 status_path = target.with_suffix(".status")
@@ -2249,13 +2254,11 @@ diagnose_native_startup() {{ printf '%s\\n' startup-diagnostic >&2; }}
                 self.assertEqual(result.stdout, "")
                 self.assertNotIn("synthetic-client-boundary", result.stderr)
 
-    def _native_curl_client(self, directory: Path, exits: list[int], http_status: str) -> tuple[Path, dict[str, str]]:
-        calls = directory / "curl-argv.jsonl"
+    def _native_unix_client(self, directory: Path, exits: list[int], http_status: str | list[str]) -> tuple[Path, dict[str, str]]:
+        calls = directory / "unix-http-argv.jsonl"
         bin_dir = directory / "bin"
         bin_dir.mkdir()
-        # A real glob match makes an unquoted --noproxy wildcard fail the argv check.
-        (directory / "wildcard-expansion-canary").touch()
-        self._tool(bin_dir, "curl", f"""#!{sys.executable}
+        self._tool(directory, "native-unix-http.py", f"""#!{sys.executable}
 import json
 import os
 import sys
@@ -2264,12 +2267,16 @@ from pathlib import Path
 calls = Path({str(calls)!r})
 previous = calls.read_text().splitlines() if calls.exists() else []
 with calls.open('a') as output:
-    output.write(json.dumps({{'argv': sys.argv[1:], 'canary': os.environ.get('DOCKERLENS_CURL_CANARY')}}) + '\\n')
+    output.write(json.dumps({{'argv': sys.argv[1:], 'canary': os.environ.get('DOCKERLENS_HTTP_CANARY')}}) + '\\n')
 exits = {exits!r}
-sys.stdout.write({http_status!r})
-sys.exit(exits[min(len(previous), len(exits) - 1)])
+exit_code = exits[min(len(previous), len(exits) - 1)]
+if exit_code == 0:
+    statuses = {http_status!r}
+    status = statuses[min(len(previous), len(statuses) - 1)] if isinstance(statuses, list) else statuses
+    sys.stdout.write(status + "\\n")
+sys.exit(exit_code)
 """)
-        return calls, {"PATH": f"{bin_dir}:/usr/bin:/bin", "DOCKERLENS_CURL_CANARY": "synthetic-client-boundary"}
+        return calls, {"PATH": f"{bin_dir}:/usr/bin:/bin", "DOCKERLENS_HTTP_CANARY": "synthetic-client-boundary"}
 
     def test_published_image_and_fixture_contracts_are_static(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text()
@@ -2279,7 +2286,7 @@ sys.exit(exits[min(len(previous), len(exits) - 1)])
         self.assertIn('--user 0:0 --workdir /tmp --hostname dockerlens-native', source)
         self.assertIn('--label io.dockerlens.fixture=synthetic', source)
         self.assertNotIn('/run/dockerlens', source)
-        self.assertIn('curl -q --noproxy \'*\' -fs --max-time 5 --unix-socket "$socket" http://localhost/_ping', source)
+        self.assertIn('--path /_ping --timeout 5 --max-response-bytes 65536 --discard-body', source)
         self.assertNotIn('apt-get', source)
         self.assertFalse((ROOT / "scripts/native-apt-install.sh").exists())
         self.assertFalse((ROOT / "scripts/native-debian-snapshot.sh").exists())
@@ -2672,8 +2679,8 @@ fi
     def test_port_diagnostic_families_are_closed_and_target_scoped(self) -> None:
         valid = [
             "DOCKERLENS_NATIVE_API_DIAG: transport=timeout",
-            "DOCKERLENS_NATIVE_PORT_API_DIAG: action=start phase=probe exit=curl_timeout",
-            "DOCKERLENS_NATIVE_PORT_API_DIAG: action=inspect_name phase=cleanup exit=outer_timeout",
+            "DOCKERLENS_NATIVE_PORT_API_DIAG: version=2 client=unix_http_v1 action=start phase=probe exit=deadline",
+            "DOCKERLENS_NATIVE_PORT_API_DIAG: version=2 client=unix_http_v1 action=inspect_name phase=cleanup exit=outer_timeout",
             "DOCKERLENS_NATIVE_PORT_START_DIAG: outcome=observed version=responsive object=timeout identity=unknown state=unknown primary=unknown secondary=unknown allocation_relation=unknown mutation=uncertain",
             "DOCKERLENS_NATIVE_API_DIAG: operation=start status=server",
             "DOCKERLENS_NATIVE_HTTP_DIAG: exit=other category=connection_refused",
@@ -2725,7 +2732,7 @@ fi
                 result = self._port_wrapper("\n".join([
                     "DOCKERLENS_NATIVE_CHECK: port_repeated_dynamic_ipv4_oracle_oracle_start",
                     "DOCKERLENS_NATIVE_API_DIAG: transport=timeout",
-                    "DOCKERLENS_NATIVE_PORT_API_DIAG: action=start phase=probe exit=curl_timeout",
+                    "DOCKERLENS_NATIVE_PORT_API_DIAG: version=2 client=unix_http_v1 action=start phase=probe exit=deadline",
                     "DOCKERLENS_NATIVE_PORT_DIAGNOSTIC_SCOPE: begin",
                     f"thread '{selected}' panicked at src/native_port_tests.rs:505:9:",
                     "private-native-ID protected-secret 32000",
@@ -2733,7 +2740,7 @@ fi
                     f"DOCKERLENS_NATIVE_PORT_START_DIAG: {observation}",
                     f"thread '{selected}' panicked at src/native_port_tests.rs:415:9:",
                     "DOCKERLENS_NATIVE_CHECK: port_cleanup",
-                    "DOCKERLENS_NATIVE_PORT_API_DIAG: action=delete phase=cleanup exit=outer_timeout",
+                    "DOCKERLENS_NATIVE_PORT_API_DIAG: version=2 client=unix_http_v1 action=delete phase=cleanup exit=outer_timeout",
                     "DOCKERLENS_NATIVE_CHECK: port_cleanup_unverified",
                     "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 130 filtered out;",
                 ]))
@@ -2741,7 +2748,7 @@ fi
                 self.assertIn("line=415 column=9", result.stderr)
                 self.assertNotIn("line=505", result.stderr)
                 self.assertIn(f"DOCKERLENS_NATIVE_PORT_START_DIAG: {observation}", result.stderr)
-                self.assertIn("action=start phase=probe exit=curl_timeout", result.stderr)
+                self.assertIn("action=start phase=probe exit=deadline", result.stderr)
                 self.assertIn("action=delete phase=cleanup exit=outer_timeout", result.stderr)
                 for secret in ("private-native-ID", "protected-secret", "32000"):
                     self.assertNotIn(secret, result.stdout + result.stderr)

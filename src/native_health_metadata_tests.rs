@@ -619,33 +619,24 @@ impl HealthRun {
         });
         let mut command = self.timer(cleanup, false);
         command.args([
-            "curl",
-            "-q",
-            "--noproxy",
-            "*",
-            "--silent",
-            "--show-error",
-            "--max-time",
+            "python3",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/native-unix-http.py"),
+            "--timeout",
             "7",
-            "--max-filesize",
+            "--max-response-bytes",
             "65536",
-            "--unix-socket",
+            "--socket",
             &self.socket,
-            "--request",
+            "--method",
             method,
-            "--header",
-            "Content-Type: application/json",
+            "--max-request-bytes",
+            "8388608",
+            "--json-content-type",
         ]);
         if input.is_some() {
-            command.args(["--data-binary", "@-"]);
-        } else if method == "POST" {
-            command.args(["--data-binary", ""]);
+            command.args(["--body-stdin"]);
         }
-        command.args([
-            "--write-out",
-            "\n%{http_code}",
-            &format!("http://localhost{path}"),
-        ]);
+        command.args(["--path", path]);
         let output = self.capture(&mut command, input.as_deref(), cleanup);
         let at = output
             .iter()

@@ -723,23 +723,29 @@ fixture is writable inside this task-private directory so the rootless mapped
 UID can exercise the rendered read-write bind mount. The separate read-only
 bind assertion therefore tests mount behavior independently of host ownership.
 
-All three harness curl sites (readiness polling, the final readiness check and
-the direct API GET helper) use first-option `-q` and literal `--noproxy '*'`.
-This disables default curl configuration and proxy routing for the existing
-explicit Unix-socket requests, without changing executable selection, inherited
-environment, URLs, request counts, limits, startup cadence, privileges or cleanup.
-Offline fake-client regressions check complete argv and nonzero invocation counts
-for each site, including the final readiness fallback and native/status failures.
-They neither diagnose historical failures nor establish native or release evidence.
+Host Engine Unix-HTTP now uses the independent test-only
+[Unix-HTTP transport v1](native-unix-http.md), under ADR 0020. It replaces both
+readiness calls, direct captures and every Rust native helper using the same
+explicit AF_UNIX endpoint. Readiness and direct captures explicitly require
+actual HTTP 200; a transport error cannot become HTTP 000 or an absence result.
+Existing request/byte limits, caller timers, scoped ownership, uncertain
+mutations and cleanup assertions remain authoritative. The twenty-one exact
+native invocations, Docker CLI and genuine Rust acquisition remain independent;
+TCP/UDP/network-namespace curl probes retain their own unchanged transport.
+The earlier first-option curl-only argv/executable freeze is superseded only for
+host Engine Unix-HTTP. Python/curl AppArmor mediation differs; the historical
+curl-denied capture remains failed, with no host-policy repair or claim of
+equivalent confinement. Authored fake-server and consumer regressions are
+offline transport controls, not native or release evidence.
 
 The canonical harness continues to serve local execution, `check.yml` main push,
 `native-validation.yml` reviewed dispatch and `release-validation.yml` exact-main
 dispatch. Renovate's original native-image manager still uniquely extracts the
 same five image/fixture tag-and-digest pairs; its paths, grouping and approvals
-need no edit. BoxFerry's frozen producer receipt and script-digest catalogue binding
-remain unchanged: adopting a revised harness source separately requires an explicit
-consumer contract or a new independently verified producer build and receipt, not a
-hash-only refresh.
+need no edit. Historical BoxFerry producer receipts remain unchanged. Adoption
+under BoxFerry #366 requires the reviewed helper revision/digest alongside native
+script identity and a new independently verified producer build and receipt;
+a hash-only refresh cannot qualify changed code.
 
 Every image declares a Docker data-root VOLUME. The harness disables
 automatic image volumes and mounts exactly one task-labeled named volume at
@@ -1066,7 +1072,8 @@ helper retains immutable outer identity and its held namespace FD. Before
 identity publication or namespace entry, that exact FD's kernel device/inode
 must differ from the helper's host/self network namespace. A name, label or
 bridge intent is not a substitute; unavailable/equal identities fail closed.
-The approved first-option `curl -q` keeps default client configuration disabled.
+The separate network-namespace probes retain first-option `curl -q` to keep
+default client configuration disabled; host Engine Unix-HTTP follows ADR 0020.
 
 The initial `NATIVE_PORT_PROBES_PATH` contract is a fresh, exclusive,
 owner-private regular file directly under validated `NATIVE_CAPTURE_DIR`.
@@ -1148,8 +1155,8 @@ repeated genuine absence checks, assertion outcomes and admission stay unchanged
 raw test, controller and runtime output remains private.
 
 Failed API diagnostics separately retain the first closed action/phase/exit for
-probe and cleanup, distinguishing curl's request timeout from the outer command
-timeout and signals without printing a route, ID or response. Only a transport
+probe and cleanup, identifying `version=2 client=unix_http_v1` and distinguishing the helper's
+closed categories from the outer command timeout and signals without printing a route, ID or response. Only a transport
 failure starting the exact registered repeated-ephemeral IPv4 CLI oracle enables
 an optional version GET and that same immutable ID's inspect GET. This uses a
 test-only guarded seam into the existing acquisition transport, not subprocess
@@ -1199,7 +1206,7 @@ allocation/reservation collision, but that explanation remains a hypothesis.
 No oracle source is copied or translated into the implementation.
 
 Only non-cleanup POST START requests for the exact registered canonical IDs and
-names of `multi-dynamic-oracle` and `multi-dynamic-rendered` get curl/outer
+names of `multi-dynamic-oracle` and `multi-dynamic-rendered` get HTTP-helper/outer
 ceilings of 24/26 seconds, and only after the independently verified
 `debian11-rootless` context records matching rootless capture facts, API 1.41
 and exact Engine 20.10.5 release text. The context's already accepted
@@ -1210,7 +1217,7 @@ limits are clipped to the remaining original 180-second deadline, preserving
 forty seconds for cleanup, the existing one-second KILL grace, and a further
 one-second setup/reporting margin. Full 24/26 limits require 68 whole seconds
 remaining; at 45 seconds the clipped limits are 1/3, and less time submits no
-request. Curl remains two seconds below its outer timer. Limits are recomputed
+request. The HTTP helper remains two seconds below its outer timer. Limits are recomputed
 after optional private record publication before request I/O.
 
 All eight shape outcomes, traffic and exact assertions, command/byte caps,
@@ -1231,7 +1238,7 @@ child of the separate mode-0700 `$run_dir/diagnostics` directory, outside the
 direct native proof inputs. The closed record binds run, lane, exact candidate,
 immutable outer ID and name, created ID and name, API, phase, and the original
 180-second cutoff. It starts immediately before capture and is finalized only
-on that original curl/command timeout, recording the actual POST failure end.
+on that original HTTP-helper/outer-command timeout, recording the actual POST failure end.
 Failure to publish or finalize leaves the optional observation unavailable;
 it cannot affect the original request, assertions, eight port shapes, existing
 four-second two-GET follow-up, forty-second inner cleanup reserve, or proof.

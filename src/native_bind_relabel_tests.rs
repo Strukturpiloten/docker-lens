@@ -508,32 +508,24 @@ impl Run {
         }
         let input = body.map(|v| serde_json::to_vec(v).unwrap());
         let mut args = vec![
-            "curl".into(),
-            "-q".into(),
-            "--noproxy".into(),
-            "*".into(),
-            "-sS".into(),
-            "--max-time".into(),
+            "python3".into(),
+            concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/native-unix-http.py").into(),
+            "--timeout".into(),
             if cleanup { "0.5".into() } else { "2".into() },
-            "--max-filesize".into(),
+            "--max-response-bytes".into(),
             "65536".into(),
-            "--unix-socket".into(),
+            "--socket".into(),
             self.socket.clone(),
-            "-X".into(),
+            "--method".into(),
             method.into(),
-            "-H".into(),
-            "Content-Type: application/json".into(),
+            "--max-request-bytes".into(),
+            "8388608".into(),
+            "--json-content-type".into(),
         ];
         if input.is_some() {
-            args.extend(["--data-binary".into(), "@-".into()]);
-        } else if method == "POST" {
-            args.extend(["--data-binary".into(), String::new()]);
+            args.push("--body-stdin".into());
         }
-        args.extend([
-            "-w".into(),
-            "\n%{http_code}".into(),
-            format!("http://localhost{path}"),
-        ]);
+        args.extend(["--path".into(), path.into()]);
         let output = self.command(cleanup, false, &args, input.as_deref(), 64 * 1024 + 8);
         assert!(
             output.status.success(),

@@ -282,3 +282,10 @@ only a private Unix test socket. Debian package provenance is checked inside
 the image. Genuine native runs and independent review are required before any
 compatibility catalog record is positive; discovering a version number is
 not compatibility evidence.
+
+Host Engine HTTP in the native test harness uses the independent test-only
+[Unix-HTTP transport](native-unix-http.md), under ADR 0020. This helper is not
+the product acquisition implementation or a semantic oracle. Caller route,
+ownership, mutation, absolute-budget and cleanup assertions remain in the native
+tests; Docker CLI, real Rust acquisition and namespace TCP/UDP probes remain
+independent. Historical source records and capability admission are unchanged.

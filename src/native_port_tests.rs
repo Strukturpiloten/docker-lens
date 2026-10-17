@@ -292,11 +292,11 @@ const PORT_SUFFIXES: [&str; 8] = [
 
 fn repeated_start_timeouts(remaining: Duration) -> Option<(u64, u64)> {
     // Reserve forty seconds for cleanup, the existing one-second KILL grace,
-    // and one further second for setup/reporting. Keep curl two seconds below
+    // and one further second for setup/reporting. Keep the HTTP helper two seconds below
     // its outer timer, including when the shared deadline clips both limits.
     let outer = remaining.as_secs().checked_sub(42)?.min(26);
-    let curl = outer.checked_sub(2)?.min(24);
-    (curl > 0).then_some((curl, outer))
+    let http = outer.checked_sub(2)?.min(24);
+    (http > 0).then_some((http, outer))
 }
 
 struct NativeRun {
@@ -610,33 +610,29 @@ impl NativeRun {
             .and_then(|(name, id)| PrivateStartWindow::begin(self, name, id));
         // Recompute after publication so its elapsed time cannot consume the
         // extended request's cleanup reserve. This check precedes request I/O.
-        let (curl_seconds, outer_seconds) = request_timeouts();
+        let (http_seconds, outer_seconds) = request_timeouts();
         let mut command = self.timer(cleanup, false, outer_seconds);
         command.args([
-            "curl",
-            "-q",
-            "--noproxy",
-            "*",
-            "-sS",
-            "--max-time",
-            &curl_seconds.to_string(),
-            "--max-filesize",
+            "python3",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/native-unix-http.py"),
+            "--timeout",
+            &http_seconds.to_string(),
+            "--max-response-bytes",
             "131072",
-            "--unix-socket",
+            "--socket",
             &self.socket,
-            "-X",
+            "--method",
             method,
-            "-H",
-            "Content-Type: application/json",
+            "--max-request-bytes",
+            "8388608",
+            "--json-content-type",
         ]);
         if input.is_some() {
-            command.args(["--data-binary", "@-"]);
-        } else if method == "POST" {
-            command.args(["--data-binary", ""]);
+            command.args(["--body-stdin"]);
         }
-        command.args(["-w", "\n%{http_code}", &format!("http://localhost{path}")]);
+        command.args(["--path", path]);
         let output = self.capture(&mut command, input.as_deref(), 131080);
-        if !output.status.success() && matches!(output.status.code(), Some(28 | 124)) {
+        if !output.status.success() && matches!(output.status.code(), Some(3 | 124)) {
             if let Some(window) = start_window {
                 window.finish_timeout();
             }
@@ -667,7 +663,7 @@ impl NativeRun {
             );
             eprintln!(
                 "DOCKERLENS_NATIVE_API_DIAG: transport={}",
-                if output.status.code() == Some(28) || output.status.code() == Some(124) {
+                if output.status.code() == Some(3) || output.status.code() == Some(124) {
                     "timeout"
                 } else {
                     "other"
@@ -2604,12 +2600,19 @@ fn closed_api_failure_diagnostic(action: &'static str, cleanup: bool, code: Opti
     ));
     let phase = if cleanup { "cleanup" } else { "probe" };
     let exit = match code {
-        Some(28) => "curl_timeout",
+        Some(2) => "validation",
+        Some(3) => "deadline",
+        Some(4) => "io",
+        Some(5) => "protocol",
+        Some(6) => "size",
+        Some(7) => "output",
         Some(124) => "outer_timeout",
         Some(137 | 143) | None => "signal",
         _ => "other",
     };
-    format!("DOCKERLENS_NATIVE_PORT_API_DIAG: action={action} phase={phase} exit={exit}")
+    format!(
+        "DOCKERLENS_NATIVE_PORT_API_DIAG: version=2 client=unix_http_v1 action={action} phase={phase} exit={exit}"
+    )
 }
 
 #[test]
@@ -2625,18 +2628,23 @@ fn failed_api_diagnostic_closes_routes_phases_and_timeout_sources() {
     ] {
         for (cleanup, phase) in [(false, "probe"), (true, "cleanup")] {
             for (code, exit) in [
-                (Some(28), "curl_timeout"),
+                (Some(2), "validation"),
+                (Some(3), "deadline"),
+                (Some(4), "io"),
+                (Some(5), "protocol"),
+                (Some(6), "size"),
+                (Some(7), "output"),
                 (Some(124), "outer_timeout"),
                 (Some(137), "signal"),
                 (Some(143), "signal"),
                 (None, "signal"),
-                (Some(7), "other"),
+                (Some(28), "other"),
                 (Some(0), "other"),
             ] {
                 assert_eq!(
                     closed_api_failure_diagnostic(action, cleanup, code),
                     format!(
-                        "DOCKERLENS_NATIVE_PORT_API_DIAG: action={action} phase={phase} exit={exit}"
+                        "DOCKERLENS_NATIVE_PORT_API_DIAG: version=2 client=unix_http_v1 action={action} phase={phase} exit={exit}"
                     )
                 );
             }

@@ -654,7 +654,9 @@ deadline=$((SECONDS + 360))
 while (( SECONDS < deadline )); do
   if [[ -S $socket ]]; then
     if [[ $EUID == 0 ]]; then chmod 0666 "$socket"; else sudo -n chmod 0666 "$socket"; fi
-    if curl -q --noproxy '*' -fs --max-time 5 --unix-socket "$socket" http://localhost/_ping >/dev/null; then break; fi
+    ready_status=$(python3 "$script_dir/native-unix-http.py" --socket "$socket" --method GET \
+      --path /_ping --timeout 5 --max-response-bytes 65536 --discard-body 2>/dev/null) || ready_status=unavailable
+    if [[ $ready_status == 200 ]]; then break; fi
   fi
   running=$("${podman_cmd[@]}" inspect --format '{{.State.Running}}' "$container" 2>/dev/null) || running=unknown
   if [[ $running != true ]]; then
@@ -664,7 +666,12 @@ while (( SECONDS < deadline )); do
   fi
   sleep 2
 done
-[[ -S $socket ]] && curl -q --noproxy '*' -fs --max-time 5 --unix-socket "$socket" http://localhost/_ping >/dev/null || {
+ready_status=unavailable
+if [[ -S $socket ]]; then
+  ready_status=$(python3 "$script_dir/native-unix-http.py" --socket "$socket" --method GET \
+    --path /_ping --timeout 5 --max-response-bytes 65536 --discard-body 2>/dev/null) || ready_status=unavailable
+fi
+[[ $ready_status == 200 ]] || {
   echo 'inner daemon did not become ready within six minutes' >&2
   diagnose_native_startup
   exit 1
@@ -682,8 +689,8 @@ fi
 api_get() {
   local path=$1 target=$2
   local status
-  status=$(timeout 20 curl -q --noproxy '*' -fsS --max-time 15 --unix-socket "$socket" \
-    "http://localhost$path" -o "$target" -w '%{http_code}')
+  status=$(timeout 20 python3 "$script_dir/native-unix-http.py" --socket "$socket" --method GET \
+    --path "$path" --timeout 15 --max-response-bytes 8388608 --response-body-file "$target")
   [[ $status == 200 ]] || { echo "native GET did not return HTTP 200: $path" >&2; exit 1; }
   printf '%s\n' "$status" > "${target%.json}.status"
 }

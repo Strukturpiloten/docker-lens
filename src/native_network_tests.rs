@@ -833,17 +833,19 @@ impl InternalProofResources {
             .args([
                 "--kill-after=1",
                 "3",
-                "curl",
-                "-sS",
-                "--max-time",
+                "python3",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/native-unix-http.py"),
+                "--timeout",
                 "2",
-                "--unix-socket",
+                "--max-response-bytes",
+                "8388608",
+                "--method",
+                "GET",
+                "--socket",
                 &required("NATIVE_ENGINE_SOCKET"),
-                "-o",
-                "/dev/null",
-                "-w",
-                "%{http_code}",
-                &format!("http://localhost{path}"),
+                "--discard-body",
+                "--path",
+                &path,
             ])
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -906,7 +908,7 @@ impl InternalProofResources {
 }
 
 fn exact_http_absence(command_succeeded: bool, status: &[u8]) -> bool {
-    command_succeeded && status == b"404"
+    command_succeeded && status == b"404\n"
 }
 
 fn proof_required_remaining(outstanding: usize, next_operation_secs: u64) -> u64 {
@@ -1090,12 +1092,12 @@ fn proof_external_blocked(result: &BoundedDnsCliOutput) -> bool {
 
 #[test]
 fn internal_proof_cleanup_retains_failed_resources_and_requires_exact_404() {
-    assert!(exact_http_absence(true, b"404"));
+    assert!(exact_http_absence(true, b"404\n"));
     for (success, status) in [
-        (false, &b"404"[..]),
+        (false, &b"404\n"[..]),
         (true, &b"500"[..]),
         (true, &b"000"[..]),
-        (true, &b"404\n"[..]),
+        (true, &b"404"[..]),
         (true, &b"protected-private"[..]),
     ] {
         assert!(!exact_http_absence(success, status));
@@ -1807,26 +1809,35 @@ fn api_with_timeout_and_cap(
         ),
         "network executor request outside closed allowlist"
     );
-    let mut command = Command::new("curl");
+    let mut command = Command::new("python3");
+    command.arg(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/scripts/native-unix-http.py"
+    ));
     command.args([
-        "-sS",
-        "--max-time",
+        "--timeout",
         max_time,
-        "--unix-socket",
+        "--socket",
         &required("NATIVE_ENGINE_SOCKET"),
-        "-X",
+        "--method",
         method,
-        "-H",
-        "Content-Type: application/json",
+        "--max-request-bytes",
+        "8388608",
+        "--json-content-type",
     ]);
+    command.arg("--max-response-bytes").arg(
+        response_cap
+            .map_or(8 * 1024 * 1024, |cap| cap.saturating_sub(4))
+            .to_string(),
+    );
     if body.is_some() {
-        command.args(["--data-binary", "@-"]).stdin(Stdio::piped());
-    } else if method == "POST" {
-        command.args(["--data-binary", ""]);
+        command.args(["--body-stdin"]).stdin(Stdio::piped());
     }
-    command.args(["-w", "\n%{http_code}", &format!("http://localhost{path}")]);
+    command.args(["--path", path]);
     command.stdout(Stdio::piped()).stderr(Stdio::null());
-    let mut child = command.spawn().expect("test-only curl available");
+    let mut child = command
+        .spawn()
+        .expect("test-only Unix-HTTP helper available");
     if let Some(body) = body {
         child
             .stdin

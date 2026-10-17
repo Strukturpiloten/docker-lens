@@ -108,3 +108,6 @@ evidence for live #10 acquisition and #12 target
 request conformance is required before any compatibility claim. See
 [architecture](docs/architecture.md) and
 [verification](docs/verification.md).
+Host Engine test requests use the independent, bounded
+[harness Unix-HTTP transport](docs/native-unix-http.md); product acquisition and
+Docker CLI/namespace oracles remain separate. Fresh native qualification is required.

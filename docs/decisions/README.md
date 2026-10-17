@@ -21,6 +21,7 @@ Durable native boundaries and evidence/admission contracts:
 - [0017: External-network internal expectation](0017-external-network-internal-expectation.md)
 - [0018: Reviewed external-network cohort](0018-reviewed-external-network-cohort.md)
 - [0019: Reviewed configured stop-signal cohort](0019-reviewed-stop-signal-cohort.md)
+- [0020: Independent harness Unix-HTTP transport](0020-harness-unix-http-transport.md)
 
 ADR 0019 selects only the complete StopSignal singleton beyond ADR 0018's
 retained groups for candidate rehearsal. ADR 0017's None/false/true, conditional
