@@ -109,7 +109,9 @@ fn timestamp_ns(text: &str) -> Option<u128> {
     let year = number(date.get(..4)?)?;
     let month = number(date.get(5..7)?)?;
     let day = number(date.get(8..10)?)?;
-    let leap = |year: u32| year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let leap = |year: u32| {
+        year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400))
+    };
     let months = [
         31,
         28 + u32::from(leap(year)),
@@ -831,7 +833,7 @@ impl HealthRun {
             status == 200 && self.owned(&before, index, Some(id)),
             "ownership immediately before start"
         );
-        if index % 2 == 0 {
+        if index.is_multiple_of(2) {
             self.docker(&["start".to_owned(), id.to_owned()], false);
         } else {
             assert_eq!(

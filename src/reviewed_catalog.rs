@@ -371,7 +371,7 @@ fn api(value: &str) -> ApiVersion {
 fn digest(value: &str) -> CapabilityEvidenceKey {
     assert_eq!(value.len(), 64, "reviewed digest length");
     let mut bytes = [0_u8; 32];
-    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         bytes[index] = u8::from_str_radix(
             std::str::from_utf8(pair).expect("reviewed digest encoding"),
             16,

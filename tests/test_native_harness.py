@@ -2772,7 +2772,7 @@ fi
     def test_port_start_followup_reuses_only_test_scoped_canonical_gets(self) -> None:
         source = (ROOT / "src/native_port_tests.rs").read_text()
         failure = source.split('let output = self.capture(&mut command, input.as_deref(), 131080);', 1)[1].split('let split = output', 1)[0]
-        self.assertIn('if !cleanup && method == "POST" && start', failure)
+        self.assertIn('if !cleanup && method == "POST" && start', ' '.join(failure.split()))
         self.assertIn('self.name("multi-dynamic-oracle")', failure)
         self.assertIn('path == format!("{prefix}/containers/{id}/start")', failure)
         self.assertLess(failure.index('DIAGNOSTIC_SCOPE: begin'), failure.index('self.repeated_start_diagnostics('))

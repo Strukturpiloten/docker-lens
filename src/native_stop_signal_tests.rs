@@ -180,7 +180,7 @@ fn configured(run: &HealthRun, index: usize, base_id: &Value) -> Value {
 fn create(run: &mut HealthRun, index: usize) {
     assert_eq!(run.inspect(&run.names[index], false).0, 404);
     let signal = SIGNALS[index / 2].0;
-    if index % 2 == 0 {
+    if index.is_multiple_of(2) {
         run.attempted[index] = true;
         let output = run.docker(
             &[
@@ -368,7 +368,7 @@ fn observe(run: &mut HealthRun, index: usize, base_id: &Value) -> Value {
             && times[3] - times[2] < 5 * u128::from(SECOND),
         "native stop causality"
     );
-    json!({"role":if index%2 == 0 {"oracle"} else {"rendered"},"id":id,"name":run.names[index],"owner":run.run,
+    json!({"role":if index.is_multiple_of(2) {"oracle"} else {"rendered"},"id":id,"name":run.names[index],"owner":run.run,
         "image":run.base,"image_id":base_id,"configured_signal":SIGNALS[index/2].0,"wire":"passed",
         "readiness":"pid1-traps-ready","running_before_stop":true,"started_at":started,"ready_observed_at":ready_at,
         "stop_requested_at":requested_at,"finished_at":finished,"stopped_observed_at":observed_at,

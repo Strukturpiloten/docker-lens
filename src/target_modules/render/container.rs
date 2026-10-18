@@ -221,22 +221,22 @@ pub(super) fn render_container(
             } else {
                 ",\"ReadOnly\":false"
             });
-            if let MountSource::Tmpfs(options) = mount.source() {
-                if options.size_bytes.is_some() || options.mode.is_some() {
-                    body.push_str(",\"TmpfsOptions\":{");
-                    let mut option_field = false;
-                    if let Some(size) = options.size_bytes {
-                        body.push_str(&format!("\"SizeBytes\":{}", size.get()));
-                        option_field = true;
-                    }
-                    if let Some(mode) = options.mode {
-                        if option_field {
-                            body.push(',');
-                        }
-                        body.push_str(&format!("\"Mode\":{mode}"));
-                    }
-                    body.push('}');
+            if let MountSource::Tmpfs(options) = mount.source()
+                && (options.size_bytes.is_some() || options.mode.is_some())
+            {
+                body.push_str(",\"TmpfsOptions\":{");
+                let mut option_field = false;
+                if let Some(size) = options.size_bytes {
+                    body.push_str(&format!("\"SizeBytes\":{}", size.get()));
+                    option_field = true;
                 }
+                if let Some(mode) = options.mode {
+                    if option_field {
+                        body.push(',');
+                    }
+                    body.push_str(&format!("\"Mode\":{mode}"));
+                }
+                body.push('}');
             }
             body.push('}');
         }

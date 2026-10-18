@@ -77,7 +77,7 @@ fn configured(run: &HealthRun, index: usize, image: &Value, running: bool) -> Va
 fn create(run: &mut HealthRun, index: usize) {
     assert_eq!(run.inspect(&run.names[index], false).0, 404);
     let authored = CASES[index / 2].1;
-    if index % 2 == 0 {
+    if index.is_multiple_of(2) {
         // Independent CLI spelling: omission is no flags, false is explicit,
         // true is explicit. No renderer output is used to author this oracle.
         let mut args = vec![
@@ -310,8 +310,8 @@ fn observe(run: &mut HealthRun, index: usize, image: &Value) -> Value {
             && times[3] - times[0] <= 180 * u128::from(SECOND),
         "ordered bounded effects"
     );
-    json!({"role":if index % 2 == 0 {"oracle"} else {"rendered"},"id":id,"name":run.names[index],
-        "owner":run.run,"image":run.base,"image_id":image["id"],"wire":if index % 2 == 0 {"independent_cli"} else {"literal_rendered"},
+    json!({"role":if index.is_multiple_of(2) {"oracle"} else {"rendered"},"id":id,"name":run.names[index],
+        "owner":run.run,"image":run.base,"image_id":image["id"],"wire":if index.is_multiple_of(2) {"independent_cli"} else {"literal_rendered"},
         "cli_api":run.api,"init_configured":before["HostConfig"]["Init"],"readonly_configured":before["HostConfig"]["ReadonlyRootfs"],
         "worker_pid":pid,"worker_ppid":ppid,"worker_state":state,"pid1_pid":1,"rootfs_probe_path":"/dockerlens-rootfs-canary",
         "probe_path_mount":false,"write_exit":code,"write_effect":effect,"readback":readback,"started_at":started,
