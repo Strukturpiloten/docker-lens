@@ -26,14 +26,15 @@ choice is closed. That resolved dependency decision does not qualify the current
 source candidate or replace complete and application gates. Standalone DockerLens
 requires MSRV `1.98.1`, matching the current pinned development compiler.
 
-The five new lifecycle-family source groups remain unadmitted in the compiled
-catalogue. [ADR 0021](decisions/0021-lifecycle-raw-source-projection.md) projects
-complete raw source groups only; passing source probes alone cannot select a
-compiled cohort. Complete milestone coverage, independent
-admission review and downstream acceptance remain required. This documentation
-preparation stays isolated and unpublished pending parent PR
-[#118](https://github.com/Strukturpiloten/docker-lens/pull/118) and the coherent
-milestone gates; it is not a release-readiness claim.
+[ADR 0022](decisions/0022-reviewed-lifecycle-cohort.md) selects the independently
+reviewed lifecycle cohort at Debian 34 capabilities/56 shapes and upstream 36/60.
+Raw family markers remain `raw_source_only`/`catalogue_admission: unadmitted`;
+they describe raw authority, not the separate compiled selection. Under
+[ADR 0023](decisions/0023-process-source-proof-wiring.md), hostname and command/
+entrypoint-clear proofs are mandatory before the current raw projection grows to
+37/59 and 39/63. Those three process groups remain unselected. Complete milestone
+coverage, fresh exact-final-candidate native proof, independent review and actual
+downstream acceptance remain required; this is not a release-readiness claim.
 
 ## Readiness
 
@@ -49,7 +50,7 @@ For the final current-main candidate require:
 
 - The complete offline gate and package verification below.
 - Fresh successful exact-candidate `Release validation`, including all four
-  independent native lanes, each executing the canonical twenty-one exact test
+  independent native lanes, each executing the canonical twenty-three exact test
   invocations, and its fail-closed final aggregate. A failed, skipped or cancelled
   lane blocks publication. If required work extends the canonical suite, every
   added invocation is mandatory too.

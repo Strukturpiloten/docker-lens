@@ -7,6 +7,45 @@ The scaffold policy tests check alignment and MSRV failure propagation through
 the shared local, PR/main, native-dispatch, and release offline gate. Earlier
 verification records below retain the Rust versions used at those checkpoints.
 
+## Reviewed lifecycle successor source cohort
+
+[ADR 0022](decisions/0022-reviewed-lifecycle-cohort.md) selects the authenticated
+source from run `39124651853`, attempt 1, candidate
+`a251748de3a61f9dc3d735e670ce3ea461ee0a30`, dispatched by trusted main
+`96d83f6d6959dba6079e3e9bdc35db3b27635609` for PR #123. All seven jobs and
+every step passed; 21 actual tests ran once in order on each of four lanes
+(84 total), with six actor/exact-head admissions and four cleanup-dependent
+lane successes. The primary authenticated live API metadata and ZIP digests;
+the independent reviewer verified stable bounded/no-follow archive reads,
+single regular unencrypted members and CRC, strict canonical UTF-8 JSON,
+complete source outcomes and byte-exact extracted members.
+
+[Sanitized provenance](evidence/lifecycle-cohort-39124651853.json) binds every
+artifact ID, API archive digest, exact raw member hash and reviewed envelope
+hash to the unchanged
+[independent source receipt](evidence/lifecycle-independent-review-39124651853.json).
+That receipt establishes input/source review only; the admission diff still
+requires independent review. Trusted source assertions and closed success logs
+establish the bounded effect/ownership/cleanup checks; private raw timestamps,
+payloads and independent host inventories were not directly inspected. The
+independent reviewer did not separately fetch live actor identities/permissions.
+
+The compiled successor admits all complete StopTimeout, ContainerInit,
+ReadOnlyRootfs and TmpfsMount groups on all four exact profiles, and
+HealthStartInterval only upstream: Debian 34 capabilities/56 shapes and
+upstream 36/60. Debian retains unsupported legacy-field/not-effective health
+outcomes. Raw markers remain `raw_source_only`/`unadmitted`; only the reviewed
+envelopes and explicit compiled selection admit capabilities. Every historical
+cohort remains byte-exact. No reaping, general signal behavior, Cartesian flag
+combination, arbitrary tmpfs value or SELinux effect is established.
+
+The changed admission candidate still needs final-edit complete gates, fresh
+authenticated exact-final-candidate four-lane/23-test execution and independent
+review, all six actual authored-fixture volume-only rehearsals, and actual
+Nextcloud/Supabase bind and desired-external consumer review. This source run
+does not qualify those later bytes or close #39/#31/#3, establish BoxFerry
+application/full migration acceptance, or authorize release/publication/deployment.
+
 ## Complete raw source groups before catalogue selection
 
 [ADR 0021](decisions/0021-lifecycle-raw-source-projection.md) maps all validated
@@ -22,16 +61,34 @@ The five public family outcomes use `admission: raw_source_only` together with
 `catalogue_admission: unadmitted`. Their closed current raw subset is
 `$defs.lifecycle_source_projection` in `native-evidence.schema.json`; the historical
 reviewed-record root, private v1 proof protocols and all evidence bytes are unchanged.
-Canonical raw counts are Debian 34 capabilities/56 shapes and upstream 36/60.
-The compiled catalogue still withholds all five groups and remains 30/47 and 31/49.
+The historical lifecycle projection contains Debian 34 capabilities/56 shapes
+and upstream 36/60. ADR 0022 separately selects reviewed envelopes at those counts;
+raw projection alone cannot change the compiled catalogue.
 Run `39121741122`, attempt 1, source `cead64a28f7c409c2de23ee298fad9b080e106fc`
-provided independently reviewed 84-test source evidence for the mapping. It cannot
-qualify this changed emitter; fresh exact-head native proof and independent review,
-complete final-edit gates and the accepted actual consumer rehearsals remain required.
+provided independently reviewed 84-test source evidence for the mapping. That
+older run cannot qualify the changed emitter. Run `39124651853` supplies its
+fresh source proof above; final admission-diff review, complete final-edit gates,
+fresh final-candidate native proof and actual consumer rehearsals remain required.
 
 ## Mandatory runtime-cohort proof requirements
 
-The canonical harness requires twenty-one exact ignored invocations, retaining the
+[ADR 0023](decisions/0023-process-source-proof-wiring.md) adds the twenty-second
+`native_health_metadata_tests::lifecycle::hostname::live_hostname_matches_engine`
+and twenty-third
+`native_health_metadata_tests::command_clear::live_command_clear_matches_engine`.
+The hostname reader completes before command-clear runs; its separate reader then
+runs unconditionally before the optional public emitter. Both fixed direct-child
+proofs bind to independent harness facts. All original ordinals, budgets,
+privilege and cleanup ownership remain; command-clear owns separate cleanup and
+its fixed `cleanup_unverified` marker fails even beside a successful summary.
+Current raw counts are Debian 37/59 and upstream 39/63, while compiled selection
+remains 34/56 and 36/60. ContainerHostname, CommandClear and EntrypointClear are
+the only new raw singleton groups; HealthDisabled is excluded. Closed public
+outcomes expose source-only/unadmitted markers, never actual hostnames, argv,
+IDs, timestamps or private payloads. Disconnected `$defs.hostname_source_projection`
+and `$defs.command_clear_source_projection` leave historical root acceptance intact.
+
+The canonical harness requires twenty-three exact ignored invocations, retaining the
 original first seventeen in order and adding the separate eighteenth
 `native_health_metadata_tests::lifecycle::runtime_filesystem::live_runtime_filesystem_matches_engine`
 and nineteenth
@@ -150,7 +207,7 @@ finite binding/readback requests are not a renewed inner cleanup budget.
 
 This integration has source-only Python/mocked-transport and syntax coverage;
 native qualification is pending. Full final-edit gates, fresh authenticated
-exact-head twenty-one-test four-lane evidence, independent review, and required
+exact-head twenty-three-test four-lane evidence, independent review, and required
 BoxFerry consumer rehearsals remain mandatory. No runtime cleanup completion,
 capability admission, full migration acceptance or release is claimed.
 
@@ -209,7 +266,7 @@ sanitized receipt establishes trusted-harness assertions/closed success logs,
 not direct private-proof inspection, independent host inventory or separately
 retained effect values. Every historical record remains byte-exact. This is
 candidate rehearsal only: fresh final-edit complete gates, authenticated
-exact-final-candidate twenty-one-test four-lane proof and independent review,
+exact-final-candidate twenty-three-test four-lane proof and independent review,
 all six actual authored-fixture volume-only rehearsals and actual
 Nextcloud/Supabase bind/desired-external consumers remain required before
 ready/merge/main admission or release. Old source/consumer receipts grant no
@@ -345,7 +402,7 @@ source markers. Complete future raw groups are NetworkLabels, NetworkAliases
 (both primary/secondary), and NetworkMultipleAttachment. The old 22 network
 markers cannot replace the new effect/ownership/cleanup proof. No IPv6, IPAM,
 static address, options, NAT or additional internal/external group is promoted.
-With current parameterized identity, health and port proof, future raw counts
+At that source checkpoint, with parameterized identity, health and port proof, prospective raw counts
 are Debian 26 capabilities/40 shapes and upstream 27/42; counts alone are not
 evidence. These were intermediate producer counts. ADR 0016 now selects only
 complete groups from the coherent source cohort; historical bytes and later
@@ -763,7 +820,7 @@ readiness calls, direct captures and every Rust native helper using the same
 explicit AF_UNIX endpoint. Readiness and direct captures explicitly require
 actual HTTP 200; a transport error cannot become HTTP 000 or an absence result.
 Existing request/byte limits, caller timers, scoped ownership, uncertain
-mutations and cleanup assertions remain authoritative. The twenty-one exact
+mutations and cleanup assertions remain authoritative. The twenty-three exact
 native invocations, Docker CLI and genuine Rust acquisition remain independent;
 TCP/UDP/network-namespace curl probes retain their own unchanged transport.
 The earlier first-option curl-only argv/executable freeze is superseded only for
@@ -1447,7 +1504,7 @@ health or start-interval groups. Identity is not arbitrary-image startup or
 host UID mapping; bind configuration is not relabel effect evidence.
 
 This is pre-merge candidate rehearsal admission. Production merge/main/release
-still require complete final-edit gates, fresh twenty-one-test four-lane proof
+still require complete final-edit gates, fresh twenty-three-test four-lane proof
 on the final candidate, fresh all six actual authored fixture volume-only consumer
 rehearsals required by ADR 0012, and fresh reviewed BoxFerry consumption of
 the actual authored Nextcloud/Supabase binds and desired external expectations.

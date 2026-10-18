@@ -29,8 +29,13 @@ class PackagePolicyTests(unittest.TestCase):
         self.assertIn("`0.1.0` is already published", handoff)
         self.assertIn("Do not attempt to publish that version again", handoff)
         self.assertIn("choice is closed", handoff)
-        self.assertIn("five new lifecycle-family source groups remain unadmitted", handoff)
-        self.assertIn("canonical twenty-one exact test invocations", handoff)
+        self.assertIn(
+            "reviewed lifecycle cohort at Debian 34 capabilities/56 shapes and upstream 36/60",
+            handoff,
+        )
+        self.assertIn("`raw_source_only`/`catalogue_admission: unadmitted`", handoff)
+        self.assertIn("Those three process groups remain unselected", handoff)
+        self.assertIn("canonical twenty-three exact test invocations", handoff)
         self.assertIn("all six actual authored-fixture volume-only rehearsals", handoff)
         self.assertIn("actual Nextcloud/Supabase bind and desired-external expectation consumers", handoff)
         self.assertIn("a separate explicit request", handoff)

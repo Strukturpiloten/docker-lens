@@ -111,10 +111,16 @@ projection and complete `ExternalNetworkInternalFalse`/`ExternalNetworkInternalT
 raw group, separately from created-network `NetworkInternal`. Missing, partial,
 stale, cross-context or custody-invalid proof refuses the entire manifest.
 Schema projection definitions are additive and disconnected from the unchanged
-reviewed root contract. With parameterized identity-v2, source raw counts are
-Debian 29/46 and upstream 30/48; definitions/counts alone are not genuine evidence.
+reviewed root contract. At the ADR 0018 source checkpoint, with parameterized
+identity-v2, raw counts were Debian 29/46 and upstream 30/48;
+definitions/counts alone are not genuine evidence.
 ADR 0018 selects authenticated run `37788762974`'s complete source group for
-sealed candidate rehearsal. Fresh exact-final-candidate fifteen-test four-lane
+sealed candidate rehearsal, then using fifteen native invocations per lane.
+[ADR 0022](decisions/0022-reviewed-lifecycle-cohort.md) now selects the independently
+reviewed lifecycle cohort at Debian 34/56 and upstream 36/60.
+[ADR 0023](decisions/0023-process-source-proof-wiring.md) requires both process
+proofs before current raw counts extend to 37/59 and 39/63, without selecting
+their three new groups. Fresh exact-final-candidate twenty-three-test four-lane
 execution, independent review and actual consumer gates remain required before
 ready/merge; source evidence does not qualify a changed candidate. No dependencies,
 software pins, operational images, workflow pins or Renovate extraction change.

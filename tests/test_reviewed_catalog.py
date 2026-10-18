@@ -355,6 +355,107 @@ STOP_SIGNAL_ARCHIVES = {
 }
 STOP_SIGNAL_REVIEW_RECEIPT_SHA256 = "02485e90a14b0ab44c03388931a0532b904fa963e1b90c05f03113b892637cb1"
 
+# Successor validation vocabulary only: these constants do not register a cohort.
+# Authenticated source records and an independent review must precede selection.
+LIFECYCLE_COMMON_SHAPES = {
+    "StopTimeout": ["StopTimeoutZero", "StopTimeoutPositive"],
+    "ContainerInit": ["ContainerInitTrue", "ContainerInitFalse"],
+    "ReadOnlyRootfs": ["ReadOnlyRootfsTrue", "ReadOnlyRootfsFalse"],
+    "TmpfsMount": ["TmpfsMountReadWrite", "TmpfsMountReadOnly", "TmpfsMountOptions"],
+}
+LIFECYCLE_HEALTH_SHAPES = {
+    "HealthStartInterval": ["HealthStartIntervalZero", "HealthStartIntervalPositive"],
+}
+LIFECYCLE_CAPABILITIES = set(LIFECYCLE_COMMON_SHAPES) | set(LIFECYCLE_HEALTH_SHAPES)
+
+
+def lifecycle_admission(lane: str) -> dict:
+    if lane not in LANES:
+        raise ValueError("unknown lifecycle lane")
+    if lane.startswith("debian11-"):
+        return {**STOP_SIGNAL_SHAPES, **LIFECYCLE_COMMON_SHAPES}
+    return {**STOP_SIGNAL_UPSTREAM_SHAPES, **LIFECYCLE_COMMON_SHAPES,
+            **LIFECYCLE_HEALTH_SHAPES}
+
+
+def lifecycle_source_projection(lane: str) -> dict:
+    """Closed ADR 0021 projection; neither proof nor authenticated source data."""
+    if lane not in LANES:
+        raise ValueError("unknown lifecycle lane")
+    legacy = lane.startswith("debian11-")
+    status = {"admission": "raw_source_only", "catalogue_admission": "unadmitted"}
+    return {
+        "lifecycle_contract": "lifecycle-v1",
+        "lifecycle_outcomes": {
+            **status, "probes": [
+                "stop_timeout_effective",
+                "health_start_interval_not_effective_on_selected_api" if legacy
+                else "health_start_interval_effective",
+            ],
+        },
+        "lifecycle_default_effect_contract": "lifecycle-default-effects-v1",
+        "lifecycle_default_effect_outcomes": {
+            **status, "probes": [
+                "stop_timeout_omitted_graceful_zero_forced",
+                "health_start_interval_unsupported_legacy_field" if legacy
+                else "health_start_interval_default_equivalent",
+            ],
+        },
+        "runtime_filesystem_contract": "runtime-filesystem-v1",
+        "runtime_filesystem_outcomes": {
+            **status, "init_effect_scope": "pid1_indirection_only",
+            "rootfs_effect_scope": "diagonal_omitted_false_true_only",
+            "controls": ["omitted", "false", "true"],
+        },
+        "tmpfs_effect_contract": "tmpfs-effect-v1",
+        "tmpfs_effect_outcomes": {
+            **status, "coverage": "explicit_1MiB_0700_and_2MiB_0750_rw_ro_only",
+        },
+        "health_start_interval_boundary_contract": "health-start-interval-boundary-v1",
+        "health_start_interval_boundary_outcomes": {
+            **status, "scope": "created_configuration_only", "probes": [
+                "omission_configured_absent", "literal_zero_configured_absent",
+                "cli_zero_client_unknown_flag" if legacy else "cli_zero_configured_absent",
+            ],
+        },
+    }
+
+
+def bind_lifecycle_source(manifest: dict, lane: str, admission: dict) -> None:
+    """Require every complementary finite proof before successor admission."""
+    expected = lifecycle_admission(lane)
+    if (manifest.get("lane") != lane or admission != expected
+            or manifest.get("admitted_shapes") != expected
+            or manifest.get("capability_outcome") != dict.fromkeys(expected, "available")):
+        raise ValueError("lifecycle admission requires exact complete per-lane groups")
+    for field, value in lifecycle_source_projection(lane).items():
+        if manifest.get(field) != value:
+            raise ValueError("lifecycle admission requires complete finite source outcomes")
+
+
+LIFECYCLE_CANDIDATE = "a251748de3a61f9dc3d735e670ce3ea461ee0a30"
+LIFECYCLE_RUN = "https://github.com/Strukturpiloten/docker-lens/actions/runs/39124651853/attempts/1"
+LIFECYCLE_MANIFESTS = {
+    "debian11-rootful": "3036c448b553c26e26d7fdffa2edf9f58f8630b684fc661603d71d1ec135a5ac",
+    "debian11-rootless": "25cd1c07f2788a429135b2dd84b9be342939d59075fdc87e912ee29bc51fd6fe",
+    "upstream-rootful": "68ee1fe84ba068e834b439b055a2fb702bbc26e89f5456689460990c8e730841",
+    "upstream-rootless": "21576936e7a0f2d23da62bcd2f88f57dcea45e6837102400b806d069045aeeb4",
+}
+LIFECYCLE_REVIEWED = {
+    "debian11-rootful": "e62a1ff2181534cf78c0676c17af468c3932b76cd61e6201e6b22f89a118617c",
+    "debian11-rootless": "6ca015a0edb9ced8ffc06d43a6b5c4d2456cd99cac20d0d80442673ba7ff0c92",
+    "upstream-rootful": "ff6eb1bbc6ca6c07f16ebf6e7de4d61ae056c5cfa8af16e11df7ee97edd249c1",
+    "upstream-rootless": "de7d25c9d24d32ca929d8c2fe33291daf3d2f663a0162996f1ac616423a72914",
+}
+LIFECYCLE_ARCHIVES = {
+    "debian11-rootful": (12135508690, "8e9b678bb7b88689c2ecf32df43ad492edd6727d5e47d7c4f9bef51c4688afd9", 2545),
+    "debian11-rootless": (12136206021, "be5f107d9aa1cf3cab2b2a65d265b3e0d6ac45111f398faf3e4a72985b61f27b", 2546),
+    "upstream-rootful": (12135777782, "a2812c3b6706e9ef5da75acc3ab64f84b2e3160997cf37532479e2b5c518f9d9", 2492),
+    "upstream-rootless": (12135384037, "2800790a9652880e19afb3b2377bc0f8fc78390f09b55bd2c3cdbb33c0436ba4", 2496),
+}
+LIFECYCLE_REVIEW_RECEIPT_SHA256 = "4ef79059ec665fda368fdc6cec9bfd66408a0011024471227de18577bbd9a5ba"
+
+
 # Every reviewed cohort must be deliberately added here with its exact run,
 # candidate, four identities, four envelope digests, four raw manifest digests,
 # and exact reviewed capability-to-shape admissions. A later new shape needs
@@ -396,6 +497,11 @@ COHORTS = {
         lane: (STOP_SIGNAL_REVIEWED[lane], STOP_SIGNAL_MANIFESTS[lane],
                EXPECTED_IDENTITIES[lane], STOP_SIGNAL_SHAPES if lane.startswith("debian11-")
                else STOP_SIGNAL_UPSTREAM_SHAPES)
+        for lane in LANES
+    },
+    (LIFECYCLE_CANDIDATE, LIFECYCLE_RUN): {
+        lane: (LIFECYCLE_REVIEWED[lane], LIFECYCLE_MANIFESTS[lane],
+               EXPECTED_IDENTITIES[lane], lifecycle_admission(lane))
         for lane in LANES
     },
 }
@@ -558,12 +664,15 @@ def bind_cohorts(
             manifest = raw[record["native_manifest_sha256"]][1]
             identity = record["identity"]
             expected_admission = cohorts[cohort_key][lane][3]
+            lifecycle = bool(LIFECYCLE_CAPABILITIES & set(expected_admission))
+            if lifecycle:
+                bind_lifecycle_source(manifest, lane, expected_admission)
             if {"ContainerUser", "ContainerWorkdir"} & set(expected_admission):
                 if (manifest.get("identity_contract") != "container-identity-v1"
                         or manifest.get("identity_cases") != IDENTITY_CASES
                         or manifest.get("identity_probes") != IDENTITY_PROBES):
                     raise ValueError("identity admission requires complete parameterized proof markers")
-            if cohort_key in ((APPLICATION_CANDIDATE, APPLICATION_RUN), (EXTERNAL_CANDIDATE, EXTERNAL_RUN),
+            if lifecycle or cohort_key in ((APPLICATION_CANDIDATE, APPLICATION_RUN), (EXTERNAL_CANDIDATE, EXTERNAL_RUN),
                               (STOP_SIGNAL_CANDIDATE, STOP_SIGNAL_RUN)):
                 if (manifest["admitted_shapes"] != expected_admission
                         or manifest["capability_outcome"] != dict.fromkeys(expected_admission, "available")
@@ -586,11 +695,11 @@ def bind_cohorts(
                                      reason="nested_default_bridge_ipv6_runtime_binding_absent")
                 if manifest.get("port_probes") != ports:
                     raise ValueError("application admission requires exact per-lane port outcomes")
-            if cohort_key in ((EXTERNAL_CANDIDATE, EXTERNAL_RUN), (STOP_SIGNAL_CANDIDATE, STOP_SIGNAL_RUN)):
+            if lifecycle or cohort_key in ((EXTERNAL_CANDIDATE, EXTERNAL_RUN), (STOP_SIGNAL_CANDIDATE, STOP_SIGNAL_RUN)):
                 if (manifest.get("external_network_contract") != "external-network-internal-v1"
                         or manifest.get("external_network_probes") != EXTERNAL_EXPECTATION_SHAPES):
                     raise ValueError("external admission requires complete independent source projection")
-            if cohort_key == (STOP_SIGNAL_CANDIDATE, STOP_SIGNAL_RUN):
+            if lifecycle or cohort_key == (STOP_SIGNAL_CANDIDATE, STOP_SIGNAL_RUN):
                 if (manifest.get("stop_signal_contract") != "stop-signal-v1"
                         or manifest.get("stop_signal_probes") != ["StopSignal"]):
                     raise ValueError("stop signal admission requires complete independent source projection")
@@ -658,6 +767,158 @@ def bind_stop_signal_source_provenance(metadata):
 
 
 class ReviewedCatalogTests(unittest.TestCase):
+    def test_synthetic_lifecycle_groups_match_complete_rust_contracts(self) -> None:
+        required = required_shapes()
+        for lane in LANES:
+            admission = lifecycle_admission(lane)
+            manifest = {"lane": lane, "admitted_shapes": deepcopy(admission),
+                        "capability_outcome": dict.fromkeys(admission, "available"),
+                        **lifecycle_source_projection(lane)}
+            bind_lifecycle_source(manifest, lane, admission)
+            with self.subTest(lane=lane):
+                self.assertEqual((len(admission), sum(map(len, admission.values()))),
+                                 (34, 56) if lane.startswith("debian11-") else (36, 60))
+                for name, shapes in admission.items():
+                    self.assertEqual(tuple(shapes), required[name])
+                self.assertEqual("HealthStartInterval" in admission, lane.startswith("upstream-"))
+
+    def test_synthetic_lifecycle_projection_refuses_missing_changed_or_extra_outcomes(self) -> None:
+        for lane in LANES:
+            admission = lifecycle_admission(lane)
+            projection = lifecycle_source_projection(lane)
+            manifest = {"lane": lane, "admitted_shapes": deepcopy(admission),
+                        "capability_outcome": dict.fromkeys(admission, "available"),
+                        **deepcopy(projection)}
+            for field, expected in projection.items():
+                changes = [None, "unverified", {}, []]
+                if isinstance(expected, dict):
+                    changes.append({**expected, "unreviewed_effect": "observed"})
+                    for key, value in expected.items():
+                        missing = deepcopy(expected)
+                        del missing[key]
+                        changes.append(missing)
+                        changes.append({**expected, key: "admitted"})
+                        if isinstance(value, list):
+                            for index in range(len(value)):
+                                changes.append({**expected, key: value[:index] + value[index + 1:]})
+                            changes.append({**expected, key: value + [value[0]]})
+                            changes.append({**expected, key: list(reversed(value))})
+                for changed in changes:
+                    malformed = deepcopy(manifest)
+                    malformed[field] = changed
+                    with self.subTest(lane=lane, field=field, changed=changed), self.assertRaises(ValueError):
+                        bind_lifecycle_source(malformed, lane, admission)
+                missing = deepcopy(manifest)
+                del missing[field]
+                with self.subTest(lane=lane, missing=field), self.assertRaises(ValueError):
+                    bind_lifecycle_source(missing, lane, admission)
+
+    def test_synthetic_lifecycle_projection_refuses_cross_lane_and_broader_claims(self) -> None:
+        for lane in LANES:
+            admission = lifecycle_admission(lane)
+            manifest = {"lane": lane, "admitted_shapes": deepcopy(admission),
+                        "capability_outcome": dict.fromkeys(admission, "available"),
+                        **lifecycle_source_projection(lane)}
+            opposite = "upstream-rootful" if lane.startswith("debian11-") else "debian11-rootful"
+            for field, value in lifecycle_source_projection(opposite).items():
+                if value == manifest[field]:
+                    continue
+                changed = deepcopy(manifest)
+                changed[field] = value
+                with self.subTest(lane=lane, opposite_field=field), self.assertRaises(ValueError):
+                    bind_lifecycle_source(changed, lane, admission)
+            for field, key, value in (
+                    ("runtime_filesystem_outcomes", "init_effect_scope", "reaping_and_general_signals"),
+                    ("runtime_filesystem_outcomes", "rootfs_effect_scope", "all_flag_combinations"),
+                    ("tmpfs_effect_outcomes", "coverage", "arbitrary_values_and_defaults"),
+                    ("health_start_interval_boundary_outcomes", "scope", "scheduler_effects")):
+                changed = deepcopy(manifest)
+                changed[field][key] = value
+                with self.subTest(lane=lane, field=field, key=key), self.assertRaises(ValueError):
+                    bind_lifecycle_source(changed, lane, admission)
+            changed = deepcopy(manifest)
+            changed["lane"] = opposite
+            with self.assertRaises(ValueError):
+                bind_lifecycle_source(changed, lane, admission)
+            with self.assertRaises(ValueError):
+                bind_lifecycle_source(manifest, "unknown", admission)
+
+    def test_synthetic_lifecycle_admission_refuses_partial_duplicate_or_nonpositive_groups(self) -> None:
+        for lane in LANES:
+            admission = lifecycle_admission(lane)
+            manifest = {"lane": lane, "admitted_shapes": deepcopy(admission),
+                        "capability_outcome": dict.fromkeys(admission, "available"),
+                        **lifecycle_source_projection(lane)}
+            for name in LIFECYCLE_CAPABILITIES & set(admission):
+                shapes = admission[name]
+                for fault in ("missing", "empty", "duplicate", "unrelated", "unknown", "unavailable"):
+                    changed = deepcopy(manifest)
+                    if fault == "missing":
+                        del changed["admitted_shapes"][name]
+                    elif fault in ("unknown", "unavailable"):
+                        changed["capability_outcome"][name] = fault
+                    else:
+                        changed["admitted_shapes"][name] = {
+                            "empty": [], "duplicate": [shapes[0]] * len(shapes),
+                            "unrelated": ["StopSignal"],
+                        }[fault]
+                    with self.subTest(lane=lane, name=name, fault=fault), self.assertRaises(ValueError):
+                        bind_lifecycle_source(changed, lane, admission)
+                for index in range(len(shapes)):
+                    changed = deepcopy(manifest)
+                    del changed["admitted_shapes"][name][index]
+                    with self.subTest(lane=lane, name=name, partial=index), self.assertRaises(ValueError):
+                        bind_lifecycle_source(changed, lane, admission)
+                incomplete_admission = deepcopy(admission)
+                del incomplete_admission[name]
+                with self.assertRaises(ValueError):
+                    bind_lifecycle_source(manifest, lane, incomplete_admission)
+            if lane.startswith("debian11-"):
+                changed = deepcopy(manifest)
+                changed["admitted_shapes"].update(LIFECYCLE_HEALTH_SHAPES)
+                changed["capability_outcome"]["HealthStartInterval"] = "available"
+                with self.assertRaises(ValueError):
+                    bind_lifecycle_source(changed, lane, changed["admitted_shapes"])
+
+    def test_synthetic_successor_binding_requires_families_and_retained_independent_oracles(self) -> None:
+        # In-memory controls only: no authenticated record or cohort is created.
+        historical_reviewed = hashed_json("reviewed")
+        historical_native = hashed_json("native")
+        reviewed = indexed_cohorts(historical_reviewed, COHORTS)[STOP_SIGNAL_CANDIDATE, STOP_SIGNAL_RUN]
+        native = indexed_native_manifests(historical_native, COHORTS)
+        candidate, run = "b" * 40, "https://github.com/Strukturpiloten/docker-lens/actions/runs/1002/attempts/1"
+        spec, additions, raw_additions = {}, [], []
+        for index, lane in enumerate(LANES):
+            record = deepcopy(reviewed[lane][1])
+            manifest = deepcopy(native[record["native_manifest_sha256"]][1])
+            admission = deepcopy(lifecycle_admission(lane))
+            reviewed_digest, manifest_digest = f"{index + 101:064x}", f"{index + 105:064x}"
+            record.update(candidate_sha=candidate, run_url=run, native_manifest_sha256=manifest_digest,
+                          capabilities=[{"name": name, "state": "available", "admitted_shapes": shapes}
+                                        for name, shapes in admission.items()])
+            manifest.update(candidate_sha=candidate, admitted_shapes=admission,
+                            capability_outcome=dict.fromkeys(admission, "available"),
+                            **lifecycle_source_projection(lane))
+            spec[lane] = (reviewed_digest, manifest_digest, deepcopy(EXPECTED_IDENTITIES[lane]), admission)
+            additions.append((Path(reviewed_digest + ".json"), record))
+            raw_additions.append((Path(manifest_digest + ".json"), manifest))
+        known = {**COHORTS, (candidate, run): spec}
+        self.assertEqual(set(bind_cohorts(historical_reviewed + additions,
+                                          historical_native + raw_additions, known)), set(known))
+        for index, lane in enumerate(LANES):
+            fields = [*lifecycle_source_projection(lane), "identity_contract", "health_metadata_contract",
+                      "network_attachment_contract", "bind_relabel_contract", "external_network_contract",
+                      "stop_signal_contract", "bind_relabel_selinux_effect", "port_probes"]
+            for field in fields:
+                changed = deepcopy(raw_additions)
+                del changed[index][1][field]
+                with self.subTest(lane=lane, missing=field), self.assertRaises(ValueError):
+                    bind_cohorts(historical_reviewed + additions, historical_native + changed, known)
+            changed = deepcopy(additions)
+            changed[index][1]["capabilities"][-1]["state"] = "unknown"
+            with self.subTest(lane=lane, side="reviewed"), self.assertRaises(ValueError):
+                bind_cohorts(historical_reviewed + changed, historical_native + raw_additions, known)
+
     def test_rust_record_tuples_pair_exact_lane_digest_and_file(self) -> None:
         source = (ROOT / "src/reviewed_catalog.rs").read_text(encoding="utf-8")
         section = source.split("const RECORDS:", 1)[1].split("pub(crate) fn records", 1)[0]
@@ -666,14 +927,146 @@ class ReviewedCatalogTests(unittest.TestCase):
         self.assertEqual(section.count("NativeEvidenceLane::"), 4)
         reviewed = {
             lane: path.stem
-            for lane, (path, _) in indexed_cohorts(hashed_json("reviewed"), COHORTS)[STOP_SIGNAL_CANDIDATE, STOP_SIGNAL_RUN].items()
+            for lane, (path, _) in indexed_cohorts(hashed_json("reviewed"), COHORTS)[LIFECYCLE_CANDIDATE, LIFECYCLE_RUN].items()
         }
         self.assertEqual({match["variant"] for match in tuples}, set(LANE_VARIANTS))
         for match in tuples:
             lane = LANE_VARIANTS[match["variant"]]
             self.assertEqual(match["digest"], reviewed[lane])
             self.assertEqual(match["path_digest"], reviewed[lane])
-            self.assertEqual(match["digest"], STOP_SIGNAL_REVIEWED[lane])
+            self.assertEqual(match["digest"], LIFECYCLE_REVIEWED[lane])
+
+    def test_lifecycle_successor_selects_exact_complete_source_groups_and_retains_history(self) -> None:
+        native = hashed_json("native")
+        raw = indexed_native_manifests(native, COHORTS)
+        reviewed = bind_cohorts(hashed_json("reviewed"), native, COHORTS)
+        self.assertEqual(len(reviewed), 8)
+        for lane, (path, record) in reviewed[LIFECYCLE_CANDIDATE, LIFECYCLE_RUN].items():
+            with self.subTest(lane=lane):
+                expected = lifecycle_admission(lane)
+                self.assertEqual(path.stem, LIFECYCLE_REVIEWED[lane])
+                self.assertEqual(record["native_manifest_sha256"], LIFECYCLE_MANIFESTS[lane])
+                self.assertEqual(record["identity"], EXPECTED_IDENTITIES[lane])
+                self.assertEqual({entry["name"]: entry["admitted_shapes"] for entry in record["capabilities"]}, expected)
+                manifest = raw[LIFECYCLE_MANIFESTS[lane]][1]
+                bind_lifecycle_source(manifest, lane, expected)
+                retained_raw = deepcopy(manifest)
+                for field in lifecycle_source_projection(lane):
+                    del retained_raw[field]
+                for name in LIFECYCLE_CAPABILITIES & set(expected):
+                    del retained_raw["admitted_shapes"][name]
+                    del retained_raw["capability_outcome"][name]
+                prior_raw = raw[STOP_SIGNAL_MANIFESTS[lane]][1]
+                retained_raw["candidate_sha"] = prior_raw["candidate_sha"]
+                self.assertEqual(retained_raw, prior_raw)
+                retained_record = deepcopy(record)
+                retained_record["capabilities"] = [entry for entry in record["capabilities"]
+                                                   if entry["name"] not in LIFECYCLE_CAPABILITIES]
+                prior_record = reviewed[STOP_SIGNAL_CANDIDATE, STOP_SIGNAL_RUN][lane][1]
+                for field in ("candidate_sha", "run_url", "native_manifest_sha256"):
+                    retained_record[field] = prior_record[field]
+                self.assertEqual(retained_record, prior_record)
+
+    def test_lifecycle_successor_public_provenance_binds_actual_independent_source_receipt(self) -> None:
+        provenance = strict_public_json((ROOT / "docs/evidence/lifecycle-cohort-39124651853.json").read_bytes())
+        receipt = provenance["independent_source_review"]
+        self.assertEqual(receipt["receipt_path"], "docs/evidence/lifecycle-independent-review-39124651853.json")
+        receipt_bytes = (ROOT / receipt["receipt_path"]).read_bytes()
+        self.assertEqual(receipt["receipt_sha256"], LIFECYCLE_REVIEW_RECEIPT_SHA256)
+        self.assertEqual(hashlib.sha256(receipt_bytes).hexdigest(), LIFECYCLE_REVIEW_RECEIPT_SHA256)
+        metadata = strict_public_json(receipt_bytes)
+        self.assertEqual(metadata["candidate_sha"], LIFECYCLE_CANDIDATE)
+        self.assertEqual(metadata["decision"], "GO for separate explicit successor-cohort admission review only")
+        self.assertEqual(metadata["material_findings"], [])
+        self.assertEqual(provenance["candidate_sha"], LIFECYCLE_CANDIDATE)
+        self.assertEqual(provenance["repository"], {"id": 1387403220, "full_name": "Strukturpiloten/docker-lens"})
+        self.assertEqual(provenance["pull_request"], 123)
+        run = provenance["run"]
+        self.assertEqual((run["id"], run["attempt"], run["dispatcher_sha"]),
+                         (39124651853, 1, "96d83f6d6959dba6079e3e9bdc35db3b27635609"))
+        self.assertNotEqual(run["dispatcher_sha"], LIFECYCLE_CANDIDATE)
+        for field in ("id", "attempt", "event", "status", "conclusion"):
+            self.assertEqual(run[field], metadata["run"][field])
+        self.assertEqual(run["dispatcher_sha"], metadata["run"]["trusted_dispatcher_sha"])
+        self.assertEqual(metadata["verification"]["actual_tests_total"], 84)
+        self.assertEqual(metadata["verification"]["ordered_actual_tests_per_lane"], 21)
+        self.assertEqual(metadata["verification"]["actor_and_exact_head_admission_successes"], 6)
+        self.assertEqual(metadata["verification"]["cleanup_dependent_lane_successes"], 4)
+        self.assertEqual(provenance["metadata_sha256"], metadata["metadata_sha256"])
+        self.assertEqual(provenance["admission_counts"],
+                         {"debian": {"capabilities": 34, "shapes": 56},
+                          "upstream": {"capabilities": 36, "shapes": 60}})
+        self.assertEqual(provenance["raw_projection_markers"],
+                         {"admission": "raw_source_only", "catalogue_admission": "unadmitted"})
+        self.assertEqual({job["id"] for job in provenance["jobs"]},
+                         {117667123445, 117667155877, 117668321354, 117668321360,
+                          117668321427, 117668321438, 117669351260})
+        self.assertTrue(all(job["conclusion"] == "success" and job["all_steps_successful"]
+                            for job in provenance["jobs"]))
+        self.assertEqual(len(provenance["artifacts"]), 4)
+        self.assertEqual({artifact["name"] for artifact in provenance["artifacts"]},
+                         {"dockerlens-native-" + lane for lane in LANES})
+        for artifact in provenance["artifacts"]:
+            lane = artifact["name"].removeprefix("dockerlens-native-")
+            independent = next(item for item in metadata["artifacts"] if item["lane"] == lane)
+            artifact_id, archive_sha, size = LIFECYCLE_ARCHIVES[lane]
+            self.assertEqual((artifact["id"], artifact["archive_api_digest"], artifact["size"]),
+                             (artifact_id, "sha256:" + archive_sha, size))
+            self.assertEqual((independent["id"], independent["archive_sha256"], independent["archive_bytes"]),
+                             (artifact_id, archive_sha, size))
+            self.assertFalse(artifact["expired"])
+            self.assertEqual(artifact["member_name"], lane + ".json")
+            self.assertEqual(artifact["native_manifest_sha256"], LIFECYCLE_MANIFESTS[lane])
+            self.assertEqual(artifact["reviewed_record_sha256"], LIFECYCLE_REVIEWED[lane])
+            raw = (ROOT / "docs/evidence/native/sha256" / (LIFECYCLE_MANIFESTS[lane] + ".json")).read_bytes()
+            self.assertEqual(len(raw), artifact["member_bytes"])
+            self.assertEqual(hashlib.sha256(raw).hexdigest(), independent["member_sha256"])
+        self.assertFalse(provenance["maintenance"]["pin_changes"])
+        self.assertEqual(provenance["selinux_effect"], "unverified")
+        forbidden = {"runtime_uid", "outer_id", "container_id", "network_id", "owner",
+                     "signed_url", "token", "credential", "private_proof", "log_body", "actors"}
+
+        def closed_public(value):
+            if isinstance(value, dict):
+                self.assertTrue(set(value).isdisjoint(forbidden))
+                for child in value.values():
+                    closed_public(child)
+            elif isinstance(value, list):
+                for child in value:
+                    closed_public(child)
+        closed_public(provenance)
+        closed_public(metadata)
+
+    def test_lifecycle_successor_refuses_incomplete_or_nonpositive_raw_and_reviewed_groups(self) -> None:
+        for lane in LANES:
+            for name in LIFECYCLE_CAPABILITIES & set(lifecycle_admission(lane)):
+                for side in ("raw", "reviewed"):
+                    for fault in ("missing", "partial", "duplicate", "wrong_group", "unknown", "unavailable"):
+                        reviewed = deepcopy(hashed_json("reviewed"))
+                        native = deepcopy(hashed_json("native"))
+                        manifest = next(value for path, value in native if path.stem == LIFECYCLE_MANIFESTS[lane])
+                        record = next(value for path, value in reviewed if path.stem == LIFECYCLE_REVIEWED[lane])
+                        entry = next(value for value in record["capabilities"] if value["name"] == name)
+                        if fault == "missing":
+                            if side == "raw":
+                                del manifest["admitted_shapes"][name]
+                            else:
+                                record["capabilities"].remove(entry)
+                        elif fault in ("unknown", "unavailable"):
+                            if side == "raw":
+                                manifest["capability_outcome"][name] = fault
+                            else:
+                                entry["state"] = fault
+                        else:
+                            shapes = lifecycle_admission(lane)[name]
+                            replacement = {"partial": shapes[:-1], "duplicate": [shapes[0]] * len(shapes),
+                                           "wrong_group": ["StopSignal"]}[fault]
+                            if side == "raw":
+                                manifest["admitted_shapes"][name] = replacement
+                            else:
+                                entry["admitted_shapes"] = replacement
+                        with self.subTest(lane=lane, name=name, side=side, fault=fault), self.assertRaises(ValueError):
+                            bind_cohorts(reviewed, native, COHORTS)
 
     def test_four_records_bind_exact_manifest_bytes_and_shapes(self) -> None:
         native_records = hashed_json("native")
@@ -775,11 +1168,11 @@ class ReviewedCatalogTests(unittest.TestCase):
 
     def test_compiled_candidate_has_exact_per_lane_complete_groups(self) -> None:
         source = (ROOT / "src/reviewed_catalog.rs").read_text(encoding="utf-8")
-        self.assertIn(f'const SOURCE_CANDIDATE: &str = "{STOP_SIGNAL_CANDIDATE}";', source)
-        self.assertIn(f'"{STOP_SIGNAL_RUN}";', source)
+        self.assertIn(f'const SOURCE_CANDIDATE: &str = "{LIFECYCLE_CANDIDATE}";', source)
+        self.assertIn(f'"{LIFECYCLE_RUN}";', source)
         for prefix, expected, counts in (
-                ("REVIEWED", STOP_SIGNAL_SHAPES, (30, 47)),
-                ("UPSTREAM", STOP_SIGNAL_UPSTREAM_SHAPES, (31, 49))):
+                ("REVIEWED", lifecycle_admission("debian11-rootful"), (34, 56)),
+                ("UPSTREAM", lifecycle_admission("upstream-rootful"), (36, 60))):
             capabilities = source.split(f"const {prefix}_CAPABILITIES:", 1)[1].split("];", 1)[0]
             shapes = source.split(f"const {prefix}_SHAPES:", 1)[1].split("];", 1)[0]
             capability_names = re.findall(r"Capability::(\w+)", capabilities)
@@ -847,7 +1240,7 @@ class ReviewedCatalogTests(unittest.TestCase):
 
     def test_application_cohort_binds_exact_groups_and_preserves_all_history(self) -> None:
         reviewed = bind_cohorts(hashed_json("reviewed"), hashed_json("native"), COHORTS)
-        self.assertEqual(len(reviewed), 7)
+        self.assertEqual(len(reviewed), 8)
         for lane, (path, record) in reviewed[APPLICATION_CANDIDATE, APPLICATION_RUN].items():
             expected = APPLICATION_SHAPES if lane.startswith("debian11-") else APPLICATION_UPSTREAM_SHAPES
             self.assertEqual(path.stem, APPLICATION_REVIEWED[lane])
@@ -923,7 +1316,7 @@ class ReviewedCatalogTests(unittest.TestCase):
     def test_identity_cohort_adds_only_two_singleton_groups_and_preserves_history(self) -> None:
         reviewed = bind_cohorts(hashed_json("reviewed"), hashed_json("native"), COHORTS)
         raw = indexed_native_manifests(hashed_json("native"), COHORTS)
-        self.assertEqual(len(reviewed), 7)
+        self.assertEqual(len(reviewed), 8)
         self.assertEqual(len(IDENTITY_SHAPES), 16)
         self.assertEqual(sum(map(len, IDENTITY_SHAPES.values())), 26)
         self.assertEqual(set(IDENTITY_SHAPES) - set(LABEL_SHAPES),
@@ -1237,7 +1630,7 @@ class ReviewedCatalogTests(unittest.TestCase):
     def test_external_cohort_is_exact_append_only_and_publicly_authenticated(self) -> None:
         native = hashed_json("native")
         reviewed = bind_cohorts(hashed_json("reviewed"), native, COHORTS)
-        self.assertEqual(len(reviewed), 7)
+        self.assertEqual(len(reviewed), 8)
         raw = indexed_native_manifests(native, COHORTS)
         for lane, (path, record) in reviewed[EXTERNAL_CANDIDATE, EXTERNAL_RUN].items():
             expected = EXTERNAL_SHAPES if lane.startswith("debian11-") else EXTERNAL_UPSTREAM_SHAPES
@@ -1297,7 +1690,7 @@ class ReviewedCatalogTests(unittest.TestCase):
         native = hashed_json("native")
         raw = indexed_native_manifests(native, COHORTS)
         reviewed = bind_cohorts(hashed_json("reviewed"), native, COHORTS)
-        self.assertEqual(len(reviewed), 7)
+        self.assertEqual(len(reviewed), 8)
         for lane in LANES:
             manifest = deepcopy(raw[STOP_SIGNAL_MANIFESTS[lane]][1])
             prior_manifest = raw[EXTERNAL_MANIFESTS[lane]][1]

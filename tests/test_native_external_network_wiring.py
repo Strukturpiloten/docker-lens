@@ -101,7 +101,7 @@ class ExternalNetworkWiringTests(unittest.TestCase):
         harness = (ROOT / "scripts/native-conformance.sh").read_text()
         invocations = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$',
                                  harness, re.MULTILINE)
-        self.assertEqual(len(invocations), 21)
+        self.assertEqual(len(invocations), 23)
         self.assertEqual(invocations[13:15], [("native_bind_relabel", "live_bind_relabel_configuration_matches_engine"),
                                            (TARGET, TEST)])
         command = f'"$(dirname "$0")/run-exact-native-test.sh" {TARGET} {TEST}'

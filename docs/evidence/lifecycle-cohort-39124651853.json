@@ -1,0 +1,187 @@
+{
+  "schema_version": 1,
+  "kind": "reviewed-lifecycle-source-cohort",
+  "scope": "trusted harness execution and public projections; not direct private-proof inspection, final-candidate qualification or application acceptance",
+  "repository": {
+    "id": 1387403220,
+    "full_name": "Strukturpiloten/docker-lens"
+  },
+  "pull_request": 123,
+  "candidate_sha": "a251748de3a61f9dc3d735e670ce3ea461ee0a30",
+  "run": {
+    "id": 39124651853,
+    "attempt": 1,
+    "event": "workflow_dispatch",
+    "workflow_path": ".github/workflows/native-validation.yml",
+    "workflow_ref": "refs/heads/main",
+    "dispatcher_sha": "96d83f6d6959dba6079e3e9bdc35db3b27635609",
+    "status": "completed",
+    "conclusion": "success"
+  },
+  "artifacts": [
+    {
+      "id": 12135508690,
+      "name": "dockerlens-native-debian11-rootful",
+      "archive_api_digest": "sha256:8e9b678bb7b88689c2ecf32df43ad492edd6727d5e47d7c4f9bef51c4688afd9",
+      "size": 2545,
+      "expired": false,
+      "member_name": "debian11-rootful.json",
+      "member_bytes": 10051,
+      "native_manifest_sha256": "3036c448b553c26e26d7fdffa2edf9f58f8630b684fc661603d71d1ec135a5ac",
+      "reviewed_record_sha256": "e62a1ff2181534cf78c0676c17af468c3932b76cd61e6201e6b22f89a118617c"
+    },
+    {
+      "id": 12136206021,
+      "name": "dockerlens-native-debian11-rootless",
+      "archive_api_digest": "sha256:be5f107d9aa1cf3cab2b2a65d265b3e0d6ac45111f398faf3e4a72985b61f27b",
+      "size": 2546,
+      "expired": false,
+      "member_name": "debian11-rootless.json",
+      "member_bytes": 10054,
+      "native_manifest_sha256": "25cd1c07f2788a429135b2dd84b9be342939d59075fdc87e912ee29bc51fd6fe",
+      "reviewed_record_sha256": "6ca015a0edb9ced8ffc06d43a6b5c4d2456cd99cac20d0d80442673ba7ff0c92"
+    },
+    {
+      "id": 12135777782,
+      "name": "dockerlens-native-upstream-rootful",
+      "archive_api_digest": "sha256:a2812c3b6706e9ef5da75acc3ab64f84b2e3160997cf37532479e2b5c518f9d9",
+      "size": 2492,
+      "expired": false,
+      "member_name": "upstream-rootful.json",
+      "member_bytes": 10084,
+      "native_manifest_sha256": "68ee1fe84ba068e834b439b055a2fb702bbc26e89f5456689460990c8e730841",
+      "reviewed_record_sha256": "ff6eb1bbc6ca6c07f16ebf6e7de4d61ae056c5cfa8af16e11df7ee97edd249c1"
+    },
+    {
+      "id": 12135384037,
+      "name": "dockerlens-native-upstream-rootless",
+      "archive_api_digest": "sha256:2800790a9652880e19afb3b2377bc0f8fc78390f09b55bd2c3cdbb33c0436ba4",
+      "size": 2496,
+      "expired": false,
+      "member_name": "upstream-rootless.json",
+      "member_bytes": 10087,
+      "native_manifest_sha256": "21576936e7a0f2d23da62bcd2f88f57dcea45e6837102400b806d069045aeeb4",
+      "reviewed_record_sha256": "de7d25c9d24d32ca929d8c2fe33291daf3d2f663a0162996f1ac616423a72914"
+    }
+  ],
+  "jobs": [
+    {
+      "id": 117667123445,
+      "name": "Validate dispatcher and exact reviewed PR head",
+      "conclusion": "success",
+      "all_steps_successful": true
+    },
+    {
+      "id": 117667155877,
+      "name": "Complete offline gate at exact PR head",
+      "conclusion": "success",
+      "all_steps_successful": true
+    },
+    {
+      "id": 117668321354,
+      "name": "Native Engine debian11-rootful",
+      "conclusion": "success",
+      "all_steps_successful": true
+    },
+    {
+      "id": 117668321360,
+      "name": "Native Engine upstream-rootless",
+      "conclusion": "success",
+      "all_steps_successful": true
+    },
+    {
+      "id": 117668321427,
+      "name": "Native Engine debian11-rootless",
+      "conclusion": "success",
+      "all_steps_successful": true
+    },
+    {
+      "id": 117668321438,
+      "name": "Native Engine upstream-rootful",
+      "conclusion": "success",
+      "all_steps_successful": true
+    },
+    {
+      "id": 117669351260,
+      "name": "All reviewed native validation required",
+      "conclusion": "success",
+      "all_steps_successful": true
+    }
+  ],
+  "review": {
+    "source_pr": "https://github.com/Strukturpiloten/docker-lens/pull/123",
+    "native_tests_each_lane": 21,
+    "actual_tests_total": 84,
+    "actor_and_exact_head_admission_successes": 6,
+    "cleanup_dependent_lane_successes": 4,
+    "public_projection": "Primary authenticated live API metadata; independent reviewer verified held bounded archive reads, exact single members, CRC, strict canonical JSON and complete finite source groups.",
+    "cleanup": "Successful exact source assertions and closed logs; no independent host inventory or direct private-proof inspection.",
+    "admission_change": "Separate independent final-diff review remains required."
+  },
+  "independent_source_review": {
+    "receipt_path": "docs/evidence/lifecycle-independent-review-39124651853.json",
+    "receipt_sha256": "4ef79059ec665fda368fdc6cec9bfd66408a0011024471227de18577bbd9a5ba"
+  },
+  "metadata_sha256": {
+    "run": "23d7c83e0d656482666a3248e11c0e85fbe25d2848b134415f6e7fa96c24f33f",
+    "public_log": "370fea02f8f60f509112a22e96fc0ff8ec671bd85d4f1eadcd7bcd4e9c4c0054",
+    "artifacts": "eade4343d67679f685b4853603ae41b26b01047f9d0cc540d07dbf6467de1975"
+  },
+  "admission_scope": "candidate pre-merge rehearsal; fresh exact-final-candidate and actual consumer gates remain required",
+  "admission_counts": {
+    "debian": {
+      "capabilities": 34,
+      "shapes": 56
+    },
+    "upstream": {
+      "capabilities": 36,
+      "shapes": 60
+    }
+  },
+  "finite_groups": {
+    "all_four_lanes": [
+      "StopTimeout",
+      "ContainerInit",
+      "ReadOnlyRootfs",
+      "TmpfsMount"
+    ],
+    "upstream_only": [
+      "HealthStartInterval"
+    ],
+    "init_effect_scope": "pid1_indirection_only",
+    "rootfs_effect_scope": "diagonal_omitted_false_true_only",
+    "tmpfs_coverage": "explicit_1MiB_0700_and_2MiB_0750_rw_ro_only",
+    "debian_health_start_interval": "unsupported_legacy_field; not_effective_on_selected_api"
+  },
+  "raw_projection_markers": {
+    "admission": "raw_source_only",
+    "catalogue_admission": "unadmitted"
+  },
+  "selinux_effect": "unverified",
+  "oracle": {
+    "command": "./scripts/native-conformance.sh <lane>",
+    "debian_package": "docker.io 20.10.5+dfsg1-1+deb11u2",
+    "debian_engine": "20.10.5+dfsg1",
+    "upstream_engine": "29.8.1",
+    "source_license_reference": "ADR 0015 and lifecycle contracts: Apache-2.0 Moby/Debian references; no oracle source or binaries redistributed",
+    "redistribution": "Sanitized public metadata under repository MPL-2.0; no private proof or log bodies"
+  },
+  "remaining_gates": [
+    "independent final admission-diff review and complete final-edit gate",
+    "fresh authenticated exact-final-candidate four-lane twenty-one-test native qualification and independent review",
+    "fresh all six actual authored-fixture volume-only consumer rehearsals",
+    "fresh reviewed BoxFerry actual Nextcloud and Supabase bind and desired external-expectation consumers",
+    "separate BoxFerry source-bound admission/producer receipts and application acceptance"
+  ],
+  "maintenance": {
+    "canonical_harness": "scripts/native-conformance.sh",
+    "consumers": [
+      "local execution",
+      ".github/workflows/check.yml main push",
+      ".github/workflows/native-validation.yml reviewed-PR dispatch",
+      ".github/workflows/release-validation.yml exact-main dispatch"
+    ],
+    "pin_changes": false,
+    "renovate_review": "No dependency, software pin, extraction path or operational definition changes. Cargo/GitHub Actions ownership, toolchain/five-image regex extraction, grouping and manual approval remain unchanged."
+  }
+}

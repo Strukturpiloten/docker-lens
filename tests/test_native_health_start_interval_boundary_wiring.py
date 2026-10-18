@@ -111,8 +111,8 @@ class HealthBoundaryEvidenceTests(unittest.TestCase):
                 "probes": ["omission_configured_absent", "literal_zero_configured_absent",
                            "cli_zero_client_unknown_flag" if debian else "cli_zero_configured_absent"],
             })
-            self.assertEqual(len(record["capability_outcome"]), 34 if debian else 36)
-            self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 56 if debian else 60)
+            self.assertEqual(len(record["capability_outcome"]), 37 if debian else 39)
+            self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 59 if debian else 63)
             self.assertEqual("HealthStartInterval" in record["capability_outcome"], not debian)
             self.assertEqual("HealthStartInterval" in record["admitted_shapes"], not debian)
             for private in ("dl-hsi-", '"StartInterval":', "StartedAt", "client_exit", '"configured":', '"cleanup":', SECRET):

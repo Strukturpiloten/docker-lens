@@ -1,4 +1,4 @@
-"""Closed twenty-one-test wiring and emitter controls; no real native calls."""
+"""Closed twenty-two-test wiring and emitter controls; no real native calls."""
 
 import copy
 import json
@@ -43,6 +43,8 @@ EXPECTED_CALLS = [
     ("native_tmpfs_effect", "live_tmpfs_effects_match_engine"),
     ("native_health_start_interval_boundary", "live_health_start_interval_boundary_matches_engine"),
     ("native_lifecycle_default_effect", "live_lifecycle_default_effects_match_engine"),
+    ("native_hostname", "live_hostname_matches_engine"),
+    ("native_command_clear", "live_command_clear_matches_engine"),
 ]
 
 
@@ -79,14 +81,14 @@ sys.exit(int(os.environ["STATUS"]))
             ended = time.time()
             return result, [json.loads(line) for line in calls.read_text().splitlines()], started, ended
 
-    def test_twenty_one_invocations_are_exact_and_owner_scope_is_only_five(self):
+    def test_twenty_two_invocations_are_exact_and_owner_scope_is_six(self):
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         calls = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source, re.M)
         self.assertEqual(calls, EXPECTED_CALLS)
         owner = source.index('(\n  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1\n')
         end = source.index('\n)\n', owner)
         scoped = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source[owner:end], re.M)
-        self.assertEqual(scoped, EXPECTED_CALLS[-5:])
+        self.assertEqual(scoped, EXPECTED_CALLS[-7:-1])
         self.assertEqual(source.count('export NATIVE_LIFECYCLE_CLEANUP_OWNER='), 1)
         self.assertLess(source.index('unset NATIVE_LIFECYCLE_CLEANUP_OWNER'), source.index('run-exact-native-test.sh" native_capture'))
         emission = source.index('python3 "$script_dir/native-evidence.py"')
@@ -224,8 +226,8 @@ class RuntimeCohortEvidenceTests(unittest.TestCase):
             self.assertEqual(record["tmpfs_effect_outcomes"], {
                 "admission": "raw_source_only", "catalogue_admission": "unadmitted", "coverage": "explicit_1MiB_0700_and_2MiB_0750_rw_ro_only",
             })
-            self.assertEqual(len(record["capability_outcome"]), 34 if lane.startswith("debian11-") else 36)
-            self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 56 if lane.startswith("debian11-") else 60)
+            self.assertEqual(len(record["capability_outcome"]), 37 if lane.startswith("debian11-") else 39)
+            self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 59 if lane.startswith("debian11-") else 63)
             for capability in ("ContainerInit", "ReadOnlyRootfs", "TmpfsMount", "StopTimeout", "HealthStartInterval"):
                 positive = capability != "HealthStartInterval" or not lane.startswith("debian11-")
                 self.assertEqual(capability in record["capability_outcome"], positive)

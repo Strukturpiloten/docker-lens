@@ -41,7 +41,9 @@ StartInterval. Debian HTTP 201 accepts an unknown member; both fixtures must
 retain raw absence. Only `unsupported_legacy_field`, scoped to
 `accepted_unknown_member_legacy_schedule_only`, is allowed there. Modern profiles
 require `default_equivalent`, scoped to `supported_field_zero_default_schedule`,
-and the actual five-second cadence above. Both remain catalogue-unadmitted. Allowed outcomes
+and the actual five-second cadence above. Both source dispositions retain
+unadmitted raw markers; ADR 0022 separately selects the upstream complete group,
+not the Debian unsupported outcome. Allowed outcomes
 derive from independently supplied exact context, never proof self-attestation.
 
 Distinct name `dl-def-<run>-zero-cli-refusal` is not an owned-container slot and
@@ -80,11 +82,13 @@ The public `lifecycle_default_effect_contract` and closed
 Stop plus modern-equivalent or legacy-unsupported markers are
 projected; native logs, IDs, timestamps, raw fields/private paths are not.
 Only complete validated raw source groups extend capability/shape maps. Sealed
-records, compiled catalogue withholding, private v1 protocols and historical
-receipts stay unchanged. Legacy outcomes never add HealthStartInterval.
+records, private v1 protocols and historical receipts stay unchanged. ADR 0022
+separately selects the reviewed lifecycle cohort at 34/56 and 36/60; raw markers
+alone grant no admission. ADR 0023 adds process-source projection without selecting
+its three new groups. Legacy outcomes never add HealthStartInterval.
 
 No software/tool/runtime pin or pin location changes; existing Renovate ownership
 and extraction remain applicable. Final-edit complete gates, fresh authenticated
-exact-candidate twenty-one-test four-lane execution, independent review and
+exact-candidate twenty-three-test four-lane execution, independent review and
 required consumer rehearsals remain mandatory. Source/inert controls prove none
 of the outstanding genuine native gates.

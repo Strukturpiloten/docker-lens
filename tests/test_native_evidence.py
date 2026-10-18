@@ -20,6 +20,8 @@ from test_native_lifecycle_default_effect_proof import fixture as lifecycle_defa
 from test_native_runtime_filesystem_proof import fixture as runtime_filesystem_fixture
 from test_native_tmpfs_effect_proof import fixture as tmpfs_effect_fixture
 from test_native_health_start_interval_boundary_proof import fixture as health_boundary_fixture
+from test_native_hostname_proof import fixture as hostname_fixture
+from test_native_command_clear_proof import fixture as command_clear_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/native-evidence.py"
@@ -75,6 +77,9 @@ EXPECTED_LIFECYCLE_SOURCE_SHAPES = {
 }
 EXPECTED_FUTURE_RAW_SHAPES = {
     **EXPECTED_RAW_SHAPES, **EXPECTED_PORT_CAPABILITY_SHAPES, **EXPECTED_LIFECYCLE_SOURCE_SHAPES,
+    "ContainerHostname": ["ContainerHostname"],
+    "CommandClear": ["ClearCommand"],
+    "EntrypointClear": ["ClearEntrypoint"],
 }
 SOURCE_PROBES = [
     "DiscoveryMetadata", "ExactContainerId", "ExactContainerName",
@@ -152,6 +157,58 @@ def identity_proof(lane: str, mode: str, api: str, sha: str) -> dict:
 
 
 class NativeEvidenceTests(unittest.TestCase):
+    def test_process_source_projection_is_closed_complete_and_not_catalogue_admission(self) -> None:
+        import test_native_external_network_evidence as canonical
+        from test_reviewed_catalog import required_shapes
+
+        schema = json.loads((ROOT / "docs/native-evidence.schema.json").read_text())
+        expectations = {
+            "hostname": {"hostname_contract": "hostname-v1", "hostname_outcomes": {
+                "admission": "raw_source_only", "catalogue_admission": "unadmitted",
+                "outcome": "omitted_and_explicit_verified"}},
+            "command_clear": {"command_clear_contract": "command-clear-v1", "command_clear_outcomes": {
+                "admission": "raw_source_only", "catalogue_admission": "unadmitted",
+                "outcome": "all_four_process_controls_verified"}},
+        }
+        groups = {"ContainerHostname": ["ContainerHostname"], "CommandClear": ["ClearCommand"],
+                  "EntrypointClear": ["ClearEntrypoint"]}
+        required = required_shapes()
+        catalogue = (ROOT / "src/reviewed_catalog.rs").read_text()
+        for capability, shapes in groups.items():
+            self.assertEqual(tuple(shapes), required[capability])
+            for prefix in ("REVIEWED", "UPSTREAM"):
+                selected = catalogue.split(f"const {prefix}_CAPABILITIES:", 1)[1].split("];", 1)[0]
+                self.assertNotIn(f"Capability::{capability},", selected)
+                selected_shapes = catalogue.split(f"const {prefix}_SHAPES:", 1)[1].split("];", 1)[0]
+                self.assertNotIn(f"NativeCapabilityShape::{shapes[0]},", selected_shapes)
+        for lane in ("debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless"):
+            with self.subTest(lane=lane):
+                result, path = canonical.ExternalNetworkEvidenceTests.emit(self, lane)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                record = json.loads(path.read_text())
+                for family, expected in expectations.items():
+                    definition = schema["$defs"][f"{family}_source_projection"]
+                    self.assertFalse(definition["additionalProperties"])
+                    self.assertEqual(set(definition["required"]), set(expected))
+                    self.assertEqual(set(definition["properties"]), set(expected))
+                    self.assertEqual(definition["properties"][f"{family}_contract"],
+                                     {"const": expected[f"{family}_contract"]})
+                    self.assertNotIn(f"#/$defs/{family}_source_projection", json.dumps(schema))
+                    self.assertEqual({key: record[key] for key in expected}, expected)
+                    outcome = definition["properties"][f"{family}_outcomes"]
+                    self.assertFalse(outcome["additionalProperties"])
+                    self.assertEqual(set(outcome["required"]), set(expected[f"{family}_outcomes"]))
+                    self.assertEqual(outcome["properties"], {
+                        key: {"const": value} for key, value in expected[f"{family}_outcomes"].items()})
+                for capability, shapes in groups.items():
+                    self.assertEqual(record["admitted_shapes"][capability], shapes)
+                self.assertNotIn("HealthDisabled", record["admitted_shapes"])
+                raw = path.read_text()
+                for private in ("dl-hostname-", "dl-command-", "/dl-image-entrypoint", "/dl-command-process",
+                                "process_argv", "process_hostname", "borrowed_image", "derived_image",
+                                "started_at", "restart_count", RUN_ID, "PRIVATE_PROJECTION_CANARY"):
+                    self.assertNotIn(private, raw)
+
     def test_complete_lifecycle_raw_groups_and_catalogue_boundary_on_all_lanes(self) -> None:
         # Reuse input construction only. Expectations come from the independent
         # finite contract matrix and the existing required_for API contract.
@@ -176,8 +233,8 @@ class NativeEvidenceTests(unittest.TestCase):
                     del expected["PortHostIpv6"]
                 self.assertEqual(record["admitted_shapes"], expected)
                 self.assertEqual(record["capability_outcome"], {name: "available" for name in expected})
-                self.assertEqual(len(record["capability_outcome"]), 34 if debian else 36)
-                self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 56 if debian else 60)
+                self.assertEqual(len(record["capability_outcome"]), 37 if debian else 39)
+                self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 59 if debian else 63)
                 for name, shapes in EXPECTED_LIFECYCLE_SOURCE_SHAPES.items():
                     self.assertEqual(tuple(shapes), required[name])
                     if debian and name == "HealthStartInterval":
@@ -202,15 +259,19 @@ class NativeEvidenceTests(unittest.TestCase):
                     rule = definition["properties"]["probes"]
                     self.assertFalse(rule["items"])
                     self.assertEqual(record[name]["probes"], [item["const"] for item in rule["prefixItems"]])
-        # Raw output cannot change the product's immutable compiled selection.
+        # ADR 0022 separately selects authenticated reviewed envelopes. Raw
+        # projection and its unchanged unadmitted markers grant no admission.
         catalogue = (ROOT / "src/reviewed_catalog.rs").read_text()
-        for prefix, capability_count, shape_count in (("REVIEWED", 30, 47), ("UPSTREAM", 31, 49)):
+        for prefix, capability_count, shape_count in (("REVIEWED", 34, 56), ("UPSTREAM", 36, 60)):
             capabilities = catalogue.split(f"const {prefix}_CAPABILITIES:", 1)[1].split("];", 1)[0]
             shapes = catalogue.split(f"const {prefix}_SHAPES:", 1)[1].split("];", 1)[0]
             self.assertEqual(len(re.findall(r"Capability::(\w+)", capabilities)), capability_count)
             self.assertEqual(len(re.findall(r"NativeCapabilityShape::(\w+)", shapes)), shape_count)
             for name in EXPECTED_LIFECYCLE_SOURCE_SHAPES:
-                self.assertNotIn(f"Capability::{name},", capabilities)
+                if prefix == "REVIEWED" and name == "HealthStartInterval":
+                    self.assertNotIn(f"Capability::{name},", capabilities)
+                else:
+                    self.assertIn(f"Capability::{name},", capabilities)
 
     def test_every_lifecycle_family_remains_mandatory_complete_bound_and_clean(self) -> None:
         import test_native_external_network_evidence as canonical
@@ -221,6 +282,8 @@ class NativeEvidenceTests(unittest.TestCase):
             ("runtime_filesystem", "runtime-filesystem-v1.json", "cases"),
             ("tmpfs_effect", "tmpfs-effect-v1.json", "cases"),
             ("health_boundary", "health-start-interval-boundary-v1.json", "cases"),
+            ("hostname", "hostname-v1.json", "cases"),
+            ("command_clear", "command-clear-v1.json", "cases"),
         )
         for lane in ("debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless"):
             for option, filename, group in families:
@@ -235,7 +298,7 @@ class NativeEvidenceTests(unittest.TestCase):
             for option, filename, group in families:
                 proof_path = path.parent.parent / filename
                 original = json.loads(proof_path.read_text())
-                for mutation in ("partial", "context", "effect", "cleanup", "unexpected"):
+                for mutation in ("partial", "context", "effect", "cleanup", "unexpected", "protected_extra"):
                     with self.subTest(lane=lane, family=option, mutation=mutation):
                         proof = copy.deepcopy(original)
                         if mutation == "partial":
@@ -251,10 +314,16 @@ class NativeEvidenceTests(unittest.TestCase):
                                 proof["cases"][0]["containers"][0]["worker_pid"] = 0
                             elif option == "tmpfs_effect":
                                 proof["cases"][0]["containers"][0]["effect"]["filesystem"] = "ext4"
+                            elif option == "hostname":
+                                proof["cases"][1]["containers"][1]["process_hostname"] = "PRIVATE_PROJECTION_CANARY"
+                            elif option == "command_clear":
+                                proof["cases"][2]["containers"][1]["process_argv"] = ["PRIVATE_PROJECTION_CANARY"]
                             else:
                                 proof["cases"][0]["records"][0]["state"]["Pid"] = 1
                         elif mutation == "cleanup":
                             proof["cleanup"]["uncertain"] = True
+                        elif mutation == "protected_extra":
+                            proof["context"]["PRIVATE_PROJECTION_CANARY"] = "PRIVATE_PROJECTION_CANARY"
                         else:
                             proof["PRIVATE_PROJECTION_CANARY"] = "PRIVATE_PROJECTION_CANARY"
                         proof_path.write_text(json.dumps(proof))
@@ -280,13 +349,15 @@ class NativeEvidenceTests(unittest.TestCase):
                                      "port_shape", "port_probe_entry", "port_probes",
                                      "native_port_probe_proof", "bind_relabel_capability_vocabulary",
                                      "bind_relabel_shape_vocabulary", "external_network_probes",
-                                     "external_network_projection", "lifecycle_source_projection"})
+                                     "external_network_projection", "lifecycle_source_projection",
+                                     "hostname_source_projection", "command_clear_source_projection"})
         unchanged = copy.deepcopy(schema)
         for name in ("identity_probes", "identity_container_proof", "native_identity_proof",
                      "identity_container_v2", "identity_case_v2", "native_identity_proof_v2",
                      "port_shape", "port_probe_entry", "port_probes", "native_port_probe_proof",
                      "bind_relabel_capability_vocabulary", "bind_relabel_shape_vocabulary",
-                     "external_network_probes", "external_network_projection", "lifecycle_source_projection"):
+                     "external_network_probes", "external_network_projection", "lifecycle_source_projection",
+                     "hostname_source_projection", "command_clear_source_projection"):
             del unchanged["$defs"][name]
         # Preserve the exact historical #74 root projection: later vocabulary
         # additions do not rewrite historical envelope bytes or admission.
@@ -466,6 +537,10 @@ class NativeEvidenceTests(unittest.TestCase):
                  health_boundary_missing: bool = False,
         lifecycle_default_effect: object = None,
         lifecycle_default_effect_missing: bool = False,
+                 hostname: object = None,
+                 hostname_missing: bool = False,
+                 command_clear: object = None,
+                 command_clear_missing: bool = False,
                  port_proof_override: object = None) -> tuple[subprocess.CompletedProcess[str], Path]:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -581,6 +656,23 @@ class NativeEvidenceTests(unittest.TestCase):
         if not lifecycle_default_effect_missing:
             lifecycle_default_effect_path.write_text(json.dumps(defaults if lifecycle_default_effect is None else lifecycle_default_effect), encoding="utf-8")
             lifecycle_default_effect_path.chmod(0o600)
+        # Explicit unit fixtures only; these are not authenticated native evidence.
+        hostname_proof = hostname_fixture(lane)
+        hostname_proof["context"].update(copy.deepcopy(external["context"]))
+        for case in hostname_proof["cases"]:
+            for container in case["containers"]:
+                container["image"] = HEALTH_FIXTURE_IMAGE
+        command_proof = command_clear_fixture(lane)
+        command_proof["context"].update(copy.deepcopy(external["context"]))
+        command_proof["seed"]["image"] = HEALTH_FIXTURE_IMAGE
+        for filename, proof, override, missing in (
+            ("hostname-v1.json", hostname_proof, hostname, hostname_missing),
+            ("command-clear-v1.json", command_proof, command_clear, command_clear_missing),
+        ):
+            if not missing:
+                private_path = root / filename
+                private_path.write_text(json.dumps(proof if override is None else override), encoding="utf-8")
+                private_path.chmod(0o600)
         result = subprocess.run(
             ["python3", str(SCRIPT), str(version_path), str(shapes_path), str(source_path),
              str(network_path), str(volume_path), str(volume_label_path), str(identity_path),
@@ -605,7 +697,7 @@ class NativeEvidenceTests(unittest.TestCase):
         self.assertEqual(evidence["acquisition_api"], "1.49")
         self.assertEqual(evidence["rendering_api"], "1.56")
         self.assertEqual(evidence["runtime_components"], {"containerd": "2.3.5", "runc": "1.5.1"})
-        self.assertEqual(len(evidence["capability_outcome"]), 34)
+        self.assertEqual(len(evidence["capability_outcome"]), 37)
         self.assertEqual(set(evidence["capability_outcome"].values()), {"available"})
         self.assertEqual(evidence["admitted_shapes"], EXPECTED_FUTURE_RAW_SHAPES)
         self.assertEqual(evidence["source_probes"], SOURCE_PROBES)

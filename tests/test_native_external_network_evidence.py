@@ -64,9 +64,9 @@ class ExternalNetworkEvidenceTests(unittest.TestCase):
                 self.assertEqual(record["capability_outcome"]["NetworkExternalInternalExpectation"], "available")
                 self.assertEqual(record["admitted_shapes"]["NetworkExternalInternalExpectation"], SHAPES)
                 self.assertEqual(record["admitted_shapes"]["NetworkInternal"], ["InternalBridgeNetworkCreate"])
-                self.assertEqual(len(record["capability_outcome"]), 34 if lane.startswith("debian11-") else 36)
+                self.assertEqual(len(record["capability_outcome"]), 37 if lane.startswith("debian11-") else 39)
                 self.assertEqual(sum(map(len, record["admitted_shapes"].values())),
-                                 56 if lane.startswith("debian11-") else 60)
+                                 59 if lane.startswith("debian11-") else 63)
                 for key, expected in (
                     ("source_probes", legacy.SOURCE_PROBES), ("network_probes", legacy.NETWORK_PROBES),
                     ("volume_probes", legacy.VOLUME_PROBES), ("volume_label_probes", legacy.VOLUME_LABEL_PROBES),

@@ -29,8 +29,8 @@ class LifecycleEvidenceTests(unittest.TestCase):
                 for field in ("StopTimeout", "HealthStartInterval"):
                     self.assertEqual(field in record["capability_outcome"], field != "HealthStartInterval" or not debian)
                     self.assertEqual(field in record["admitted_shapes"], field != "HealthStartInterval" or not debian)
-                self.assertEqual(len(record["capability_outcome"]), 34 if debian else 36)
-                self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 56 if debian else 60)
+                self.assertEqual(len(record["capability_outcome"]), 37 if debian else 39)
+                self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 59 if debian else 63)
                 for private in ("lifecycle-term", "lifecycle-health-failure", "StartedAt", "FinishedAt",
                                 "outer_before", "image_before", "cleanup", "owner",
                                 "a" * 64, "f" * 64):

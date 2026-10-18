@@ -67,6 +67,9 @@ mod stop_signal;
 #[path = "native_lifecycle_tests.rs"]
 mod lifecycle;
 
+#[path = "native_command_clear_tests.rs"]
+mod command_clear;
+
 fn required(name: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| panic!("closed health metadata environment"))
 }
@@ -344,6 +347,8 @@ struct HealthRun {
     bytes: Cell<usize>,
     facts: Option<DaemonFacts>,
     cleaned: bool,
+    // A child fixture can own a different cleanup ledger without claiming success.
+    cleanup_delegated: bool,
 }
 
 struct HealthExpectation {
@@ -467,6 +472,7 @@ impl HealthRun {
             bytes: Cell::new(0),
             facts: None,
             cleaned: false,
+            cleanup_delegated: false,
         }
     }
 
@@ -1551,7 +1557,7 @@ impl HealthRun {
 
 impl Drop for HealthRun {
     fn drop(&mut self) {
-        if !self.cleaned {
+        if !self.cleaned && !self.cleanup_delegated {
             let clean = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.cleanup()))
                 .unwrap_or(false);
             if !clean {

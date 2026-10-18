@@ -107,13 +107,16 @@ exit/stopped-state facts and absence. The executable strict schema is
 `scripts/native_stop_signal_proof.py`. This is trusted-harness completion, not
 cryptographic attestation against a privileged writer.
 
-The nineteen-argument emitter remains unchanged. After sixteen required tests,
-the fixed new private file permits only `stop_signal_contract`,
+The nineteen-argument emitter protocol stays unchanged. At the original ADR 0019
+checkpoint, after sixteen required tests, the fixed new private file permitted only `stop_signal_contract`,
 `stop_signal_probes` and the complete raw StopSignal singleton. With identity-v2
 and prescribed Debian IPv6 boundaries, raw counts are Debian **30/47**
 capabilities/shapes and upstream **31/49**. ADR 0019 admits those exact sealed
 counts, retaining all prior fields/groups and adding only StopSignal. Counts
-and offline controls alone are expectations, never native proof.
+and offline controls alone are expectations, never native proof. ADR 0022 later
+selects the reviewed lifecycle cohort at 34/56 and 36/60. ADR 0023 requires 23
+canonical invocations and extends current raw counts to 37/59 and 39/63 without
+selecting the three new process groups; the checkpoint counts above remain historical.
 
 Local/main/reviewed-dispatch/release share `scripts/native-conformance.sh`; no
 consumer workflow or nineteen-argument caller changes. Other Lens products and

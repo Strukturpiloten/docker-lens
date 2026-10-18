@@ -14,28 +14,34 @@ compatibility claim.
 The planned native work is tracked in [DockerLens #3](https://github.com/Strukturpiloten/docker-lens/issues/3).
 Typed networks, protected runtime settings and conditional bind-source review
 are available as inert data. The candidate selects the independently reviewed
-configured stop-signal source cohort from run `38106164571`, attempt 1, under
-[ADR 0019](docs/decisions/0019-reviewed-stop-signal-cohort.md). Exact Debian
-profiles admit 30 capabilities/47 shapes; upstream profiles add only the
-complete IPv6 port group, for 31/49. The machine records preserve all six
-earlier cohorts byte-exact.
+complete lifecycle source cohort from run `39124651853`, attempt 1, under
+[ADR 0022](docs/decisions/0022-reviewed-lifecycle-cohort.md). Exact Debian
+profiles admit 34 capabilities/56 shapes; upstream profiles add the complete
+IPv6 port and HealthStartInterval groups, for 36/60. The machine records
+preserve all seven earlier cohorts byte-exact.
 
 The selection retains complete common IPv4/repeated/exposed-only/ephemeral port,
 container-label/shell-health/start-period, network-label/alias/multiple-attachment,
 and shared/private bind configured-retention groups and the complete
-external-network Internal false/true expectation group, adding only StopSignal.
+external-network Internal false/true expectation group and StopSignal. It adds
+complete StopTimeout zero/positive, init true/false, read-only-rootfs true/false
+and three tmpfs shapes on every lane, plus HealthStartInterval zero/positive
+only upstream. Init effects cover PID1 indirection, rootfs effects cover diagonal
+omitted/false/true controls, and tmpfs effects cover only explicit
+1 MiB/0700 and 2 MiB/0750 rw/ro cases. Reaping, general signal behavior,
+Cartesian flag combinations and arbitrary tmpfs values remain unproved.
 Native symbolic TERM/INT trap effects are bounded source evidence, not a promise
 of arbitrary-image or application shutdown behavior. None remains
 unconstrained; explicit booleans select inert schema 3 and never network mutation.
-Other topology and runtime
-groups remain unadmitted. Bind prerequisites retain all source review and
+Other topology and runtime groups remain unadmitted. Bind prerequisites retain
+all source review and
 unverified SELinux conditions from [ADR 0015](docs/decisions/0015-bind-relabel-intent.md);
 configured retention does not prove relabel effects. Schema-1 and request
 representations retain their existing behavior.
 
 This is candidate pre-merge rehearsal admission. Production merge, main
 admission and release remain blocked until fresh exact-final-candidate complete
-and four-lane twenty-one-test native gates, fresh independently reviewed volume-only
+and four-lane twenty-three-test native gates, fresh independently reviewed volume-only
 consumer rehearsals of all six actual authored fixtures under
 [ADR 0012](docs/decisions/0012-candidate-volume-label-admission.md), and reviewed
 BoxFerry consumers of the actual Nextcloud/Supabase binds and desired external
@@ -45,11 +51,16 @@ The [default/zero lifecycle source probe](docs/native-lifecycle-default-effects-
 and the other four lifecycle-family proofs are mandatory before raw evidence is
 emitted. [ADR 0021](docs/decisions/0021-lifecycle-raw-source-projection.md) projects
 complete finite StopTimeout/init/read-only-rootfs/tmpfs source groups on all lanes
-and HealthStartInterval only on upstream. Canonical raw records contain 34/56
-capabilities/shapes on Debian and 36/60 upstream, marked `raw_source_only` with
-`catalogue_admission: unadmitted`. The compiled catalogue stays at 30/47 and 31/49.
-Legacy unknown-field acceptance remains unsupported; source projection adds no
-product capability. Fresh exact-head native and consumer qualification is required.
+and HealthStartInterval only on upstream. [ADR 0023](docs/decisions/0023-process-source-proof-wiring.md)
+requires hostname and command/entrypoint-clear proofs and extends current raw
+records to 37/59 capabilities/shapes on Debian and 39/63 upstream, marked
+`raw_source_only` with `catalogue_admission: unadmitted`. Historical raw bytes
+are preserved unchanged; ADR 0022 separately selects reviewed lifecycle envelopes
+at 34/56 and 36/60. Hostname and both clear groups remain unselected.
+Debian HealthStartInterval remains explicitly unsupported/not-effective;
+legacy unknown-field acceptance supplies no support. The source run passed all
+21 ordered native tests in each lane. Fresh exact-final-candidate native and
+consumer qualification is still required after this admission change.
 Identity support does not promise arbitrary-image startup or host UID mapping.
 No application or full migration acceptance is claimed. External-volume
 prerequisites cannot carry labels or mutate an existing volume.

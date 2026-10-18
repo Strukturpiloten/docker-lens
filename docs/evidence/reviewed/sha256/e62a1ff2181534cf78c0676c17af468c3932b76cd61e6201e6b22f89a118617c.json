@@ -1,0 +1,283 @@
+{
+  "schema_version": 1,
+  "lane": "debian11-rootful",
+  "candidate_sha": "a251748de3a61f9dc3d735e670ce3ea461ee0a30",
+  "run_url": "https://github.com/Strukturpiloten/docker-lens/actions/runs/39124651853/attempts/1",
+  "native_manifest_artifact_name": "dockerlens-native-debian11-rootful",
+  "native_manifest_sha256": "3036c448b553c26e26d7fdffa2edf9f58f8630b684fc661603d71d1ec135a5ac",
+  "identity": {
+    "build": {
+      "kind": "debian-package",
+      "distribution": "debian11",
+      "package_name": "docker.io",
+      "package_revision": "20.10.5+dfsg1-1+deb11u2"
+    },
+    "engine_release": "20.10.5+dfsg1",
+    "advertised_api": "1.41",
+    "acquisition_api": "1.41",
+    "rendering_api": "1.41",
+    "mode": "rootful"
+  },
+  "capabilities": [
+    {
+      "admitted_shapes": [
+        "BindMountReadWrite",
+        "BindMountReadOnly"
+      ],
+      "name": "BindMount",
+      "state": "available"
+    },
+    {
+      "admitted_shapes": [
+        "BindMountPrivateRelabelReadWrite",
+        "BindMountPrivateRelabelReadOnly"
+      ],
+      "name": "BindRelabelPrivate",
+      "state": "available"
+    },
+    {
+      "admitted_shapes": [
+        "BindMountSharedRelabelReadWrite",
+        "BindMountSharedRelabelReadOnly"
+      ],
+      "name": "BindRelabelShared",
+      "state": "available"
+    },
+    {
+      "admitted_shapes": [
+        "BridgeNetworkCreate",
+        "BridgeNetworkAttach"
+      ],
+      "name": "BridgeNetwork",
+      "state": "available"
+    },
+    {
+      "admitted_shapes": [
+        "ExecCommand"
+      ],
+      "name": "Command",
+      "state": "available"
+    },
+    {
+      "admitted_shapes": [
+        "ContainerInitTrue",
+        "ContainerInitFalse"
+      ],
+      "name": "ContainerInit",
+      "state": "available"
+    },
+    {
+      "admitted_shapes": [
+        "ContainerCreateLabels"
+      ],
+      "name": "ContainerLabels",
+      "state": "available"
+    },
+    {
+      "admitted_shapes": [
+        "ContainerUser"
+      ],
+      "name": "ContainerUser",
+      "state": "available"
+    },
+    {
+      "admitted_shapes": [
+        "ContainerWorkdir"
+      ],
+      "name": "ContainerWorkdir",
+      "state": "available"
+    },
+    {
+      "admitted_shapes": [
+        "ExecEntrypoint"
+      ],
+      "name": "Entrypoint",
+      "state": "available"
+    },
+    {
+      "admitted_shapes": [
+        "EnvironmentValue",
+        "EnvironmentEmptyValue"
+      ],
+      "name": "EnvironmentAssignment",
+      "state": "available"
+    },
+    {
+      "admitted_shapes": [
+        "ShellHealthcheck"
+      ],
+      "name": "HealthShell",
+      "state": "available"
+    },
+    {
+      "admitted_shapes": [
+        "HealthStartPeriodZero",
+        "HealthStartPeriodPositive"
+      ],
+      "name": "HealthStartPeriod",
+      "state": "available"
+    },
+    {
+      "admitted_shapes": [
+        "ExecHealthcheck"
+      ],
+      "name": "Healthcheck",
+      "state": "available"
+    },
+    {
+      "admitted_shapes": [
+        "NamedVolumeCreate",
+        "NamedVolumeMountReadWrite",
+        "NamedVolumeMountReadOnly"
+      ],
+      "name": "NamedVolume",
+      "state": "available"
+    },
+    {
+      "admitted_shapes": [
+        "NetworkPrimaryAliases",
+        "NetworkSecondaryAliases"
+      ],
+      "name": "NetworkAliases",
+      "state": "available"
+    },
+    {
+      "admitted_shapes": [
+        "ExternalNetworkInternalFalse",
+        "ExternalNetworkInternalTrue"
+      ],
+      "name": "NetworkExternalInternalExpectation",
+      "state": "available"
+    },
+    {
+      "admitted_shapes": [
+        "ExternalNetworkReference"
+      ],
+      "name": "NetworkExternalReference",
+      "state": "available"
+    },
+    {
+      "admitted_shapes": [
+        "InternalBridgeNetworkCreate"
+      ],
+      "name": "NetworkInternal",
+      "state": "available"
+    },
+    {
+      "admitted_shapes": [
+        "NetworkCreateLabels"
+      ],
+      "name": "NetworkLabels",
+      "state": "available"
+    },
+    {
+      "admitted_shapes": [
+        "NetworkSecondaryConnect"
+      ],
+      "name": "NetworkMultipleAttachment",
+      "state": "available"
+    },
+    {
+      "admitted_shapes": [
+        "EphemeralHostPort"
+      ],
+      "name": "PortEphemeral",
+      "state": "available"
+    },
+    {
+      "admitted_shapes": [
+        "ExposedOnlyPort"
+      ],
+      "name": "PortExposeOnly",
+      "state": "available"
+    },
+    {
+      "admitted_shapes": [
+        "FixedIpv4HostPort",
+        "EphemeralIpv4HostPort"
+      ],
+      "name": "PortHostIpv4",
+      "state": "available"
+    },
+    {
+      "admitted_shapes": [
+        "MultipleFixedPortBindings",
+        "MultipleEphemeralPortBindings"
+      ],
+      "name": "PortMultipleBindings",
+      "state": "available"
+    },
+    {
+      "admitted_shapes": [
+        "FixedTcpPort",
+        "FixedUdpPort"
+      ],
+      "name": "PortPublish",
+      "state": "available"
+    },
+    {
+      "admitted_shapes": [
+        "ReadOnlyRootfsTrue",
+        "ReadOnlyRootfsFalse"
+      ],
+      "name": "ReadOnlyRootfs",
+      "state": "available"
+    },
+    {
+      "admitted_shapes": [
+        "RestartNo",
+        "RestartAlways",
+        "RestartUnlessStopped",
+        "RestartOnFailureUnlimited",
+        "RestartOnFailureLimited"
+      ],
+      "name": "RestartPolicy",
+      "state": "available"
+    },
+    {
+      "admitted_shapes": [
+        "StandaloneCreate"
+      ],
+      "name": "StandaloneContainer",
+      "state": "available"
+    },
+    {
+      "admitted_shapes": [
+        "StopSignal"
+      ],
+      "name": "StopSignal",
+      "state": "available"
+    },
+    {
+      "admitted_shapes": [
+        "StopTimeoutZero",
+        "StopTimeoutPositive"
+      ],
+      "name": "StopTimeout",
+      "state": "available"
+    },
+    {
+      "admitted_shapes": [
+        "TmpfsMountReadWrite",
+        "TmpfsMountReadOnly",
+        "TmpfsMountOptions"
+      ],
+      "name": "TmpfsMount",
+      "state": "available"
+    },
+    {
+      "admitted_shapes": [
+        "ExternalVolumeReference"
+      ],
+      "name": "VolumeExternalReference",
+      "state": "available"
+    },
+    {
+      "admitted_shapes": [
+        "VolumeCreateLabels"
+      ],
+      "name": "VolumeLabels",
+      "state": "available"
+    }
+  ]
+}

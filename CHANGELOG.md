@@ -2,11 +2,27 @@
 
 ## Unreleased
 
+- Wire hostname and command/entrypoint-clear as mandatory canonical invocations
+  22 and 23, preserving original order, deadlines and cleanup ownership. Require
+  both complete context-bound private proofs before any new raw group/output;
+  expose only closed source-only/unadmitted outcomes. Current raw totals are
+  Debian 37 capabilities/59 shapes and upstream 39/63; compiled selection stays
+  34/56 and 36/60. Historical 21-test campaign records and private v1 protocols
+  remain unchanged. Fresh final-edit complete, 23-test four-lane native and actual
+  consumer qualification remain required; no process-group admission is claimed.
+- Select ADR 0022's authenticated lifecycle source cohort for candidate rehearsal:
+  complete StopTimeout, init, read-only-rootfs and tmpfs groups on all four exact
+  profiles, plus HealthStartInterval only upstream. Debian admits 34 capabilities/
+  56 shapes; upstream 36/60. Keep Debian unsupported/not-effective health outcomes,
+  finite PID1/diagonal-rootfs/explicit-tmpfs scopes, unchanged raw unadmitted
+  markers and every historical record. Fresh final-candidate complete/native and
+  actual consumer gates remain required; no full migration or application claim.
+
 - Project complete validated lifecycle/default, init/read-only-rootfs and tmpfs
   proof groups into raw source capability/shape maps only, with upstream-only
   HealthStartInterval. Distinguish `raw_source_only` from unadmitted compiled
   catalogue status. Preserve all five mandatory private readers, Debian legacy
-  negatives, 21 native invocations, historical evidence and the sealed catalogue;
+  negatives, the original 21 native invocations, historical evidence and the sealed catalogue;
   fresh exact-head qualification and consumer gates remain required.
 
 - Raise the minimum supported Rust version from 1.85.0 to 1.98.1, matching the
@@ -15,7 +31,7 @@
   independent, test-only AF_UNIX transport. Preserve exact request bytes,
   complete bounded HTTP framing and actual status, with one absolute deadline
   and value-free failures. Caller budgets, ownership, mutation uncertainty,
-  privacy and cleanup remain authoritative; all twenty-one native invocations
+  privacy and cleanup remain authoritative; all original twenty-one native invocations
   and independent CLI/acquisition/network probes remain required. Product APIs,
   capability admission and historical evidence are unchanged; fresh exact-head
   native qualification and downstream consumer gates remain mandatory.
@@ -34,7 +50,7 @@
   every prior group and historical byte, at Debian 30 capabilities/47 shapes and
   upstream 31/49. Preserve absent-field rendering, Debian IPv6 negatives,
   HealthStartInterval withholding and unverified SELinux obligations. Fresh
-  final-candidate complete/twenty-one-test four-lane and all actual volume/bind/
+  final-candidate complete/twenty-three-test four-lane and all actual volume/bind/
   desired-external consumer gates still block ready/merge/main admission/release;
   no application or native-final-candidate qualification is claimed.
 

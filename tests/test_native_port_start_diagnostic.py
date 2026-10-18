@@ -329,7 +329,7 @@ class NativePortStartDiagnosticTests(unittest.TestCase):
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         block = 'port_invocation_us=${EPOCHREALTIME/./}' + source.split(
             'port_invocation_us=${EPOCHREALTIME/./}', 1)[1].split(
-                '\nif [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR', 1)[0]
+                '\n"$(dirname "$0")/run-exact-native-test.sh" native_health_metadata', 1)[0]
         block = block.replace('"$(dirname "$0")/run-exact-native-test.sh"', "exact_wrapper")
         calls = self.root / "calls"
         for status in (0, 37):

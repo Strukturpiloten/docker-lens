@@ -7,7 +7,7 @@ if [[ $# != 2 || ! $1 =~ ^[a-z_]+$ || ! $2 =~ ^[a-z_]+$ ]]; then
 fi
 target=$1
 test_name=$2
-if [[ $target == native_target || $target == native_volume || $target == native_network || $target == native_volume_label || $target == native_identity || $target == native_port || $target == native_health_metadata || $target == native_network_attachment || $target == native_bind_relabel || $target == native_external_network || $target == native_stop_signal || $target == native_lifecycle || $target == native_runtime_filesystem || $target == native_tmpfs_effect || $target == native_health_start_interval_boundary || $target == native_lifecycle_default_effect ]]; then
+if [[ $target == native_target || $target == native_volume || $target == native_network || $target == native_volume_label || $target == native_identity || $target == native_port || $target == native_health_metadata || $target == native_network_attachment || $target == native_bind_relabel || $target == native_external_network || $target == native_stop_signal || $target == native_lifecycle || $target == native_runtime_filesystem || $target == native_tmpfs_effect || $target == native_health_start_interval_boundary || $target == native_lifecycle_default_effect || $target == native_hostname || $target == native_command_clear ]]; then
   # Native target tests need crate-private, test-only capability claims.
   # It is a library unit test; no public constructor is exposed for the harness.
   cargo_target=(--lib)
@@ -24,6 +24,10 @@ if [[ $target == native_target || $target == native_volume || $target == native_
     selected="native_health_metadata_tests::lifecycle::health_start_interval_boundary::$test_name"
   elif [[ $target == native_lifecycle_default_effect ]]; then
     selected="native_health_metadata_tests::lifecycle::default_effect::$test_name"
+  elif [[ $target == native_hostname ]]; then
+    selected="native_health_metadata_tests::lifecycle::hostname::$test_name"
+  elif [[ $target == native_command_clear ]]; then
+    selected="native_health_metadata_tests::command_clear::$test_name"
   fi
 else
   cargo_target=(--test "$target")
@@ -46,7 +50,7 @@ run_status=0
 # Bind optional failure diagnostics to this invocation's existing hard timeout.
 # The native test reserves its own cleanup and reporting margin before this time.
 run_deadline_epoch=$(( $(date +%s) + 180 ))
-result=$(NATIVE_NETWORK_TEST_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_HEALTH_METADATA_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_STOP_SIGNAL_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_LIFECYCLE_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_RUNTIME_FILESYSTEM_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_TMPFS_EFFECT_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_HEALTH_START_INTERVAL_BOUNDARY_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_LIFECYCLE_DEFAULT_EFFECT_DEADLINE_EPOCH=$run_deadline_epoch timeout 180 cargo test --locked "${cargo_target[@]}" -- --ignored --exact "$selected" 2>&1) || run_status=$?
+result=$(NATIVE_NETWORK_TEST_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_HEALTH_METADATA_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_STOP_SIGNAL_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_LIFECYCLE_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_RUNTIME_FILESYSTEM_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_TMPFS_EFFECT_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_HEALTH_START_INTERVAL_BOUNDARY_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_LIFECYCLE_DEFAULT_EFFECT_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_HOSTNAME_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_COMMAND_CLEAR_DEADLINE_EPOCH=$run_deadline_epoch timeout 180 cargo test --locked "${cargo_target[@]}" -- --ignored --exact "$selected" 2>&1) || run_status=$?
 # Only libtest's numeric summary is safe to print. Test and compiler output can
 # contain protected native values, socket payloads, or authored secrets.
 summary=$(grep -Eo '^test result: (ok|FAILED)\. [0-9]+ passed; [0-9]+ failed; [0-9]+ ignored; [0-9]+ measured; [0-9]+ filtered out;' <<<"$result" | tail -n 1 || true)
@@ -71,7 +75,7 @@ stop_signal_causal_marker=
 lifecycle_causal_marker=
 lifecycle_stage=
 lifecycle_handoff=
-if [[ $target == native_lifecycle || $target == native_runtime_filesystem || $target == native_tmpfs_effect || $target == native_health_start_interval_boundary || $target == native_lifecycle_default_effect ]]; then
+if [[ $target == native_lifecycle || $target == native_runtime_filesystem || $target == native_tmpfs_effect || $target == native_health_start_interval_boundary || $target == native_lifecycle_default_effect || $target == native_hostname ]]; then
   if [[ $target == native_lifecycle ]]; then
     marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: lifecycle_(context|cleanup|cleanup_unverified|evidence)$' <<<"$result" | tail -n 1 || true)
     lifecycle_causal_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: lifecycle_(context|cleanup|cleanup_unverified|evidence)$' <<<"$result" | awk '/^DOCKERLENS_NATIVE_CHECK: lifecycle_cleanup(_unverified)?$/ { exit } { last=$0 } END { if (last != "") print last }' || true)
@@ -96,6 +100,11 @@ if [[ $target == native_health_start_interval_boundary ]]; then
   lifecycle_causal_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: health_start_interval_boundary_(context|configuration|cleanup|evidence)$' <<<"$result" | awk '/^DOCKERLENS_NATIVE_CHECK: health_start_interval_boundary_cleanup$/ { exit } { last=$0 } END { if (last != "") print last }' || true)
 fi
 stop_signal_stage=
+if [[ $target == native_hostname ]]; then
+  hostname_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: hostname_(context|effects|cleanup|evidence)$' <<<"$result" | tail -n 1 || true)
+  if [[ -n $hostname_marker ]]; then marker=$hostname_marker; fi
+  lifecycle_causal_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: hostname_(context|effects|cleanup|evidence)$' <<<"$result" | awk '/^DOCKERLENS_NATIVE_CHECK: hostname_cleanup$/ { exit } { last=$0 } END { if (last != "") print last }' || true)
+fi
 stop_signal_lifecycle=
 if [[ $target == native_stop_signal ]]; then
   stop_signal_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: stop_signal_(context|term|int|cleanup|cleanup_unverified|evidence)$' <<<"$result" | tail -n 1 || true)
@@ -183,8 +192,22 @@ internal_cleanup=$(grep -Eo '^DOCKERLENS_NATIVE_CLEANUP: internal_proof=(pass|fa
 # A panic's selected test source and numeric location identify an assertion
 # without disclosing its message, compared values, or an absolute build path.
 panic_site=
+if [[ $target == native_command_clear ]]; then
+  command_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: command_clear_(context|derive|cleanup|cleanup_unverified|evidence)$' <<<"$result" | tail -n 1 || true)
+  if [[ -n $command_marker ]]; then marker=$command_marker; fi
+  lifecycle_causal_marker=$(awk '/^thread .* panicked at / || /^DOCKERLENS_NATIVE_CHECK: command_clear_cleanup(_unverified)?$/ { exit } /^DOCKERLENS_NATIVE_CHECK: command_clear_(context|derive|evidence)$/ { last=$0 } END { if (last != "") print last }' <<<"$result")
+  lifecycle_stage=$(awk '/^thread .* panicked at / || /^DOCKERLENS_NATIVE_CHECK: command_clear_cleanup(_unverified)?$/ { exit } /^DOCKERLENS_NATIVE_COMMAND_CLEAR_STAGE: case=(image_defaults|entrypoint_inherit|command_clear|entrypoint_clear) role=(oracle|rendered) stage=(create|effect)$/ { last=$0 } END { if (last != "") print last }' <<<"$result")
+  if grep -Eq '^DOCKERLENS_NATIVE_CHECK: command_clear_cleanup_unverified$' <<<"$result"; then
+    if (( run_status == 0 )); then run_status=1; fi
+  fi
+fi
 case $target in
-  native_lifecycle | native_runtime_filesystem | native_tmpfs_effect | native_health_start_interval_boundary | native_lifecycle_default_effect)
+  native_command_clear)
+    panic_site=$(awk '/^thread .* panicked at / { print; exit }' <<<"$result" | sed -nE \
+      "s/^thread '${selected}'( \\([0-9]{1,10}\\))? panicked at src\\/(native_command_clear_tests|native_health_metadata_tests)\\.rs:([1-9][0-9]{0,5}):([1-9][0-9]{0,3}):$/DOCKERLENS_NATIVE_PANIC: source=\\2 line=\\3 column=\\4/p")
+    if [[ -z $panic_site ]]; then panic_site='DOCKERLENS_NATIVE_PANIC: source=native_command_clear_tests location=unavailable'; fi
+    ;;
+  native_lifecycle | native_runtime_filesystem | native_tmpfs_effect | native_health_start_interval_boundary | native_lifecycle_default_effect | native_hostname)
     # The first panic is primary even when later bounded cleanup also fails.
     # Never project arbitrary panic payloads, paths, native IDs or timestamps.
     lifecycle_source=native_lifecycle_tests
@@ -192,6 +215,7 @@ case $target in
     if [[ $target == native_tmpfs_effect ]]; then lifecycle_source=native_tmpfs_effect_tests; fi
     if [[ $target == native_health_start_interval_boundary ]]; then lifecycle_source=native_health_start_interval_boundary_tests; fi
     if [[ $target == native_lifecycle_default_effect ]]; then lifecycle_source=native_lifecycle_default_effect_tests; fi
+    if [[ $target == native_hostname ]]; then lifecycle_source=native_hostname_tests; fi
     panic_site=$(awk '/^thread .* panicked at / { print; exit }' <<<"$result" | sed -nE \
       "s/^thread '${selected}'( \([0-9]{1,10}\))? panicked at src\/(${lifecycle_source}|native_lifecycle_tests|native_health_metadata_tests)\.rs:([1-9][0-9]{0,5}):([1-9][0-9]{0,3}):$/DOCKERLENS_NATIVE_PANIC: source=\2 line=\3 column=\4/p")
     if [[ -z $panic_site ]]; then panic_site="DOCKERLENS_NATIVE_PANIC: source=$lifecycle_source location=unavailable"; fi

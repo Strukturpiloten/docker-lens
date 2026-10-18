@@ -147,6 +147,42 @@
     }
   },
   "$defs": {
+    "hostname_source_projection": {
+      "description": "Disconnected current raw source subset; not reviewed-record or compiled-catalogue admission.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hostname_contract", "hostname_outcomes"],
+      "properties": {
+        "hostname_contract": { "const": "hostname-v1" },
+        "hostname_outcomes": {
+          "type": "object", "additionalProperties": false,
+          "required": ["admission", "catalogue_admission", "outcome"],
+          "properties": {
+            "admission": { "const": "raw_source_only" },
+            "catalogue_admission": { "const": "unadmitted" },
+            "outcome": { "const": "omitted_and_explicit_verified" }
+          }
+        }
+      }
+    },
+    "command_clear_source_projection": {
+      "description": "Disconnected current raw source subset; complete four-case process controls only, never private argv or catalogue admission.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command_clear_contract", "command_clear_outcomes"],
+      "properties": {
+        "command_clear_contract": { "const": "command-clear-v1" },
+        "command_clear_outcomes": {
+          "type": "object", "additionalProperties": false,
+          "required": ["admission", "catalogue_admission", "outcome"],
+          "properties": {
+            "admission": { "const": "raw_source_only" },
+            "catalogue_admission": { "const": "unadmitted" },
+            "outcome": { "const": "all_four_process_controls_verified" }
+          }
+        }
+      }
+    },
     "lifecycle_source_projection": {
       "description": "Current raw lane-manifest subset only. Private v1 protocols and the historical reviewed-record root remain unchanged; raw_source_only never authorizes the compiled catalogue. All five complete private readers are mandatory before projection.",
       "type": "object",

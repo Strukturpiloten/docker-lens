@@ -39,6 +39,12 @@ from native_external_network_proof import (
     CONTRACT as EXTERNAL_NETWORK_CONTRACT, FILENAME as EXTERNAL_NETWORK_FILENAME,
     read_external_network_proof,
 )
+from native_hostname_proof import (
+    CONTRACT as HOSTNAME_CONTRACT, FILENAME as HOSTNAME_FILENAME, read_hostname_proof,
+)
+from native_command_clear_proof import (
+    CONTRACT as COMMAND_CLEAR_CONTRACT, FILENAME as COMMAND_CLEAR_FILENAME, read_command_clear_proof,
+)
 
 
 CAPABILITIES = (
@@ -524,6 +530,13 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         capture_dir / HEALTH_START_INTERVAL_BOUNDARY_FILENAME, capture_dir, external_context)
     lifecycle_default_effect_outcomes = list(read_lifecycle_default_effect_proof(
         capture_dir / LIFECYCLE_DEFAULT_EFFECT_FILENAME, capture_dir, external_context))
+    # Both complete process families are mandatory. Fixed private direct children
+    # share only the independently constructed harness context, never self-context.
+    read_hostname_proof(capture_dir / HOSTNAME_FILENAME, capture_dir, external_context)
+    command_clear_shapes = list(read_command_clear_proof(
+        capture_dir / COMMAND_CLEAR_FILENAME, capture_dir, external_context))
+    if command_clear_shapes != ["ClearCommand", "ClearEntrypoint"]:
+        raise ValueError("incomplete command-clear source group")
 
     # Only these closed mappings follow the complete, validated native proof
     # files above. They extend raw lane evidence, never the reviewed catalogue.
@@ -585,6 +598,11 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
     # acceptance of an unknown legacy JSON member, determines this boundary.
     if not debian:
         proof_shapes["HealthStartInterval"] = list(HEALTH_INTERVAL_SOURCE_SHAPES)
+    proof_shapes.update({
+        "ContainerHostname": ["ContainerHostname"],
+        "CommandClear": ["ClearCommand"],
+        "EntrypointClear": ["ClearEntrypoint"],
+    })
 
     record = {
         "schema_version": 1,
@@ -643,6 +661,14 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         "health_start_interval_boundary_outcomes": {
             **RAW_SOURCE_STATUS, "scope": "created_configuration_only",
             "probes": health_boundary["outcomes"],
+        },
+        "hostname_contract": HOSTNAME_CONTRACT,
+        "hostname_outcomes": {
+            **RAW_SOURCE_STATUS, "outcome": "omitted_and_explicit_verified",
+        },
+        "command_clear_contract": COMMAND_CLEAR_CONTRACT,
+        "command_clear_outcomes": {
+            **RAW_SOURCE_STATUS, "outcome": "all_four_process_controls_verified",
         },
     }
     if parameterized_identity:

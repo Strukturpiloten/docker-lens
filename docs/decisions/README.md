@@ -23,10 +23,18 @@ Durable native boundaries and evidence/admission contracts:
 - [0019: Reviewed configured stop-signal cohort](0019-reviewed-stop-signal-cohort.md)
 - [0020: Independent harness Unix-HTTP transport](0020-harness-unix-http-transport.md)
 - [0021: Complete lifecycle raw source projection](0021-lifecycle-raw-source-projection.md)
+- [0022: Reviewed lifecycle successor cohort](0022-reviewed-lifecycle-cohort.md)
+- [0023: Mandatory process-source probes and closed raw projection](0023-process-source-proof-wiring.md)
 
-ADR 0019 selects only the complete StopSignal singleton beyond ADR 0018's
-retained groups for candidate rehearsal. ADR 0021 projects complete raw source
-groups without changing that compiled selection. ADR 0017's None/false/true, conditional
-schema-3 and pure snapshot boundaries remain; fresh final-candidate twenty-one-test
+ADR 0022 supersedes ADR 0019's active-cohort selection for candidate rehearsal:
+complete StopTimeout/init/rootfs/tmpfs groups on all lanes, with
+HealthStartInterval upstream-only, at Debian 34/56 and upstream 36/60.
+ADR 0021's raw source markers remain unchanged and do not grant admission.
+ADR 0017's None/false/true, conditional
+schema-3 and pure snapshot boundaries remain; fresh final-candidate twenty-three-test
 native and actual consumer gates still block ready/merge/main admission and
 release. Historical evidence and earlier obligations are preserved.
+ADR 0023 adds mandatory hostname and command-clear invocations 22 and 23, with
+both strict readers required before closed source-only raw projection. Current
+raw totals are Debian 37/59 and upstream 39/63; the three new process singleton
+groups remain outside ADR 0022's unchanged compiled selection.

@@ -601,6 +601,7 @@ fn allowlist_fixture(lane: &str) -> HealthRun {
         bytes: Cell::new(0),
         facts: None,
         cleaned: true,
+        cleanup_delegated: false,
     }
 }
 

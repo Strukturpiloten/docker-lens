@@ -4,9 +4,18 @@ The native harness emitter and compiled product catalogue have separate authorit
 [ADR 0021](decisions/0021-lifecycle-raw-source-projection.md) extends complete raw
 source groups only after all five lifecycle-family private proofs validate.
 Raw records use `admission: raw_source_only` and `catalogue_admission: unadmitted`;
-they do not select a product cohort. Raw Debian/upstream counts are 34/56 and
-36/60 capabilities/shapes; the sealed selection below remains 30/47 and 31/49.
-No private proof protocol, native invocation, product API or renderer is changed.
+they do not select a product cohort. [ADR 0022](decisions/0022-reviewed-lifecycle-cohort.md)
+separately selects authenticated reviewed envelopes at Debian 34/56 and upstream
+36/60 capabilities/shapes. All historical raw bytes and cohorts remain unchanged.
+[ADR 0023](decisions/0023-process-source-proof-wiring.md) adds mandatory hostname
+and command/entrypoint-clear source probes as canonical invocations 22 and 23.
+Both strict private readers must pass before any new group or public output.
+Current raw records contain 37/59 capabilities/shapes on Debian and 39/63
+upstream; these three process groups remain absent from compiled selection.
+The stable nineteen-argument emitter binds fixed direct-child proofs to existing
+independent harness context. Closed disconnected schema definitions expose only
+source-only/unadmitted status and fixed outcomes, never hostname/argv/IDs/times.
+Private v1 protocols, historical evidence, product APIs and renderers are unchanged.
 
 ## Data flow
 
@@ -52,12 +61,13 @@ No private proof protocol, native invocation, product API or renderer is changed
    advertised maximum API, negotiated acquisition API, tested rendering API,
    and daemon mode. Catalog discovery returns its SHA-256 evidence key. The
    candidate catalog selects four exact records from independently reviewed
-   run `38106164571`, attempt 1, source
-   `ef8b40c2d392c3983a3ebdc54730812352fe6b39`, under ADR 0019.
-   Only StopSignal is added beyond ADR 0018's retained complete groups.
-   Debian admits exactly 30 capabilities/47 shapes; upstream adds only the
-   complete IPv6 port group for 31/49. All six historical cohorts remain
-   immutable. ADR 0012's six actual authored fixture volume-only consumer gate
+   run `39124651853`, attempt 1, source
+   `a251748de3a61f9dc3d735e670ce3ea461ee0a30`, under ADR 0022.
+   Complete StopTimeout, ContainerInit, ReadOnlyRootfs and TmpfsMount groups
+   extend ADR 0019's retained groups on all lanes; HealthStartInterval is
+   upstream-only. Debian admits exactly 34 capabilities/56 shapes; upstream
+   adds the complete IPv6 port and health-interval groups for 36/60. All seven
+   historical cohorts remain immutable. ADR 0012's six actual authored fixture volume-only consumer gate
    and fresh reviewed actual Nextcloud/Supabase bind and desired external
    expectation consumers remain required.
    Each changed candidate and release needs fresh complete and four-lane
@@ -96,8 +106,10 @@ The four exact profiles retain reviewed external-network and internal-bridge
 groups and now admit network labels, primary/secondary aliases and ordered
 multiple attachments under ADR 0016. Network IPv6, IPAM, options and static
 addresses still await separate exact-lane admission. Container labels, shell
-health and zero/positive start period are admitted; disabled health, start
-interval and other runtime groups stay unadmitted.
+health and zero/positive start period are admitted. Complete StopTimeout,
+ContainerInit, ReadOnlyRootfs and TmpfsMount groups are separately reviewed
+under ADR 0022; only upstream admits HealthStartInterval zero/positive.
+Disabled health and other unreviewed runtime groups stay unadmitted.
 `StartInterval` is gated by
 an exact capability claim; no generic Engine API introduction version is
 assumed from Compose metadata. Port rendering groups host bindings under one
@@ -153,7 +165,7 @@ and historical evidence remain unchanged. ADR 0018 selects authenticated source
 run `37788762974` at Debian 29/46 and upstream 30/48 for candidate rehearsal;
 ADR 0019 retains those groups and adds only the StopSignal singleton.
 Definitions or offline controls grant no native compatibility. Fresh
-authenticated exact-final-candidate twenty-one-test four-lane execution,
+authenticated exact-final-candidate twenty-three-test four-lane execution,
 independent review and the separate ADR 0012/0016/0018/0019 consumer gates remain
 required before ready/merge. No source run qualifies a changed candidate.
 
@@ -180,9 +192,10 @@ It starts six actual borrowed-image containers, keeps legacy CLI parser refusal
 separate, and observes stop and health effects under the existing scoped owner
 and original deadline. Debian unknown-member acceptance/legacy scheduling is
 explicitly unsupported/unproven, not modern zero/default equivalence. The emitter
-projects closed raw source dispositions and complete groups under ADR 0021;
-changed-source native qualification remains pending. Catalogue admission stays
-unadmitted, with no product capability, shape catalogue or historical record changes.
+projects closed raw source dispositions and complete groups under ADR 0021.
+Raw catalogue markers stay unadmitted. ADR 0022 separately selects authenticated
+reviewed envelopes without changing those markers or historical records;
+fresh exact-final-candidate qualification remains required.
 
 ## Decoder evidence boundary
 

@@ -1021,6 +1021,8 @@ export NATIVE_RUNTIME_FILESYSTEM_PROOF_PATH="$run_dir/runtime-filesystem-v1.json
 export NATIVE_TMPFS_EFFECT_PROOF_PATH="$run_dir/tmpfs-effect-v1.json"
 export NATIVE_HEALTH_START_INTERVAL_BOUNDARY_PROOF_PATH="$run_dir/health-start-interval-boundary-v1.json"
 export NATIVE_LIFECYCLE_DEFAULT_EFFECT_PROOF_PATH="$run_dir/lifecycle-default-effects-v1.json"
+export NATIVE_HOSTNAME_PROOF_PATH="$run_dir/hostname-v1.json"
+export NATIVE_COMMAND_CLEAR_PROOF_PATH="$run_dir/command-clear-v1.json"
 export NATIVE_PORT_START_DIAGNOSTIC_PATH="$run_dir/diagnostics/port-start-window.json"
 export NATIVE_IDENTITY_CANDIDATE_SHA
 NATIVE_IDENTITY_CANDIDATE_SHA=$(git -C "$script_dir/.." rev-parse HEAD)
@@ -1036,6 +1038,8 @@ export NATIVE_RUNTIME_FILESYSTEM_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 export NATIVE_TMPFS_EFFECT_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 export NATIVE_HEALTH_START_INTERVAL_BOUNDARY_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 export NATIVE_LIFECYCLE_DEFAULT_EFFECT_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
+export NATIVE_HOSTNAME_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
+export NATIVE_COMMAND_CLEAR_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 if [[ $EUID == 0 ]]; then export NATIVE_PODMAN_USE_SUDO=0; else export NATIVE_PODMAN_USE_SUDO=1; fi
 
 port_start_failure_diagnostic() {
@@ -1105,7 +1109,50 @@ fi
 "$(dirname "$0")/run-exact-native-test.sh" native_tmpfs_effect live_tmpfs_effects_match_engine
 "$(dirname "$0")/run-exact-native-test.sh" native_health_start_interval_boundary live_health_start_interval_boundary_matches_engine
 "$(dirname "$0")/run-exact-native-test.sh" native_lifecycle_default_effect live_lifecycle_default_effects_match_engine
+"$(dirname "$0")/run-exact-native-test.sh" native_hostname live_hostname_matches_engine
 )
+
+# Always validate the private hostname proof, including local native execution
+# without public manifest emission. Context is supplied from independent harness
+# facts rather than read from the proof; this adds no raw capability projection.
+python3 "$script_dir/native_hostname_proof.py" "$run_dir" "$NATIVE_HOSTNAME_CANDIDATE_SHA" "$run_id" \
+  "$lane" "$server_version" "$api_version" "$expected_mode" "$installed_docker_package" \
+  "$NATIVE_FIXTURE_IMAGE" "$image" "$NATIVE_OUTER_CONTAINER_ID" "$NATIVE_BIND_RELABEL_DAEMON_UID"
+
+"$(dirname "$0")/run-exact-native-test.sh" native_command_clear live_command_clear_matches_engine
+# Mandatory private validation also applies when no public evidence is requested.
+python3 - "$script_dir" "$run_dir" "$NATIVE_COMMAND_CLEAR_CANDIDATE_SHA" "$run_id" \
+  "$lane" "$server_version" "$api_version" "$expected_mode" "$installed_docker_package" \
+  "$NATIVE_FIXTURE_IMAGE" "$image" "$NATIVE_OUTER_CONTAINER_ID" "$NATIVE_BIND_RELABEL_DAEMON_UID" <<'COMMAND_CLEAR_PROOF'
+import re
+import sys
+from pathlib import Path
+
+try:
+    sys.path.insert(0, sys.argv[1])
+    from native_command_clear_proof import read_command_clear_proof
+
+    (directory, candidate, run, lane, engine, api, mode, package,
+     fixture, outer_image, outer_id, uid) = sys.argv[2:]
+    if re.fullmatch(r"0|[1-9][0-9]{0,9}", uid) is None:
+        raise ValueError()
+    context = {
+        "candidate_sha": candidate, "run_id": run, "lane": lane,
+        "engine_release": engine, "rendering_api": api,
+        "acquisition_api": "1.41" if lane.startswith("debian11-") else "1.49",
+        "mode": mode, "docker_package": package, "fixture_image": fixture,
+        "daemon_uid": int(uid), "outer": {
+            "id": outer_id, "name": f"dl-native-{run}", "owner": run,
+            "image": outer_image, "data_volume": f"dl-native-data-{run}",
+            "socket_source": str(Path(directory) / "socket"), "privileged": True,
+            "memory_bytes": 4294967296, "cpu_quota": 200000,
+            "cpu_period": 100000, "pids_limit": 512,
+        },
+    }
+    read_command_clear_proof(Path(directory) / "command-clear-v1.json", Path(directory), context)
+except (OSError, ValueError, TypeError, KeyError, OverflowError, RecursionError, AttributeError, ImportError):
+    raise SystemExit("native command-clear proof rejected") from None
+COMMAND_CLEAR_PROOF
 
 if [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]; then
   candidate_sha=$(git -C "$script_dir/.." rev-parse HEAD)
