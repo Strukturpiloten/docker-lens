@@ -56,6 +56,9 @@ from native_supplementary_groups_proof import (
 from native_kernel_settings_proof import (
     CONTRACT as KERNEL_SETTINGS_CONTRACT, FILENAME as KERNEL_SETTINGS_FILENAME, read_kernel_settings_proof,
 )
+from native_pids_limit_proof import (
+    FILENAME as PIDS_LIMIT_FILENAME, SCOPE as PIDS_LIMIT_SCOPE, read_pids_limit_proof,
+)
 
 
 CAPABILITIES = (
@@ -572,6 +575,16 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
             or type(kernel_settings["capability_admission"]) is not list or kernel_settings["capability_admission"] != []
             or type(kernel_settings["catalogue_admission"]) is not bool or kernel_settings["catalogue_admission"] is not False):
         raise ValueError("incomplete kernel-settings source group")
+
+    # Mandatory private qualification, not a raw capability/shape projection.
+    pids_limit = read_pids_limit_proof(capture_dir / PIDS_LIMIT_FILENAME, capture_dir, external_context)
+    if (type(pids_limit) is not dict
+            or set(pids_limit) != {"contract", "capability_admission", "catalogue_admission", "scope"}
+            or type(pids_limit["contract"]) is not str or pids_limit["contract"] != "pids-limit-v1"
+            or type(pids_limit["capability_admission"]) is not list or pids_limit["capability_admission"] != []
+            or type(pids_limit["catalogue_admission"]) is not bool or pids_limit["catalogue_admission"] is not False
+            or type(pids_limit["scope"]) is not str or pids_limit["scope"] != PIDS_LIMIT_SCOPE):
+        raise ValueError("incomplete pids-limit private qualification")
 
     # Only these closed mappings follow the complete, validated native proof
     # files above. They extend raw lane evidence, never the reviewed catalogue.

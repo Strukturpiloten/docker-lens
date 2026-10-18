@@ -41,7 +41,7 @@ representations retain their existing behavior.
 
 This is candidate pre-merge rehearsal admission. Production merge, main
 admission and release remain blocked until fresh exact-final-candidate complete
-and four-lane twenty-six-test native gates, fresh independently reviewed volume-only
+and four-lane twenty-seven-test native gates, fresh independently reviewed volume-only
 consumer rehearsals of all six actual authored fixtures under
 [ADR 0012](docs/decisions/0012-candidate-volume-label-admission.md), and reviewed
 BoxFerry consumers of the actual Nextcloud/Supabase binds and desired external
@@ -60,6 +60,11 @@ adds the mandatory twenty-fourth ShmSize source probe and strict proof gate.
 supplementary groups and diagonal kernel settings as mandatory invocations 25/26
 with separate one-child ownership and strict private gates, even without emission.
 Only four complete finite source groups are added, never selected catalogue facts.
+[ADR 0027](docs/decisions/0027-pids-limit-private-qualification.md) appends mandatory
+PIDs invocation 27 with a separate one-child owner scope and strict private proof
+validation, even without public emission. It adds no public PIDs fields or
+capability/shape mapping. Fresh native qualification remains pending; nofile stays
+outside the canonical gate.
 Host capture remains deferred.
 Current raw projection totals are 43/66 capabilities/shapes on Debian and 45/70 upstream, marked
 `raw_source_only` with `catalogue_admission: unadmitted`. Historical raw bytes

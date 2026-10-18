@@ -52,7 +52,8 @@ else:
     def test_twenty_third_registration_and_mandatory_independent_reader(self):
         harness = (ROOT / "scripts/native-conformance.sh").read_text()
         calls = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', harness, re.M)
-        self.assertEqual(len(calls), 26)
+        self.assertEqual(len(calls), 27)
+        self.assertEqual(calls[26:], [("native_pids_limit", "live_pids_limit_effects_match_engine")])
         self.assertEqual(calls[21:23], [("native_hostname", "live_hostname_matches_engine"), (TARGET, TEST)])
         self.assertEqual(calls.count((TARGET, TEST)), 1)
         hostname_reader = harness.index('python3 "$script_dir/native_hostname_proof.py"')
@@ -170,6 +171,7 @@ else:
         from test_native_shm_size_proof import fixture as shm_fixture
         from test_native_supplementary_groups_proof import fixture as supplementary_fixture
         from test_native_kernel_settings_proof import fixture as kernel_fixture
+        from test_native_pids_limit_proof import fixture as pids_fixture
 
         harness = (ROOT / "scripts/native-conformance.sh").read_text()
         tail = harness.split('python3 "$script_dir/native_hostname_proof.py"', 1)[1].split(
@@ -183,7 +185,8 @@ else:
                           "supplementary_missing", "supplementary_context", "supplementary_effect",
                           "supplementary_cleanup", "supplementary_native_failure",
                           "kernel_missing", "kernel_context", "kernel_false", "kernel_namespace",
-                          "kernel_cleanup", "kernel_native_failure"):
+                          "kernel_cleanup", "kernel_native_failure", "pids_missing", "pids_context",
+                          "pids_effect", "pids_cleanup", "pids_native_failure"):
                 with self.subTest(lane=lane, fault=fault), tempfile.TemporaryDirectory() as temporary:
                     root = Path(temporary)
                     hostname = hostname_fixture(lane)
@@ -198,12 +201,15 @@ else:
                     supplementary["context"] = json.loads(json.dumps(context))
                     kernel = kernel_fixture(lane)
                     kernel["context"] = json.loads(json.dumps(context))
+                    pids = pids_fixture(lane)
+                    pids["context"] = json.loads(json.dumps(context))
                     env = dict(os.environ, script_dir=str(ROOT / "scripts"), run_dir=str(root),
                                NATIVE_HOSTNAME_CANDIDATE_SHA=context["candidate_sha"],
                                NATIVE_COMMAND_CLEAR_CANDIDATE_SHA=context["candidate_sha"],
                                NATIVE_SHM_SIZE_CANDIDATE_SHA=context["candidate_sha"],
                                NATIVE_SUPPLEMENTARY_GROUPS_CANDIDATE_SHA=context["candidate_sha"],
                                NATIVE_KERNEL_SETTINGS_CANDIDATE_SHA=context["candidate_sha"],
+                               NATIVE_PIDS_LIMIT_CANDIDATE_SHA=context["candidate_sha"],
                                run_id=context["run_id"], lane=lane, server_version=context["engine_release"],
                                api_version=context["rendering_api"], expected_mode=context["mode"],
                                installed_docker_package=context["docker_package"],
@@ -213,7 +219,8 @@ else:
                                TRACE=str(root / "trace"), STATUS="37" if fault == "native_failure" else "0",
                                SHM_STATUS="41" if fault == "shm_native_failure" else "0",
                                SUPPLEMENTARY_STATUS="43" if fault == "supplementary_native_failure" else "0",
-                               KERNEL_STATUS="47" if fault == "kernel_native_failure" else "0")
+                               KERNEL_STATUS="47" if fault == "kernel_native_failure" else "0",
+                               PIDS_STATUS="53" if fault == "pids_native_failure" else "0")
                     env.pop("NATIVE_LIFECYCLE_CLEANUP_OWNER", None)
                     if fault == "hostname_context":
                         hostname["context"]["candidate_sha"] = "e" * 40
@@ -241,14 +248,21 @@ else:
                         kernel["cases"][0]["containers"][0]["effect"]["net_namespace"] = kernel["outer_namespaces"]["net"]
                     elif fault == "kernel_cleanup":
                         kernel["cleanup"]["uncertain"] = True
+                    elif fault == "pids_context":
+                        pids["context"]["candidate_sha"] = "e" * 40
+                    elif fault == "pids_effect":
+                        pids["cases"][0]["work"]["successes"] = 13
+                    elif fault == "pids_cleanup":
+                        pids["cleanup"]["uncertain"] = True
                     for family, proof in (("hostname", hostname), ("command", command), ("shm", shm),
-                                          ("supplementary", supplementary), ("kernel", kernel)):
+                                          ("supplementary", supplementary), ("kernel", kernel), ("pids", pids)):
                         if fault != family + "_missing":
                             path = root / {"hostname": "hostname-v1.json", "command": "command-clear-v1.json",
                                            "shm": "shm-size-v1.json",
                                            "supplementary": "supplementary-groups-v1.json",
-                                           "kernel": "kernel-settings-v1.json"}[family]
-                            path.write_text(json.dumps(proof))
+                                           "kernel": "kernel-settings-v1.json", "pids": "pids-limit-v1.json"}[family]
+                            serialization = {"separators": (",", ":")} if family == "pids" else {}
+                            path.write_text(json.dumps(proof, **serialization))
                             path.chmod(0o600)
                     script = ('set -euo pipefail\ncommand_wrapper() {\n'
                               'if [[ $1 != native_command_clear ]]; then\n'
@@ -257,19 +271,22 @@ else:
                               'printf "%s\\n" "$*" >> "$TRACE"\n'
                               'case $1 in native_shm_size) return "$SHM_STATUS";;\n'
                               'native_supplementary_groups) return "$SUPPLEMENTARY_STATUS";;\n'
-                              'native_kernel_settings) return "$KERNEL_STATUS";; esac\nreturn "$STATUS"; }\n'
+                              'native_kernel_settings) return "$KERNEL_STATUS";;\n'
+                              'native_pids_limit) return "$PIDS_STATUS";; esac\nreturn "$STATUS"; }\n'
                               + tail + '\nprintf "public\\n" >> "$TRACE"\n')
                     result = subprocess.run(["bash", "-c", script], env=env, capture_output=True,
                                             text=True, timeout=5, check=False)
                     trace = root / "trace"
                     events = trace.read_text().splitlines() if trace.exists() else []
                     expected = [] if fault.startswith("hostname_") else [f"{TARGET} {TEST}"]
-                    if fault == "none" or fault.startswith(("shm_", "supplementary_", "kernel_")):
+                    if fault == "none" or fault.startswith(("shm_", "supplementary_", "kernel_", "pids_")):
                         expected.append("native_shm_size live_shm_size_effects_match_engine")
-                    if fault == "none" or fault.startswith(("supplementary_", "kernel_")):
+                    if fault == "none" or fault.startswith(("supplementary_", "kernel_", "pids_")):
                         expected.append("native_supplementary_groups live_supplementary_groups_match_engine")
-                    if fault == "none" or fault.startswith("kernel_"):
+                    if fault == "none" or fault.startswith(("kernel_", "pids_")):
                         expected.append("native_kernel_settings live_kernel_settings_match_engine")
+                    if fault == "none" or fault.startswith("pids_"):
+                        expected.append("native_pids_limit live_pids_limit_effects_match_engine")
                     if fault == "none":
                         expected.append("public")
                     self.assertEqual(events, expected)
@@ -282,6 +299,8 @@ else:
                         self.assertEqual(result.returncode, 43)
                     if fault == "kernel_native_failure":
                         self.assertEqual(result.returncode, 47)
+                    if fault == "pids_native_failure":
+                        self.assertEqual(result.returncode, 53)
                     self.assertNotIn(SECRET, result.stdout + result.stderr)
 
     def test_cleanup_delegation_is_not_success_and_is_not_retried(self):

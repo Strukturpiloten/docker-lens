@@ -1,4 +1,5 @@
-//! Prepared pids-limit-v1 child, compiled privately but outside the canonical native suite.
+//! Prepared pids-limit-v1 child, registered as canonical private source invocation 27.
+//! Fresh native qualification remains pending; this wiring does not claim native support.
 //! Only disposable owned fixtures mutate.
 //! No report, synthetic oracle, or test-local capability fact admits a catalogue group.
 

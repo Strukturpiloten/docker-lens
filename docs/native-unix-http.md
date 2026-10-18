@@ -84,9 +84,9 @@ Separate TCP/UDP/network-namespace diagnostics retain native curl observations.
 The canonical native harness and every host Engine Unix-HTTP Rust test consumer
 use this helper. Their closed route and ownership assertions, byte/request
 budgets, uncertain mutations, absence rounds and the original twenty-four exact
-native invocations are preserved. The appended source gates bring the suite to
-twenty-six invocations. Docker CLI, Compose providers, real Rust acquisition
-and independent fixed native expectations remain separate oracles. The
+native invocations are preserved. The appended source gates are required by the
+[current canonical four-lane suite](verification.md). Docker CLI, Compose providers,
+real Rust acquisition and independent fixed native expectations remain separate oracles. The
 TCP/UDP/network-namespace curl probes remain mandatory and unchanged.
 [ADR 0023](decisions/0023-process-source-proof-wiring.md) adds hostname/command-clear source wiring without changing this
 transport. That process slice's raw source counts were Debian 37/59 and upstream 39/63.

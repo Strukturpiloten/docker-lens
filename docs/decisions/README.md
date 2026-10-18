@@ -28,13 +28,14 @@ Durable native boundaries and evidence/admission contracts:
 - [0024: Raw-only disabled-health source projection](0024-health-disabled-raw-source-projection.md)
 - [0025: Mandatory ShmSize source integration](0025-shm-size-source-integration.md)
 - [0026: Mandatory runtime-settings source integration](0026-runtime-settings-source-integration.md)
+- [0027: Mandatory PIDs private qualification](0027-pids-limit-private-qualification.md)
 
 ADR 0022 supersedes ADR 0019's active-cohort selection for candidate rehearsal:
 complete StopTimeout/init/rootfs/tmpfs groups on all lanes, with
 HealthStartInterval upstream-only, at Debian 34/56 and upstream 36/60.
 ADR 0021's raw source markers remain unchanged and do not grant admission.
 ADR 0017's None/false/true, conditional
-schema-3 and pure snapshot boundaries remain; fresh final-candidate twenty-six-test
+schema-3 and pure snapshot boundaries remain; fresh final-candidate twenty-seven-test
 native and actual consumer gates still block ready/merge/main admission and
 release. Historical evidence and earlier obligations are preserved.
 ADR 0023 adds mandatory hostname and command-clear invocations 22 and 23, with
@@ -51,5 +52,9 @@ ADR 0026 appends supplementary groups and kernel settings as invocations 25/26,
 with separate one-child owner scopes and mandatory independent strict readers.
 Only complete SupplementaryGroups, SecurityOptions, Sysctls and SysctlIpv4Forward
 raw groups are added; all four remain unselected and host capture stays deferred.
+ADR 0027 appends PIDs invocation 27 in its own one-child owner scope, with a
+mandatory private CLI reader and emitter qualification, but no public PIDs fields
+or capability/shape projection. The first 26 calls and existing owner blocks
+remain unchanged; nofile remains outside the canonical harness.
 Current combined raw totals are Debian 43/66 and upstream 45/70; compiled
 selection stays 34/56 and 36/60. These nine raw groups remain unselected.

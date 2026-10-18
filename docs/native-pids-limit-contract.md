@@ -1,12 +1,13 @@
 # Finite PID-controller source-effect contract
 
-Prepared `pids-limit-v1` child of the existing lifecycle helper, registered as a
-private Rust module for formatting and compilation only. It remains outside the
-canonical twenty-six native invocations.
-This is source-only implementation work for #39/#31/#3, not native qualification,
-raw capability projection, catalogue admission or a compatibility claim. The
-primary owns later canonical registration and complete/four-lane gates. Product output
-stays inert; no pin, API, runner, emitter, schema or historical record changes.
+The prepared `pids-limit-v1` child of the existing lifecycle helper is mandatory
+private invocation 27 under [ADR 0027](decisions/0027-pids-limit-private-qualification.md).
+The canonical harness and unchanged nineteen-argument emitter require its strict
+private proof even without public PIDs projection. The producer, reader and
+16 KiB custody limit remain unchanged. This is source-only integration for
+#39/#31/#3, not passing native qualification, catalogue admission or a compatibility
+claim. The primary owns complete/four-lane gates. Product output stays inert;
+no pin, public API, schema or historical record changes.
 
 ## Six independently authored cases
 

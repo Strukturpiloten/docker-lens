@@ -1,9 +1,10 @@
 # Diagonal nofile source-only contract
 
-`nofile-v1` is unregistered source preparation for DockerLens #39. It defines
-neither a passing native lane nor capability support. Primary integration owns
-registration, shared bounded-custody helpers, compilation, complete gates and
-fresh exact-candidate four-lane native qualification. No raw projection,
+`nofile-v1` is privately registered and compiled source preparation for DockerLens
+#39, outside the canonical twenty-seven-invocation harness and the new PIDs
+integration. It defines neither a passing native lane nor capability support;
+native qualification remains unverified. Primary integration owns complete gates
+and fresh exact-candidate four-lane native qualification. No raw projection,
 catalogue selection, emitter ABI, product API, version or schema is changed.
 
 The existing `Ulimits`/`UlimitNofile` capability groups require finite **and**

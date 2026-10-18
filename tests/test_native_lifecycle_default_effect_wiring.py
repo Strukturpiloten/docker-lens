@@ -57,14 +57,15 @@ sys.exit(int(os.environ["STATUS"]))
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         invocation = f'"$(dirname "$0")/run-exact-native-test.sh" {TARGET} {TEST}'
         calls = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source, re.M)
-        self.assertEqual(len(calls), 26)
+        self.assertEqual(len(calls), 27)
+        self.assertEqual(calls[26:], [("native_pids_limit", "live_pids_limit_effects_match_engine")])
         self.assertEqual(calls[20], (TARGET, TEST))
         self.assertEqual(source.count(invocation), 1)
         owner = source.index('(\n  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1\n')
         end = source.index('\n)\n', owner)
         owned_calls = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source[owner:end], re.M)
         self.assertEqual(owned_calls, calls[16:22])
-        self.assertEqual(source.count("export NATIVE_LIFECYCLE_CLEANUP_OWNER="), 4)
+        self.assertEqual(source.count("export NATIVE_LIFECYCLE_CLEANUP_OWNER="), 5)
         self.assertLess(source.index("unset NATIVE_LIFECYCLE_CLEANUP_OWNER"), owner)
         for line in (f'export NATIVE_LIFECYCLE_DEFAULT_EFFECT_PROOF_PATH="$run_dir/{FILENAME}"',
                      'export NATIVE_LIFECYCLE_DEFAULT_EFFECT_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA'):

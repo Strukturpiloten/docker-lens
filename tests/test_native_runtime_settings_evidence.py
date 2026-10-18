@@ -79,8 +79,10 @@ class RuntimeSettingsEvidenceTests(unittest.TestCase):
                                 "net_namespace", "pid_namespace", "effective_capabilities", "kernel_groups",
                                 "root_corroboration", "ordinary_elapsed_ns", '"acquisition":'):
                     self.assertNotIn(private, raw)
-                for excluded in ("Ulimits", "UlimitNofile", "LinuxCapabilities", "MemoryLimit", "DeviceMappings"):
+                for excluded in ("Ulimits", "UlimitNofile", "LinuxCapabilities", "MemoryLimit", "DeviceMappings", "PidsLimit"):
                     self.assertNotIn(excluded, record["capability_outcome"])
+                self.assertNotIn("pids_limit_contract", record)
+                self.assertNotIn("pids_limit_outcomes", record)
 
     def test_missing_partial_wrong_context_effect_and_cleanup_refuse_entire_output(self):
         for lane in LANES:

@@ -128,8 +128,9 @@ the separate ShmSize source group and mandatory twenty-fourth invocation.
 mandatory supplementary/kernel source gates as invocations 25/26; their four
 finite raw groups remain unselected and host capture stays deferred. Current combined raw totals are Debian 43/66 and upstream 45/70; HealthDisabled,
 ShmSize and the three process groups remain unselected. Fresh
-exact-final-candidate twenty-six-test four-lane
-execution, independent review and actual consumer gates remain required before
+exact-final-candidate execution of the
+[current canonical four-lane suite](verification.md), independent review and actual
+consumer gates remain required before
 ready/merge; source evidence does not qualify a changed candidate. No dependencies,
 software pins, operational images, workflow pins or Renovate extraction change.
 

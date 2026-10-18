@@ -76,6 +76,7 @@ native-image grouping and disabled automerge. Historical oracle references above
 are intentionally outside the automatic operational update stream.
 
 Source/inert controls do not prove native qualification. Complete final-edit
-gates, fresh exact-candidate twenty-six-test four-lane execution, independent review
+gates, fresh exact-candidate execution of the
+[current canonical four-lane suite](verification.md), independent review
 and required BoxFerry consumer rehearsals remain mandatory. This representation
 probe does not close #114/#39/#31/#3 or BoxFerry #343/#366 and requests no release.

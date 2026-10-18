@@ -40,7 +40,7 @@ cohort remains byte-exact. No reaping, general signal behavior, Cartesian flag
 combination, arbitrary tmpfs value or SELinux effect is established.
 
 The changed admission candidate still needs final-edit complete gates, fresh
-authenticated exact-final-candidate four-lane/26-test execution and independent
+authenticated exact-final-candidate four-lane/27-test execution and independent
 review, all six actual authored-fixture volume-only rehearsals, and actual
 Nextcloud/Supabase bind and desired-external consumer review. This source run
 does not qualify those later bytes or close #39/#31/#3, establish BoxFerry
@@ -114,8 +114,8 @@ Only ShmSize/ShmSize is added, with closed source-only/unadmitted status, scope
 `explicit_1MiB_2MiB_with_observed_omission_only` and outcome
 `tmpfs_effect_and_ipc_isolation_verified`. The disconnected schema definition
 changes no historical root acceptance. No actual default, namespace, ID, argv or
-time leaves the private proof. Fresh exact-final-candidate 26-by-four execution
-(104 invocations), review and all actual consumer gates remain required.
+time leaves the private proof. Fresh exact-final-candidate 27-by-four execution
+(108 invocations), review and all actual consumer gates remain required.
 
 [ADR 0026](decisions/0026-runtime-settings-source-integration.md) appends
 SupplementaryGroups and diagonal kernel settings as invocations 25/26, selecting
@@ -129,7 +129,26 @@ remains pending. See the frozen [supplementary](native-supplementary-groups-cont
 and [kernel](native-kernel-settings-contract.md) preparation contracts; this ADR
 extends only their integration status, never their private protocols.
 
-The canonical harness requires twenty-six exact ignored invocations, retaining the
+[ADR 0027](decisions/0027-pids-limit-private-qualification.md) appends mandatory
+private PIDs invocation 27, selecting
+`native_health_metadata_tests::lifecycle::pids_limit::live_pids_limit_effects_match_engine`.
+Its separate one-child outer-cleanup owner scope preserves all first 26 calls/order
+and earlier owner blocks. The once-created 180-second wrapper deadline also binds
+PIDs; its existing 46-second cleanup reserve and 16 KiB custody maximum do not grow.
+The independent twelve-argument CLI reader always runs, even without emission.
+The unchanged nineteen-argument emitter requires the fixed `pids-limit-v1.json`
+child against its existing independent external context and exactly typed
+`contract`, `capability_admission`, `catalogue_admission`, `scope` return keys:
+`pids-limit-v1`, `[]`, `false`, and the existing reader's scope. Every proof or
+return-contract failure rejects the entire public output. There is no public PIDs
+projection, capability/shape mapping or schema addition. Raw counts remain
+43/66 and 45/70; selection remains 34/56 and 36/60. The producer emits no
+PIDs-specific stage markers: only actual shared context/cleanup/handoff diagnostics
+and first-panic allowlisted numeric locations are exposed. Nofile remains outside
+the canonical harness, and host capture remains deferred. Source-only wiring and
+mocked controls are not fresh exact-candidate four-lane proof (108 invocations).
+
+The canonical harness requires twenty-seven exact ignored invocations, retaining the
 original first seventeen in order and adding the separate eighteenth
 `native_health_metadata_tests::lifecycle::runtime_filesystem::live_runtime_filesystem_matches_engine`
 and nineteenth
@@ -234,7 +253,8 @@ generic version support and cannot close the larger required-contract issue.
 The wrapper retains its nineteen-argument emitter protocol and original
 180-second invocation deadline, exposes only fixed lifecycle diagnostics, and
 preserves the first observation failure. The original six-child lifecycle block
-and separate one-child ShmSize block receive the canonical outer-cleanup owner token.
+and separate one-child ShmSize, supplementary-group, kernel-setting and PIDs blocks
+receive the canonical outer-cleanup owner token.
 An uncertain inner cleanup requests
 outer teardown and fails; its marker never proves completed teardown. The EXIT
 owner now binds outer/sidecar creation IDs, rechecks ID/name/run ownership, removes
@@ -249,7 +269,7 @@ finite binding/readback requests are not a renewed inner cleanup budget.
 
 This integration has source-only Python/mocked-transport and syntax coverage;
 native qualification is pending. Full final-edit gates, fresh authenticated
-exact-head twenty-six-test four-lane evidence, independent review, and required
+exact-head twenty-seven-test four-lane evidence, independent review, and required
 BoxFerry consumer rehearsals remain mandatory. No runtime cleanup completion,
 capability admission, full migration acceptance or release is claimed.
 
@@ -308,7 +328,7 @@ sanitized receipt establishes trusted-harness assertions/closed success logs,
 not direct private-proof inspection, independent host inventory or separately
 retained effect values. Every historical record remains byte-exact. This is
 candidate rehearsal only: fresh final-edit complete gates, authenticated
-exact-final-candidate twenty-six-test four-lane proof and independent review,
+exact-final-candidate twenty-seven-test four-lane proof and independent review,
 all six actual authored-fixture volume-only rehearsals and actual
 Nextcloud/Supabase bind/desired-external consumers remain required before
 ready/merge/main admission or release. Old source/consumer receipts grant no
@@ -865,7 +885,7 @@ readiness calls, direct captures and every Rust native helper using the same
 explicit AF_UNIX endpoint. Readiness and direct captures explicitly require
 actual HTTP 200; a transport error cannot become HTTP 000 or an absence result.
 Existing request/byte limits, caller timers, scoped ownership, uncertain
-mutations and cleanup assertions remain authoritative. The twenty-six exact
+mutations and cleanup assertions remain authoritative. The twenty-seven exact
 native invocations, Docker CLI and genuine Rust acquisition remain independent;
 TCP/UDP/network-namespace curl probes retain their own unchanged transport.
 The earlier first-option curl-only argv/executable freeze is superseded only for
@@ -1549,7 +1569,7 @@ health or start-interval groups. Identity is not arbitrary-image startup or
 host UID mapping; bind configuration is not relabel effect evidence.
 
 This is pre-merge candidate rehearsal admission. Production merge/main/release
-still require complete final-edit gates, fresh twenty-six-test four-lane proof
+still require complete final-edit gates, fresh twenty-seven-test four-lane proof
 on the final candidate, fresh all six actual authored fixture volume-only consumer
 rehearsals required by ADR 0012, and fresh reviewed BoxFerry consumption of
 the actual authored Nextcloud/Supabase binds and desired external expectations.

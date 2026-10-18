@@ -144,5 +144,6 @@ binary redistribution or public API is introduced.
 
 The focused Python policy controls establish only source validation. This
 change has not executed native lanes. Complete final-edit gates, integrated
-exact-head twenty-six-test four-lane execution and independent review remain the primary's
-responsibility. Missing process observations are a real failure, never a skip.
+exact-head execution of the [current canonical four-lane suite](verification.md)
+and independent review remain the primary's responsibility. Missing process
+observations are a real failure, never a skip.

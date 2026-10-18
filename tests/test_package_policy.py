@@ -35,7 +35,7 @@ class PackagePolicyTests(unittest.TestCase):
         )
         self.assertIn("`raw_source_only`/`catalogue_admission: unadmitted`", handoff)
         self.assertIn("Those three process groups remain unselected", handoff)
-        self.assertIn("canonical twenty-six exact test invocations", handoff)
+        self.assertIn("canonical twenty-seven exact test invocations", handoff)
         self.assertIn("all six actual authored-fixture volume-only rehearsals", handoff)
         self.assertIn("actual Nextcloud/Supabase bind and desired-external expectation consumers", handoff)
         self.assertIn("a separate explicit request", handoff)

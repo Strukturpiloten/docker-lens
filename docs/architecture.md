@@ -43,6 +43,18 @@ SupplementaryGroups, SecurityOptions, Sysctls and SysctlIpv4Forward. Only finite
 closed outcomes are public; selected catalogue and historical records are unchanged.
 Host capture remains deferred; no nofile source group is integrated.
 
+[ADR 0027](decisions/0027-pids-limit-private-qualification.md) appends mandatory
+PIDs invocation 27 in a separate one-child cleanup-owner scope, preserving all
+first 26 calls/order and earlier owner blocks. Its twelve-argument reader runs
+before optional emission; the unchanged nineteen-argument emitter independently
+requires the fixed private child and exact typed four-key return. This is private
+qualification only: no public PIDs fields, capability/shape mapping or schema
+addition, and raw totals remain Debian 43/66 and upstream 45/70. Selected totals
+remain 34/56 and 36/60. Existing producer, reader, custody limits and shared
+180-second deadline/46-second cleanup reserve remain unchanged. Source wiring
+and synthetic controls are not passing native evidence; nofile and host capture
+remain outside this integration.
+
 ## Data flow
 
 1. An explicitly supplied endpoint and selector create a bounded read request
@@ -191,7 +203,7 @@ and historical evidence remain unchanged. ADR 0018 selects authenticated source
 run `37788762974` at Debian 29/46 and upstream 30/48 for candidate rehearsal;
 ADR 0019 retains those groups and adds only the StopSignal singleton.
 Definitions or offline controls grant no native compatibility. Fresh
-authenticated exact-final-candidate twenty-six-test four-lane execution,
+authenticated exact-final-candidate twenty-seven-test four-lane execution,
 independent review and the separate ADR 0012/0016/0018/0019 consumer gates remain
 required before ready/merge. No source run qualifies a changed candidate.
 
