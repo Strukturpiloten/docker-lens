@@ -107,15 +107,15 @@ class HealthBoundaryEvidenceTests(unittest.TestCase):
             debian = lane.startswith("debian11-")
             self.assertEqual(record["health_start_interval_boundary_contract"], "health-start-interval-boundary-v1")
             self.assertEqual(record["health_start_interval_boundary_outcomes"], {
-                "admission": "unadmitted", "scope": "created_configuration_only",
+                "admission": "raw_source_only", "catalogue_admission": "unadmitted", "scope": "created_configuration_only",
                 "probes": ["omission_configured_absent", "literal_zero_configured_absent",
                            "cli_zero_client_unknown_flag" if debian else "cli_zero_configured_absent"],
             })
-            self.assertEqual(len(record["capability_outcome"]), 30 if debian else 31)
-            self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 47 if debian else 49)
-            self.assertNotIn("HealthStartInterval", record["capability_outcome"])
-            self.assertNotIn("HealthStartInterval", record["admitted_shapes"])
-            for private in ("dl-hsi-", "StartInterval", "StartedAt", "client_exit", '"configured":', '"cleanup":', SECRET):
+            self.assertEqual(len(record["capability_outcome"]), 34 if debian else 36)
+            self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 56 if debian else 60)
+            self.assertEqual("HealthStartInterval" in record["capability_outcome"], not debian)
+            self.assertEqual("HealthStartInterval" in record["admitted_shapes"], not debian)
+            for private in ("dl-hsi-", '"StartInterval":', "StartedAt", "client_exit", '"configured":', '"cleanup":', SECRET):
                 self.assertNotIn(private, path.read_text())
 
     def test_missing_proof_refuses_all_lanes_without_publishing(self):

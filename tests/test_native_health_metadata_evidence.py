@@ -41,7 +41,7 @@ class HealthMetadataEvidenceTests(unittest.TestCase):
                     self.assertEqual(record["admitted_shapes"][capability], shapes)
                     self.assertEqual(record["capability_outcome"][capability], "available")
                 self.assertNotIn("HealthDisabled", record["admitted_shapes"])
-                self.assertNotIn("HealthStartInterval", record["admitted_shapes"])
+                self.assertEqual("HealthStartInterval" in record["admitted_shapes"], not lane.startswith("debian11-"))
                 for private in ("StartedAt", "started_at", "regression_observed_at", "dl-health-",
                                 "inherited_failure", "disabled_gap_ns", "initial_attempts", "Ab12Cd34"):
                     self.assertNotIn(private, destination.read_text())

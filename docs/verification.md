@@ -7,7 +7,29 @@ The scaffold policy tests check alignment and MSRV failure propagation through
 the shared local, PR/main, native-dispatch, and release offline gate. Earlier
 verification records below retain the Rust versions used at those checkpoints.
 
-## Mandatory unadmitted runtime-cohort source observations
+## Complete raw source groups before catalogue selection
+
+[ADR 0021](decisions/0021-lifecycle-raw-source-projection.md) maps all validated
+StopTimeout zero/positive, init true/false, read-only rootfs true/false and three
+tmpfs shapes into raw `capability_outcome`/`admitted_shapes`. HealthStartInterval
+zero/positive additionally requires the exact upstream positive, default-equivalent
+and representation outcomes. Debian retains its unsupported legacy-field and
+not-effective outcomes, with no positive health-interval group or inferred floor.
+All five strict private readers remain mandatory before any output; missing,
+partial, wrong-context, failed-effect or uncertain-cleanup proofs reject the record.
+
+The five public family outcomes use `admission: raw_source_only` together with
+`catalogue_admission: unadmitted`. Their closed current raw subset is
+`$defs.lifecycle_source_projection` in `native-evidence.schema.json`; the historical
+reviewed-record root, private v1 proof protocols and all evidence bytes are unchanged.
+Canonical raw counts are Debian 34 capabilities/56 shapes and upstream 36/60.
+The compiled catalogue still withholds all five groups and remains 30/47 and 31/49.
+Run `39121741122`, attempt 1, source `cead64a28f7c409c2de23ee298fad9b080e106fc`
+provided independently reviewed 84-test source evidence for the mapping. It cannot
+qualify this changed emitter; fresh exact-head native proof and independent review,
+complete final-edit gates and the accepted actual consumer rehearsals remain required.
+
+## Mandatory runtime-cohort proof requirements
 
 The canonical harness requires twenty-one exact ignored invocations, retaining the
 original first seventeen in order and adding the separate eighteenth
@@ -74,14 +96,15 @@ fixed filenames from the existing private capture directory and supplies context
 independently from trusted canonical harness facts and observed daemon UID; a
 proof never supplies its own oracle. New raw-only fields are closed
 `runtime_filesystem_contract`/`runtime_filesystem_outcomes` and
-`tmpfs_effect_contract`/`tmpfs_effect_outcomes`, explicitly `admission: unadmitted`.
+`tmpfs_effect_contract`/`tmpfs_effect_outcomes`, marked `admission: raw_source_only`
+and `catalogue_admission: unadmitted` after the complete readers pass.
 Only literal omitted/false/true labels, PID1/diagonal scope and the fixed tmpfs
 coverage string are projected, never IDs, native bytes, timestamps or payloads.
-Capabilities, admitted shapes, historical evidence and sealed catalogues remain
-unchanged. Missing/failed/ambiguous proof is refusal, not unsupported-native
+The raw groups above do not change historical evidence or sealed catalogues.
+Missing/failed/ambiguous proof is refusal, not unsupported-native
 evidence. Definitions and synthetic controls are not four-lane qualification.
 
-## Mandatory unadmitted lifecycle source observations
+## Mandatory lifecycle proof requirements
 
 DockerLens #114 wires `lifecycle-v1` as the seventeenth mandatory exact ignored
 test. Its six unique owned BusyBox containers borrow the existing pinned image;
@@ -104,9 +127,10 @@ The separate twenty-first source probe defines those observations without native
 qualification or capability admission; Debian zero semantics remain unproven.
 The omitted health
 control is comparative evidence, not independent shape admission. The emitter
-adds only `lifecycle_contract` and closed `lifecycle_outcomes`, explicitly marked
-`admission: unadmitted`; capability/shape maps and historical records are
-unchanged. An effective or `not_effective_on_selected_api` observation is not
+retains `lifecycle_contract` and closed `lifecycle_outcomes`, now marked
+`admission: raw_source_only` and `catalogue_admission: unadmitted`. Complete raw
+groups require all complementary proofs; historical records are unchanged.
+An effective or `not_effective_on_selected_api` observation is not
 generic version support and cannot close the larger required-contract issue.
 
 The wrapper retains its nineteen-argument emitter protocol and original

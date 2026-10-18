@@ -1,5 +1,13 @@
 # Architecture
 
+The native harness emitter and compiled product catalogue have separate authority.
+[ADR 0021](decisions/0021-lifecycle-raw-source-projection.md) extends complete raw
+source groups only after all five lifecycle-family private proofs validate.
+Raw records use `admission: raw_source_only` and `catalogue_admission: unadmitted`;
+they do not select a product cohort. Raw Debian/upstream counts are 34/56 and
+36/60 capabilities/shapes; the sealed selection below remains 30/47 and 31/49.
+No private proof protocol, native invocation, product API or renderer is changed.
+
 ## Data flow
 
 1. An explicitly supplied endpoint and selector create a bounded read request
@@ -172,8 +180,9 @@ It starts six actual borrowed-image containers, keeps legacy CLI parser refusal
 separate, and observes stop and health effects under the existing scoped owner
 and original deadline. Debian unknown-member acceptance/legacy scheduling is
 explicitly unsupported/unproven, not modern zero/default equivalence. The emitter
-projects only closed unadmitted dispositions; native qualification remains pending
-and no product capability, shape catalogue or historical record changes.
+projects closed raw source dispositions and complete groups under ADR 0021;
+changed-source native qualification remains pending. Catalogue admission stays
+unadmitted, with no product capability, shape catalogue or historical record changes.
 
 ## Decoder evidence boundary
 

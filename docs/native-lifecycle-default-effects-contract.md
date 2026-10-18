@@ -2,9 +2,9 @@
 
 The twenty-first mandatory canonical ignored invocation is
 `native_health_metadata_tests::lifecycle::default_effect::live_lifecycle_default_effects_match_engine`.
-This implemented test-only source probe is **not native-validated**. Producer,
-private reader, registration and inert controls do not admit capabilities or
-establish compatibility. Existing positive `lifecycle-v1` and twentieth
+The changed raw projection still requires fresh exact-head native qualification.
+Producer, private reader, registration and inert controls do not authorize the
+compiled catalogue or establish compatibility. Existing positive `lifecycle-v1` and twentieth
 representation-only `health-start-interval-boundary-v1` remain unchanged.
 
 ## Six actual fixtures and separate legacy refusal
@@ -41,7 +41,7 @@ StartInterval. Debian HTTP 201 accepts an unknown member; both fixtures must
 retain raw absence. Only `unsupported_legacy_field`, scoped to
 `accepted_unknown_member_legacy_schedule_only`, is allowed there. Modern profiles
 require `default_equivalent`, scoped to `supported_field_zero_default_schedule`,
-and the actual five-second cadence above. Both are unadmitted. Allowed outcomes
+and the actual five-second cadence above. Both remain catalogue-unadmitted. Allowed outcomes
 derive from independently supplied exact context, never proof self-attestation.
 
 Distinct name `dl-def-<run>-zero-cli-refusal` is not an owned-container slot and
@@ -74,11 +74,14 @@ Owner-private `lifecycle-default-effects-v1.json` is a fixed direct capture-dir
 child. The nineteen-argument emitter protocol stays unchanged. Private custody,
 bounded reads, duplicate-key refusal, exact context, six distinct IDs, request/
 readback distinctions, effects, cleanup and accounting precede publication.
-Only `lifecycle_default_effect_contract` and closed
-`lifecycle_default_effect_outcomes`, marked `admission: unadmitted`, are added to
-public evidence. Stop plus modern-equivalent or legacy-unsupported markers are
+The public `lifecycle_default_effect_contract` and closed
+`lifecycle_default_effect_outcomes` use `admission: raw_source_only` and
+`catalogue_admission: unadmitted` under [ADR 0021](decisions/0021-lifecycle-raw-source-projection.md).
+Stop plus modern-equivalent or legacy-unsupported markers are
 projected; native logs, IDs, timestamps, raw fields/private paths are not.
-Capabilities, shape maps, sealed records and historical receipts stay unchanged.
+Only complete validated raw source groups extend capability/shape maps. Sealed
+records, compiled catalogue withholding, private v1 protocols and historical
+receipts stay unchanged. Legacy outcomes never add HealthStartInterval.
 
 No software/tool/runtime pin or pin location changes; existing Renovate ownership
 and extraction remain applicable. Final-edit complete gates, fresh authenticated

@@ -217,18 +217,19 @@ class RuntimeCohortEvidenceTests(unittest.TestCase):
             record = json.loads(raw)
             self.assertEqual(record["runtime_filesystem_contract"], "runtime-filesystem-v1")
             self.assertEqual(record["runtime_filesystem_outcomes"], {
-                "admission": "unadmitted", "init_effect_scope": "pid1_indirection_only",
+                "admission": "raw_source_only", "catalogue_admission": "unadmitted", "init_effect_scope": "pid1_indirection_only",
                 "rootfs_effect_scope": "diagonal_omitted_false_true_only", "controls": ["omitted", "false", "true"],
             })
             self.assertEqual(record["tmpfs_effect_contract"], "tmpfs-effect-v1")
             self.assertEqual(record["tmpfs_effect_outcomes"], {
-                "admission": "unadmitted", "coverage": "explicit_1MiB_0700_and_2MiB_0750_rw_ro_only",
+                "admission": "raw_source_only", "catalogue_admission": "unadmitted", "coverage": "explicit_1MiB_0700_and_2MiB_0750_rw_ro_only",
             })
-            self.assertEqual(len(record["capability_outcome"]), 30 if lane.startswith("debian11-") else 31)
-            self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 47 if lane.startswith("debian11-") else 49)
-            for forbidden in ("ContainerInit", "ReadOnlyRootfs", "TmpfsMount", "StopTimeout", "HealthStartInterval"):
-                self.assertNotIn(forbidden, record["capability_outcome"])
-                self.assertNotIn(forbidden, record["admitted_shapes"])
+            self.assertEqual(len(record["capability_outcome"]), 34 if lane.startswith("debian11-") else 36)
+            self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 56 if lane.startswith("debian11-") else 60)
+            for capability in ("ContainerInit", "ReadOnlyRootfs", "TmpfsMount", "StopTimeout", "HealthStartInterval"):
+                positive = capability != "HealthStartInterval" or not lane.startswith("debian11-")
+                self.assertEqual(capability in record["capability_outcome"], positive)
+                self.assertEqual(capability in record["admitted_shapes"], positive)
             for private in ("worker_pid", "daemon_uid", "capacity_bytes", "dl-runtime-", "dl-tmpfs-", "a" * 64, "f" * 64):
                 self.assertNotIn(private, raw)
 

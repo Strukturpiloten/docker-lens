@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Project complete validated lifecycle/default, init/read-only-rootfs and tmpfs
+  proof groups into raw source capability/shape maps only, with upstream-only
+  HealthStartInterval. Distinguish `raw_source_only` from unadmitted compiled
+  catalogue status. Preserve all five mandatory private readers, Debian legacy
+  negatives, 21 native invocations, historical evidence and the sealed catalogue;
+  fresh exact-head qualification and consumer gates remain required.
+
 - Raise the minimum supported Rust version from 1.85.0 to 1.98.1, matching the
   pinned development toolchain. Consumers must upgrade Rust before building.
 - Replace host Engine HTTP in the native harness with DockerLens #119's

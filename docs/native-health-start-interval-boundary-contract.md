@@ -58,10 +58,14 @@ The fixed owner-private `health-start-interval-boundary-v1.json` retains native
 values. Its strict reader receives context independently from harness facts.
 Only closed configuration outcomes enter raw lane evidence, under
 `health_start_interval_boundary_contract` and
-`health_start_interval_boundary_outcomes`, explicitly `admission: unadmitted`.
+`health_start_interval_boundary_outcomes`, marked `admission: raw_source_only`
+and `catalogue_admission: unadmitted` under
+[ADR 0021](decisions/0021-lifecycle-raw-source-projection.md).
 Missing, malformed, partial, stale or cleanup-ambiguous proof refuses the whole
-emitter. Capabilities, admitted shapes, sealed catalogues and historical records
-remain unchanged.
+emitter. This representation proof alone grants no raw group: complementary
+positive and default-effect proofs are mandatory. Only upstream can project the
+complete raw health-interval group. Private v1 protocols, sealed catalogues and
+historical records remain unchanged.
 
 Local, trusted PR-candidate dispatch, main and Release consume the same harness.
 BoxFerry consumes reviewed catalogues/pins rather than this private probe;

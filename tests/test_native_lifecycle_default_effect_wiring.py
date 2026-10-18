@@ -181,18 +181,19 @@ class DefaultEffectEvidenceTests(unittest.TestCase):
             raw = path.read_text()
             record = json.loads(raw)
             self.assertEqual(record["lifecycle_default_effect_contract"], "lifecycle-default-effects-v1")
-            self.assertEqual(record["lifecycle_default_effect_outcomes"], {"admission": "unadmitted",
+            self.assertEqual(record["lifecycle_default_effect_outcomes"], {"admission": "raw_source_only", "catalogue_admission": "unadmitted",
                 "probes": ["stop_timeout_omitted_graceful_zero_forced", "health_start_interval_unsupported_legacy_field"
                            if lane.startswith("debian11-") else "health_start_interval_default_equivalent"]})
             self.assertEqual(record["lifecycle_contract"], "lifecycle-v1")
-            self.assertEqual(record["lifecycle_outcomes"], {"admission": "unadmitted", "probes": [
+            self.assertEqual(record["lifecycle_outcomes"], {"admission": "raw_source_only", "catalogue_admission": "unadmitted", "probes": [
                 "stop_timeout_effective", "health_start_interval_not_effective_on_selected_api" if lane.startswith("debian11-")
                 else "health_start_interval_effective"]})
-            self.assertEqual(len(record["capability_outcome"]), 30 if lane.startswith("debian11-") else 31)
-            self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 47 if lane.startswith("debian11-") else 49)
+            self.assertEqual(len(record["capability_outcome"]), 34 if lane.startswith("debian11-") else 36)
+            self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 56 if lane.startswith("debian11-") else 60)
             for capability in ("StopTimeout", "HealthStartInterval"):
-                self.assertNotIn(capability, record["capability_outcome"])
-                self.assertNotIn(capability, record["admitted_shapes"])
+                positive = capability != "HealthStartInterval" or not lane.startswith("debian11-")
+                self.assertEqual(capability in record["capability_outcome"], positive)
+                self.assertEqual(capability in record["admitted_shapes"], positive)
             for private in ("dl-def-", "stop_elapsed_ns", "raw_timeout", "raw_start_interval", "started_at",
                             "stderr_signature", "daemon_uid", "sha256:" + "d" * 64, SECRET):
                 self.assertNotIn(private, raw)

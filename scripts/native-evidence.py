@@ -113,6 +113,14 @@ PORT_CAPABILITY_SHAPES = {
     "PortExposeOnly": ("ExposedOnlyPort",),
     "PortEphemeral": ("EphemeralHostPort",),
 }
+LIFECYCLE_SOURCE_SHAPES = {
+    "StopTimeout": ("StopTimeoutZero", "StopTimeoutPositive"),
+    "ContainerInit": ("ContainerInitTrue", "ContainerInitFalse"),
+    "ReadOnlyRootfs": ("ReadOnlyRootfsTrue", "ReadOnlyRootfsFalse"),
+    "TmpfsMount": ("TmpfsMountReadWrite", "TmpfsMountReadOnly", "TmpfsMountOptions"),
+}
+HEALTH_INTERVAL_SOURCE_SHAPES = ("HealthStartIntervalZero", "HealthStartIntervalPositive")
+RAW_SOURCE_STATUS = {"admission": "raw_source_only", "catalogue_admission": "unadmitted"}
 
 
 def identity_object(pairs):
@@ -557,6 +565,26 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
     })
     proof_shapes["NetworkExternalInternalExpectation"] = external_network_probes
     proof_shapes["StopSignal"] = stop_signal_probes
+    # All five strict readers above are mandatory, including representation,
+    # negative controls, actual effects and final ownership/cleanup. Neither
+    # positive lifecycle effects nor zero representation alone is a whole group.
+    debian = lane.startswith("debian11-")
+    if lifecycle_outcomes != [
+        "stop_timeout_effective", "health_start_interval_" + (
+            "not_effective_on_selected_api" if debian else "effective"),
+    ] or lifecycle_default_effect_outcomes != [
+        "stop_timeout_omitted_graceful_zero_forced", "health_start_interval_" + (
+            "unsupported_legacy_field" if debian else "default_equivalent"),
+    ] or health_boundary["outcomes"] != [
+        "omission_configured_absent", "literal_zero_configured_absent",
+        "cli_zero_client_unknown_flag" if debian else "cli_zero_configured_absent",
+    ]:
+        raise ValueError("incomplete lifecycle source group")
+    proof_shapes.update({name: list(required) for name, required in LIFECYCLE_SOURCE_SHAPES.items()})
+    # Exact independently supplied lane context, never a guessed API floor or
+    # acceptance of an unknown legacy JSON member, determines this boundary.
+    if not debian:
+        proof_shapes["HealthStartInterval"] = list(HEALTH_INTERVAL_SOURCE_SHAPES)
 
     record = {
         "schema_version": 1,
@@ -593,27 +621,27 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         "external_network_probes": external_network_probes,
         "stop_signal_contract": STOP_SIGNAL_CONTRACT,
         "stop_signal_probes": stop_signal_probes,
-        # Source observations remain explicitly unadmitted. Neither lifecycle
-        # capability nor shape enters capability_outcome/admitted_shapes.
+        # Raw lane source projection is distinct from sealed catalogue admission.
+        # Private v1 proof protocols retain their original unadmitted markers.
         "lifecycle_contract": LIFECYCLE_CONTRACT,
-        "lifecycle_outcomes": {"admission": "unadmitted", "probes": lifecycle_outcomes},
+        "lifecycle_outcomes": {**RAW_SOURCE_STATUS, "probes": lifecycle_outcomes},
         "lifecycle_default_effect_contract": LIFECYCLE_DEFAULT_EFFECT_CONTRACT,
         "lifecycle_default_effect_outcomes": {
-            "admission": "unadmitted", "probes": lifecycle_default_effect_outcomes,
+            **RAW_SOURCE_STATUS, "probes": lifecycle_default_effect_outcomes,
         },
         "runtime_filesystem_contract": RUNTIME_FILESYSTEM_CONTRACT,
         "runtime_filesystem_outcomes": {
-            "admission": "unadmitted", "init_effect_scope": "pid1_indirection_only",
+            **RAW_SOURCE_STATUS, "init_effect_scope": "pid1_indirection_only",
             "rootfs_effect_scope": "diagonal_omitted_false_true_only",
             "controls": ["omitted", "false", "true"],
         },
         "tmpfs_effect_contract": TMPFS_EFFECT_CONTRACT,
         "tmpfs_effect_outcomes": {
-            "admission": "unadmitted", "coverage": tmpfs_effect["coverage"],
+            **RAW_SOURCE_STATUS, "coverage": tmpfs_effect["coverage"],
         },
         "health_start_interval_boundary_contract": HEALTH_START_INTERVAL_BOUNDARY_CONTRACT,
         "health_start_interval_boundary_outcomes": {
-            "admission": "unadmitted", "scope": "created_configuration_only",
+            **RAW_SOURCE_STATUS, "scope": "created_configuration_only",
             "probes": health_boundary["outcomes"],
         },
     }

@@ -44,8 +44,10 @@ class PortCapabilityEvidenceTests(unittest.TestCase):
                              identity=identity, port_probes=probes,
                              port_proof_override=proof_override)
 
-    def expected_groups(self, identity_version, ipv6=True):
-        groups = {**legacy.EXPECTED_RAW_SHAPES, **PORT_GROUPS}
+    def expected_groups(self, identity_version, ipv6=True, health_interval=True):
+        groups = {**legacy.EXPECTED_RAW_SHAPES, **PORT_GROUPS, **legacy.EXPECTED_LIFECYCLE_SOURCE_SHAPES}
+        if not health_interval:
+            del groups["HealthStartInterval"]
         if not ipv6:
             del groups["PortHostIpv6"]
         if identity_version == 2:
@@ -55,12 +57,13 @@ class PortCapabilityEvidenceTests(unittest.TestCase):
 
     def assert_groups(self, destination, identity_version, ipv6=True):
         record = json.loads(destination.read_text(encoding="utf-8"))
-        expected = self.expected_groups(identity_version, ipv6)
+        health_interval = not record["lane"].startswith("debian11-")
+        expected = self.expected_groups(identity_version, ipv6, health_interval)
         self.assertEqual(record["admitted_shapes"], expected)
         self.assertEqual(record["capability_outcome"], {name: "available" for name in expected})
-        self.assertEqual(len(expected), (31 if identity_version == 2 else 29) - (not ipv6))
+        self.assertEqual(len(expected), (35 if identity_version == 2 else 33) - (not ipv6) + health_interval)
         self.assertEqual(sum(map(len, expected.values())),
-                         (49 if identity_version == 2 else 47) - (0 if ipv6 else 2))
+                         (58 if identity_version == 2 else 56) - (0 if ipv6 else 2) + 2 * health_interval)
         self.assertEqual("identity_contract" in record, identity_version == 2)
         self.assertEqual("identity_cases" in record, identity_version == 2)
         for private in (legacy.RUN_ID, "dl-identity-", "configured_user", "cleanup"):

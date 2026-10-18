@@ -26,8 +26,10 @@ choice is closed. That resolved dependency decision does not qualify the current
 source candidate or replace complete and application gates. Standalone DockerLens
 requires MSRV `1.98.1`, matching the current pinned development compiler.
 
-The five new lifecycle-family source groups remain unadmitted; passing source
-probes alone cannot promote them. Complete milestone coverage, independent
+The five new lifecycle-family source groups remain unadmitted in the compiled
+catalogue. [ADR 0021](decisions/0021-lifecycle-raw-source-projection.md) projects
+complete raw source groups only; passing source probes alone cannot select a
+compiled cohort. Complete milestone coverage, independent
 admission review and downstream acceptance remain required. This documentation
 preparation stays isolated and unpublished pending parent PR
 [#118](https://github.com/Strukturpiloten/docker-lens/pull/118) and the coherent

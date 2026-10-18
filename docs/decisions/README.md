@@ -22,9 +22,11 @@ Durable native boundaries and evidence/admission contracts:
 - [0018: Reviewed external-network cohort](0018-reviewed-external-network-cohort.md)
 - [0019: Reviewed configured stop-signal cohort](0019-reviewed-stop-signal-cohort.md)
 - [0020: Independent harness Unix-HTTP transport](0020-harness-unix-http-transport.md)
+- [0021: Complete lifecycle raw source projection](0021-lifecycle-raw-source-projection.md)
 
 ADR 0019 selects only the complete StopSignal singleton beyond ADR 0018's
-retained groups for candidate rehearsal. ADR 0017's None/false/true, conditional
-schema-3 and pure snapshot boundaries remain; fresh final-candidate sixteen-test
+retained groups for candidate rehearsal. ADR 0021 projects complete raw source
+groups without changing that compiled selection. ADR 0017's None/false/true, conditional
+schema-3 and pure snapshot boundaries remain; fresh final-candidate twenty-one-test
 native and actual consumer gates still block ready/merge/main admission and
 release. Historical evidence and earlier obligations are preserved.

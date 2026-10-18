@@ -66,7 +66,16 @@ EXPECTED_PORT_CAPABILITY_SHAPES = {
     "PortExposeOnly": ["ExposedOnlyPort"],
     "PortEphemeral": ["EphemeralHostPort"],
 }
-EXPECTED_FUTURE_RAW_SHAPES = {**EXPECTED_RAW_SHAPES, **EXPECTED_PORT_CAPABILITY_SHAPES}
+EXPECTED_LIFECYCLE_SOURCE_SHAPES = {
+    "StopTimeout": ["StopTimeoutZero", "StopTimeoutPositive"],
+    "ContainerInit": ["ContainerInitTrue", "ContainerInitFalse"],
+    "ReadOnlyRootfs": ["ReadOnlyRootfsTrue", "ReadOnlyRootfsFalse"],
+    "TmpfsMount": ["TmpfsMountReadWrite", "TmpfsMountReadOnly", "TmpfsMountOptions"],
+    "HealthStartInterval": ["HealthStartIntervalZero", "HealthStartIntervalPositive"],
+}
+EXPECTED_FUTURE_RAW_SHAPES = {
+    **EXPECTED_RAW_SHAPES, **EXPECTED_PORT_CAPABILITY_SHAPES, **EXPECTED_LIFECYCLE_SOURCE_SHAPES,
+}
 SOURCE_PROBES = [
     "DiscoveryMetadata", "ExactContainerId", "ExactContainerName",
     "LiteralNamePrefix", "ExactLabel", "ExplicitAllContainers",
@@ -143,6 +152,115 @@ def identity_proof(lane: str, mode: str, api: str, sha: str) -> dict:
 
 
 class NativeEvidenceTests(unittest.TestCase):
+    def test_complete_lifecycle_raw_groups_and_catalogue_boundary_on_all_lanes(self) -> None:
+        # Reuse input construction only. Expectations come from the independent
+        # finite contract matrix and the existing required_for API contract.
+        import test_native_external_network_evidence as canonical
+        from test_reviewed_catalog import required_shapes
+
+        required = required_shapes()
+        schema = json.loads((ROOT / "docs/native-evidence.schema.json").read_text())
+        projection = schema["$defs"]["lifecycle_source_projection"]
+        self.assertFalse(projection["additionalProperties"])
+        self.assertEqual(set(projection["required"]), set(projection["properties"]))
+        for lane in ("debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless"):
+            with self.subTest(lane=lane):
+                result, path = canonical.ExternalNetworkEvidenceTests.emit(self, lane)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                record = json.loads(path.read_text())
+                debian = lane.startswith("debian11-")
+                expected = {**EXPECTED_FUTURE_RAW_SHAPES, "ContainerUser": ["ContainerUser"],
+                            "ContainerWorkdir": ["ContainerWorkdir"]}
+                if debian:
+                    del expected["HealthStartInterval"]
+                    del expected["PortHostIpv6"]
+                self.assertEqual(record["admitted_shapes"], expected)
+                self.assertEqual(record["capability_outcome"], {name: "available" for name in expected})
+                self.assertEqual(len(record["capability_outcome"]), 34 if debian else 36)
+                self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 56 if debian else 60)
+                for name, shapes in EXPECTED_LIFECYCLE_SOURCE_SHAPES.items():
+                    self.assertEqual(tuple(shapes), required[name])
+                    if debian and name == "HealthStartInterval":
+                        self.assertNotIn(name, record["capability_outcome"])
+                        self.assertNotIn(name, record["admitted_shapes"])
+                    else:
+                        self.assertEqual(record["capability_outcome"][name], "available")
+                        self.assertEqual(record["admitted_shapes"][name], shapes)
+                for name, definition in projection["properties"].items():
+                    if name.endswith("_outcomes"):
+                        value = record[name]
+                        self.assertFalse(definition["additionalProperties"])
+                        self.assertEqual(set(value), set(definition["required"]))
+                        for status in ("admission", "catalogue_admission"):
+                            self.assertEqual(value[status], definition["properties"][status]["const"])
+                    elif name.endswith("_contract"):
+                        self.assertEqual(record[name], definition["const"])
+                # The raw subset schema also closes the legacy/modern outcome
+                # combinations, rather than merely listing both vocabularies.
+                lane_schema = projection["allOf"][0]["then" if debian else "else"]
+                for name, definition in lane_schema["properties"].items():
+                    rule = definition["properties"]["probes"]
+                    self.assertFalse(rule["items"])
+                    self.assertEqual(record[name]["probes"], [item["const"] for item in rule["prefixItems"]])
+        # Raw output cannot change the product's immutable compiled selection.
+        catalogue = (ROOT / "src/reviewed_catalog.rs").read_text()
+        for prefix, capability_count, shape_count in (("REVIEWED", 30, 47), ("UPSTREAM", 31, 49)):
+            capabilities = catalogue.split(f"const {prefix}_CAPABILITIES:", 1)[1].split("];", 1)[0]
+            shapes = catalogue.split(f"const {prefix}_SHAPES:", 1)[1].split("];", 1)[0]
+            self.assertEqual(len(re.findall(r"Capability::(\w+)", capabilities)), capability_count)
+            self.assertEqual(len(re.findall(r"NativeCapabilityShape::(\w+)", shapes)), shape_count)
+            for name in EXPECTED_LIFECYCLE_SOURCE_SHAPES:
+                self.assertNotIn(f"Capability::{name},", capabilities)
+
+    def test_every_lifecycle_family_remains_mandatory_complete_bound_and_clean(self) -> None:
+        import test_native_external_network_evidence as canonical
+
+        families = (
+            ("lifecycle", "lifecycle-v1.json", "stop_timeout"),
+            ("lifecycle_default_effect", "lifecycle-default-effects-v1.json", "stop_timeout"),
+            ("runtime_filesystem", "runtime-filesystem-v1.json", "cases"),
+            ("tmpfs_effect", "tmpfs-effect-v1.json", "cases"),
+            ("health_boundary", "health-start-interval-boundary-v1.json", "cases"),
+        )
+        for lane in ("debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless"):
+            for option, filename, group in families:
+                with self.subTest(lane=lane, family=option, mutation="missing"):
+                    result, path = canonical.ExternalNetworkEvidenceTests.emit(self, lane, **{option + "_missing": True})
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse(path.exists())
+                    self.assertEqual(result.stderr.strip(), "native evidence rejected")
+            result, path = canonical.ExternalNetworkEvidenceTests.emit(self, lane)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            path.unlink()
+            for option, filename, group in families:
+                proof_path = path.parent.parent / filename
+                original = json.loads(proof_path.read_text())
+                for mutation in ("partial", "context", "effect", "cleanup", "unexpected"):
+                    with self.subTest(lane=lane, family=option, mutation=mutation):
+                        proof = copy.deepcopy(original)
+                        if mutation == "partial":
+                            proof[group].pop()
+                        elif mutation == "context":
+                            proof["context"]["candidate_sha"] = "e" * 40
+                        elif mutation == "effect":
+                            if option == "lifecycle":
+                                proof["stop_timeout"][0]["containers"][0]["exit_code"] = 0
+                            elif option == "lifecycle_default_effect":
+                                proof["stop_timeout"][0]["exit_code"] = 0
+                            elif option == "runtime_filesystem":
+                                proof["cases"][0]["containers"][0]["worker_pid"] = 0
+                            elif option == "tmpfs_effect":
+                                proof["cases"][0]["containers"][0]["effect"]["filesystem"] = "ext4"
+                            else:
+                                proof["cases"][0]["records"][0]["state"]["Pid"] = 1
+                        elif mutation == "cleanup":
+                            proof["cleanup"]["uncertain"] = True
+                        else:
+                            proof["PRIVATE_PROJECTION_CANARY"] = "PRIVATE_PROJECTION_CANARY"
+                        proof_path.write_text(json.dumps(proof))
+                        canonical.ExternalNetworkEvidenceTests.rerun(self, result, path)
+                proof_path.write_text(json.dumps(original))
+
     def test_identity_schema_is_additive_not_reviewed_admission(self) -> None:
         schema = json.loads((ROOT / "docs/native-evidence.schema.json").read_text())
         defs = schema["$defs"]
@@ -162,13 +280,13 @@ class NativeEvidenceTests(unittest.TestCase):
                                      "port_shape", "port_probe_entry", "port_probes",
                                      "native_port_probe_proof", "bind_relabel_capability_vocabulary",
                                      "bind_relabel_shape_vocabulary", "external_network_probes",
-                                     "external_network_projection"})
+                                     "external_network_projection", "lifecycle_source_projection"})
         unchanged = copy.deepcopy(schema)
         for name in ("identity_probes", "identity_container_proof", "native_identity_proof",
                      "identity_container_v2", "identity_case_v2", "native_identity_proof_v2",
                      "port_shape", "port_probe_entry", "port_probes", "native_port_probe_proof",
                      "bind_relabel_capability_vocabulary", "bind_relabel_shape_vocabulary",
-                     "external_network_probes", "external_network_projection"):
+                     "external_network_probes", "external_network_projection", "lifecycle_source_projection"):
             del unchanged["$defs"][name]
         # Preserve the exact historical #74 root projection: later vocabulary
         # additions do not rewrite historical envelope bytes or admission.
@@ -487,7 +605,7 @@ class NativeEvidenceTests(unittest.TestCase):
         self.assertEqual(evidence["acquisition_api"], "1.49")
         self.assertEqual(evidence["rendering_api"], "1.56")
         self.assertEqual(evidence["runtime_components"], {"containerd": "2.3.5", "runc": "1.5.1"})
-        self.assertEqual(len(evidence["capability_outcome"]), 29)
+        self.assertEqual(len(evidence["capability_outcome"]), 34)
         self.assertEqual(set(evidence["capability_outcome"].values()), {"available"})
         self.assertEqual(evidence["admitted_shapes"], EXPECTED_FUTURE_RAW_SHAPES)
         self.assertEqual(evidence["source_probes"], SOURCE_PROBES)
@@ -625,10 +743,12 @@ class NativeEvidenceTests(unittest.TestCase):
                     self.assertEqual(record["expected_mode"], mode)
                     self.assertEqual(record["engine_version"], release)
                     self.assertEqual(record["rendering_api"], api)
+                    expected = {capability: required for capability, required in EXPECTED_FUTURE_RAW_SHAPES.items()
+                                if family != "debian11" or capability != "HealthStartInterval"}
                     self.assertEqual(record["capability_outcome"], {
-                        capability: "available" for capability in EXPECTED_FUTURE_RAW_SHAPES
+                        capability: "available" for capability in expected
                     })
-                    self.assertEqual(record["admitted_shapes"], EXPECTED_FUTURE_RAW_SHAPES)
+                    self.assertEqual(record["admitted_shapes"], expected)
                     self.assertEqual(record["source_probes"], SOURCE_PROBES)
                     self.assertEqual(record["identity_probes"], IDENTITY_PROBES)
 

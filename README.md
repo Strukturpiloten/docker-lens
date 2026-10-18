@@ -42,9 +42,14 @@ BoxFerry consumers of the actual Nextcloud/Supabase binds and desired external
 expectations pass. Source evidence and old consumer receipts do not qualify this
 changed admission candidate.
 The [default/zero lifecycle source probe](docs/native-lifecycle-default-effects-contract.md)
-is implemented and mandatory but not native-validated. It adds no capability:
-modern health-default equivalence and unsupported legacy unknown-field scheduling
-are separate closed, unadmitted outcomes; existing positive lifecycle evidence stays intact.
+and the other four lifecycle-family proofs are mandatory before raw evidence is
+emitted. [ADR 0021](docs/decisions/0021-lifecycle-raw-source-projection.md) projects
+complete finite StopTimeout/init/read-only-rootfs/tmpfs source groups on all lanes
+and HealthStartInterval only on upstream. Canonical raw records contain 34/56
+capabilities/shapes on Debian and 36/60 upstream, marked `raw_source_only` with
+`catalogue_admission: unadmitted`. The compiled catalogue stays at 30/47 and 31/49.
+Legacy unknown-field acceptance remains unsupported; source projection adds no
+product capability. Fresh exact-head native and consumer qualification is required.
 Identity support does not promise arbitrary-image startup or host UID mapping.
 No application or full migration acceptance is claimed. External-volume
 prerequisites cannot carry labels or mutate an existing volume.

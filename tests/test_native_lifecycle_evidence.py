@@ -22,15 +22,15 @@ class LifecycleEvidenceTests(unittest.TestCase):
                 debian = lane.startswith("debian11-")
                 self.assertEqual(record["lifecycle_contract"], "lifecycle-v1")
                 self.assertEqual(record["lifecycle_outcomes"], {
-                    "admission": "unadmitted",
+                    "admission": "raw_source_only", "catalogue_admission": "unadmitted",
                     "probes": ["stop_timeout_effective", "health_start_interval_" + (
                         "not_effective_on_selected_api" if debian else "effective")],
                 })
                 for field in ("StopTimeout", "HealthStartInterval"):
-                    self.assertNotIn(field, record["capability_outcome"])
-                    self.assertNotIn(field, record["admitted_shapes"])
-                self.assertEqual(len(record["capability_outcome"]), 30 if debian else 31)
-                self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 47 if debian else 49)
+                    self.assertEqual(field in record["capability_outcome"], field != "HealthStartInterval" or not debian)
+                    self.assertEqual(field in record["admitted_shapes"], field != "HealthStartInterval" or not debian)
+                self.assertEqual(len(record["capability_outcome"]), 34 if debian else 36)
+                self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 56 if debian else 60)
                 for private in ("lifecycle-term", "lifecycle-health-failure", "StartedAt", "FinishedAt",
                                 "outer_before", "image_before", "cleanup", "owner",
                                 "a" * 64, "f" * 64):

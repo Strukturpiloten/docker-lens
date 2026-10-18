@@ -147,6 +147,356 @@
     }
   },
   "$defs": {
+    "lifecycle_source_projection": {
+      "description": "Current raw lane-manifest subset only. Private v1 protocols and the historical reviewed-record root remain unchanged; raw_source_only never authorizes the compiled catalogue. All five complete private readers are mandatory before projection.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "lane",
+        "lifecycle_contract",
+        "lifecycle_outcomes",
+        "lifecycle_default_effect_contract",
+        "lifecycle_default_effect_outcomes",
+        "runtime_filesystem_contract",
+        "runtime_filesystem_outcomes",
+        "tmpfs_effect_contract",
+        "tmpfs_effect_outcomes",
+        "health_start_interval_boundary_contract",
+        "health_start_interval_boundary_outcomes"
+      ],
+      "properties": {
+        "lane": {
+          "enum": [
+            "debian11-rootful",
+            "debian11-rootless",
+            "upstream-rootful",
+            "upstream-rootless"
+          ]
+        },
+        "lifecycle_contract": {
+          "const": "lifecycle-v1"
+        },
+        "lifecycle_outcomes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "admission",
+            "catalogue_admission",
+            "probes"
+          ],
+          "properties": {
+            "admission": {
+              "const": "raw_source_only"
+            },
+            "catalogue_admission": {
+              "const": "unadmitted"
+            },
+            "probes": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "prefixItems": [
+                {
+                  "const": "stop_timeout_effective"
+                },
+                {
+                  "enum": [
+                    "health_start_interval_not_effective_on_selected_api",
+                    "health_start_interval_effective"
+                  ]
+                }
+              ],
+              "items": false
+            }
+          }
+        },
+        "lifecycle_default_effect_contract": {
+          "const": "lifecycle-default-effects-v1"
+        },
+        "lifecycle_default_effect_outcomes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "admission",
+            "catalogue_admission",
+            "probes"
+          ],
+          "properties": {
+            "admission": {
+              "const": "raw_source_only"
+            },
+            "catalogue_admission": {
+              "const": "unadmitted"
+            },
+            "probes": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "prefixItems": [
+                {
+                  "const": "stop_timeout_omitted_graceful_zero_forced"
+                },
+                {
+                  "enum": [
+                    "health_start_interval_unsupported_legacy_field",
+                    "health_start_interval_default_equivalent"
+                  ]
+                }
+              ],
+              "items": false
+            }
+          }
+        },
+        "runtime_filesystem_contract": {
+          "const": "runtime-filesystem-v1"
+        },
+        "runtime_filesystem_outcomes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "admission",
+            "catalogue_admission",
+            "init_effect_scope",
+            "rootfs_effect_scope",
+            "controls"
+          ],
+          "properties": {
+            "admission": {
+              "const": "raw_source_only"
+            },
+            "catalogue_admission": {
+              "const": "unadmitted"
+            },
+            "init_effect_scope": {
+              "const": "pid1_indirection_only"
+            },
+            "rootfs_effect_scope": {
+              "const": "diagonal_omitted_false_true_only"
+            },
+            "controls": {
+              "type": "array",
+              "minItems": 3,
+              "maxItems": 3,
+              "prefixItems": [
+                {
+                  "const": "omitted"
+                },
+                {
+                  "const": "false"
+                },
+                {
+                  "const": "true"
+                }
+              ],
+              "items": false
+            }
+          }
+        },
+        "tmpfs_effect_contract": {
+          "const": "tmpfs-effect-v1"
+        },
+        "tmpfs_effect_outcomes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "admission",
+            "catalogue_admission",
+            "coverage"
+          ],
+          "properties": {
+            "admission": {
+              "const": "raw_source_only"
+            },
+            "catalogue_admission": {
+              "const": "unadmitted"
+            },
+            "coverage": {
+              "const": "explicit_1MiB_0700_and_2MiB_0750_rw_ro_only"
+            }
+          }
+        },
+        "health_start_interval_boundary_contract": {
+          "const": "health-start-interval-boundary-v1"
+        },
+        "health_start_interval_boundary_outcomes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "admission",
+            "catalogue_admission",
+            "scope",
+            "probes"
+          ],
+          "properties": {
+            "admission": {
+              "const": "raw_source_only"
+            },
+            "catalogue_admission": {
+              "const": "unadmitted"
+            },
+            "scope": {
+              "const": "created_configuration_only"
+            },
+            "probes": {
+              "type": "array",
+              "minItems": 3,
+              "maxItems": 3,
+              "prefixItems": [
+                {
+                  "const": "omission_configured_absent"
+                },
+                {
+                  "const": "literal_zero_configured_absent"
+                },
+                {
+                  "enum": [
+                    "cli_zero_client_unknown_flag",
+                    "cli_zero_configured_absent"
+                  ]
+                }
+              ],
+              "items": false
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "lane": {
+                "enum": [
+                  "debian11-rootful",
+                  "debian11-rootless"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "lifecycle_outcomes": {
+                "properties": {
+                  "probes": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "prefixItems": [
+                      {
+                        "const": "stop_timeout_effective"
+                      },
+                      {
+                        "const": "health_start_interval_not_effective_on_selected_api"
+                      }
+                    ],
+                    "items": false
+                  }
+                }
+              },
+              "lifecycle_default_effect_outcomes": {
+                "properties": {
+                  "probes": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "prefixItems": [
+                      {
+                        "const": "stop_timeout_omitted_graceful_zero_forced"
+                      },
+                      {
+                        "const": "health_start_interval_unsupported_legacy_field"
+                      }
+                    ],
+                    "items": false
+                  }
+                }
+              },
+              "health_start_interval_boundary_outcomes": {
+                "properties": {
+                  "probes": {
+                    "type": "array",
+                    "minItems": 3,
+                    "maxItems": 3,
+                    "prefixItems": [
+                      {
+                        "const": "omission_configured_absent"
+                      },
+                      {
+                        "const": "literal_zero_configured_absent"
+                      },
+                      {
+                        "const": "cli_zero_client_unknown_flag"
+                      }
+                    ],
+                    "items": false
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "lifecycle_outcomes": {
+                "properties": {
+                  "probes": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "prefixItems": [
+                      {
+                        "const": "stop_timeout_effective"
+                      },
+                      {
+                        "const": "health_start_interval_effective"
+                      }
+                    ],
+                    "items": false
+                  }
+                }
+              },
+              "lifecycle_default_effect_outcomes": {
+                "properties": {
+                  "probes": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "prefixItems": [
+                      {
+                        "const": "stop_timeout_omitted_graceful_zero_forced"
+                      },
+                      {
+                        "const": "health_start_interval_default_equivalent"
+                      }
+                    ],
+                    "items": false
+                  }
+                }
+              },
+              "health_start_interval_boundary_outcomes": {
+                "properties": {
+                  "probes": {
+                    "type": "array",
+                    "minItems": 3,
+                    "maxItems": 3,
+                    "prefixItems": [
+                      {
+                        "const": "omission_configured_absent"
+                      },
+                      {
+                        "const": "literal_zero_configured_absent"
+                      },
+                      {
+                        "const": "cli_zero_configured_absent"
+                      }
+                    ],
+                    "items": false
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
     "external_network_probes": {
       "description": "Ordered public projection after complete private external-network proof; never sealed admission.",
       "type": "array",
