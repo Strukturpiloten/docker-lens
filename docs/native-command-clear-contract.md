@@ -12,12 +12,17 @@ even when public evidence emission is disabled. Fixed diagnostics retain the
 first causal stage/panic only; cleanup-unverified always fails.
 
 The unchanged nineteen-argument emitter requires both strict private proofs
-before any new group or output, and maps only ContainerHostname,
-CommandClear/ClearCommand and EntrypointClear/ClearEntrypoint. Current raw totals
-are Debian 37 capabilities/59 shapes and upstream 39/63, with closed source-only/
+before any new group or output. ADR 0023's process slice maps only ContainerHostname,
+CommandClear/ClearCommand and EntrypointClear/ClearEntrypoint. That slice's raw totals
+were Debian 37 capabilities/59 shapes and upstream 39/63, with closed source-only/
 unadmitted public family outcomes. No hostname, argv, IDs, timestamps or private
 payloads are projected. Compiled selection stays 34/56 and 36/60; HealthDisabled
-is excluded. Private v1 protocols and historical schema-root acceptance remain
+was excluded from that slice. [ADR 0024](decisions/0024-health-disabled-raw-source-projection.md)
+separately derives only raw HealthDisabled/DisabledHealthcheck after the unchanged
+complete health-metadata-v1 validation. [ADR 0025](decisions/0025-shm-size-source-integration.md)
+adds raw ShmSize after its separate complete proof; current combined raw totals
+are 39/61 and 41/65 without selecting any of these groups. The original 23 ordered
+invocations remain unchanged and ShmSize is mandatory invocation 24. Private v1 protocols and historical schema-root acceptance remain
 unchanged through disconnected public projection definitions.
 
 Four ordered cases each require an independently authored Docker CLI oracle and
@@ -137,5 +142,5 @@ binary redistribution or public API is introduced.
 
 The focused Python policy controls establish only source validation. This
 change has not executed native lanes. Complete final-edit gates, integrated
-exact-head twenty-three-test four-lane execution and independent review remain the primary's
+exact-head twenty-four-test four-lane execution and independent review remain the primary's
 responsibility. Missing process observations are a real failure, never a skip.

@@ -25,16 +25,26 @@ Durable native boundaries and evidence/admission contracts:
 - [0021: Complete lifecycle raw source projection](0021-lifecycle-raw-source-projection.md)
 - [0022: Reviewed lifecycle successor cohort](0022-reviewed-lifecycle-cohort.md)
 - [0023: Mandatory process-source probes and closed raw projection](0023-process-source-proof-wiring.md)
+- [0024: Raw-only disabled-health source projection](0024-health-disabled-raw-source-projection.md)
+- [0025: Mandatory ShmSize source integration](0025-shm-size-source-integration.md)
 
 ADR 0022 supersedes ADR 0019's active-cohort selection for candidate rehearsal:
 complete StopTimeout/init/rootfs/tmpfs groups on all lanes, with
 HealthStartInterval upstream-only, at Debian 34/56 and upstream 36/60.
 ADR 0021's raw source markers remain unchanged and do not grant admission.
 ADR 0017's None/false/true, conditional
-schema-3 and pure snapshot boundaries remain; fresh final-candidate twenty-three-test
+schema-3 and pure snapshot boundaries remain; fresh final-candidate twenty-four-test
 native and actual consumer gates still block ready/merge/main admission and
 release. Historical evidence and earlier obligations are preserved.
 ADR 0023 adds mandatory hostname and command-clear invocations 22 and 23, with
-both strict readers required before closed source-only raw projection. Current
-raw totals are Debian 37/59 and upstream 39/63; the three new process singleton
+both strict readers required before closed source-only raw projection. Its
+slice's raw totals were Debian 37/59 and upstream 39/63; the three process singleton
 groups remain outside ADR 0022's unchanged compiled selection.
+ADR 0024 additionally derives only HealthDisabled/DisabledHealthcheck after the
+unchanged complete health-metadata-v1 proof validates, with closed raw-source/
+unadmitted outcome metadata. That health-only slice's raw totals were Debian
+38/60 and upstream 40/64 with the original 23 native invocations unchanged.
+ADR 0025 appends mandatory ShmSize invocation 24 with a separate one-child
+cleanup-owner scope, complete private gate and raw-only ShmSize singleton.
+Current combined raw totals are Debian 39/61 and upstream 41/65; compiled
+selection stays 34/56 and 36/60. All five new raw groups remain unselected.

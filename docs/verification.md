@@ -40,7 +40,7 @@ cohort remains byte-exact. No reaping, general signal behavior, Cartesian flag
 combination, arbitrary tmpfs value or SELinux effect is established.
 
 The changed admission candidate still needs final-edit complete gates, fresh
-authenticated exact-final-candidate four-lane/23-test execution and independent
+authenticated exact-final-candidate four-lane/24-test execution and independent
 review, all six actual authored-fixture volume-only rehearsals, and actual
 Nextcloud/Supabase bind and desired-external consumer review. This source run
 does not qualify those later bytes or close #39/#31/#3, establish BoxFerry
@@ -81,14 +81,43 @@ runs unconditionally before the optional public emitter. Both fixed direct-child
 proofs bind to independent harness facts. All original ordinals, budgets,
 privilege and cleanup ownership remain; command-clear owns separate cleanup and
 its fixed `cleanup_unverified` marker fails even beside a successful summary.
-Current raw counts are Debian 37/59 and upstream 39/63, while compiled selection
+Current raw counts are Debian 39/61 and upstream 41/65, while compiled selection
 remains 34/56 and 36/60. ContainerHostname, CommandClear and EntrypointClear are
-the only new raw singleton groups; HealthDisabled is excluded. Closed public
+the three raw singleton groups of ADR 0023's slice, which excluded HealthDisabled. Closed public
 outcomes expose source-only/unadmitted markers, never actual hostnames, argv,
 IDs, timestamps or private payloads. Disconnected `$defs.hostname_source_projection`
 and `$defs.command_clear_source_projection` leave historical root acceptance intact.
 
-The canonical harness requires twenty-three exact ignored invocations, retaining the
+[ADR 0024](decisions/0024-health-disabled-raw-source-projection.md) additionally
+maps only HealthDisabled to DisabledHealthcheck after the unchanged complete
+health-metadata-v1 private reader succeeds. That reader validates both inherited
+failing-health and disabled CLI/rendered controls together with every other case,
+context, effect and cleanup check, and still returns only its four legacy shapes.
+The fixed `health_disabled_contract` and closed `health_disabled_outcomes` contain
+only `health-metadata-v1`, raw-source/unadmitted markers and
+`disabled_health_suppression_verified`. The disconnected
+`$defs.health_disabled_source_projection` does not change historical root
+acceptance. HealthDisabled remains unselected, as do the three process groups;
+the original 23 ordered native invocations and prior strict readers remain unchanged.
+Offline fixtures are not native evidence. PR #124's passing exact-source campaign
+`39130478489` for `e7995ecfa9cadaae0bc7bc1685e5e1f320c907ff` cannot qualify this changed emitter.
+
+[ADR 0025](decisions/0025-shm-size-source-integration.md) appends the mandatory
+twenty-fourth `native_health_metadata_tests::lifecycle::shm_size::live_shm_size_effects_match_engine`.
+It runs in a separate one-child subshell with the existing authenticated outer
+cleanup owner; the original six-child block remains byte-identical. Its strict
+twelve-argument CLI reader always runs after the test, even without public emission.
+The emitter preserves its nineteen arguments and validates the fixed direct child
+against existing independent context before any group/output. It requires exactly
+typed contract `shm-size-v1`, empty capability admission and false catalogue admission.
+Only ShmSize/ShmSize is added, with closed source-only/unadmitted status, scope
+`explicit_1MiB_2MiB_with_observed_omission_only` and outcome
+`tmpfs_effect_and_ipc_isolation_verified`. The disconnected schema definition
+changes no historical root acceptance. No actual default, namespace, ID, argv or
+time leaves the private proof. Fresh exact-final-candidate 24-by-four execution
+(96 invocations), review and all actual consumer gates remain required.
+
+The canonical harness requires twenty-four exact ignored invocations, retaining the
 original first seventeen in order and adding the separate eighteenth
 `native_health_metadata_tests::lifecycle::runtime_filesystem::live_runtime_filesystem_matches_engine`
 and nineteenth
@@ -192,8 +221,9 @@ generic version support and cannot close the larger required-contract issue.
 
 The wrapper retains its nineteen-argument emitter protocol and original
 180-second invocation deadline, exposes only fixed lifecycle diagnostics, and
-preserves the first observation failure. Only the five lifecycle-family invocations
-receive the canonical outer-cleanup owner token. An uncertain inner cleanup requests
+preserves the first observation failure. The original six-child lifecycle block
+and separate one-child ShmSize block receive the canonical outer-cleanup owner token.
+An uncertain inner cleanup requests
 outer teardown and fails; its marker never proves completed teardown. The EXIT
 owner now binds outer/sidecar creation IDs, rechecks ID/name/run ownership, removes
 only those IDs with immediate stop, and verifies both ID/name absence. Data-volume
@@ -207,7 +237,7 @@ finite binding/readback requests are not a renewed inner cleanup budget.
 
 This integration has source-only Python/mocked-transport and syntax coverage;
 native qualification is pending. Full final-edit gates, fresh authenticated
-exact-head twenty-three-test four-lane evidence, independent review, and required
+exact-head twenty-four-test four-lane evidence, independent review, and required
 BoxFerry consumer rehearsals remain mandatory. No runtime cleanup completion,
 capability admission, full migration acceptance or release is claimed.
 
@@ -266,7 +296,7 @@ sanitized receipt establishes trusted-harness assertions/closed success logs,
 not direct private-proof inspection, independent host inventory or separately
 retained effect values. Every historical record remains byte-exact. This is
 candidate rehearsal only: fresh final-edit complete gates, authenticated
-exact-final-candidate twenty-three-test four-lane proof and independent review,
+exact-final-candidate twenty-four-test four-lane proof and independent review,
 all six actual authored-fixture volume-only rehearsals and actual
 Nextcloud/Supabase bind/desired-external consumers remain required before
 ready/merge/main admission or release. Old source/consumer receipts grant no
@@ -440,14 +470,17 @@ aggregate budgets; work exhaustion never resets the ledger. Derived images,
 the seed and every owned container need exact identity/ownership and two final
 absence rounds before exclusive private proof publication.
 
-The emitter reads that complete owner-private bound proof and projects only
+At the original health/metadata source checkpoint, the emitter read the complete
+owner-private bound proof and projected only
 `health-metadata-v1` plus the four closed source-shape names. Only the complete
-`ContainerLabels`, `HealthShell` and `HealthStartPeriod` groups are emitted;
-inherited/disabled controls grant no additional groups. Historical manifests
-stay immutable. ADR 0016 now selects these complete groups with the coherent
+`ContainerLabels`, `HealthShell` and `HealthStartPeriod` groups were emitted;
+inherited/disabled controls granted no additional groups at that checkpoint. ADR 0024
+now additionally derives the raw-only HealthDisabled singleton from the same
+unchanged complete validation; the private four-shape return stays unchanged.
+Historical manifests stay immutable. ADR 0016 selected these complete groups with the coherent
 application cohort; final-candidate/consumer gates remain mandatory.
-With parameterized identity and the currently prescribed Debian IPv6
-boundaries, future raw manifests contain Debian 23 groups/36 shapes and
+With that checkpoint's parameterized identity and prescribed Debian IPv6
+boundaries, prospective raw manifests contained Debian 23 groups/36 shapes and
 upstream 24/38. Counts are expectations, not substitutes for authentic proof.
 
 Local execution, main Check, reviewed-PR native dispatch and Release validation
@@ -820,7 +853,7 @@ readiness calls, direct captures and every Rust native helper using the same
 explicit AF_UNIX endpoint. Readiness and direct captures explicitly require
 actual HTTP 200; a transport error cannot become HTTP 000 or an absence result.
 Existing request/byte limits, caller timers, scoped ownership, uncertain
-mutations and cleanup assertions remain authoritative. The twenty-three exact
+mutations and cleanup assertions remain authoritative. The twenty-four exact
 native invocations, Docker CLI and genuine Rust acquisition remain independent;
 TCP/UDP/network-namespace curl probes retain their own unchanged transport.
 The earlier first-option curl-only argv/executable freeze is superseded only for
@@ -1504,7 +1537,7 @@ health or start-interval groups. Identity is not arbitrary-image startup or
 host UID mapping; bind configuration is not relabel effect evidence.
 
 This is pre-merge candidate rehearsal admission. Production merge/main/release
-still require complete final-edit gates, fresh twenty-three-test four-lane proof
+still require complete final-edit gates, fresh twenty-four-test four-lane proof
 on the final candidate, fresh all six actual authored fixture volume-only consumer
 rehearsals required by ADR 0012, and fresh reviewed BoxFerry consumption of
 the actual authored Nextcloud/Supabase binds and desired external expectations.

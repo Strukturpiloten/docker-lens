@@ -147,6 +147,42 @@
     }
   },
   "$defs": {
+    "shm_size_source_projection": {
+      "description": "Disconnected raw-only finite ShmSize subset; not reviewed-record or compiled-catalogue admission.",
+      "type": "object", "additionalProperties": false,
+      "required": ["shm_size_contract", "shm_size_outcomes"],
+      "properties": {
+        "shm_size_contract": { "const": "shm-size-v1" },
+        "shm_size_outcomes": {
+          "type": "object", "additionalProperties": false,
+          "required": ["admission", "catalogue_admission", "scope", "outcome"],
+          "properties": {
+            "admission": { "const": "raw_source_only" },
+            "catalogue_admission": { "const": "unadmitted" },
+            "scope": { "const": "explicit_1MiB_2MiB_with_observed_omission_only" },
+            "outcome": { "const": "tmpfs_effect_and_ipc_isolation_verified" }
+          }
+        }
+      }
+    },
+    "health_disabled_source_projection": {
+      "description": "Disconnected raw-only disabled-health subset after complete health-metadata-v1 validation; never reviewed-record or compiled-catalogue admission.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["health_disabled_contract", "health_disabled_outcomes"],
+      "properties": {
+        "health_disabled_contract": { "const": "health-metadata-v1" },
+        "health_disabled_outcomes": {
+          "type": "object", "additionalProperties": false,
+          "required": ["admission", "catalogue_admission", "outcome"],
+          "properties": {
+            "admission": { "const": "raw_source_only" },
+            "catalogue_admission": { "const": "unadmitted" },
+            "outcome": { "const": "disabled_health_suppression_verified" }
+          }
+        }
+      }
+    },
     "hostname_source_projection": {
       "description": "Disconnected current raw source subset; not reviewed-record or compiled-catalogue admission.",
       "type": "object",

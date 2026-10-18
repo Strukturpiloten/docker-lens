@@ -45,6 +45,9 @@ from native_hostname_proof import (
 from native_command_clear_proof import (
     CONTRACT as COMMAND_CLEAR_CONTRACT, FILENAME as COMMAND_CLEAR_FILENAME, read_command_clear_proof,
 )
+from native_shm_size_proof import (
+    CONTRACT as SHM_SIZE_CONTRACT, FILENAME as SHM_SIZE_FILENAME, read_shm_size_proof,
+)
 
 
 CAPABILITIES = (
@@ -537,6 +540,13 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         capture_dir / COMMAND_CLEAR_FILENAME, capture_dir, external_context))
     if command_clear_shapes != ["ClearCommand", "ClearEntrypoint"]:
         raise ValueError("incomplete command-clear source group")
+    shm_size = read_shm_size_proof(capture_dir / SHM_SIZE_FILENAME, capture_dir, external_context)
+    if (type(shm_size) is not dict
+            or set(shm_size) != {"contract", "capability_admission", "catalogue_admission"}
+            or type(shm_size["contract"]) is not str or shm_size["contract"] != "shm-size-v1"
+            or type(shm_size["capability_admission"]) is not list or shm_size["capability_admission"] != []
+            or type(shm_size["catalogue_admission"]) is not bool or shm_size["catalogue_admission"] is not False):
+        raise ValueError("incomplete shm-size source group")
 
     # Only these closed mappings follow the complete, validated native proof
     # files above. They extend raw lane evidence, never the reviewed catalogue.
@@ -559,11 +569,15 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         if all(shape in observed_port_shapes for shape in required):
             proof_shapes[capability] = list(required)
     # The private reader requires every context-bound case/effect/cleanup.
-    # Never promote inherited/disabled controls or arbitrary health markers.
+    # The unchanged complete reader also requires inherited-failure and disabled
+    # CLI/rendered controls. Only their complete validation permits this raw-only
+    # disabled singleton; its four legacy return/probe names stay unchanged.
     proof_shapes.update({
         "ContainerLabels": ["ContainerCreateLabels"],
         "HealthShell": ["ShellHealthcheck"],
         "HealthStartPeriod": ["HealthStartPeriodZero", "HealthStartPeriodPositive"],
+        "HealthDisabled": ["DisabledHealthcheck"],
+        "ShmSize": ["ShmSize"],
     })
     # Only the complete four-shape context/effect/cleanup protocol grants these
     # future raw groups. The historical 22 network markers grant no new group.
@@ -630,6 +644,15 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         "port_probes": port_probes,
         "health_metadata_contract": HEALTH_METADATA_CONTRACT,
         "health_metadata_probes": health_metadata_probes,
+        "health_disabled_contract": HEALTH_METADATA_CONTRACT,
+        "health_disabled_outcomes": {
+            **RAW_SOURCE_STATUS, "outcome": "disabled_health_suppression_verified",
+        },
+        "shm_size_contract": SHM_SIZE_CONTRACT,
+        "shm_size_outcomes": {
+            **RAW_SOURCE_STATUS, "scope": "explicit_1MiB_2MiB_with_observed_omission_only",
+            "outcome": "tmpfs_effect_and_ipc_isolation_verified",
+        },
         "network_attachment_contract": NETWORK_ATTACHMENT_CONTRACT,
         "network_attachment_probes": network_attachment_probes,
         "bind_relabel_contract": BIND_RELABEL_CONTRACT,

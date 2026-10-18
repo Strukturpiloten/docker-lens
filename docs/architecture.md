@@ -10,12 +10,29 @@ separately selects authenticated reviewed envelopes at Debian 34/56 and upstream
 [ADR 0023](decisions/0023-process-source-proof-wiring.md) adds mandatory hostname
 and command/entrypoint-clear source probes as canonical invocations 22 and 23.
 Both strict private readers must pass before any new group or public output.
-Current raw records contain 37/59 capabilities/shapes on Debian and 39/63
-upstream; these three process groups remain absent from compiled selection.
+These three process groups remain absent from compiled selection.
+[ADR 0024](decisions/0024-health-disabled-raw-source-projection.md) adds only the
+HealthDisabled/DisabledHealthcheck raw singleton after the unchanged complete
+health-metadata-v1 reader validates all four cases, including both inherited
+failing-health and disabled CLI/rendered controls. Its four legacy return/probe
+names remain unchanged. [ADR 0025](decisions/0025-shm-size-source-integration.md)
+adds only raw ShmSize after complete strict validation of the finite source proof.
+Current raw projection totals are Debian 39/61 and upstream 41/65; HealthDisabled,
+ShmSize and the three process groups remain outside compiled selection.
 The stable nineteen-argument emitter binds fixed direct-child proofs to existing
 independent harness context. Closed disconnected schema definitions expose only
 source-only/unadmitted status and fixed outcomes, never hostname/argv/IDs/times.
 Private v1 protocols, historical evidence, product APIs and renderers are unchanged.
+The additional disconnected `$defs.health_disabled_source_projection` contains
+only the fixed contract, source-only/unadmitted markers and
+`disabled_health_suppression_verified`, never health logs, sentinel payloads or
+timestamps. Its health producer and strict-reader behavior remain unchanged.
+The twenty-fourth ShmSize child runs in a new one-child cleanup-owner subshell;
+the original six-child block and first 23 invocations retain their bytes/order.
+The mandatory twelve-argument CLI reader runs even without public emission.
+The emitter requires an exact typed closed source-only return against independent
+context before mapping ShmSize; its public outcome exposes no actual defaults,
+IPC namespaces, IDs, argv or timestamps. Historical root acceptance stays intact.
 
 ## Data flow
 
@@ -165,7 +182,7 @@ and historical evidence remain unchanged. ADR 0018 selects authenticated source
 run `37788762974` at Debian 29/46 and upstream 30/48 for candidate rehearsal;
 ADR 0019 retains those groups and adds only the StopSignal singleton.
 Definitions or offline controls grant no native compatibility. Fresh
-authenticated exact-final-candidate twenty-three-test four-lane execution,
+authenticated exact-final-candidate twenty-four-test four-lane execution,
 independent review and the separate ADR 0012/0016/0018/0019 consumer gates remain
 required before ready/merge. No source run qualifies a changed candidate.
 

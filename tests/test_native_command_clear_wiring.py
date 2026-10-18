@@ -52,8 +52,8 @@ else:
     def test_twenty_third_registration_and_mandatory_independent_reader(self):
         harness = (ROOT / "scripts/native-conformance.sh").read_text()
         calls = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', harness, re.M)
-        self.assertEqual(len(calls), 23)
-        self.assertEqual(calls[-2:], [("native_hostname", "live_hostname_matches_engine"), (TARGET, TEST)])
+        self.assertEqual(len(calls), 24)
+        self.assertEqual(calls[21:23], [("native_hostname", "live_hostname_matches_engine"), (TARGET, TEST)])
         self.assertEqual(calls.count((TARGET, TEST)), 1)
         hostname_reader = harness.index('python3 "$script_dir/native_hostname_proof.py"')
         command = harness.index(f'"$(dirname "$0")/run-exact-native-test.sh" {TARGET} {TEST}')
@@ -167,6 +167,7 @@ else:
     def test_actual_harness_tail_requires_both_readers_before_public_emission(self):
         from test_native_command_clear_proof import fixture as command_fixture
         from test_native_hostname_proof import fixture as hostname_fixture
+        from test_native_shm_size_proof import fixture as shm_fixture
 
         harness = (ROOT / "scripts/native-conformance.sh").read_text()
         tail = harness.split('python3 "$script_dir/native_hostname_proof.py"', 1)[1].split(
@@ -175,7 +176,8 @@ else:
         tail = tail.replace('"$(dirname "$0")/run-exact-native-test.sh"', "command_wrapper")
         for lane in ("debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless"):
             for fault in ("none", "hostname_missing", "hostname_context", "command_missing",
-                          "command_effect", "command_cleanup", "native_failure"):
+                          "command_effect", "command_cleanup", "native_failure", "shm_missing",
+                          "shm_context", "shm_effect", "shm_cleanup", "shm_native_failure"):
                 with self.subTest(lane=lane, fault=fault), tempfile.TemporaryDirectory() as temporary:
                     root = Path(temporary)
                     hostname = hostname_fixture(lane)
@@ -184,40 +186,61 @@ else:
                     command = command_fixture(lane)
                     command["context"] = json.loads(json.dumps(context))
                     command["seed"]["image"] = context["fixture_image"]
+                    shm = shm_fixture(lane)
+                    shm["context"] = json.loads(json.dumps(context))
                     env = dict(os.environ, script_dir=str(ROOT / "scripts"), run_dir=str(root),
                                NATIVE_HOSTNAME_CANDIDATE_SHA=context["candidate_sha"],
                                NATIVE_COMMAND_CLEAR_CANDIDATE_SHA=context["candidate_sha"],
+                               NATIVE_SHM_SIZE_CANDIDATE_SHA=context["candidate_sha"],
                                run_id=context["run_id"], lane=lane, server_version=context["engine_release"],
                                api_version=context["rendering_api"], expected_mode=context["mode"],
                                installed_docker_package=context["docker_package"],
                                NATIVE_FIXTURE_IMAGE=context["fixture_image"], image=context["outer"]["image"],
                                NATIVE_OUTER_CONTAINER_ID=context["outer"]["id"],
                                NATIVE_BIND_RELABEL_DAEMON_UID=str(context["daemon_uid"]),
-                               TRACE=str(root / "trace"), STATUS="37" if fault == "native_failure" else "0")
+                               TRACE=str(root / "trace"), STATUS="37" if fault == "native_failure" else "0",
+                               SHM_STATUS="41" if fault == "shm_native_failure" else "0")
+                    env.pop("NATIVE_LIFECYCLE_CLEANUP_OWNER", None)
                     if fault == "hostname_context":
                         hostname["context"]["candidate_sha"] = "e" * 40
                     elif fault == "command_effect":
                         command["cases"][2]["containers"][1]["marker"] = SECRET
                     elif fault == "command_cleanup":
                         command["cleanup"]["uncertain"] = True
-                    for family, proof in (("hostname", hostname), ("command", command)):
+                    elif fault == "shm_context":
+                        shm["context"]["candidate_sha"] = "e" * 40
+                    elif fault == "shm_effect":
+                        shm["cases"][1]["containers"][1]["write_outcome"] = SECRET
+                    elif fault == "shm_cleanup":
+                        shm["cleanup"]["uncertain"] = True
+                    for family, proof in (("hostname", hostname), ("command", command), ("shm", shm)):
                         if fault != family + "_missing":
-                            path = root / ("hostname-v1.json" if family == "hostname" else "command-clear-v1.json")
+                            path = root / {"hostname": "hostname-v1.json", "command": "command-clear-v1.json",
+                                           "shm": "shm-size-v1.json"}[family]
                             path.write_text(json.dumps(proof))
                             path.chmod(0o600)
-                    script = ('set -euo pipefail\ncommand_wrapper() { printf "%s\\n" "$*" >> "$TRACE"; return "$STATUS"; }\n'
+                    script = ('set -euo pipefail\ncommand_wrapper() {\n'
+                              'if [[ $1 == native_shm_size ]]; then\n'
+                              '  [[ ${NATIVE_LIFECYCLE_CLEANUP_OWNER:-} == native_conformance_outer_v1 ]] || return 99\n'
+                              'else [[ -z ${NATIVE_LIFECYCLE_CLEANUP_OWNER:-} ]] || return 98; fi\n'
+                              'printf "%s\\n" "$*" >> "$TRACE"\n'
+                              'if [[ $1 == native_shm_size ]]; then return "$SHM_STATUS"; fi\nreturn "$STATUS"; }\n'
                               + tail + '\nprintf "public\\n" >> "$TRACE"\n')
                     result = subprocess.run(["bash", "-c", script], env=env, capture_output=True,
                                             text=True, timeout=5, check=False)
                     trace = root / "trace"
                     events = trace.read_text().splitlines() if trace.exists() else []
                     expected = [] if fault.startswith("hostname_") else [f"{TARGET} {TEST}"]
+                    if fault == "none" or fault.startswith("shm_"):
+                        expected.append("native_shm_size live_shm_size_effects_match_engine")
                     if fault == "none":
                         expected.append("public")
                     self.assertEqual(events, expected)
                     self.assertEqual(result.returncode == 0, fault == "none", result.stderr)
                     if fault == "native_failure":
                         self.assertEqual(result.returncode, 37)
+                    if fault == "shm_native_failure":
+                        self.assertEqual(result.returncode, 41)
                     self.assertNotIn(SECRET, result.stdout + result.stderr)
 
     def test_cleanup_delegation_is_not_success_and_is_not_retried(self):

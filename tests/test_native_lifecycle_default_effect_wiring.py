@@ -57,14 +57,14 @@ sys.exit(int(os.environ["STATUS"]))
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         invocation = f'"$(dirname "$0")/run-exact-native-test.sh" {TARGET} {TEST}'
         calls = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source, re.M)
-        self.assertEqual(len(calls), 23)
-        self.assertEqual(calls[-3], (TARGET, TEST))
+        self.assertEqual(len(calls), 24)
+        self.assertEqual(calls[20], (TARGET, TEST))
         self.assertEqual(source.count(invocation), 1)
         owner = source.index('(\n  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1\n')
         end = source.index('\n)\n', owner)
         owned_calls = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source[owner:end], re.M)
-        self.assertEqual(owned_calls, calls[-7:-1])
-        self.assertEqual(source.count("export NATIVE_LIFECYCLE_CLEANUP_OWNER="), 1)
+        self.assertEqual(owned_calls, calls[16:22])
+        self.assertEqual(source.count("export NATIVE_LIFECYCLE_CLEANUP_OWNER="), 2)
         self.assertLess(source.index("unset NATIVE_LIFECYCLE_CLEANUP_OWNER"), owner)
         for line in (f'export NATIVE_LIFECYCLE_DEFAULT_EFFECT_PROOF_PATH="$run_dir/{FILENAME}"',
                      'export NATIVE_LIFECYCLE_DEFAULT_EFFECT_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA'):
@@ -188,8 +188,8 @@ class DefaultEffectEvidenceTests(unittest.TestCase):
             self.assertEqual(record["lifecycle_outcomes"], {"admission": "raw_source_only", "catalogue_admission": "unadmitted", "probes": [
                 "stop_timeout_effective", "health_start_interval_not_effective_on_selected_api" if lane.startswith("debian11-")
                 else "health_start_interval_effective"]})
-            self.assertEqual(len(record["capability_outcome"]), 37 if lane.startswith("debian11-") else 39)
-            self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 59 if lane.startswith("debian11-") else 63)
+            self.assertEqual(len(record["capability_outcome"]), 39 if lane.startswith("debian11-") else 41)
+            self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 61 if lane.startswith("debian11-") else 65)
             for capability in ("StopTimeout", "HealthStartInterval"):
                 positive = capability != "HealthStartInterval" or not lane.startswith("debian11-")
                 self.assertEqual(capability in record["capability_outcome"], positive)

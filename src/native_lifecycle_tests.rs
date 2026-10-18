@@ -17,6 +17,9 @@ mod health_start_interval_boundary;
 #[path = "native_hostname_tests.rs"]
 mod hostname;
 
+#[path = "native_shm_size_tests.rs"]
+mod shm_size;
+
 const CONTRACT: &str = "lifecycle-v1";
 const FILENAME: &str = "lifecycle-v1.json";
 const CLEANUP_OWNER: &str = "native_conformance_outer_v1";

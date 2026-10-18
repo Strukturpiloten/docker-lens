@@ -2,13 +2,33 @@
 
 ## Unreleased
 
+- Integrate the separate ShmSize lifecycle child as mandatory native invocation
+  24 with its strict private proof gate and closed raw-only singleton. Preserve
+  the first 23 invocations, original six-child cleanup block, nineteen-argument
+  emitter, native producers/private readers and historical evidence. The new
+  one-child owner scope retains existing budgets and cleanup failure semantics.
+  Current combined raw totals are Debian 39 capabilities/61 shapes and upstream
+  41/65; compiled selection stays 34/56 and 36/60, with all new groups unselected.
+  Fresh 24-by-four native qualification, complete gates and actual consumers
+  remain required; prior passing campaign bytes do not qualify this emitter.
+
+- Project only the raw HealthDisabled/DisabledHealthcheck singleton after the
+  unchanged complete health-metadata-v1 proof validates inherited-failure and
+  disabled CLI/rendered controls as well as every prior context/effect/cleanup
+  check. Add a closed source-only/unadmitted public outcome, with no private
+  payloads or schema-root change. That health-only slice's raw totals were Debian 38 capabilities/
+  60 shapes and upstream 40/64; compiled selection remains 34/56 and 36/60.
+  Preserve the reader's four legacy shapes, all 23 native invocations, historical
+  evidence and pins. Fresh exact-final-candidate complete/native and actual
+  consumer gates remain required; no HealthDisabled admission is claimed.
+
 - Wire hostname and command/entrypoint-clear as mandatory canonical invocations
   22 and 23, preserving original order, deadlines and cleanup ownership. Require
   both complete context-bound private proofs before any new raw group/output;
-  expose only closed source-only/unadmitted outcomes. Current raw totals are
+  expose only closed source-only/unadmitted outcomes. At that source slice, raw totals were
   Debian 37 capabilities/59 shapes and upstream 39/63; compiled selection stays
   34/56 and 36/60. Historical 21-test campaign records and private v1 protocols
-  remain unchanged. Fresh final-edit complete, 23-test four-lane native and actual
+  remain unchanged. Fresh final-edit complete, 24-test four-lane native and actual
   consumer qualification remain required; no process-group admission is claimed.
 - Select ADR 0022's authenticated lifecycle source cohort for candidate rehearsal:
   complete StopTimeout, init, read-only-rootfs and tmpfs groups on all four exact
@@ -50,7 +70,7 @@
   every prior group and historical byte, at Debian 30 capabilities/47 shapes and
   upstream 31/49. Preserve absent-field rendering, Debian IPv6 negatives,
   HealthStartInterval withholding and unverified SELinux obligations. Fresh
-  final-candidate complete/twenty-three-test four-lane and all actual volume/bind/
+  final-candidate complete/twenty-four-test four-lane and all actual volume/bind/
   desired-external consumer gates still block ready/merge/main admission/release;
   no application or native-final-candidate qualification is claimed.
 

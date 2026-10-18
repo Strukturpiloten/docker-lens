@@ -115,8 +115,14 @@ capabilities/shapes and upstream **31/49**. ADR 0019 admits those exact sealed
 counts, retaining all prior fields/groups and adding only StopSignal. Counts
 and offline controls alone are expectations, never native proof. ADR 0022 later
 selects the reviewed lifecycle cohort at 34/56 and 36/60. ADR 0023 requires 23
-canonical invocations and extends current raw counts to 37/59 and 39/63 without
-selecting the three new process groups; the checkpoint counts above remain historical.
+canonical invocations; that process slice's raw counts were 37/59 and 39/63
+without selecting its three new groups. [ADR 0024](decisions/0024-health-disabled-raw-source-projection.md)
+separately derives only raw HealthDisabled after complete unchanged health-proof
+validation. [ADR 0025](decisions/0025-shm-size-source-integration.md) adds only
+raw ShmSize with mandatory invocation 24. Current combined raw totals are Debian
+39/61 and upstream 41/65 while compiled selection stays 34/56 and 36/60.
+HealthDisabled, ShmSize and the three process groups remain unselected;
+the checkpoint counts above remain historical.
 
 Local/main/reviewed-dispatch/release share `scripts/native-conformance.sh`; no
 consumer workflow or nineteen-argument caller changes. Other Lens products and

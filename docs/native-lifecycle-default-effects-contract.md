@@ -89,6 +89,6 @@ its three new groups. Legacy outcomes never add HealthStartInterval.
 
 No software/tool/runtime pin or pin location changes; existing Renovate ownership
 and extraction remain applicable. Final-edit complete gates, fresh authenticated
-exact-candidate twenty-three-test four-lane execution, independent review and
+exact-candidate twenty-four-test four-lane execution, independent review and
 required consumer rehearsals remain mandatory. Source/inert controls prove none
 of the outstanding genuine native gates.

@@ -41,7 +41,7 @@ representations retain their existing behavior.
 
 This is candidate pre-merge rehearsal admission. Production merge, main
 admission and release remain blocked until fresh exact-final-candidate complete
-and four-lane twenty-three-test native gates, fresh independently reviewed volume-only
+and four-lane twenty-four-test native gates, fresh independently reviewed volume-only
 consumer rehearsals of all six actual authored fixtures under
 [ADR 0012](docs/decisions/0012-candidate-volume-label-admission.md), and reviewed
 BoxFerry consumers of the actual Nextcloud/Supabase binds and desired external
@@ -52,11 +52,17 @@ and the other four lifecycle-family proofs are mandatory before raw evidence is
 emitted. [ADR 0021](docs/decisions/0021-lifecycle-raw-source-projection.md) projects
 complete finite StopTimeout/init/read-only-rootfs/tmpfs source groups on all lanes
 and HealthStartInterval only on upstream. [ADR 0023](docs/decisions/0023-process-source-proof-wiring.md)
-requires hostname and command/entrypoint-clear proofs and extends current raw
-records to 37/59 capabilities/shapes on Debian and 39/63 upstream, marked
+requires hostname and command/entrypoint-clear proofs. [ADR 0024](docs/decisions/0024-health-disabled-raw-source-projection.md)
+adds only HealthDisabled/DisabledHealthcheck after the existing complete
+health-metadata proof validates. [ADR 0025](docs/decisions/0025-shm-size-source-integration.md)
+adds the mandatory twenty-fourth ShmSize source probe and strict proof gate.
+Current raw projection totals are 39/61 capabilities/shapes on Debian and 41/65 upstream, marked
 `raw_source_only` with `catalogue_admission: unadmitted`. Historical raw bytes
 are preserved unchanged; ADR 0022 separately selects reviewed lifecycle envelopes
-at 34/56 and 36/60. Hostname and both clear groups remain unselected.
+at 34/56 and 36/60. Hostname, both clear groups, HealthDisabled and ShmSize remain unselected.
+The health reader's four legacy return/probe names and original 23 native invocations
+remain unchanged. ShmSize adds only the finite 1 MiB/2 MiB tmpfs-effect and private
+IPC-isolation source group with observed omission controls, never a promised default.
 Debian HealthStartInterval remains explicitly unsupported/not-effective;
 legacy unknown-field acceptance supplies no support. The source run passed all
 21 ordered native tests in each lane. Fresh exact-final-candidate native and

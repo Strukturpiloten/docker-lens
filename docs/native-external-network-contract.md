@@ -119,8 +119,14 @@ sealed candidate rehearsal, then using fifteen native invocations per lane.
 [ADR 0022](decisions/0022-reviewed-lifecycle-cohort.md) now selects the independently
 reviewed lifecycle cohort at Debian 34/56 and upstream 36/60.
 [ADR 0023](decisions/0023-process-source-proof-wiring.md) requires both process
-proofs before current raw counts extend to 37/59 and 39/63, without selecting
-their three new groups. Fresh exact-final-candidate twenty-three-test four-lane
+proofs; that process slice's raw counts were 37/59 and 39/63 without selecting
+its three new groups. [ADR 0024](decisions/0024-health-disabled-raw-source-projection.md)
+additionally derives only raw HealthDisabled after complete unchanged health-proof
+validation. [ADR 0025](decisions/0025-shm-size-source-integration.md) adds only
+the separate ShmSize source group and mandatory twenty-fourth invocation.
+Current combined raw totals are Debian 39/61 and upstream 41/65; HealthDisabled,
+ShmSize and the three process groups remain unselected. Fresh
+exact-final-candidate twenty-four-test four-lane
 execution, independent review and actual consumer gates remain required before
 ready/merge; source evidence does not qualify a changed candidate. No dependencies,
 software pins, operational images, workflow pins or Renovate extraction change.

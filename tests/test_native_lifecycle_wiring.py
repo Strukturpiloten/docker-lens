@@ -71,8 +71,8 @@ class LifecycleWiringTests(unittest.TestCase):
     def test_owner_token_is_scoped_to_canonical_invocation_and_no_new_emitter_argument(self):
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         invocations = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source, re.M)
-        self.assertEqual(len(invocations), 23)
-        self.assertEqual(invocations[-7:-1], [
+        self.assertEqual(len(invocations), 24)
+        self.assertEqual(invocations[16:22], [
             ("native_lifecycle", "live_lifecycle_matches_engine"),
             ("native_runtime_filesystem", "live_runtime_filesystem_matches_engine"),
             ("native_tmpfs_effect", "live_tmpfs_effects_match_engine"),
