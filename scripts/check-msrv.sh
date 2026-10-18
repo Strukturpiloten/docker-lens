@@ -15,7 +15,8 @@ print(version)
 PY
 )
 
-# rustup verifies the official Rust distribution; keep the advertised minimum
-# separate from the newer pinned lint/doc toolchain.
-rustup toolchain install "$msrv" --profile minimal
+# rustup verifies the official Rust distribution. Check the manifest's advertised
+# minimum explicitly, even when it matches the pinned lint/doc toolchain.
+# Install the compiler without updating the separately managed rustup executable.
+rustup toolchain install "$msrv" --profile minimal --no-self-update
 rustup run "$msrv" cargo check --all-targets --locked

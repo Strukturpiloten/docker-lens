@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Raise the minimum supported Rust version from 1.85.0 to 1.98.1, matching the
+  pinned development toolchain. Consumers must upgrade Rust before building.
 - Select ADR 0019's authenticated configured stop-signal source cohort for
   candidate rehearsal only: add the complete StopSignal singleton while retaining
   every prior group and historical byte, at Debian 30 capabilities/47 shapes and

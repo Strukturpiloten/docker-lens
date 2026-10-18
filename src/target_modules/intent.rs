@@ -168,13 +168,13 @@ impl TargetIntent {
                     return Err(IntentError::DuplicateVolumeLabel);
                 }
             }
-            if let TargetResource::Network(network) = resource {
-                if network.role == NetworkRole::ApplicationDefault {
-                    if default_network {
-                        return Err(IntentError::DuplicateDefaultNetwork);
-                    }
-                    default_network = true;
+            if let TargetResource::Network(network) = resource
+                && network.role == NetworkRole::ApplicationDefault
+            {
+                if default_network {
+                    return Err(IntentError::DuplicateDefaultNetwork);
                 }
+                default_network = true;
             }
             let identity = match resource {
                 TargetResource::Network(network) => &network.identity,
@@ -191,10 +191,9 @@ impl TargetIntent {
                 if let NetworkSource::External {
                     expected_driver, ..
                 } = &network.source
+                    && *expected_driver != NetworkDriver::Bridge
                 {
-                    if *expected_driver != NetworkDriver::Bridge {
-                        return Err(IntentError::InvalidNetworkDriver);
-                    }
+                    return Err(IntentError::InvalidNetworkDriver);
                 }
                 if let NetworkSource::Create(create) = &network.source {
                     if create.driver != NetworkDriver::Bridge {
@@ -380,10 +379,10 @@ impl TargetIntent {
                     return Err(IntentError::DuplicateMount);
                 }
                 for command in [&container.entrypoint, &container.command] {
-                    if let ImageCommand::Exec(arguments) = command {
-                        if arguments.is_empty() || arguments[0].bytes().is_empty() {
-                            return Err(IntentError::InvalidArgument);
-                        }
+                    if let ImageCommand::Exec(arguments) = command
+                        && (arguments.is_empty() || arguments[0].bytes().is_empty())
+                    {
+                        return Err(IntentError::InvalidArgument);
                     }
                 }
                 if matches!(&container.command, ImageCommand::Clear)

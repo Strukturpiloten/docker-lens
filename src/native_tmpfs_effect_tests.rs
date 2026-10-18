@@ -20,7 +20,7 @@ const OPTIONS: [(u64, u32, bool); 4] = [
 fn create_tmpfs(run: &mut HealthRun, index: usize) {
     let (size, mode, read_only) = OPTIONS[index / 2];
     assert_eq!(run.inspect(&run.names[index], false).0, 404);
-    if index % 2 == 0 {
+    if index.is_multiple_of(2) {
         // CLI is independently authored, not generated from a rendered request.
         let specification = format!(
             "type=tmpfs,destination={TARGET},tmpfs-size={size},tmpfs-mode={mode:o}{}",
@@ -244,7 +244,7 @@ fn observe_tmpfs(run: &mut HealthRun, index: usize, base: &Value) -> Value {
         "saturation_bytes":if read_only {0} else {size}})
     );
     configured_tmpfs(run, index, base);
-    json!({"role":if index % 2 == 0 {"oracle"} else {"rendered"},
+    json!({"role":if index.is_multiple_of(2) {"oracle"} else {"rendered"},
         "id":id,"name":run.names[index],"owner":run.run,"image_id":base["id"],
         "configuration":{"type":"tmpfs","target":TARGET,"size_bytes":size,"mode":mode,"read_only":read_only},
         "effect":effect})
