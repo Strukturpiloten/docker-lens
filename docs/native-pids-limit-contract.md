@@ -3,11 +3,36 @@
 The prepared `pids-limit-v1` child of the existing lifecycle helper is mandatory
 private invocation 27 under [ADR 0027](decisions/0027-pids-limit-private-qualification.md).
 The canonical harness and unchanged nineteen-argument emitter require its strict
-private proof even without public PIDs projection. The producer, reader and
+private proof even without public PIDs projection. The private protocol, reader and
 16 KiB custody limit remain unchanged. This is source-only integration for
 #39/#31/#3, not passing native qualification, catalogue admission or a compatibility
 claim. The primary owns complete/four-lane gates. Product output stays inert;
 no pin, public API, schema or historical record changes.
+
+## Failure localization and canonical mapped paths
+
+[ADR 0029](decisions/0029-pids-failure-localization.md) supersedes only ADR 0027's
+absence-of-PIDs-stage clause and repairs the independently demonstrated
+empty-relative-path representation seam: both validated joined paths use
+canonical components, matching the unchanged strict reader. Controller selection,
+membership coordinates and ownership predicates do not change. This is not an
+established cause of the failed native campaign. Actual closed case/role/operation stages precede
+commands and each of the four outer/leaf controller resolutions. The wrapper keeps
+the last valid stage before the first panic or cleanup boundary and only a single
+matching resolver-refusal classification. Native stderr, paths, IDs, namespace
+values, memberships and command payloads remain private. Refusal categories
+distinguish no controller mount, no common mount-root coordinates, failed owned
+descendancy and multiple fully matching mounts; they never translate paths or
+relax the original exact-one predicate. Diagnostics are not proof or a root cause.
+
+Failed exact-source run 39165508951 (attempt 1, be19402cccb94e20659acb04b1c267efe4390250)
+passed 26 prior invocations per lane then failed PIDs 27 on all four: 104 prior
+passes and four failed attempts, with zero artifacts and zero cleanup-dependent
+lane successes. At that source, rootful first panics were shared command-success
+542:9; rootless first panics were resolver 360:5. health_metadata_context was only
+the last shared marker, not a demonstrated phase. No private proof/raw output was
+available. Those failures remain unqualified; this change adds localization, not
+a speculative namespace/controller fix. Host capture remains deferred.
 
 ## Six independently authored cases
 

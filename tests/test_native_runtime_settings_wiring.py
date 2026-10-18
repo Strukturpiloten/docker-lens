@@ -56,9 +56,10 @@ else:
         first24 = ORIGINAL_CALLS + [("native_shm_size", "live_shm_size_effects_match_engine")]
         self.assertEqual(calls[:26], first24 + [("native_" + family, "live_" + family + "_match_engine")
                                          for family in FAMILIES])
-        self.assertEqual(calls[26:], [("native_pids_limit", "live_pids_limit_effects_match_engine")])
+        self.assertEqual(calls[26:27], [("native_pids_limit", "live_pids_limit_effects_match_engine")])
+        self.assertEqual(calls[27:], [("native_nofile", "live_nofile_limits_and_effects_match_engine")])
         prefix = '(\n  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1\n'
-        self.assertEqual(source.count(prefix), 5)
+        self.assertEqual(source.count(prefix), 6)
         previous = source.index('python3 "$script_dir/native_shm_size_proof.py"')
         for family in FAMILIES:
             call = f'"$(dirname "$0")/run-exact-native-test.sh" native_{family} live_{family}_match_engine'

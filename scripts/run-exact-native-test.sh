@@ -7,7 +7,7 @@ if [[ $# != 2 || ! $1 =~ ^[a-z_]+$ || ! $2 =~ ^[a-z_]+$ ]]; then
 fi
 target=$1
 test_name=$2
-if [[ $target == native_target || $target == native_volume || $target == native_network || $target == native_volume_label || $target == native_identity || $target == native_port || $target == native_health_metadata || $target == native_network_attachment || $target == native_bind_relabel || $target == native_external_network || $target == native_stop_signal || $target == native_lifecycle || $target == native_runtime_filesystem || $target == native_tmpfs_effect || $target == native_health_start_interval_boundary || $target == native_lifecycle_default_effect || $target == native_hostname || $target == native_command_clear || $target == native_shm_size || $target == native_supplementary_groups || $target == native_kernel_settings || $target == native_pids_limit ]]; then
+if [[ $target == native_target || $target == native_volume || $target == native_network || $target == native_volume_label || $target == native_identity || $target == native_port || $target == native_health_metadata || $target == native_network_attachment || $target == native_bind_relabel || $target == native_external_network || $target == native_stop_signal || $target == native_lifecycle || $target == native_runtime_filesystem || $target == native_tmpfs_effect || $target == native_health_start_interval_boundary || $target == native_lifecycle_default_effect || $target == native_hostname || $target == native_command_clear || $target == native_shm_size || $target == native_supplementary_groups || $target == native_kernel_settings || $target == native_pids_limit || $target == native_nofile ]]; then
   # Native target tests need crate-private, test-only capability claims.
   # It is a library unit test; no public constructor is exposed for the harness.
   cargo_target=(--lib)
@@ -34,6 +34,8 @@ if [[ $target == native_target || $target == native_volume || $target == native_
     selected="native_health_metadata_tests::lifecycle::kernel_settings::$test_name"
   elif [[ $target == native_pids_limit ]]; then
     selected="native_health_metadata_tests::lifecycle::pids_limit::$test_name"
+  elif [[ $target == native_nofile ]]; then
+    selected="native_health_metadata_tests::lifecycle::nofile::$test_name"
   elif [[ $target == native_shm_size ]]; then
     selected="native_health_metadata_tests::lifecycle::shm_size::$test_name"
   fi
@@ -61,6 +63,9 @@ run_deadline_epoch=$(( $(date +%s) + 180 ))
 if [[ $target == native_pids_limit ]]; then
   export NATIVE_PIDS_LIMIT_DEADLINE_EPOCH=$run_deadline_epoch
 fi
+if [[ $target == native_nofile ]]; then
+  export NATIVE_NOFILE_DEADLINE_EPOCH=$run_deadline_epoch
+fi
 result=$(NATIVE_NETWORK_TEST_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_HEALTH_METADATA_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_STOP_SIGNAL_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_LIFECYCLE_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_RUNTIME_FILESYSTEM_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_TMPFS_EFFECT_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_HEALTH_START_INTERVAL_BOUNDARY_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_LIFECYCLE_DEFAULT_EFFECT_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_HOSTNAME_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_COMMAND_CLEAR_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_SHM_SIZE_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_SUPPLEMENTARY_GROUPS_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_KERNEL_SETTINGS_DEADLINE_EPOCH=$run_deadline_epoch timeout 180 cargo test --locked "${cargo_target[@]}" -- --ignored --exact "$selected" 2>&1) || run_status=$?
 # Only libtest's numeric summary is safe to print. Test and compiler output can
 # contain protected native values, socket payloads, or authored secrets.
@@ -86,7 +91,7 @@ stop_signal_causal_marker=
 lifecycle_causal_marker=
 lifecycle_stage=
 lifecycle_handoff=
-if [[ $target == native_lifecycle || $target == native_runtime_filesystem || $target == native_tmpfs_effect || $target == native_health_start_interval_boundary || $target == native_lifecycle_default_effect || $target == native_hostname || $target == native_shm_size || $target == native_supplementary_groups || $target == native_kernel_settings || $target == native_pids_limit ]]; then
+if [[ $target == native_lifecycle || $target == native_runtime_filesystem || $target == native_tmpfs_effect || $target == native_health_start_interval_boundary || $target == native_lifecycle_default_effect || $target == native_hostname || $target == native_shm_size || $target == native_supplementary_groups || $target == native_kernel_settings || $target == native_pids_limit || $target == native_nofile ]]; then
   if [[ $target == native_lifecycle ]]; then
     marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: lifecycle_(context|cleanup|cleanup_unverified|evidence)$' <<<"$result" | tail -n 1 || true)
     lifecycle_causal_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: lifecycle_(context|cleanup|cleanup_unverified|evidence)$' <<<"$result" | awk '/^DOCKERLENS_NATIVE_CHECK: lifecycle_cleanup(_unverified)?$/ { exit } { last=$0 } END { if (last != "") print last }' || true)
@@ -116,7 +121,7 @@ if [[ $target == native_shm_size ]]; then
   if [[ -n $shm_marker && $marker != 'DOCKERLENS_NATIVE_CHECK: lifecycle_cleanup_unverified' ]]; then marker=$shm_marker; fi
   lifecycle_causal_marker=$(awk '/^thread .* panicked at / || /^DOCKERLENS_NATIVE_CHECK: shm_size_cleanup$/ { exit } /^DOCKERLENS_NATIVE_CHECK: shm_size_(context|seed|effects|capture|proof)$/ { last=$0 } END { if (last != "") print last }' <<<"$result")
 fi
-if [[ $target == native_supplementary_groups || $target == native_kernel_settings ]]; then
+if [[ $target == native_supplementary_groups || $target == native_kernel_settings || $target == native_nofile ]]; then
   family=${target#native_}
   family_marker=$(grep -Eo "^DOCKERLENS_NATIVE_CHECK: ${family}_(context|effects|capture|cleanup|proof)$" <<<"$result" | tail -n 1 || true)
   if [[ -n $family_marker && $marker != 'DOCKERLENS_NATIVE_CHECK: lifecycle_cleanup_unverified' ]]; then marker=$family_marker; fi
@@ -223,13 +228,25 @@ if [[ $target == native_command_clear ]]; then
     if (( run_status == 0 )); then run_status=1; fi
   fi
 fi
+pids_diagnostics=
+if [[ $target == native_pids_limit ]]; then
+  pids_diagnostics=$(awk \
+    -v stages='^DOCKERLENS_NATIVE_PIDS_STAGE: (case=context role=observer stage=(context|image|outer_observer|daemon_identity|outer_pids_resolve|outer_memory_resolve|acquisition|final_snapshots|proof)|case=(finite16|finite64|unlimited) role=(oracle|rendered) stage=(preflight|create|start|inspect|private_identity|baseline_scan|leaf_pids_resolve|leaf_memory_resolve|baseline_controller|work_start|held_scan|held_controller|release|restored_scan|restored_controller|final_inspect))$' \
+    -v reasons='^DOCKERLENS_NATIVE_PIDS_RESOLVE: reason=(no_controller_mount|root_coordinate_mismatch|outside_owned_descendant|multiple_eligible_mounts)$' \
+    '/^thread .* panicked at / || /^DOCKERLENS_NATIVE_CHECK: lifecycle_cleanup(_unverified)?$/ || /^DOCKERLENS_NATIVE_LIFECYCLE_CLEANUP:/ { exit }
+     $0 ~ stages { stage=$0; reason=""; seen=0; next }
+     $0 ~ reasons && stage ~ /stage=(outer_pids_resolve|outer_memory_resolve|leaf_pids_resolve|leaf_memory_resolve)$/ {
+       seen++; reason=(seen == 1 ? $0 : "")
+     }
+     END { if (stage != "") print stage; if (reason != "") print reason }' <<<"$result")
+fi
 case $target in
   native_command_clear)
     panic_site=$(awk '/^thread .* panicked at / { print; exit }' <<<"$result" | sed -nE \
       "s/^thread '${selected}'( \\([0-9]{1,10}\\))? panicked at src\\/(native_command_clear_tests|native_health_metadata_tests)\\.rs:([1-9][0-9]{0,5}):([1-9][0-9]{0,3}):$/DOCKERLENS_NATIVE_PANIC: source=\\2 line=\\3 column=\\4/p")
     if [[ -z $panic_site ]]; then panic_site='DOCKERLENS_NATIVE_PANIC: source=native_command_clear_tests location=unavailable'; fi
     ;;
-  native_lifecycle | native_runtime_filesystem | native_tmpfs_effect | native_health_start_interval_boundary | native_lifecycle_default_effect | native_hostname | native_shm_size | native_supplementary_groups | native_kernel_settings | native_pids_limit)
+  native_lifecycle | native_runtime_filesystem | native_tmpfs_effect | native_health_start_interval_boundary | native_lifecycle_default_effect | native_hostname | native_shm_size | native_supplementary_groups | native_kernel_settings | native_pids_limit | native_nofile)
     # The first panic is primary even when later bounded cleanup also fails.
     # Never project arbitrary panic payloads, paths, native IDs or timestamps.
     lifecycle_source=native_lifecycle_tests
@@ -242,6 +259,7 @@ case $target in
     if [[ $target == native_supplementary_groups ]]; then lifecycle_source=native_supplementary_groups_tests; fi
     if [[ $target == native_kernel_settings ]]; then lifecycle_source=native_kernel_settings_tests; fi
     if [[ $target == native_pids_limit ]]; then lifecycle_source=native_pids_limit_tests; fi
+    if [[ $target == native_nofile ]]; then lifecycle_source=native_nofile_tests; fi
     panic_site=$(awk '/^thread .* panicked at / { print; exit }' <<<"$result" | sed -nE \
       "s/^thread '${selected}'( \([0-9]{1,10}\))? panicked at src\/(${lifecycle_source}|native_lifecycle_tests|native_health_metadata_tests)\.rs:([1-9][0-9]{0,5}):([1-9][0-9]{0,3}):$/DOCKERLENS_NATIVE_PANIC: source=\2 line=\3 column=\4/p")
     if [[ -z $panic_site ]]; then panic_site="DOCKERLENS_NATIVE_PANIC: source=$lifecycle_source location=unavailable"; fi
@@ -304,6 +322,7 @@ case $target in
 esac
 if (( run_status != 0 )); then
   echo "required native test $target::$test_name failed (exit $run_status)" >&2
+  if [[ -n $pids_diagnostics ]]; then printf '%s\n' "$pids_diagnostics" >&2; fi
   if [[ -n $port_causal_marker && $port_causal_marker != "$marker" ]]; then echo "$port_causal_marker" >&2; fi
   if [[ -n $marker ]]; then echo "$marker" >&2; fi
   if [[ -n $lifecycle_causal_marker && $lifecycle_causal_marker != "$marker" ]]; then echo "$lifecycle_causal_marker" >&2; fi
@@ -331,6 +350,7 @@ if (( run_status != 0 )); then
 fi
 if ! grep -Eq '^test result: ok\. 1 passed; 0 failed; 0 ignored; 0 measured; [0-9]+ filtered out;' <<<"$result"; then
   echo "required native test $target::$test_name did not execute exactly once (exit $run_status)" >&2
+  if [[ -n $pids_diagnostics ]]; then printf '%s\n' "$pids_diagnostics" >&2; fi
   if [[ -n $summary ]]; then
     echo "$summary" >&2
   fi

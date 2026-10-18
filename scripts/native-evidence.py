@@ -59,6 +59,7 @@ from native_kernel_settings_proof import (
 from native_pids_limit_proof import (
     FILENAME as PIDS_LIMIT_FILENAME, SCOPE as PIDS_LIMIT_SCOPE, read_pids_limit_proof,
 )
+from native_nofile_proof import FILENAME as NOFILE_FILENAME, read_nofile_proof
 
 
 CAPABILITIES = (
@@ -585,6 +586,14 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
             or type(pids_limit["catalogue_admission"]) is not bool or pids_limit["catalogue_admission"] is not False
             or type(pids_limit["scope"]) is not str or pids_limit["scope"] != PIDS_LIMIT_SCOPE):
         raise ValueError("incomplete pids-limit private qualification")
+
+    nofile = read_nofile_proof(capture_dir / NOFILE_FILENAME, capture_dir, external_context)
+    if (type(nofile) is not dict
+            or set(nofile) != {"contract", "capability_admission", "catalogue_admission"}
+            or type(nofile["contract"]) is not str or nofile["contract"] != "nofile-v1"
+            or type(nofile["capability_admission"]) is not list or nofile["capability_admission"] != []
+            or type(nofile["catalogue_admission"]) is not bool or nofile["catalogue_admission"] is not False):
+        raise ValueError("incomplete nofile private qualification")
 
     # Only these closed mappings follow the complete, validated native proof
     # files above. They extend raw lane evidence, never the reviewed catalogue.

@@ -52,8 +52,9 @@ else:
     def test_twenty_third_registration_and_mandatory_independent_reader(self):
         harness = (ROOT / "scripts/native-conformance.sh").read_text()
         calls = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', harness, re.M)
-        self.assertEqual(len(calls), 27)
-        self.assertEqual(calls[26:], [("native_pids_limit", "live_pids_limit_effects_match_engine")])
+        self.assertEqual(len(calls), 28)
+        self.assertEqual(calls[26:27], [("native_pids_limit", "live_pids_limit_effects_match_engine")])
+        self.assertEqual(calls[27:], [("native_nofile", "live_nofile_limits_and_effects_match_engine")])
         self.assertEqual(calls[21:23], [("native_hostname", "live_hostname_matches_engine"), (TARGET, TEST)])
         self.assertEqual(calls.count((TARGET, TEST)), 1)
         hostname_reader = harness.index('python3 "$script_dir/native_hostname_proof.py"')
@@ -172,6 +173,7 @@ else:
         from test_native_supplementary_groups_proof import fixture as supplementary_fixture
         from test_native_kernel_settings_proof import fixture as kernel_fixture
         from test_native_pids_limit_proof import fixture as pids_fixture
+        from test_native_nofile_proof import fixture as nofile_fixture
 
         harness = (ROOT / "scripts/native-conformance.sh").read_text()
         tail = harness.split('python3 "$script_dir/native_hostname_proof.py"', 1)[1].split(
@@ -203,6 +205,8 @@ else:
                     kernel["context"] = json.loads(json.dumps(context))
                     pids = pids_fixture(lane)
                     pids["context"] = json.loads(json.dumps(context))
+                    nofile = nofile_fixture(lane)
+                    nofile["context"] = json.loads(json.dumps(context))
                     env = dict(os.environ, script_dir=str(ROOT / "scripts"), run_dir=str(root),
                                NATIVE_HOSTNAME_CANDIDATE_SHA=context["candidate_sha"],
                                NATIVE_COMMAND_CLEAR_CANDIDATE_SHA=context["candidate_sha"],
@@ -210,6 +214,7 @@ else:
                                NATIVE_SUPPLEMENTARY_GROUPS_CANDIDATE_SHA=context["candidate_sha"],
                                NATIVE_KERNEL_SETTINGS_CANDIDATE_SHA=context["candidate_sha"],
                                NATIVE_PIDS_LIMIT_CANDIDATE_SHA=context["candidate_sha"],
+                               NATIVE_NOFILE_CANDIDATE_SHA=context["candidate_sha"],
                                run_id=context["run_id"], lane=lane, server_version=context["engine_release"],
                                api_version=context["rendering_api"], expected_mode=context["mode"],
                                installed_docker_package=context["docker_package"],
@@ -255,12 +260,13 @@ else:
                     elif fault == "pids_cleanup":
                         pids["cleanup"]["uncertain"] = True
                     for family, proof in (("hostname", hostname), ("command", command), ("shm", shm),
-                                          ("supplementary", supplementary), ("kernel", kernel), ("pids", pids)):
+                                          ("supplementary", supplementary), ("kernel", kernel), ("pids", pids), ("nofile", nofile)):
                         if fault != family + "_missing":
                             path = root / {"hostname": "hostname-v1.json", "command": "command-clear-v1.json",
                                            "shm": "shm-size-v1.json",
                                            "supplementary": "supplementary-groups-v1.json",
-                                           "kernel": "kernel-settings-v1.json", "pids": "pids-limit-v1.json"}[family]
+                                           "kernel": "kernel-settings-v1.json", "pids": "pids-limit-v1.json",
+                                           "nofile": "nofile-v1.json"}[family]
                             serialization = {"separators": (",", ":")} if family == "pids" else {}
                             path.write_text(json.dumps(proof, **serialization))
                             path.chmod(0o600)
@@ -272,7 +278,7 @@ else:
                               'case $1 in native_shm_size) return "$SHM_STATUS";;\n'
                               'native_supplementary_groups) return "$SUPPLEMENTARY_STATUS";;\n'
                               'native_kernel_settings) return "$KERNEL_STATUS";;\n'
-                              'native_pids_limit) return "$PIDS_STATUS";; esac\nreturn "$STATUS"; }\n'
+                              'native_pids_limit) return "$PIDS_STATUS";; native_nofile) return 0;; esac\nreturn "$STATUS"; }\n'
                               + tail + '\nprintf "public\\n" >> "$TRACE"\n')
                     result = subprocess.run(["bash", "-c", script], env=env, capture_output=True,
                                             text=True, timeout=5, check=False)
@@ -288,6 +294,7 @@ else:
                     if fault == "none" or fault.startswith("pids_"):
                         expected.append("native_pids_limit live_pids_limit_effects_match_engine")
                     if fault == "none":
+                        expected.append("native_nofile live_nofile_limits_and_effects_match_engine")
                         expected.append("public")
                     self.assertEqual(events, expected)
                     self.assertEqual(result.returncode == 0, fault == "none", result.stderr)

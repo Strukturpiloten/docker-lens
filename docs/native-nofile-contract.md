@@ -1,8 +1,10 @@
 # Diagonal nofile source-only contract
 
-`nofile-v1` is privately registered and compiled source preparation for DockerLens
-#39, outside the canonical twenty-seven-invocation harness and the new PIDs
-integration. It defines neither a passing native lane nor capability support;
+`nofile-v1` is mandatory private invocation 28 for DockerLens #39 under
+[ADR 0028](decisions/0028-nofile-private-qualification.md). The canonical harness
+and unchanged nineteen-argument emitter require its existing strict proof, also
+without public emission. This source-only wiring adds no public nofile projection.
+It defines neither a passing native lane nor capability support;
 native qualification remains unverified. Primary integration owns complete gates
 and fresh exact-candidate four-lane native qualification. No raw projection,
 catalogue selection, emitter ABI, product API, version or schema is changed.
@@ -164,15 +166,14 @@ context and incomplete families refuse the entire proof. Success prints nothing;
 refusal emits only a fixed private-value-free message. Raw errors, paths,
 descriptor reports, IDs, inode values and argv remain private.
 
-Primary owns additive shared custody integration: `ProofTarget.publish_bounded`
+This wiring reuses existing shared custody integration: `ProofTarget.publish_bounded`
 and `read_private_proof(..., max_bytes=...)` retain identical held-directory,
 exclusive no-follow, owner/mode, single-link and stable-readback controls. Their
 old default remains16KiB; only nofile explicitly opts into512KiB. This does not
 enlarge command stdout65550/stderr8192, API bodies, ordinary bytes, requests,
-workload, deadlines or native admission. The source-only worktree depends on
-that approved shared seam but does not implement or copy it. Its forwarding
-test mocks the seam contract only; actual shared-custody regression coverage
-and Rust compilation remain primary integration responsibilities.
+workload, deadlines or native admission. This wiring does not change or copy
+that shared seam. Complete shared-custody regression coverage and Rust compilation
+remain primary integration responsibilities; mocked controls are not native proof.
 
 Each of eight witnesses has259 owned nodes. With baseline≤16 and the four
 case-specific held caps, the complete proof has at most2072 owned nodes and2240

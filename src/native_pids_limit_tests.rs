@@ -16,6 +16,121 @@ const PIDS_CAPTURE_CALLS: usize = 16;
 const PIDS_CAPTURE_BYTES: usize = 512 * 1024;
 const PIDS_PROOF_BYTES: usize = 16 * 1024;
 
+// Source-local stopping points, not proof outcomes or native values.
+#[derive(Clone, Copy)]
+enum PidsOperation {
+    Context,
+    Image,
+    OuterObserver,
+    DaemonIdentity,
+    OuterPidsResolve,
+    OuterMemoryResolve,
+    Preflight,
+    Create,
+    Start,
+    Inspect,
+    PrivateIdentity,
+    BaselineScan,
+    LeafPidsResolve,
+    LeafMemoryResolve,
+    BaselineController,
+    WorkStart,
+    HeldScan,
+    HeldController,
+    Release,
+    RestoredScan,
+    RestoredController,
+    FinalInspect,
+    Acquisition,
+    FinalSnapshots,
+    Proof,
+}
+
+impl PidsOperation {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Context => "context",
+            Self::Image => "image",
+            Self::OuterObserver => "outer_observer",
+            Self::DaemonIdentity => "daemon_identity",
+            Self::OuterPidsResolve => "outer_pids_resolve",
+            Self::OuterMemoryResolve => "outer_memory_resolve",
+            Self::Preflight => "preflight",
+            Self::Create => "create",
+            Self::Start => "start",
+            Self::Inspect => "inspect",
+            Self::PrivateIdentity => "private_identity",
+            Self::BaselineScan => "baseline_scan",
+            Self::LeafPidsResolve => "leaf_pids_resolve",
+            Self::LeafMemoryResolve => "leaf_memory_resolve",
+            Self::BaselineController => "baseline_controller",
+            Self::WorkStart => "work_start",
+            Self::HeldScan => "held_scan",
+            Self::HeldController => "held_controller",
+            Self::Release => "release",
+            Self::RestoredScan => "restored_scan",
+            Self::RestoredController => "restored_controller",
+            Self::FinalInspect => "final_inspect",
+            Self::Acquisition => "acquisition",
+            Self::FinalSnapshots => "final_snapshots",
+            Self::Proof => "proof",
+        }
+    }
+}
+
+fn pids_stage(index: Option<usize>, operation: PidsOperation) {
+    let (case, role) = if let Some(index) = index {
+        assert!(index < 6, "closed PID diagnostic case");
+        (
+            PIDS_CASES[index / 2].0,
+            if index.is_multiple_of(2) {
+                "oracle"
+            } else {
+                "rendered"
+            },
+        )
+    } else {
+        ("context", "observer")
+    };
+    eprintln!(
+        "DOCKERLENS_NATIVE_PIDS_STAGE: case={case} role={role} stage={}",
+        operation.label()
+    );
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum PidsResolutionFailure {
+    NoControllerMount,
+    RootCoordinateMismatch,
+    OutsideOwnedDescendant,
+    MultipleEligibleMounts,
+}
+
+impl PidsResolutionFailure {
+    const fn label(&self) -> &'static str {
+        match self {
+            Self::NoControllerMount => "no_controller_mount",
+            Self::RootCoordinateMismatch => "root_coordinate_mismatch",
+            Self::OutsideOwnedDescendant => "outside_owned_descendant",
+            Self::MultipleEligibleMounts => "multiple_eligible_mounts",
+        }
+    }
+}
+
+fn pids_resolution_failure(
+    eligible_mount: bool,
+    rooted_mount: bool,
+    candidates: usize,
+) -> Option<PidsResolutionFailure> {
+    match candidates {
+        1 => None,
+        2.. => Some(PidsResolutionFailure::MultipleEligibleMounts),
+        _ if !eligible_mount => Some(PidsResolutionFailure::NoControllerMount),
+        _ if !rooted_mount => Some(PidsResolutionFailure::RootCoordinateMismatch),
+        _ => Some(PidsResolutionFailure::OutsideOwnedDescendant),
+    }
+}
+
 // Authored from the finite protocol, not copied from an oracle implementation.
 // A one-line worker gives its only fork site a fixed diagnostic line number.
 const PIDS_WORKER: &str = "set -u; LC_ALL=C; export LC_ALL; n=0; trap 'code=$?; printf \"EXIT %s %s %s\\n\" \"$$\" \"$code\" \"$n\"; IFS= read -r release; [ \"$release\" = RELEASE ] || exit 73' EXIT; printf 'READY %s\\n' \"$$\"; IFS= read -r start; [ \"$start\" = START ] || exit 74; while [ \"$n\" -lt 32 ]; do n=$((n+1)); printf 'TRY %s\\n' \"$n\"; (trap - EXIT; IFS= read -r held <&5) & printf 'CHILD %s\\n' \"$!\"; done; exit 0";
@@ -325,6 +440,8 @@ fn pids_resolve(
     let (outer_kind, owner) = member(outer);
     assert!(kind == outer_kind, "same actual controller generation");
     let mut candidates = Vec::new();
+    let mut eligible_mount = false;
+    let mut rooted_mount = false;
     for line in lines.iter().filter_map(|line| line.strip_prefix("M ")) {
         let (left, right) = line
             .split_once(" - ")
@@ -342,6 +459,7 @@ fn pids_resolve(
         {
             continue;
         }
+        eligible_mount = true;
         let root = pids_safe_path(fields[3]);
         let mount = pids_safe_path(fields[4]);
         let selected_path = pids_safe_path(&selected);
@@ -350,12 +468,18 @@ fn pids_resolve(
             selected_path.strip_prefix(&root),
             owner_path.strip_prefix(&root),
         ) {
-            let path = mount.join(leaf);
-            let outer_path = mount.join(parent);
+            rooted_mount = true;
+            // Joining an empty suffix retains a separator; the private reader requires
+            // canonical path strings even when the owner is the mount root.
+            let path: PathBuf = mount.join(leaf).components().collect();
+            let outer_path: PathBuf = mount.join(parent).components().collect();
             if (!descendant || path != outer_path) && path.starts_with(&outer_path) {
                 candidates.push(json!({"kind":if tail[0] == "cgroup2" {"v2"} else {"v1"},"mount_id":pids_u64(fields[0]),"root":fields[3],"mountpoint":fields[4],"membership":selected,"path":path,"outer_membership":owner,"outer_path":outer_path,"inode":0,"device":0}));
             }
         }
+    }
+    if let Some(reason) = pids_resolution_failure(eligible_mount, rooted_mount, candidates.len()) {
+        eprintln!("DOCKERLENS_NATIVE_PIDS_RESOLVE: reason={}", reason.label());
     }
     assert!(
         candidates.len() == 1,
@@ -921,16 +1045,20 @@ fn live_pids_limit_effects_match_engine() {
     run.attempted = vec![false; 6];
     let owner = BoundOuterCleanupOwner::bind(&run);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        pids_stage(None, PidsOperation::Context);
         let daemon_uid = run.context();
+        pids_stage(None, PidsOperation::Image);
         let image = image_snapshot(&run);
         assert!(
             image["config"]["Volumes"].is_null() || image["config"]["Volumes"] == json!({}),
             "no automatic borrowed volumes"
         );
+        pids_stage(None, PidsOperation::OuterObserver);
         let context = pids_lines(
             pids_shell(&run, PIDS_OUTER_CONTEXT, &[]),
             &["PIDNS", "MNTNS", "CGNS", "M", "S", "D"],
         );
+        pids_stage(None, PidsOperation::DaemonIdentity);
         let daemon: Vec<_> = pids_field(&context, "D").split_whitespace().collect();
         assert!(daemon.len() >= 4, "observed daemon namespace chain");
         assert!(
@@ -943,7 +1071,9 @@ fn live_pids_limit_effects_match_engine() {
             .iter()
             .filter_map(|line| line.strip_prefix("S ").map(str::to_owned))
             .collect();
+        pids_stage(None, PidsOperation::OuterPidsResolve);
         let outer_pids = pids_resolve(&context, &outer_members, "pids", &outer_members, false);
+        pids_stage(None, PidsOperation::OuterMemoryResolve);
         let outer_memory = pids_resolve(&context, &outer_members, "memory", &outer_members, false);
         let facts = run.facts.as_mut().unwrap();
         let scope = facts.capabilities[0].scope.clone();
@@ -966,6 +1096,7 @@ fn live_pids_limit_effects_match_engine() {
         let mut observer_kind = None;
         for index in 0..6 {
             let case_started = Instant::now();
+            pids_stage(Some(index), PidsOperation::Preflight);
             let preflight_lines = pids_lines(
                 pids_shell(
                     &run,
@@ -986,10 +1117,14 @@ fn live_pids_limit_effects_match_engine() {
                     && preflight["outer_memory"].as_u64().unwrap() <= 3221225472,
                 "actual headroom before each create"
             );
+            pids_stage(Some(index), PidsOperation::Create);
             pids_create(&mut run, index);
+            pids_stage(Some(index), PidsOperation::Start);
             start(&run, index);
+            pids_stage(Some(index), PidsOperation::Inspect);
             let inspected = pids_configured(&run, index, &image);
             let id = run.ids[index].as_ref().unwrap().clone();
+            pids_stage(Some(index), PidsOperation::PrivateIdentity);
             let private = docker(
                 &run,
                 &[
@@ -1015,6 +1150,7 @@ fn live_pids_limit_effects_match_engine() {
                     && namespaces.insert(namespace),
                 "six distinct independently bound private PID namespaces, separate from daemon and observer"
             );
+            pids_stage(Some(index), PidsOperation::BaselineScan);
             let baseline_lines = pids_scan(&run, &context, namespace, depth, init_start, "ready");
             let baseline_rows = pids_rows(&baseline_lines);
             assert!(
@@ -1059,7 +1195,9 @@ fn live_pids_limit_effects_match_engine() {
                 .iter()
                 .filter_map(|line| line.strip_prefix("G ").map(str::to_owned))
                 .collect();
+            pids_stage(Some(index), PidsOperation::LeafPidsResolve);
             let mut pids = pids_resolve(&context, &memberships, "pids", &outer_members, true);
+            pids_stage(Some(index), PidsOperation::LeafMemoryResolve);
             let mut memory = pids_resolve(&context, &memberships, "memory", &outer_members, true);
             if let Some(kind) = &observer_kind {
                 assert!(
@@ -1087,9 +1225,12 @@ fn live_pids_limit_effects_match_engine() {
                 "private root UID translated through actual map"
             );
             let nproc = pids_nproc(&baseline_lines, &baseline_rows);
+            pids_stage(Some(index), PidsOperation::BaselineController);
             let (baseline, event_source) =
                 pids_controller(&run, &baseline_rows, "ready", &mut pids, &mut memory);
+            pids_stage(Some(index), PidsOperation::WorkStart);
             pids_control(&run, outer_init, namespace, init_start, uid, "START");
+            pids_stage(Some(index), PidsOperation::HeldScan);
             let held_lines =
                 pids_scan(&run, &context, namespace, depth, init_start, "exit_barrier");
             let held_rows = pids_rows(&held_lines);
@@ -1168,6 +1309,7 @@ fn live_pids_limit_effects_match_engine() {
                 },
                 "specific C-locale native EAGAIN envelope, never generic fork text"
             );
+            pids_stage(Some(index), PidsOperation::HeldController);
             let (held, held_source) =
                 pids_controller(&run, &held_rows, "exit_barrier", &mut pids, &mut memory);
             assert!(
@@ -1177,7 +1319,9 @@ fn live_pids_limit_effects_match_engine() {
                     && held["oom_kills"] == baseline["oom_kills"],
                 "attributable exclusive-leaf denial interval with no OOM"
             );
+            pids_stage(Some(index), PidsOperation::Release);
             pids_control(&run, outer_init, namespace, init_start, uid, "RELEASE");
+            pids_stage(Some(index), PidsOperation::RestoredScan);
             let restored_lines = pids_scan(&run, &context, namespace, depth, init_start, "idle");
             let restored_rows = pids_rows(&restored_lines);
             assert!(
@@ -1192,6 +1336,7 @@ fn live_pids_limit_effects_match_engine() {
                     && pids_log(&restored_lines, "err") == pids_log(&held_lines, "err"),
                 "original worker status preserved through release with no new output"
             );
+            pids_stage(Some(index), PidsOperation::RestoredController);
             let (restored, restored_source) =
                 pids_controller(&run, &restored_rows, "idle", &mut pids, &mut memory);
             assert!(
@@ -1200,6 +1345,7 @@ fn live_pids_limit_effects_match_engine() {
                     && restored["oom_kills"] == baseline["oom_kills"],
                 "no additional hidden fork or OOM after release"
             );
+            pids_stage(Some(index), PidsOperation::FinalInspect);
             assert!(
                 pids_configured(&run, index, &image)["State"]["StartedAt"]
                     == inspected["State"]["StartedAt"],
@@ -1211,6 +1357,7 @@ fn live_pids_limit_effects_match_engine() {
             );
             cases.push(json!({"case":PIDS_CASES[index/2].0,"role":if index.is_multiple_of(2){"oracle"}else{"rendered"},"id":run.ids[index],"name":run.names[index],"wire":if index.is_multiple_of(2){"independent_cli"}else{"literal_rendered"},"image_id":image["id"],"configured_limit":PIDS_CASES[index/2].1,"identity":{"private_pid":1,"private_uid":0,"start":init_start,"pid_namespace":namespace,"state_pid":inspected["State"]["Pid"],"nspid":chain,"uid_map":maps[0],"outer_uid":uid,"worker_private":baseline_rows[1][1],"worker_start":baseline_rows[1][3]},"pids_mapping":pids,"memory_mapping":memory,"event_source":event_source,"nproc":nproc,"preflight":preflight,"baseline":baseline,"held":held,"restored":restored,"work":{"attempts":attempts,"successes":successes,"exit_status":if finite{2}else{0},"diagnostic":if finite{"native_c_eagain_fork"}else{"none"},"held_barrier":true,"release":"all_children_gone"},"elapsed_ns":case_started.elapsed().as_nanos() as u64,"cleanup":"absent"}));
         }
+        pids_stage(None, PidsOperation::Acquisition);
         let acquisition = pids_acquisition(&run);
         let observer = json!({"pid_namespace":pids_namespace(pids_field(&context,"PIDNS"),"pid"),"mount_namespace":pids_namespace(pids_field(&context,"MNTNS"),"mnt"),"cgroup_namespace":pids_namespace(pids_field(&context,"CGNS"),"cgroup"),"daemon_pid_namespace":daemon_ns,"daemon_depth":depth,"daemon_uid":daemon_uid,"cgroup_kind":observer_kind.unwrap(),"outer_process_ceiling":512});
         (daemon_uid, image, cases, acquisition, observer)
@@ -1230,6 +1377,7 @@ fn live_pids_limit_effects_match_engine() {
     terminal_cleanup(&mut run, &owner, disposition);
     let (daemon_uid, image, cases, acquisition, observer) =
         require_verified_result(result, disposition);
+    pids_stage(None, PidsOperation::FinalSnapshots);
     assert!(
         !run.image_attempted
             && run.derived_id.is_none()
@@ -1262,7 +1410,167 @@ fn live_pids_limit_effects_match_engine() {
         serde_json::to_vec(&proof).unwrap().len() <= PIDS_PROOF_BYTES,
         "bounded private PID proof before publication"
     );
+    pids_stage(None, PidsOperation::Proof);
     target.publish(&proof);
+}
+
+#[test]
+fn pids_resolution_handles_v1_comount_and_v2_nonroot_mount_roots() {
+    let legacy =
+        vec!["M 31 22 0:20 /owned /sys/fs/cgroup rw - cgroup cgroup rw,pids,memory".into()];
+    for controller in ["pids", "memory"] {
+        let resolved = pids_resolve(
+            &legacy,
+            &["7:pids,memory:/owned/leaf".into()],
+            controller,
+            &["7:pids,memory:/owned".into()],
+            true,
+        );
+        assert_eq!(
+            resolved,
+            json!({"kind":"v1","mount_id":31,"root":"/owned","mountpoint":"/sys/fs/cgroup","membership":"/owned/leaf","path":"/sys/fs/cgroup/leaf","outer_membership":"/owned","outer_path":"/sys/fs/cgroup","inode":0,"device":0})
+        );
+    }
+    let unified = vec!["M 32 22 0:21 /boundary /sys/fs/cgroup rw - cgroup2 cgroup rw".into()];
+    let resolved = pids_resolve(
+        &unified,
+        &["0::/boundary/owned/leaf".into()],
+        "pids",
+        &["0::/boundary/owned".into()],
+        true,
+    );
+    assert_eq!(
+        resolved,
+        json!({"kind":"v2","mount_id":32,"root":"/boundary","mountpoint":"/sys/fs/cgroup","membership":"/boundary/owned/leaf","path":"/sys/fs/cgroup/owned/leaf","outer_membership":"/boundary/owned","outer_path":"/sys/fs/cgroup/owned","inode":0,"device":0})
+    );
+    let outer = pids_resolve(
+        &unified,
+        &["0::/boundary/owned".into()],
+        "memory",
+        &["0::/boundary/owned".into()],
+        false,
+    );
+    assert_eq!(outer["path"], "/sys/fs/cgroup/owned");
+    assert_eq!(outer["path"], outer["outer_path"]);
+}
+
+#[test]
+fn pids_resolution_canonicalizes_empty_suffix_for_v2_mount_root() {
+    let mounts = vec!["M 32 22 0:21 /boundary /sys/fs/cgroup rw - cgroup2 cgroup rw".into()];
+    let resolved = pids_resolve(
+        &mounts,
+        &["0::/boundary/leaf".into()],
+        "pids",
+        &["0::/boundary".into()],
+        true,
+    );
+    assert_eq!(
+        resolved,
+        json!({"kind":"v2","mount_id":32,"root":"/boundary","mountpoint":"/sys/fs/cgroup","membership":"/boundary/leaf","path":"/sys/fs/cgroup/leaf","outer_membership":"/boundary","outer_path":"/sys/fs/cgroup","inode":0,"device":0})
+    );
+    let outer = pids_resolve(
+        &mounts,
+        &["0::/boundary".into()],
+        "memory",
+        &["0::/boundary".into()],
+        false,
+    );
+    assert_eq!(outer["path"], "/sys/fs/cgroup");
+    assert_eq!(outer["path"], outer["outer_path"]);
+}
+
+#[test]
+fn pids_resolution_keeps_untranslated_sibling_duplicate_and_strict_descendant_refusals() {
+    let root_mount = "M 31 22 0:20 / /sys/fs/cgroup rw - cgroup2 cgroup rw";
+    for (mounts, selected, owner, descendant) in [
+        (
+            vec!["M 31 22 0:20 / /tmp rw - tmpfs tmpfs rw"],
+            "/owned/leaf",
+            "/owned",
+            true,
+        ),
+        (
+            vec!["M 31 22 0:20 /owned /sys/fs/cgroup rw - cgroup2 cgroup rw"],
+            "/",
+            "/",
+            false,
+        ),
+        (vec![root_mount], "/owned-sibling/leaf", "/owned", true),
+        (vec![root_mount], "/owned", "/owned", true),
+        (
+            vec![root_mount, "M 32 22 0:20 / /other rw - cgroup2 cgroup rw"],
+            "/owned/leaf",
+            "/owned",
+            true,
+        ),
+    ] {
+        let mounts: Vec<_> = mounts.into_iter().map(str::to_owned).collect();
+        let result = std::panic::catch_unwind(|| {
+            pids_resolve(
+                &mounts,
+                &[format!("0::{selected}")],
+                "pids",
+                &[format!("0::{owner}")],
+                descendant,
+            )
+        });
+        assert!(
+            result.is_err(),
+            "ambiguous or unowned controller mapping must refuse"
+        );
+    }
+    // More than one generation-eligible mount is not itself ambiguous: only
+    // candidates surviving the unchanged root/ownership predicates count.
+    let resolved = pids_resolve(
+        &[
+            root_mount.into(),
+            "M 32 22 0:20 /elsewhere /other rw - cgroup2 cgroup rw".into(),
+        ],
+        &["0::/owned/leaf".into()],
+        "pids",
+        &["0::/owned".into()],
+        true,
+    );
+    assert_eq!(resolved["path"], "/sys/fs/cgroup/owned/leaf");
+}
+
+#[test]
+fn pids_resolution_diagnostic_classification_uses_only_existing_predicate_observations() {
+    for (eligible, rooted, candidates, expected, label) in [
+        (
+            false,
+            false,
+            0,
+            PidsResolutionFailure::NoControllerMount,
+            "no_controller_mount",
+        ),
+        (
+            true,
+            false,
+            0,
+            PidsResolutionFailure::RootCoordinateMismatch,
+            "root_coordinate_mismatch",
+        ),
+        (
+            true,
+            true,
+            0,
+            PidsResolutionFailure::OutsideOwnedDescendant,
+            "outside_owned_descendant",
+        ),
+        (
+            true,
+            true,
+            2,
+            PidsResolutionFailure::MultipleEligibleMounts,
+            "multiple_eligible_mounts",
+        ),
+    ] {
+        let reason = pids_resolution_failure(eligible, rooted, candidates).unwrap();
+        assert_eq!(reason, expected);
+        assert_eq!(reason.label(), label);
+    }
+    assert_eq!(pids_resolution_failure(true, true, 1), None);
 }
 
 #[test]

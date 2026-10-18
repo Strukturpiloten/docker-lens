@@ -41,7 +41,7 @@ representations retain their existing behavior.
 
 This is candidate pre-merge rehearsal admission. Production merge, main
 admission and release remain blocked until fresh exact-final-candidate complete
-and four-lane twenty-seven-test native gates, fresh independently reviewed volume-only
+and four-lane twenty-eight-test native gates, fresh independently reviewed volume-only
 consumer rehearsals of all six actual authored fixtures under
 [ADR 0012](docs/decisions/0012-candidate-volume-label-admission.md), and reviewed
 BoxFerry consumers of the actual Nextcloud/Supabase binds and desired external
@@ -63,8 +63,16 @@ Only four complete finite source groups are added, never selected catalogue fact
 [ADR 0027](docs/decisions/0027-pids-limit-private-qualification.md) appends mandatory
 PIDs invocation 27 with a separate one-child owner scope and strict private proof
 validation, even without public emission. It adds no public PIDs fields or
-capability/shape mapping. Fresh native qualification remains pending; nofile stays
-outside the canonical gate.
+capability/shape mapping. [ADR 0029](docs/decisions/0029-pids-failure-localization.md)
+adds closed source-local failure diagnostics and canonical joined-path
+representation matching the strict reader, without changing controller/ownership
+predicates or qualifying failed campaign 39165508951. Fresh native qualification remains pending.
+[ADR 0028](docs/decisions/0028-nofile-private-qualification.md) appends mandatory
+private nofile invocation 28 and its strict independent proof gate, also without
+public emission. Its existing four-case/eight-fixture CLI/rendered experiment retains precise
+unlimited-start refusal, finite normalization and exact-unlimited dispositions.
+There is no public nofile projection or catalogue admission; its scoped 512 KiB
+proof/64 KiB metadata limits do not enlarge other proofs' 16 KiB default.
 Host capture remains deferred.
 Current raw projection totals are 43/66 capabilities/shapes on Debian and 45/70 upstream, marked
 `raw_source_only` with `catalogue_admission: unadmitted`. Historical raw bytes

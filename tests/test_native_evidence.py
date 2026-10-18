@@ -26,6 +26,7 @@ from test_native_shm_size_proof import fixture as shm_size_fixture
 from test_native_supplementary_groups_proof import fixture as supplementary_groups_fixture
 from test_native_kernel_settings_proof import fixture as kernel_settings_fixture
 from test_native_pids_limit_proof import fixture as pids_limit_fixture
+from test_native_nofile_proof import fixture as nofile_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/native-evidence.py"
@@ -563,6 +564,8 @@ class NativeEvidenceTests(unittest.TestCase):
                  kernel_settings_missing: bool = False,
                  pids_limit: object = None,
                  pids_limit_missing: bool = False,
+                 nofile: object = None,
+                 nofile_missing: bool = False,
                  port_proof_override: object = None) -> tuple[subprocess.CompletedProcess[str], Path]:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -697,6 +700,8 @@ class NativeEvidenceTests(unittest.TestCase):
         kernel_proof["context"]["fixture_image"] = HEALTH_FIXTURE_IMAGE
         pids_proof = pids_limit_fixture(lane)
         pids_proof["context"].update(copy.deepcopy(external["context"]))
+        nofile_proof = nofile_fixture(lane)
+        nofile_proof["context"].update(copy.deepcopy(external["context"]))
         for filename, proof, override, missing in (
             ("hostname-v1.json", hostname_proof, hostname, hostname_missing),
             ("command-clear-v1.json", command_proof, command_clear, command_clear_missing),
@@ -704,6 +709,7 @@ class NativeEvidenceTests(unittest.TestCase):
             ("supplementary-groups-v1.json", supplementary_proof, supplementary_groups, supplementary_groups_missing),
             ("kernel-settings-v1.json", kernel_proof, kernel_settings, kernel_settings_missing),
             ("pids-limit-v1.json", pids_proof, pids_limit, pids_limit_missing),
+            ("nofile-v1.json", nofile_proof, nofile, nofile_missing),
         ):
             if not missing:
                 private_path = root / filename

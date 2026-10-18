@@ -63,13 +63,14 @@ else:
         prefix = '"$(dirname "$0")/run-exact-native-test.sh" '
         calls = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source, re.M)
         self.assertEqual(calls[:26], EXPECTED_CALLS)
-        self.assertEqual(calls[26:], [(TARGET, TEST)])
+        self.assertEqual(calls[26:27], [(TARGET, TEST)])
+        self.assertEqual(calls[27:], [("native_nofile", "live_nofile_limits_and_effects_match_engine")])
         scope = '(\n  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1\n'
         old = scope + "\n".join(prefix + " ".join(call) for call in EXPECTED_CALLS[16:22]) + '\n)'
         self.assertEqual(source.count(old), 1)
         for call in EXPECTED_CALLS[23:26] + [(TARGET, TEST)]:
             self.assertEqual(source.count(scope + prefix + " ".join(call) + '\n)'), 1)
-        self.assertEqual(source.count(scope), 5)
+        self.assertEqual(source.count(scope), 6)
         kernel_reader = source.index('python3 "$script_dir/native_kernel_settings_proof.py"')
         child = source.index(scope + prefix + f'{TARGET} {TEST}\n)')
         reader = source.index('python3 "$script_dir/native_pids_limit_proof.py"')
@@ -162,6 +163,83 @@ else:
                 result, destination = canonical.ExternalNetworkEvidenceTests.emit(self, lane, pids_limit_missing=True)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse(destination.exists())
+
+    def test_actual_stage_vocabulary_is_closed_and_covers_context_and_six_roles(self):
+        context_stages = ("context", "image", "outer_observer", "daemon_identity", "outer_pids_resolve",
+                          "outer_memory_resolve", "acquisition", "final_snapshots", "proof")
+        case_stages = ("preflight", "create", "start", "inspect", "private_identity", "baseline_scan",
+                       "leaf_pids_resolve", "leaf_memory_resolve", "baseline_controller", "work_start",
+                       "held_scan", "held_controller", "release", "restored_scan", "restored_controller", "final_inspect")
+        stages = [f"case=context role=observer stage={stage}" for stage in context_stages]
+        stages += [f"case=finite16 role=oracle stage={stage}" for stage in case_stages]
+        stages += [f"case={case} role={role} stage=leaf_memory_resolve"
+                   for case in ("finite16", "finite64", "unlimited") for role in ("oracle", "rendered")]
+        for fields in stages:
+            with self.subTest(fields=fields):
+                stage = "DOCKERLENS_NATIVE_PIDS_STAGE: " + fields
+                result = self.wrapper(stage + "\n" + FAILED, 101)[0]
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(stage, result.stderr)
+        source = (ROOT / "src/native_pids_limit_tests.rs").read_text()
+        self.assertIn('"DOCKERLENS_NATIVE_PIDS_STAGE: case={case} role={role} stage={}"', source)
+        self.assertIn('"DOCKERLENS_NATIVE_PIDS_RESOLVE: reason={}"', source)
+
+    def test_last_pre_first_panic_stage_and_matching_resolution_survive_cleanup(self):
+        reasons = ("no_controller_mount", "root_coordinate_mismatch", "outside_owned_descendant", "multiple_eligible_mounts")
+        for fields in ("case=context role=observer stage=outer_pids_resolve",
+                       "case=context role=observer stage=outer_memory_resolve",
+                       "case=finite16 role=oracle stage=leaf_pids_resolve",
+                       "case=unlimited role=rendered stage=leaf_memory_resolve"):
+            for reason in reasons:
+                with self.subTest(fields=fields, reason=reason):
+                    stage = "DOCKERLENS_NATIVE_PIDS_STAGE: " + fields
+                    classification = "DOCKERLENS_NATIVE_PIDS_RESOLVE: reason=" + reason
+                    original = f"thread '{SELECTED}' panicked at src/native_health_metadata_tests.rs:542:9:\n{SECRET}\n"
+                    later = "DOCKERLENS_NATIVE_PIDS_STAGE: case=context role=observer stage=proof"
+                    output = ("DOCKERLENS_NATIVE_PIDS_STAGE: case=context role=observer stage=context\n" +
+                              "DOCKERLENS_NATIVE_CHECK: health_metadata_context\n" + stage + "\n" + classification + "\n" +
+                              original + "DOCKERLENS_NATIVE_CHECK: lifecycle_cleanup_unverified\n" + later + "\n" +
+                              f"thread '{SELECTED}' panicked at src/native_pids_limit_tests.rs:999:1:\n" + FAILED)
+                    result = self.wrapper(output, 101)[0]
+                    for fixed in ("(exit 101)", stage, classification, "lifecycle_cleanup_unverified",
+                                  "source=native_health_metadata_tests line=542 column=9"):
+                        self.assertIn(fixed, result.stderr)
+                    for absent in (SECRET, later, "line=999", "stage=context\n"):
+                        self.assertNotIn(absent, result.stdout + result.stderr)
+        stage = "DOCKERLENS_NATIVE_PIDS_STAGE: case=finite64 role=rendered stage=held_scan"
+        later = "DOCKERLENS_NATIVE_PIDS_STAGE: case=context role=observer stage=proof"
+        for boundary in (f"thread 'worker' panicked at /private/{SECRET}:1:1:",
+                         "DOCKERLENS_NATIVE_CHECK: lifecycle_cleanup",
+                         "DOCKERLENS_NATIVE_LIFECYCLE_CLEANUP: owner=native_conformance_outer_v1 scope=outer_container_and_data_volume state=required"):
+            result = self.wrapper(stage + "\n" + boundary + "\n" + later + "\n" + FAILED, 101)[0]
+            self.assertIn(stage, result.stderr)
+            self.assertNotIn(later, result.stderr)
+            self.assertNotIn(SECRET, result.stdout + result.stderr)
+
+    def test_malformed_cross_phase_and_private_diagnostics_never_become_public(self):
+        prefix = "DOCKERLENS_NATIVE_PIDS_STAGE: "
+        actual = prefix + "case=context role=observer stage=outer_pids_resolve"
+        classification = "DOCKERLENS_NATIVE_PIDS_RESOLVE: reason=root_coordinate_mismatch"
+        malformed = [prefix + "case=context role=oracle stage=context",
+                     prefix + "case=finite16 role=observer stage=preflight",
+                     prefix + "case=context role=observer stage=create",
+                     prefix + "case=finite64 role=rendered stage=outer_observer",
+                     prefix + f"case={SECRET} role=oracle stage=inspect",
+                     prefix + f"case=finite16 role=oracle stage={SECRET}",
+                     actual + " " + SECRET, actual + "\r" + SECRET,
+                     " " + actual, classification + " " + SECRET,
+                     "DOCKERLENS_NATIVE_PIDS_RESOLVE: reason=" + SECRET]
+        for line in malformed:
+            with self.subTest(line=line):
+                result = self.wrapper(actual + "\n" + line + "\n" + FAILED, 101)[0]
+                self.assertIn(actual, result.stderr)
+                self.assertNotIn(line + "\n", result.stderr)
+                self.assertNotIn(SECRET, result.stdout + result.stderr)
+        for output in (classification,
+                       prefix + "case=finite16 role=oracle stage=preflight\n" + classification,
+                       actual + "\n" + classification + "\n" + classification):
+            result = self.wrapper(output + "\n" + FAILED, 101)[0]
+            self.assertNotIn("DOCKERLENS_NATIVE_PIDS_RESOLVE:", result.stderr)
 
     def test_context_effect_cleanup_and_custody_failures_refuse_entire_output(self):
         for lane in LANES:

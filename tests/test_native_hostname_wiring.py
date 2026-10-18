@@ -51,8 +51,9 @@ else:
     def test_twenty_second_registration_preserves_existing_protocol_and_private_reader(self):
         harness = (ROOT / "scripts/native-conformance.sh").read_text()
         calls = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', harness, re.M)
-        self.assertEqual(len(calls), 27)
-        self.assertEqual(calls[26:], [("native_pids_limit", "live_pids_limit_effects_match_engine")])
+        self.assertEqual(len(calls), 28)
+        self.assertEqual(calls[26:27], [("native_pids_limit", "live_pids_limit_effects_match_engine")])
+        self.assertEqual(calls[27:], [("native_nofile", "live_nofile_limits_and_effects_match_engine")])
         self.assertEqual(calls[21], (TARGET, TEST))
         self.assertEqual(calls.count((TARGET, TEST)), 1)
         owner = harness.index('(\n  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1\n')

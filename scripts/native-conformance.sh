@@ -1027,6 +1027,7 @@ export NATIVE_SHM_SIZE_PROOF_PATH="$run_dir/shm-size-v1.json"
 export NATIVE_SUPPLEMENTARY_GROUPS_PROOF_PATH="$run_dir/supplementary-groups-v1.json"
 export NATIVE_KERNEL_SETTINGS_PROOF_PATH="$run_dir/kernel-settings-v1.json"
 export NATIVE_PIDS_LIMIT_PROOF_PATH="$run_dir/pids-limit-v1.json"
+export NATIVE_NOFILE_PROOF_PATH="$run_dir/nofile-v1.json"
 export NATIVE_PORT_START_DIAGNOSTIC_PATH="$run_dir/diagnostics/port-start-window.json"
 export NATIVE_IDENTITY_CANDIDATE_SHA
 NATIVE_IDENTITY_CANDIDATE_SHA=$(git -C "$script_dir/.." rev-parse HEAD)
@@ -1048,6 +1049,7 @@ export NATIVE_SHM_SIZE_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 export NATIVE_SUPPLEMENTARY_GROUPS_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 export NATIVE_KERNEL_SETTINGS_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 export NATIVE_PIDS_LIMIT_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
+export NATIVE_NOFILE_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 if [[ $EUID == 0 ]]; then export NATIVE_PODMAN_USE_SUDO=0; else export NATIVE_PODMAN_USE_SUDO=1; fi
 
 port_start_failure_diagnostic() {
@@ -1195,6 +1197,15 @@ python3 "$script_dir/native_kernel_settings_proof.py" "$run_dir" "$NATIVE_KERNEL
 )
 # Private positive qualification only; always validate even without emission.
 python3 "$script_dir/native_pids_limit_proof.py" "$run_dir" "$NATIVE_PIDS_LIMIT_CANDIDATE_SHA" "$run_id" \
+  "$lane" "$server_version" "$api_version" "$expected_mode" "$installed_docker_package" \
+  "$NATIVE_FIXTURE_IMAGE" "$image" "$NATIVE_OUTER_CONTAINER_ID" "$NATIVE_BIND_RELABEL_DAEMON_UID"
+
+(
+  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1
+"$(dirname "$0")/run-exact-native-test.sh" native_nofile live_nofile_limits_and_effects_match_engine
+)
+# Private qualification only; always validate even without public emission.
+python3 "$script_dir/native_nofile_proof.py" "$run_dir" "$NATIVE_NOFILE_CANDIDATE_SHA" "$run_id" \
   "$lane" "$server_version" "$api_version" "$expected_mode" "$installed_docker_package" \
   "$NATIVE_FIXTURE_IMAGE" "$image" "$NATIVE_OUTER_CONTAINER_ID" "$NATIVE_BIND_RELABEL_DAEMON_UID"
 

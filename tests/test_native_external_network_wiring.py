@@ -101,8 +101,9 @@ class ExternalNetworkWiringTests(unittest.TestCase):
         harness = (ROOT / "scripts/native-conformance.sh").read_text()
         invocations = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$',
                                  harness, re.MULTILINE)
-        self.assertEqual(len(invocations), 27)
+        self.assertEqual(len(invocations), 28)
         self.assertEqual(invocations[26], ("native_pids_limit", "live_pids_limit_effects_match_engine"))
+        self.assertEqual(invocations[27:], [("native_nofile", "live_nofile_limits_and_effects_match_engine")])
         self.assertEqual(invocations[13:15], [("native_bind_relabel", "live_bind_relabel_configuration_matches_engine"),
                                            (TARGET, TEST)])
         command = f'"$(dirname "$0")/run-exact-native-test.sh" {TARGET} {TEST}'

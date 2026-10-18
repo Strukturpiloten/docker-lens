@@ -1,4 +1,5 @@
-//! Unregistered nofile-v1 source preparation; never capability admission.
+//! nofile-v1 canonical private source invocation 28; never capability admission.
+//! Fresh native qualification remains pending; source wiring does not claim native support.
 //! Native programs below must run only in the independently owned native lanes.
 
 use super::*;

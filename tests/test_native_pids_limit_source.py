@@ -149,6 +149,73 @@ class PidsLimitSourceTests(unittest.TestCase):
         self.assertIn('"catalogue_admission":false', source)
         self.assertNotIn("ResourceSupportAssessment", source)
 
+    def test_actual_closed_stages_precede_each_named_operation(self):
+        source = SOURCE.read_text()
+        body = re.sub(r"\s+", " ", source.split("fn live_pids_limit_effects_match_engine()", 1)[1])
+        context = {
+            "Context": "let daemon_uid = run.context();",
+            "Image": "let image = image_snapshot(&run);",
+            "OuterObserver": "let context = pids_lines(",
+            "DaemonIdentity": 'let daemon: Vec<_> = pids_field(&context, "D")',
+            "OuterPidsResolve": 'let outer_pids = pids_resolve(',
+            "OuterMemoryResolve": 'let outer_memory = pids_resolve(',
+            "Acquisition": "let acquisition = pids_acquisition(&run);",
+            "FinalSnapshots": "assert!( !run.image_attempted",
+            "Proof": "target.publish(&proof);",
+        }
+        cases = {
+            "Preflight": "let preflight_lines = pids_lines(",
+            "Create": "pids_create(&mut run, index);",
+            "Start": "start(&run, index);",
+            "Inspect": "let inspected = pids_configured(&run, index, &image);",
+            "PrivateIdentity": "let private = docker(",
+            "BaselineScan": "let baseline_lines = pids_scan(",
+            "LeafPidsResolve": "let mut pids = pids_resolve(",
+            "LeafMemoryResolve": "let mut memory = pids_resolve(",
+            "BaselineController": "let (baseline, event_source) =",
+            "WorkStart": 'pids_control(&run, outer_init, namespace, init_start, uid, "START");',
+            "HeldScan": "let held_lines =",
+            "HeldController": "let (held, held_source) =",
+            "Release": 'pids_control(&run, outer_init, namespace, init_start, uid, "RELEASE");',
+            "RestoredScan": "let restored_lines = pids_scan(",
+            "RestoredController": "let (restored, restored_source) =",
+            "FinalInspect": "assert!( pids_configured(&run, index, &image)",
+        }
+        for index, operations in (("None", context), ("Some(index)", cases)):
+            for operation, following in operations.items():
+                with self.subTest(operation=operation):
+                    self.assertIn(f"pids_stage({index}, PidsOperation::{operation}); {following}", body)
+        calls = re.findall(r"pids_stage\((None|Some\(index\)), PidsOperation::(\w+)\);", body)
+        self.assertEqual(set(calls), {("None", item) for item in context} | {("Some(index)", item) for item in cases})
+        self.assertEqual(len(calls), 25)
+        labels = dict(re.findall(r'Self::(\w+) => "([a-z_]+)"', source.split("impl PidsOperation", 1)[1].split("fn pids_stage", 1)[0]))
+        self.assertEqual(set(labels), set(context) | set(cases))
+        self.assertEqual(set(labels.values()), {
+            "context", "image", "outer_observer", "daemon_identity", "outer_pids_resolve", "outer_memory_resolve",
+            "preflight", "create", "start", "inspect", "private_identity", "baseline_scan", "leaf_pids_resolve",
+            "leaf_memory_resolve", "baseline_controller", "work_start", "held_scan", "held_controller", "release",
+            "restored_scan", "restored_controller", "final_inspect", "acquisition", "final_snapshots", "proof",
+        })
+        self.assertEqual(source.count("eprintln!("), 2)
+
+    def test_resolution_diagnostics_do_not_change_mapping_or_assertion(self):
+        source = SOURCE.read_text()
+        resolver = source.split("fn pids_resolve(", 1)[1].split("fn pids_cleanup_with", 1)[0]
+        self.assertIn('pids_safe_path(fields[3])', resolver)
+        self.assertIn('pids_safe_path(fields[4])', resolver)
+        self.assertIn('selected_path.strip_prefix(&root)', resolver)
+        self.assertIn('owner_path.strip_prefix(&root)', resolver)
+        self.assertIn('(!descendant || path != outer_path) && path.starts_with(&outer_path)', resolver)
+        self.assertLess(resolver.index("continue;"), resolver.index("eligible_mount = true;"))
+        self.assertLess(resolver.index("owner_path.strip_prefix(&root)"), resolver.index("rooted_mount = true;"))
+        self.assertLess(resolver.index("rooted_mount = true;"), resolver.index("path.starts_with(&outer_path)"))
+        self.assertIn("pids_resolution_failure(eligible_mount, rooted_mount, candidates.len())", resolver)
+        self.assertRegex(resolver, r'assert!\(\s*candidates.len\(\) == 1,\s*"unique controller mount-root resolution"')
+        for name in ("pids_resolution_handles_v1_comount_and_v2_nonroot_mount_roots",
+                     "pids_resolution_keeps_untranslated_sibling_duplicate_and_strict_descendant_refusals",
+                     "pids_resolution_diagnostic_classification_uses_only_existing_predicate_observations"):
+            self.assertIn("fn " + name + "()", source)
+
 
 if __name__ == "__main__":
     unittest.main()

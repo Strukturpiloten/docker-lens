@@ -29,13 +29,15 @@ Durable native boundaries and evidence/admission contracts:
 - [0025: Mandatory ShmSize source integration](0025-shm-size-source-integration.md)
 - [0026: Mandatory runtime-settings source integration](0026-runtime-settings-source-integration.md)
 - [0027: Mandatory PIDs private qualification](0027-pids-limit-private-qualification.md)
+- [0028: Mandatory nofile private qualification](0028-nofile-private-qualification.md)
+- [0029: Closed PIDs failure localization](0029-pids-failure-localization.md)
 
 ADR 0022 supersedes ADR 0019's active-cohort selection for candidate rehearsal:
 complete StopTimeout/init/rootfs/tmpfs groups on all lanes, with
 HealthStartInterval upstream-only, at Debian 34/56 and upstream 36/60.
 ADR 0021's raw source markers remain unchanged and do not grant admission.
 ADR 0017's None/false/true, conditional
-schema-3 and pure snapshot boundaries remain; fresh final-candidate twenty-seven-test
+schema-3 and pure snapshot boundaries remain; fresh final-candidate twenty-eight-test
 native and actual consumer gates still block ready/merge/main admission and
 release. Historical evidence and earlier obligations are preserved.
 ADR 0023 adds mandatory hostname and command-clear invocations 22 and 23, with
@@ -55,6 +57,14 @@ raw groups are added; all four remain unselected and host capture stays deferred
 ADR 0027 appends PIDs invocation 27 in its own one-child owner scope, with a
 mandatory private CLI reader and emitter qualification, but no public PIDs fields
 or capability/shape projection. The first 26 calls and existing owner blocks
-remain unchanged; nofile remains outside the canonical harness.
+remain unchanged; that PIDs-only slice did not integrate nofile.
+ADR 0028 appends private nofile invocation 28 with its own one-child scope,
+mandatory independent CLI reader and exact three-key emitter check. No public
+nofile projection or catalogue admission is added; first 27 calls/order, five
+prior owner blocks and scoped native/proof limits remain unchanged.
+ADR 0029 supersedes only ADR 0027's absence-of-PIDs-diagnostics clause, adding
+actual closed source-local stages and resolver-refusal classifications without
+changing predicates, budgets, ownership, proof protocols or qualification gates.
+Failed campaign 39165508951 remains unqualified; no runtime cause is established.
 Current combined raw totals are Debian 43/66 and upstream 45/70; compiled
 selection stays 34/56 and 36/60. These nine raw groups remain unselected.

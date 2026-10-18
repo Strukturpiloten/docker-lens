@@ -48,6 +48,7 @@ class NativeHarnessTests(unittest.TestCase):
             ("native_supplementary_groups", "live_supplementary_groups_match_engine"),
             ("native_kernel_settings", "live_kernel_settings_match_engine"),
             ("native_pids_limit", "live_pids_limit_effects_match_engine"),
+            ("native_nofile", "live_nofile_limits_and_effects_match_engine"),
         ])
         self.assertLess(source.index('native_port live_port_publications_match_engine'),
                         source.index('python3 "$script_dir/native-evidence.py"'))

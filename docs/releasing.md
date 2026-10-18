@@ -44,6 +44,11 @@ are Debian 43/66 and upstream 45/70. Its four finite groups remain unselected.
 private PIDs invocation 27 and strict proof checks, including without public
 emission. It adds no public PIDs fields or capability/shape mapping; raw and
 selected totals remain unchanged, and fresh native qualification remains pending.
+[ADR 0028](decisions/0028-nofile-private-qualification.md) appends private nofile
+invocation 28 and its always-required strict proof checks, with no public nofile
+fields, capability/shape mapping or catalogue admission. Native qualification
+still requires fresh exact-candidate four-lane evidence; preparation tests do not
+establish it.
 Host capture remains deferred; no nofile admission is included. HealthDisabled and
 ShmSize remain outside compiled selection. The original 23 native invocations,
 six-child ownership block, strict private protocols and historical evidence stay unchanged.
@@ -65,7 +70,7 @@ For the final current-main candidate require:
 
 - The complete offline gate and package verification below.
 - Fresh successful exact-candidate `Release validation`, including all four
-  independent native lanes, each executing the canonical twenty-seven exact test
+  independent native lanes, each executing the canonical twenty-eight exact test
   invocations, and its fail-closed final aggregate. A failed, skipped or cancelled
   lane blocks publication. If required work extends the canonical suite, every
   added invocation is mandatory too.

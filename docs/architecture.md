@@ -41,7 +41,7 @@ The first 24 calls and existing owner blocks remain byte-exact. The nineteen-arg
 emitter requires both fixed private children before four complete raw groups:
 SupplementaryGroups, SecurityOptions, Sysctls and SysctlIpv4Forward. Only finite
 closed outcomes are public; selected catalogue and historical records are unchanged.
-Host capture remains deferred; no nofile source group is integrated.
+Host capture remains deferred; ADR 0026 did not integrate a nofile source group.
 
 [ADR 0027](decisions/0027-pids-limit-private-qualification.md) appends mandatory
 PIDs invocation 27 in a separate one-child cleanup-owner scope, preserving all
@@ -50,10 +50,26 @@ before optional emission; the unchanged nineteen-argument emitter independently
 requires the fixed private child and exact typed four-key return. This is private
 qualification only: no public PIDs fields, capability/shape mapping or schema
 addition, and raw totals remain Debian 43/66 and upstream 45/70. Selected totals
-remain 34/56 and 36/60. Existing producer, reader, custody limits and shared
+remain 34/56 and 36/60. [ADR 0029](decisions/0029-pids-failure-localization.md)
+adds closed PIDs operation stages and refusal classification, plus canonical
+serialization of validated joined paths when a relative suffix is empty. It does not
+change controller/ownership predicates, interpret the failed source campaign as compatibility evidence,
+or expose private command output. Existing private protocol, reader, custody limits and shared
 180-second deadline/46-second cleanup reserve remain unchanged. Source wiring
-and synthetic controls are not passing native evidence; nofile and host capture
-remain outside this integration.
+and synthetic controls are not passing native evidence; that PIDs-only slice
+did not integrate nofile, and host capture remains deferred.
+
+[ADR 0028](decisions/0028-nofile-private-qualification.md) appends mandatory nofile
+invocation 28, preserving the first 27 calls/order and five earlier owner blocks.
+Its separate one-child cleanup-owner scope receives the original once-created
+180-second deadline. The existing twelve-argument reader always runs before
+optional emission; the unchanged nineteen-argument emitter independently requires
+the fixed child and exact typed three-key return, not the PIDs scope-bearing return.
+No public nofile fields, capability/shape mapping or schema admission is added.
+Raw 43/66 and 45/70 and selected 34/56 and 36/60 totals remain unchanged. Existing
+512 KiB nofile proof and 64 KiB metadata limits remain scoped; default 16 KiB
+custody elsewhere, all native behavior and the 46-second reserve stay unchanged.
+Source wiring is not passing native qualification; host capture remains deferred.
 
 ## Data flow
 
@@ -203,7 +219,7 @@ and historical evidence remain unchanged. ADR 0018 selects authenticated source
 run `37788762974` at Debian 29/46 and upstream 30/48 for candidate rehearsal;
 ADR 0019 retains those groups and adds only the StopSignal singleton.
 Definitions or offline controls grant no native compatibility. Fresh
-authenticated exact-final-candidate twenty-seven-test four-lane execution,
+authenticated exact-final-candidate twenty-eight-test four-lane execution,
 independent review and the separate ADR 0012/0016/0018/0019 consumer gates remain
 required before ready/merge. No source run qualifies a changed candidate.
 
