@@ -157,7 +157,7 @@ fn rendered_request(run: &HealthRun, index: usize) -> Value {
 
 fn create(run: &mut HealthRun, index: usize) -> Option<i32> {
     assert_eq!(run.inspect(&run.names[index], false).0, 404);
-    if index % 2 == 0 {
+    if index.is_multiple_of(2) {
         // A private shell envelope preserves exact command status/output while
         // the inherited outer transport still requires its own success. All
         // arguments are positional; native strings are never shell source.
@@ -221,7 +221,7 @@ fn create(run: &mut HealthRun, index: usize) -> Option<i32> {
 
 fn observe(run: &mut HealthRun, index: usize, image: &Value) -> Value {
     let rejected = create(run, index);
-    let cli = index % 2 == 0;
+    let cli = index.is_multiple_of(2);
     let mut record = json!({"role":if cli {"oracle"} else {"rendered"},
         "name":run.names[index],"owner":run.run,"image":run.base,
         "wire":if cli {"independent_cli"} else {"literal_rendered"},

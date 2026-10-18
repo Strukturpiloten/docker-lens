@@ -1,5 +1,8 @@
 # DockerLens
 
+Building DockerLens requires Rust 1.98.1 or newer. The repository pins Rust
+1.98.1 for development, linting, documentation, and validation.
+
 DockerLens is a native Docker Engine library under construction. The current
 crate establishes privacy, observation, bounded explicit Unix-socket acquisition,
 pure Engine JSON decoding, and inert standalone target planning and rendering.

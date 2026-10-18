@@ -1,5 +1,12 @@
 # Verification
 
+The current minimum and pinned development compiler are Rust 1.98.1.
+`Cargo.toml` supplies the minimum for Clippy and `scripts/check-msrv.sh`;
+`rust-toolchain.toml` selects the same compiler for normal Cargo commands.
+The scaffold policy tests check alignment and MSRV failure propagation through
+the shared local, PR/main, native-dispatch, and release offline gate. Earlier
+verification records below retain the Rust versions used at those checkpoints.
+
 ## Mandatory unadmitted runtime-cohort source observations
 
 The canonical harness requires twenty-one exact ignored invocations, retaining the
@@ -554,7 +561,10 @@ Run `./scripts/check-all.sh --check` for the complete offline gate: format,
 Clippy, a locked all-target check under the minimum Rust release declared by
 `Cargo.toml`, unit and documentation tests, policy tests, and documentation build.
 The MSRV check installs the exact official Rust distribution through rustup
-when it is not already available; its failure stops the gate. PR, main,
+when it is not already available, with `--no-self-update` to leave the separately
+managed rustup executable unchanged. This per-invocation flag preserves compiler
+distribution verification and avoids manager self-update dependence on the
+current `CARGO_HOME`; installation or compiler-check failure stops the gate. PR, main,
 validation-dispatch, and release workflows all call this same gate.
 `--fix` runs the same checks after formatting. The VS Code task calls the fast
 format/lint script; PR and main CI call the complete offline gate. PR checks

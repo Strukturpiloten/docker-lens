@@ -91,7 +91,7 @@ fn rendered_request(run: &HealthRun, index: usize) -> Value {
 
 fn create(run: &mut HealthRun, index: usize) {
     assert_eq!(run.inspect(&run.names[index], false).0, 404);
-    if index % 2 == 0 {
+    if index.is_multiple_of(2) {
         let mut args = vec![
             "create".into(),
             "--name".into(),

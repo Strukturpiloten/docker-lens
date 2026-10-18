@@ -103,6 +103,11 @@ These model settings do not expand the workspace scope or grant additional permi
 
 ## Complete local validation
 
+Rust 2024; MSRV: Rust 1.98.1. The development toolchain currently pins the same
+release and may advance independently, but must not fall below `Cargo.toml`'s
+minimum. Clippy derives its MSRV from the manifest. `scripts/check-msrv.sh`
+checks that declared minimum independently.
+
 Run `./scripts/format-lint.sh --fix`, then `./scripts/check-all.sh --check` after the final edit.
 The local gate covers formatting, Clippy, unit and documentation tests, policy tests, and docs.
 Main push and exact-candidate release validation separately require all four isolated native

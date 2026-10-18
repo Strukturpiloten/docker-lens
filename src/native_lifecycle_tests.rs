@@ -351,7 +351,7 @@ fn cleanup(run: &mut HealthRun) -> CleanupDisposition {
 
 fn create(run: &mut HealthRun, index: usize) {
     assert_eq!(run.inspect(&run.names[index], false).0, 404);
-    if index % 2 == 0 {
+    if index.is_multiple_of(2) {
         let mut args = vec![
             "create".into(),
             "--name".into(),
@@ -545,8 +545,8 @@ fn stopped(value: &Value, exit: i64) -> bool {
 }
 
 fn identity(run: &HealthRun, index: usize, base: &Value) -> Value {
-    json!({"role":if index%2 == 0 {"oracle"} else {"rendered"},"id":run.ids[index],"name":run.names[index],
-        "owner":run.run,"image":run.base,"image_id":base["id"],"wire":if index%2 == 0 {"independent_cli"} else {"literal_rendered"},
+    json!({"role":if index.is_multiple_of(2) {"oracle"} else {"rendered"},"id":run.ids[index],"name":run.names[index],
+        "owner":run.run,"image":run.base,"image_id":base["id"],"wire":if index.is_multiple_of(2) {"independent_cli"} else {"literal_rendered"},
         "cleanup":"absent"})
 }
 

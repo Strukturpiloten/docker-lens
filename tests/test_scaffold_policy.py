@@ -14,6 +14,28 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ScaffoldPolicyTests(unittest.TestCase):
+    def test_rust_minimum_and_development_toolchain_contract(self) -> None:
+        manifest = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
+        toolchain = tomllib.loads((ROOT / "rust-toolchain.toml").read_text(encoding="utf-8"))
+        minimum = manifest["package"]["rust-version"]
+        self.assertEqual(minimum, "1.98.1")
+        self.assertEqual(manifest["package"]["edition"], "2024")
+        self.assertRegex(minimum, r"^[0-9]+\.[0-9]+\.[0-9]+$")
+        channel = toolchain["toolchain"]["channel"]
+        self.assertRegex(channel, r"^[0-9]+\.[0-9]+\.[0-9]+$")
+        self.assertGreaterEqual(tuple(map(int, channel.split("."))),
+                                tuple(map(int, minimum.split("."))))
+        self.assertTrue({"clippy", "rustfmt"}.issubset(toolchain["toolchain"]["components"]))
+        # Clippy uses Cargo's rust-version unless an explicit override is added.
+        for name in ("clippy.toml", ".clippy.toml"):
+            path = ROOT / name
+            if path.exists():
+                config = tomllib.loads(path.read_text(encoding="utf-8"))
+                self.assertEqual(config.get("msrv", minimum), minimum)
+        for name in ("README.md", "AGENTS.md", "docs/dependency-policy.md", "docs/verification.md"):
+            with self.subTest(document=name):
+                self.assertIn(f"Rust {minimum}", (ROOT / name).read_text(encoding="utf-8"))
+
     def test_release_gate_is_exact_candidate_and_native_required(self) -> None:
         workflow = (ROOT / ".github/workflows/release-validation.yml").read_text()
         self.assertIn("workflow_dispatch:", workflow)
@@ -34,7 +56,11 @@ class ScaffoldPolicyTests(unittest.TestCase):
         manager = renovate["customManagers"][0]
         self.assertEqual(manager["datasourceTemplate"], "github-tags")
         extractor = manager["matchStrings"][0].replace("(?<currentValue>", "(?P<currentValue>")
-        self.assertRegex((ROOT / "rust-toolchain.toml").read_text(), extractor)
+        toolchain = tomllib.loads((ROOT / "rust-toolchain.toml").read_text())
+        matches = list(re.finditer(extractor, (ROOT / "rust-toolchain.toml").read_text()))
+        self.assertEqual([match.group("currentValue") for match in matches],
+                         [toolchain["toolchain"]["channel"]])
+        self.assertEqual(manager["managerFilePatterns"], ["/^rust-toolchain\\.toml$/"])
         native_manager = renovate["customManagers"][1]
         self.assertEqual(native_manager["managerFilePatterns"], ["/^scripts\\/native-conformance\\.sh$/"])
         native_extractor = re.sub(
@@ -136,12 +162,52 @@ class ScaffoldPolicyTests(unittest.TestCase):
                                     capture_output=True, text=True, check=False)
             self.assertEqual(result.returncode, 37)
             self.assertEqual(trace.read_text(encoding="utf-8").splitlines(), [
-                f"toolchain install {minimum} --profile minimal",
+                f"toolchain install {minimum} --profile minimal --no-self-update",
                 f"run {minimum} cargo check --all-targets --locked",
             ])
             self.assertEqual(cargo_trace.read_text(encoding="utf-8").splitlines(), [
                 "fmt --all -- --check", "clippy --all-targets --locked -- -D warnings",
             ])
+
+    def test_msrv_check_uses_manifest_and_refuses_invalid_or_failed_toolchains(self) -> None:
+        script = (ROOT / "scripts/check-msrv.sh").read_text(encoding="utf-8")
+        for minimum, install_exit, run_exit, expected_exit, expected_calls in (
+            ("1.99.2", 0, 0, 0, 2),
+            ("1.99.2", 31, 0, 31, 1),
+            ("1.99.2", 0, 37, 37, 2),
+            ("1.98", 0, 0, 1, 0),
+            ("stable", 0, 0, 1, 0),
+        ):
+            with self.subTest(minimum=minimum, install_exit=install_exit, run_exit=run_exit):
+                with tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    scripts = root / "scripts"
+                    scripts.mkdir()
+                    check = scripts / "check-msrv.sh"
+                    check.write_text(script, encoding="utf-8")
+                    (root / "Cargo.toml").write_text(
+                        f'[package]\nrust-version = "{minimum}"\n', encoding="utf-8")
+                    trace = root / "trace"
+                    rustup = root / "rustup"
+                    rustup.write_text(
+                        '#!/usr/bin/env bash\n'
+                        'printf \'%s\\n\' "$*" >> "$MSRV_TRACE"\n'
+                        'if [[ $1 == toolchain ]]; then exit "$INSTALL_EXIT"; fi\n'
+                        'exit "$RUN_EXIT"\n', encoding="utf-8")
+                    rustup.chmod(0o755)
+                    env = dict(os.environ, PATH=f"{root}:{os.environ['PATH']}",
+                               MSRV_TRACE=str(trace), INSTALL_EXIT=str(install_exit),
+                               RUN_EXIT=str(run_exit))
+                    result = subprocess.run(["bash", str(check)], env=env,
+                                            capture_output=True, text=True, check=False)
+                    self.assertEqual(result.returncode, expected_exit)
+                    calls = trace.read_text(encoding="utf-8").splitlines() if trace.exists() else []
+                    self.assertEqual(calls, [
+                        f"toolchain install {minimum} --profile minimal --no-self-update",
+                        f"run {minimum} cargo check --all-targets --locked",
+                    ][:expected_calls])
+                    if expected_calls == 0:
+                        self.assertIn("must be an exact Rust release", result.stderr)
 
     def test_native_lanes_and_release_aggregate_remain_required(self) -> None:
         check = (ROOT / ".github/workflows/check.yml").read_text()

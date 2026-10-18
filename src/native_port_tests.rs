@@ -632,10 +632,11 @@ impl NativeRun {
         }
         command.args(["--path", path]);
         let output = self.capture(&mut command, input.as_deref(), 131080);
-        if !output.status.success() && matches!(output.status.code(), Some(3 | 124)) {
-            if let Some(window) = start_window {
-                window.finish_timeout();
-            }
+        if !output.status.success()
+            && matches!(output.status.code(), Some(3 | 124))
+            && let Some(window) = start_window
+        {
+            window.finish_timeout();
         }
         if !output.status.success() {
             let action = if method == "GET" && path == "/version" {
@@ -669,25 +670,27 @@ impl NativeRun {
                     "other"
                 }
             );
-            if !cleanup && method == "POST" && start {
-                if let Some((name, id)) = self.created.iter().find(|(name, id)| {
+            if !cleanup
+                && method == "POST"
+                && start
+                && let Some((name, id)) = self.created.iter().find(|(name, id)| {
                     *name == self.name("multi-dynamic-oracle")
                         && path == format!("{prefix}/containers/{id}/start")
-                }) {
-                    eprintln!("DOCKERLENS_NATIVE_PORT_DIAGNOSTIC_SCOPE: begin");
-                    let observed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        self.repeated_start_diagnostics(name, id)
-                    }));
-                    eprintln!("DOCKERLENS_NATIVE_PORT_DIAGNOSTIC_SCOPE: end");
-                    let (outcome, diagnostic) = match observed {
-                        Ok(value) => value,
-                        Err(_) => ("panic", StartDiagnostic::unknown()),
-                    };
-                    eprintln!(
-                        "{}",
-                        diagnostic.summary(outcome, self.uncertain_mutation.get())
-                    );
-                }
+                })
+            {
+                eprintln!("DOCKERLENS_NATIVE_PORT_DIAGNOSTIC_SCOPE: begin");
+                let observed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    self.repeated_start_diagnostics(name, id)
+                }));
+                eprintln!("DOCKERLENS_NATIVE_PORT_DIAGNOSTIC_SCOPE: end");
+                let (outcome, diagnostic) = match observed {
+                    Ok(value) => value,
+                    Err(_) => ("panic", StartDiagnostic::unknown()),
+                };
+                eprintln!(
+                    "{}",
+                    diagnostic.summary(outcome, self.uncertain_mutation.get())
+                );
             }
         }
         assert!(
@@ -1364,11 +1367,11 @@ printf '%s:%s\n' "$count" "$effective""#,
             command.arg(argument);
         }
         let output = self.capture(&mut command, None, NATIVE_CLI_STREAM_LIMIT);
-        if !output.status.success() {
-            if let Some(category) = namespace_failure_category(&output.stderr) {
-                eprintln!("DOCKERLENS_NATIVE_NAMESPACE_DIAG: category={category}");
-                panic!("closed outer namespace identity or probe failed");
-            }
+        if !output.status.success()
+            && let Some(category) = namespace_failure_category(&output.stderr)
+        {
+            eprintln!("DOCKERLENS_NATIVE_NAMESPACE_DIAG: category={category}");
+            panic!("closed outer namespace identity or probe failed");
         }
         output
     }

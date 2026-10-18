@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Raise the minimum supported Rust version from 1.85.0 to 1.98.1, matching the
+  pinned development toolchain. Consumers must upgrade Rust before building.
+- Replace host Engine HTTP in the native harness with DockerLens #119's
+  independent, test-only AF_UNIX transport. Preserve exact request bytes,
+  complete bounded HTTP framing and actual status, with one absolute deadline
+  and value-free failures. Caller budgets, ownership, mutation uncertainty,
+  privacy and cleanup remain authoritative; all twenty-one native invocations
+  and independent CLI/acquisition/network probes remain required. Product APIs,
+  capability admission and historical evidence are unchanged; fresh exact-head
+  native qualification and downstream consumer gates remain mandatory.
+
+
 - Implement a separate twenty-first mandatory default/zero lifecycle source probe,
   strict private reader and closed unadmitted emitter projection. Six actual
   borrowed-image container slots cover omitted/zero stops and health observations;
@@ -15,7 +27,7 @@
   every prior group and historical byte, at Debian 30 capabilities/47 shapes and
   upstream 31/49. Preserve absent-field rendering, Debian IPv6 negatives,
   HealthStartInterval withholding and unverified SELinux obligations. Fresh
-  final-candidate complete/sixteen-test four-lane and all actual volume/bind/
+  final-candidate complete/twenty-one-test four-lane and all actual volume/bind/
   desired-external consumer gates still block ready/merge/main admission/release;
   no application or native-final-candidate qualification is claimed.
 

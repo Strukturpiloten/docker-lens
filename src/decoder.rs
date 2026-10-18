@@ -1542,38 +1542,39 @@ pub fn decode_capture(capture: &Capture) -> Result<DecodedInventory, DecodeError
                 }
                 if let Some(options) =
                     field_value(&body, &["SecurityOptions"], FieldPath::DaemonMode)?
+                    && !options.is_null()
+                    && !is_redacted(options)
                 {
-                    if !options.is_null() && !is_redacted(options) {
-                        let mut rootless = false;
-                        for option in array(options, FieldPath::DaemonMode)? {
-                            let option = option
-                                .as_str()
-                                .ok_or(DecodeError::InvalidShape(FieldPath::DaemonMode))?;
-                            rootless |=
-                                option == "name=rootless" || option.starts_with("name=rootless,");
-                        }
-                        if rootless {
-                            result.version.daemon.mode = DaemonMode::Rootless;
-                        }
+                    let mut rootless = false;
+                    for option in array(options, FieldPath::DaemonMode)? {
+                        let option = option
+                            .as_str()
+                            .ok_or(DecodeError::InvalidShape(FieldPath::DaemonMode))?;
+                        rootless |=
+                            option == "name=rootless" || option.starts_with("name=rootless,");
+                    }
+                    if rootless {
+                        result.version.daemon.mode = DaemonMode::Rootless;
                     }
                 }
-                if let Some(rootless) = field_value(&body, &["Rootless"], FieldPath::DaemonMode)? {
-                    if !rootless.is_null() && !is_redacted(rootless) {
-                        let rootless = rootless
-                            .as_bool()
-                            .ok_or(DecodeError::InvalidShape(FieldPath::DaemonMode))?;
-                        let mode = if rootless {
-                            DaemonMode::Rootless
-                        } else {
-                            DaemonMode::Rootful
-                        };
-                        if result.version.daemon.mode != DaemonMode::Unknown
-                            && result.version.daemon.mode != mode
-                        {
-                            return Err(DecodeError::ConflictingFacts);
-                        }
-                        result.version.daemon.mode = mode;
+                if let Some(rootless) = field_value(&body, &["Rootless"], FieldPath::DaemonMode)?
+                    && !rootless.is_null()
+                    && !is_redacted(rootless)
+                {
+                    let rootless = rootless
+                        .as_bool()
+                        .ok_or(DecodeError::InvalidShape(FieldPath::DaemonMode))?;
+                    let mode = if rootless {
+                        DaemonMode::Rootless
+                    } else {
+                        DaemonMode::Rootful
+                    };
+                    if result.version.daemon.mode != DaemonMode::Unknown
+                        && result.version.daemon.mode != mode
+                    {
+                        return Err(DecodeError::ConflictingFacts);
                     }
+                    result.version.daemon.mode = mode;
                 }
             }
             ReadRequest::ListContainers => {
@@ -1609,15 +1610,15 @@ pub fn decode_capture(capture: &Capture) -> Result<DecodedInventory, DecodeError
                 object(&body, FieldPath::Other)?;
                 if let Some(volumes) =
                     field_value(&body, &["Volumes"], FieldPath::Volume { index: 0 })?
+                    && !volumes.is_null()
+                    && !is_redacted(volumes)
                 {
-                    if !volumes.is_null() && !is_redacted(volumes) {
-                        for item in array(volumes, FieldPath::Volume { index: 0 })? {
-                            listed_ids[2].insert(listed_id(
-                                item,
-                                FieldPath::Volume { index: 0 },
-                                "Name",
-                            )?);
-                        }
+                    for item in array(volumes, FieldPath::Volume { index: 0 })? {
+                        listed_ids[2].insert(listed_id(
+                            item,
+                            FieldPath::Volume { index: 0 },
+                            "Name",
+                        )?);
                     }
                 }
             }

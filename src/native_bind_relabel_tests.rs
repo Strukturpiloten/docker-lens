@@ -866,7 +866,7 @@ impl Run {
         assert_eq!(mount["Source"], source);
         assert_eq!(mount["Destination"], TARGET);
         assert_eq!(mount["Mode"], MODES[attempt.case]);
-        assert_eq!(mount["RW"], attempt.case % 2 == 0);
+        assert_eq!(mount["RW"], attempt.case.is_multiple_of(2));
         assert!(
             value["State"]["Running"] == true && value["State"]["Status"] == "running",
             "closed bind running positive"
@@ -903,7 +903,7 @@ impl Run {
         assert_eq!(mount.read_write.origin, Origin::Effective);
         assert_eq!(
             *mount.read_write.value().unwrap(),
-            self.history[index].case % 2 == 0
+            self.history[index].case.is_multiple_of(2)
         );
         assert_eq!(
             mount.mode_interpretation.availability,
@@ -914,7 +914,7 @@ impl Run {
         assert_eq!(
             mount.mode_interpretation.value(),
             Some(&MountModeInterpretation::Supported {
-                access: Some(if case % 2 == 0 {
+                access: Some(if case.is_multiple_of(2) {
                     MountAccess::ReadWrite
                 } else {
                     MountAccess::ReadOnly
