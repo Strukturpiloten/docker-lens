@@ -143,6 +143,30 @@ child against its existing independent external context and exactly typed
 return-contract failure rejects the entire public output. There is no public PIDs
 projection, capability/shape mapping or schema addition. Raw counts remain
 43/66 and 45/70; selection remains 34/56 and 36/60.
+[ADR 0030](decisions/0030-rootless-positive-pids-prerequisite.md) adds an early
+rootless-only prerequisite for that unchanged positive contract: the already
+collected, sanitized cgroup driver/version must be systemd/v2. After ENV reporting
+but before fixture pull or all 28 native invocations, other/unavailable values
+emit DOCKERLENS_NATIVE_PREREQUISITE: rootless_positive_pids_requires_systemd_cgroup_v2
+and exit nonzero through the existing owned-resource EXIT cleanup. No query,
+fallback, skip, negative qualification or rootful behavior change is added.
+Systemd/v2 is necessary, not sufficient: all positive effects, controller,
+ownership, proof and cleanup checks remain mandatory. The rootless delegation
+fixture and rootful procfs/PID-coordinate/controller-boundary evidence gaps remain
+open. Mock-only continuation is not native evidence; four-profile positive
+qualification still requires genuine passing proofs.
+
+Reviewed failed run 39173069422, attempt 1, tested
+19f1ce4c15c81dd1003e79065be4c5bddb0c17e9: 104 prior passes then four PIDs-27
+failures, no nofile-28 execution, artifacts or cleanup-dependent lane successes.
+Its independently authenticated existing ENV lines report none/v2 rootless and
+cgroupfs/v2 rootful, not a proven runtime cause. ADR 0030 records the immutable
+original-review and supplement hashes plus pinned official Docker documentation.
+Existing pins, all 28 invocation lines/six owner blocks, twelve/nineteen-argument
+interfaces, private readers/protocols and budgets remain unchanged. Local,
+main-push, trusted dispatch and release consumers use the same canonical harness;
+the unchanged five pins retain their Renovate extraction/grouping/review ownership.
+
 [ADR 0029](decisions/0029-pids-failure-localization.md) adds actual closed
 source-local stages and resolver/controller-refusal classifications. Only the last valid
 pre-first-panic stage and its single phase-compatible classification are exposed

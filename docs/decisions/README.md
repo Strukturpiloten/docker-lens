@@ -31,6 +31,7 @@ Durable native boundaries and evidence/admission contracts:
 - [0027: Mandatory PIDs private qualification](0027-pids-limit-private-qualification.md)
 - [0028: Mandatory nofile private qualification](0028-nofile-private-qualification.md)
 - [0029: Closed PIDs failure localization](0029-pids-failure-localization.md)
+- [0030: Rootless positive-PIDs prerequisite](0030-rootless-positive-pids-prerequisite.md)
 
 ADR 0022 supersedes ADR 0019's active-cohort selection for candidate rehearsal:
 complete StopTimeout/init/rootfs/tmpfs groups on all lanes, with
@@ -68,3 +69,7 @@ changing predicates, budgets, ownership, proof protocols or qualification gates.
 Failed campaign 39165508951 remains unqualified; no runtime cause is established.
 Current combined raw totals are Debian 43/66 and upstream 45/70; compiled
 selection stays 34/56 and 36/60. These nine raw groups remain unselected.
+ADR 0030 adds an early fail-closed systemd/cgroup-v2 prerequisite for the existing
+mandatory positive rootless PIDs contract, using already collected observations.
+It changes no positive proof, invocation, pin or rootful behavior and does not
+qualify the unresolved rootless fixture or rootful PID-coordinate/boundary gaps.

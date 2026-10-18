@@ -1599,6 +1599,148 @@ fi
             self.assertEqual(result.stdout, "1.1.5+ds1-1+deb11u2|unavailable|unavailable")
             self.assertNotIn("protected-secret", result.stdout + result.stderr)
 
+    def test_rootless_positive_pids_prerequisite_precedes_fixture_and_all_native_tests(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text()
+        diagnostic = "DOCKERLENS_NATIVE_PREREQUISITE: rootless_positive_pids_requires_systemd_cgroup_v2"
+        self.assertEqual(source.count(diagnostic), 1)
+        self.assertLess(source.index('echo "DOCKERLENS_NATIVE_ENV:'), source.index(diagnostic))
+        self.assertLess(source.index(diagnostic), source.index('"${inner_docker[@]}" pull "$FIXTURE_IMAGE"'))
+        calls = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" \w+ \w+$', source, re.M)
+        self.assertEqual(len(calls), 28)
+        self.assertTrue(all(source.index(diagnostic) < source.index(call) for call in calls))
+        guard = source.split('if [[ $expected_mode == rootless ]]; then\n  # Necessary', 1)[1].split(
+            '  [[ $docker_root ==', 1
+        )[0]
+        self.assertIn('[[ $inner_cgroup_driver != systemd || $inner_cgroup != 2 ]]', guard)
+        self.assertIn('exit 1', guard)
+        for forbidden in ('timeout ', 'exec ', 'info ', 'python3 ', 'return 0', 'continue'):
+            self.assertNotIn(forbidden, guard)
+
+    def test_rootless_positive_pids_prerequisite_refuses_and_cleans_exact_owned_resources(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text()
+        helpers = "cleanup_podman() {" + source.split("cleanup_podman() {", 1)[1].split(
+            "\ntrap cleanup EXIT", 1
+        )[0] + "\ntrap cleanup EXIT\n"
+        observations = "docker_root=$(timeout " + source.split("docker_root=$(timeout ", 1)[1].split(
+            "\n# Docker CLI errors", 1
+        )[0] + "\n"
+        diagnostic = "DOCKERLENS_NATIVE_PREREQUISITE: rootless_positive_pids_requires_systemd_cgroup_v2"
+        fake_podman = '''#!/usr/bin/env bash
+set -eu
+if [[ $1 == exec ]]; then
+  [[ $2 == dl-native-synthetic && $3 == dpkg-query ]] || exit 43
+  printf 'package-query\n' >> "$FAKE_STATE/queries"
+  echo 1.2.3
+  exit 0
+fi
+for name; do :; done
+case "$name" in
+  "$FAKE_OUTER_ID"|dl-native-synthetic) role=container ;;
+  "$FAKE_SIDECAR_ID"|dl-native-egress-synthetic) role=sidecar ;;
+  dl-native-net-synthetic) role=network ;;
+  dl-native-data-synthetic) role=volume ;;
+  *) exit 44 ;;
+esac
+if [[ $1 == inspect || ${2:-} == inspect ]]; then
+  case $role in
+    container) printf '%s|dl-native-synthetic|synthetic\n' "$FAKE_OUTER_ID" ;;
+    sidecar) printf '%s|dl-native-egress-synthetic|synthetic\n' "$FAKE_SIDECAR_ID" ;;
+    volume) echo 'dl-native-data-synthetic|local|/mock/volume|created|synthetic' ;;
+    network) echo synthetic ;;
+  esac
+elif [[ ${2:-} == exists ]]; then
+  [[ -e $FAKE_STATE/$role ]]
+elif [[ $1 == rm || ${2:-} == rm ]]; then
+  case $role in
+    container|sidecar) [[ $* == "rm --force --time 0 $name" ]] || exit 45 ;;
+    network) [[ $* == "network rm $name" ]] || exit 46
+      [[ ! -e $FAKE_STATE/container && ! -e $FAKE_STATE/sidecar ]] || exit 47 ;;
+    volume) [[ $* == "volume rm $name" ]] || exit 48
+      [[ ! -e $FAKE_STATE/container ]] || exit 49 ;;
+  esac
+  printf '%s\n' "$*" >> "$FAKE_STATE/removals"
+  rm "$FAKE_STATE/$role"
+else exit 50; fi
+'''
+        fake_docker = '''#!/usr/bin/env bash
+set -eu
+if [[ $1 == info && $2 == --format ]]; then
+  printf '%s\n' "$3" >> "$FAKE_STATE/queries"
+  case $3 in
+    '{{.DockerRootDir}}')
+      if [[ $FAKE_MODE == rootless ]]; then echo /home/docker/.local/share/docker
+      else echo /var/lib/docker; fi ;;
+    '{{.CgroupVersion}}') printf '%s\n' "$FAKE_CGROUP_VERSION" ;;
+    '{{.CgroupDriver}}')
+      [[ $FAKE_CGROUP_DRIVER != query_error ]] || exit 87
+      printf '%s\n' "$FAKE_CGROUP_DRIVER" ;;
+    *) exit 51 ;;
+  esac
+elif [[ $1 == pull && $2 == fixture-pinned ]]; then
+  printf 'fixture-pull\n' >> "$FAKE_STATE/continuation"
+else exit 52; fi
+'''
+        cases = (
+            ("rootless", "none", "2", False),
+            ("rootless", "protected-secret", "2", False),
+            ("rootless", "query_error", "2", False),
+            ("rootless", "systemd", "1", False),
+            ("rootless", "systemd", "unavailable", False),
+            ("rootless", "systemd", "protected-secret", False),
+            ("rootless", "systemd", "2", True),
+            ("rootful", "cgroupfs", "2", True),
+            ("rootful", "none", "2", True),
+            ("rootful", "systemd", "1", True),
+            ("rootful", "protected-secret", "unavailable", True),
+        )
+        for mode, driver, version, admitted in cases:
+            with self.subTest(mode=mode, driver=driver, version=version), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                state = root / "state"
+                state.mkdir()
+                for role in ("container", "sidecar", "network", "volume", "foreign-resource"):
+                    (state / role).write_text("untouched")
+                self._tool(root, "fake_podman", fake_podman)
+                self._tool(root, "fake_docker", fake_docker)
+                env = dict(os.environ, PATH=f"{root}:{os.environ['PATH']}", TMPDIR=str(root),
+                           FAKE_STATE=str(state), FAKE_OUTER_ID="a" * 64, FAKE_SIDECAR_ID="b" * 64,
+                           FAKE_MODE=mode, FAKE_CGROUP_DRIVER=driver, FAKE_CGROUP_VERSION=version)
+                with tempfile.TemporaryDirectory(prefix="dockerlens-native.", dir=root) as run_dir:
+                    script = (
+                        "set -euo pipefail\npodman_cmd=(fake_podman)\ninner_docker=(fake_docker)\n"
+                        f"expected_mode={mode}\nlane=upstream-{mode}\n"
+                        "watchdog_pid=\nrun_id=synthetic\npreserve_run_dir=0\nnative_success_summary=\n"
+                        "container=dl-native-synthetic\nsidecar=dl-native-egress-synthetic\n"
+                        "outer_network=dl-native-net-synthetic\nvolume=dl-native-data-synthetic\n"
+                        "outer_attempted=1; sidecar_attempted=1; network_attempted=1; network_created=1; volume_attempted=1\n"
+                        "outer_container_id=$FAKE_OUTER_ID; sidecar_container_id=$FAKE_SIDECAR_ID\n"
+                        "volume_identity='dl-native-data-synthetic|local|/mock/volume|created|synthetic'\n"
+                        "FIXTURE_IMAGE=fixture-pinned\n"
+                        f"script_dir={shlex.quote(str(ROOT / 'scripts'))}\nrun_dir={shlex.quote(run_dir)}\n"
+                        + helpers + observations
+                        + "printf 'mock-native-continuation\\n' >> \"$FAKE_STATE/continuation\"\n"
+                    )
+                    result = subprocess.run(["bash", "-c", script], env=env, capture_output=True,
+                                            text=True, timeout=10, check=False)
+                    self.assertEqual(result.returncode, 0 if admitted else 1, result.stderr)
+                    self.assertFalse(Path(run_dir).exists())
+                self.assertEqual(result.stderr.count(diagnostic), 0 if admitted else 1)
+                self.assertNotIn("protected-secret", result.stdout + result.stderr)
+                self.assertEqual((state / "foreign-resource").read_text(), "untouched")
+                self.assertEqual((state / "queries").read_text().splitlines(),
+                                 ["{{.DockerRootDir}}", "{{.CgroupVersion}}", "{{.CgroupDriver}}"]
+                                 + ["package-query"] * 3)
+                self.assertEqual((state / "removals").read_text().splitlines(),
+                                 ["rm --force --time 0 " + "a" * 64, "rm --force --time 0 " + "b" * 64,
+                                  "network rm dl-native-net-synthetic", "volume rm dl-native-data-synthetic"])
+                self.assertTrue(all(not (state / role).exists() for role in ("container", "sidecar", "network", "volume")))
+                if admitted:
+                    self.assertEqual((state / "continuation").read_text().splitlines(),
+                                     ["fixture-pull", "mock-native-continuation"])
+                else:
+                    self.assertFalse((state / "continuation").exists())
+                    self.assertIn("native lane upstream-rootless failed", result.stderr)
+
     def test_probe_error_categories_never_echo_private_details(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         classifier = "classify_probe_error() {" + source.split(

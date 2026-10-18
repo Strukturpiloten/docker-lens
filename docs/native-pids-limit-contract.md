@@ -9,6 +9,27 @@ private proof even without public PIDs projection. The private protocol, reader 
 claim. The primary owns complete/four-lane gates. Product output stays inert;
 no pin, public API, schema or historical record changes.
 
+## Early rootless positive-qualification prerequisite
+
+[ADR 0030](decisions/0030-rootless-positive-pids-prerequisite.md) requires reported
+systemd and cgroup v2 for a rootless lane, after the existing sanitized ENV line
+and before fixture pull or any of the 28 mandatory native invocations. Other or
+unavailable values emit the fixed
+DOCKERLENS_NATIVE_PREREQUISITE: rootless_positive_pids_requires_systemd_cgroup_v2
+diagnostic and exit nonzero through the existing owned-resource EXIT cleanup.
+No runtime query, fallback, skip or negative qualification is added; rootful
+behavior, all positive assertions/proofs and budgets remain unchanged.
+
+This is a necessary condition from the pinned official Docker rootless resource
+documentation, never sufficient evidence of effects, ownership or compatibility.
+Run 39173069422 at 19f1ce4c15c81dd1003e79065be4c5bddb0c17e9 failed PIDs in all
+four lanes after 104 prior passes; nofile 28 was not reached and no artifacts or
+cleanup-dependent lane successes were produced. Its separately authenticated
+existing ENV lines report none/v2 rootless and cgroupfs/v2 rootful. Those reports
+do not establish a runtime cause or actual enforcement. The rootless delegation
+fixture prerequisite and rootful PID-coordinate/controller-boundary proof gaps
+remain open; all four positive profiles still require genuine qualification.
+
 ## Failure localization and canonical mapped paths
 
 [ADR 0029](decisions/0029-pids-failure-localization.md) supersedes only ADR 0027's

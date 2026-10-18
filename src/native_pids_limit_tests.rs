@@ -814,18 +814,31 @@ fn pids_controller(
         pids["kind"] == memory["kind"],
         "same known cgroup generation"
     );
+    let bytes = pids_shell(
+        run,
+        PIDS_CONTROLLER_READ,
+        &[
+            pids["path"].as_str().unwrap().into(),
+            pids["outer_path"].as_str().unwrap().into(),
+            memory["path"].as_str().unwrap().into(),
+            memory["outer_path"].as_str().unwrap().into(),
+            pids["kind"].as_str().unwrap().into(),
+        ],
+    );
+    pids_controller_frame(bytes, rows, phase, pids, memory)
+}
+
+// Keep raw membership comparison and subsequent proof packing on the live path.
+// Pure fixtures exercise the same parser without launching an observer command.
+fn pids_controller_frame(
+    bytes: Vec<u8>,
+    rows: &[Value],
+    phase: &str,
+    pids: &mut Value,
+    memory: &mut Value,
+) -> (Value, String) {
     let lines = pids_lines(
-        pids_shell(
-            run,
-            PIDS_CONTROLLER_READ,
-            &[
-                pids["path"].as_str().unwrap().into(),
-                pids["outer_path"].as_str().unwrap().into(),
-                memory["path"].as_str().unwrap().into(),
-                memory["outer_path"].as_str().unwrap().into(),
-                pids["kind"].as_str().unwrap().into(),
-            ],
-        ),
+        bytes,
         &[
             "STAT",
             "MAX",
@@ -1697,6 +1710,158 @@ fn pids_controller_diagnostics_use_only_canonical_existing_current_observations(
         for members_match in [false, true] {
             assert_eq!(pids_controller_failure(members_match, &lines, 2), None);
         }
+    }
+}
+
+// Independently authored complete shell frames, not packed proof-reader rows.
+// Private PID order is deliberately the reverse of noncontiguous outer PID order.
+fn pids_raw_frame_fixture() -> (&'static str, &'static str) {
+    (
+        "PIDNS pid:[700]\nMNTNS mnt:[701]\nCGNS cgroup:[702]\nINIT 4317\n\
+U 0 1000 1\nG 0::/owned/leaf\nL Max processes 4096 4096 processes\n\
+F state WORKER 2\nF out READY 2\n\
+R 2579 2 4317 50003 1000 2579 72 2\nT 2579 Max processes 4096 4096 processes\n\
+R 4317 1 77 50000 1000 4317 71 1\nT 4317 Max processes 4096 4096 processes\n\
+R 903 9 2579 50008 1000 903 79 9\nT 903 Max processes 4096 4096 processes\nEND\n",
+        "STAT /sys/fs/cgroup/owned/leaf 41 1701\nSTAT /sys/fs/cgroup/owned 41 1700\n\
+MAX 16\nCURRENT 3\nSOURCE pids.events.local\nDENIALS 0\n\
+MEMBER 2579\nMEMBER 4317\nMEMBER 903\n\
+OUTERPIDS 11\nOUTERMAX 512\nOUTERMEMORY 1048576\nOUTERMEMMAX 4294967296\n\
+OOM 0\nANCESTOR 11\nCEILING 512\nEND\n",
+    )
+}
+
+fn pids_raw_scan_rows(frame: &str) -> Vec<Value> {
+    pids_rows(&pids_lines(
+        frame.as_bytes().to_vec(),
+        &[
+            "PIDNS", "MNTNS", "CGNS", "INIT", "U", "G", "L", "F", "R", "T",
+        ],
+    ))
+}
+
+fn pids_raw_controller(frame: &str, rows: &[Value]) -> (Value, String) {
+    let mapping = json!({"kind":"v2","path":"/sys/fs/cgroup/owned/leaf","outer_path":"/sys/fs/cgroup/owned","inode":0,"device":0});
+    pids_controller_frame(
+        frame.as_bytes().to_vec(),
+        rows,
+        "baseline",
+        &mut mapping.clone(),
+        &mut mapping.clone(),
+    )
+}
+
+#[test]
+fn pids_raw_frames_compare_outer_members_before_delta_encoding() {
+    let (scan, controller) = pids_raw_frame_fixture();
+    let rows = pids_raw_scan_rows(scan);
+    assert_eq!(
+        rows,
+        vec![
+            json!([4317, 1, 77, 50000, 1000]),
+            json!([2579, 2, 4317, 50003, 1000]),
+            json!([903, 9, 2579, 50008, 1000]),
+        ]
+    );
+    let (proof, source) = pids_raw_controller(controller, &rows);
+    assert_eq!(source, "pids.events.local");
+    assert_eq!(
+        proof,
+        json!({"rows":[[0,1,-4240,0,0],[-1738,2,0,3,0],[-3414,9,-1738,8,0]],"members":[-3414,-1738,0],"pids_current":3,"pids_max":16,"denials":0,"oom_kills":0,"outer_pids":11,"outer_memory":1048576,"ancestor_headroom":501,"phase":"baseline"})
+    );
+    // Encoding is output-only: raw MEMBER lines above contain neither these
+    // deltas nor private PIDs. Reconstruct the independently expected outer IDs.
+    let reconstructed: Vec<_> = proof["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|pid| pid.as_i64().unwrap() + 4317)
+        .collect();
+    assert_eq!(reconstructed, vec![903, 2579, 4317]);
+}
+
+#[test]
+fn pids_raw_controller_frames_keep_membership_and_parser_refusals() {
+    let (scan, controller) = pids_raw_frame_fixture();
+    let rows = pids_raw_scan_rows(scan);
+    for (frame, expected_panic) in [
+        (
+            controller.replace(
+                "MEMBER 2579\nMEMBER 4317\nMEMBER 903",
+                "MEMBER 2\nMEMBER 1\nMEMBER 9",
+            ),
+            "exclusive single-threaded leaf membership",
+        ),
+        (
+            controller.replace("MEMBER 903\n", "MEMBER 903\nMEMBER 903\n"),
+            "exclusive single-threaded leaf membership",
+        ),
+        (
+            controller.replace("CURRENT 3\n", "CURRENT 3\nCURRENT 3\n"),
+            "unique PID frame field",
+        ),
+        (
+            controller.replace("MEMBER 903\n", "MEMBER 0903\n"),
+            "canonical PID decimal",
+        ),
+        (
+            controller.replace("CURRENT 3\n", "CURRENT 03\n"),
+            "canonical PID decimal",
+        ),
+        (
+            controller.replace("CURRENT 3\n", "CURRENT 2\n"),
+            "exclusive single-threaded leaf membership",
+        ),
+        (
+            controller.replace("END\n", "END\nEND\n"),
+            "closed complete PID frame keys",
+        ),
+        (controller.replace("END\n", "END"), "complete PID frame"),
+        (
+            controller.replace("END\n", "UNKNOWN 1\nEND\n"),
+            "closed complete PID frame keys",
+        ),
+        // A mismatched member set must still short-circuit CURRENT parsing.
+        (
+            controller
+                .replace("MEMBER 903\n", "MEMBER 9\n")
+                .replace("CURRENT 3\n", "CURRENT 03\n"),
+            "exclusive single-threaded leaf membership",
+        ),
+    ] {
+        let panic = std::panic::catch_unwind(|| pids_raw_controller(&frame, &rows)).unwrap_err();
+        let message = panic
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| panic.downcast_ref::<String>().map(String::as_str));
+        assert_eq!(message, Some(expected_panic));
+    }
+}
+
+#[test]
+fn pids_raw_scan_frames_keep_namespace_binding_and_duplicate_refusals() {
+    let (scan, controller) = pids_raw_frame_fixture();
+    for frame in [
+        scan.replace("INIT 4317\n", "INIT 4317\nINIT 4317\n"),
+        scan.replace("1000 903 79 9", "1000 904 79 9"),
+        scan.replace("1000 903 79 9", "1000 903 79 8"),
+        scan.replace(
+            "R 903 9 2579 50008 1000 903 79 9",
+            "R 903 9 2579 50008 1000",
+        ),
+        scan.replace("R 903 9", "R 0903 9")
+            .replace("1000 903 79 9", "1000 0903 79 9"),
+        scan.replace("END\n", "END\nEND\n"),
+        scan.replace("END\n", "END"),
+        // Repeated R lines remain visible to the unchanged membership equality.
+        scan.replace("END\n", "R 903 9 2579 50008 1000 903 79 9\nEND\n"),
+    ] {
+        assert!(
+            std::panic::catch_unwind(|| {
+                pids_raw_controller(controller, &pids_raw_scan_rows(&frame))
+            })
+            .is_err()
+        );
     }
 }
 

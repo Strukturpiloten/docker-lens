@@ -742,6 +742,11 @@ native_package_version() {
 }
 echo "DOCKERLENS_NATIVE_ENV: cgroup_driver=$inner_cgroup_driver cgroup_version=$inner_cgroup runc=$(native_package_version runc) containerd=$(native_package_version containerd) libseccomp2=$(native_package_version libseccomp2)"
 if [[ $expected_mode == rootless ]]; then
+  # Necessary for the mandatory positive PIDs proof, never proof of its effects.
+  if [[ $inner_cgroup_driver != systemd || $inner_cgroup != 2 ]]; then
+    echo 'DOCKERLENS_NATIVE_PREREQUISITE: rootless_positive_pids_requires_systemd_cgroup_v2' >&2
+    exit 1
+  fi
   [[ $docker_root == /home/docker/.local/share/docker ]] || { echo 'rootless daemon store is outside owned volume' >&2; exit 1; }
 else
   [[ $docker_root == /var/lib/docker ]] || { echo 'rootful daemon store is outside owned volume' >&2; exit 1; }

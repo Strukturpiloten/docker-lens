@@ -72,6 +72,12 @@ and equal-owner/outside-prefix refusals without new observations. Procfs/control
 PID-coordinate equivalence and an authenticated exact owned controller boundary
 remain unresolved positive-proof requirements, not established runtime causes.
 Fresh native qualification remains pending.
+[ADR 0030](docs/decisions/0030-rootless-positive-pids-prerequisite.md) fails early
+for rootless lanes unless already collected cgroup metadata reports systemd/v2,
+before fixture pull or native tests. Refusal uses existing owned-resource cleanup.
+This necessary prerequisite is not a PIDs fix, negative qualification or positive
+effect proof. Rootful behavior and all 28 mandatory tests remain unchanged; actual
+rootless delegation and rootful PID-coordinate/boundary proof gaps remain open.
 [ADR 0028](docs/decisions/0028-nofile-private-qualification.md) appends mandatory
 private nofile invocation 28 and its strict independent proof gate, also without
 public emission. Its existing four-case/eight-fixture CLI/rendered experiment retains precise

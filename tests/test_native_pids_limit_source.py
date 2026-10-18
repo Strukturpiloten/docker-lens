@@ -222,7 +222,7 @@ class PidsLimitSourceTests(unittest.TestCase):
 
     def test_controller_diagnostics_preserve_original_short_circuit_and_never_query(self):
         source = SOURCE.read_text()
-        controller = source.split("fn pids_controller(", 1)[1].split("fn ", 1)[0]
+        controller = source.split("fn pids_controller(", 1)[1].split("fn pids_control(", 1)[0]
         original = ('assert!( members == expected && pids_u64(pids_field(&lines, "CURRENT")) '
                     '== rows.len() as u64, "exclusive single-threaded leaf membership" );')
         self.assertIn(original, re.sub(r"\s+", " ", controller))
@@ -241,6 +241,31 @@ class PidsLimitSourceTests(unittest.TestCase):
                                        "members_and_current_mismatch"})
         self.assertEqual(controller.count("pids_shell("), 1)
         self.assertIn('fn pids_controller_diagnostics_use_only_canonical_existing_current_observations()', source)
+
+
+    def test_raw_frame_regressions_share_live_controller_parser_before_packing(self):
+        source = SOURCE.read_text()
+        live = source.split("fn pids_controller(", 1)[1].split("fn pids_controller_frame(", 1)[0]
+        pure = source.split("fn pids_controller_frame(", 1)[1].split("fn pids_control(", 1)[0]
+        self.assertEqual(live.count("pids_shell("), 1)
+        delegation = "pids_controller_frame(bytes, rows, phase, pids, memory)"
+        self.assertEqual(live.count(delegation), 1)
+        self.assertLess(live.index('pids["kind"] == memory["kind"]'), live.index("pids_shell("))
+        self.assertLess(live.index("pids_shell("), live.index(delegation))
+        for forbidden in ("pids_shell(", "run.", "docker("):
+            self.assertNotIn(forbidden, pure)
+        self.assertIn("let lines = pids_lines(", pure)
+        self.assertIn('rows.iter().map(|row| row[0].as_u64().unwrap())', pure)
+        self.assertLess(pure.index('"exclusive single-threaded leaf membership"'), pure.index("let packed:"))
+        for regression in (
+            "pids_raw_frames_compare_outer_members_before_delta_encoding",
+            "pids_raw_controller_frames_keep_membership_and_parser_refusals",
+            "pids_raw_scan_frames_keep_namespace_binding_and_duplicate_refusals",
+        ):
+            self.assertIn(f"fn {regression}()", source)
+        fixture = source.split("fn pids_raw_frame_fixture()", 1)[1].split("fn pids_raw_scan_rows(", 1)[0]
+        self.assertIn('R 903 9 2579 50008 1000 903 79 9', fixture)
+        self.assertIn('MEMBER 2579\\nMEMBER 4317\\nMEMBER 903', fixture)
 
 
 if __name__ == "__main__":
