@@ -23,6 +23,9 @@ mod kernel_settings;
 #[path = "native_nofile_tests.rs"]
 mod nofile;
 
+#[path = "native_pids_limit_tests.rs"]
+mod pids_limit;
+
 #[path = "native_shm_size_tests.rs"]
 mod shm_size;
 

@@ -14,6 +14,8 @@ const CASES: [(&str, Option<bool>); 3] = [
     ("true_one", Some(true)),
 ];
 const BODY_ALLOWANCE: usize = 512 * 1024;
+const CLEANUP_INSPECT_BODY_BYTES: usize = 65536;
+const CLEANUP_PROJECTION_ENVELOPE: usize = 8192 + 2048;
 const CHILD: &str = r#"test "$$" -gt 1 || exit 61
 umask 077
 {
@@ -581,6 +583,231 @@ fn acquisition(run: &HealthRun, states: &[(FieldState, FieldState)]) -> Value {
         "separate_transport_bounds":{"response_header_bytes":16384,"chunk_line_bytes":64,"chunk_payload_crlf_bytes":2,"final_trailer_line_bytes":16384,"actual_wire_bytes":"not_measured"}})
 }
 
+// Consume the same full bounded inspect body, without emitting Cmd/Args through
+// cleanup's smaller stdout cap. This is kernel-local, not a transport change.
+fn kernel_cleanup_room(calls: usize, bytes: usize) -> bool {
+    calls < MAX_CALLS
+        && bytes
+            .checked_add(CLEANUP_INSPECT_BODY_BYTES)
+            .and_then(|total| total.checked_add(CLEANUP_PROJECTION_ENVELOPE))
+            .is_some_and(|total| total <= MAX_BYTES)
+}
+
+fn kernel_cleanup_charge(counted_with_reservation: usize, actual_body: usize) -> Option<usize> {
+    let unused = CLEANUP_INSPECT_BODY_BYTES.checked_sub(actual_body)?;
+    counted_with_reservation.checked_sub(unused)
+}
+
+fn kernel_cleanup_inspect(run: &HealthRun, key: &str) -> (u16, Value) {
+    let path = format!("/v{}/containers/{key}/json", run.api);
+    assert!(
+        run.request_allowed("GET", &path),
+        "original exact kernel cleanup GET authorization"
+    );
+    assert!(
+        kernel_cleanup_room(run.calls.get(), run.bytes.get()),
+        "full kernel cleanup body and stream capacity before I/O"
+    );
+    let reserved = run
+        .bytes
+        .get()
+        .checked_add(CLEANUP_INSPECT_BODY_BYTES)
+        .unwrap_or_else(|| panic!("bounded kernel cleanup body reservation"));
+    run.bytes.set(reserved);
+    let mut command = run.timer(true, false);
+    command.args([
+        "python3",
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/scripts/native_kernel_cleanup.py"
+        ),
+        "--socket",
+        &run.socket,
+        "--path",
+        &path,
+    ]);
+    // Failure retains the full body charge; capture separately charges actual
+    // retained projection stdout/stderr, even when capture itself panics.
+    let output = run.capture(&mut command, None, true);
+    assert!(
+        output.ends_with(b"\n"),
+        "complete private kernel cleanup projection frame"
+    );
+    let frame: Value = serde_json::from_slice(&output)
+        .unwrap_or_else(|_| panic!("closed private kernel cleanup projection JSON"));
+    assert!(
+        frame.as_object().is_some_and(|object| object.len() == 3
+            && object.contains_key("status")
+            && object.contains_key("body_bytes")
+            && object.contains_key("object")),
+        "closed kernel cleanup projection fields"
+    );
+    let status = match frame["status"].as_u64() {
+        Some(200) => 200,
+        Some(404) => 404,
+        _ => panic!("closed actual kernel cleanup HTTP status"),
+    };
+    let body_bytes = frame["body_bytes"]
+        .as_u64()
+        .and_then(|count| usize::try_from(count).ok())
+        .filter(|count| (1..=CLEANUP_INSPECT_BODY_BYTES).contains(count))
+        .unwrap_or_else(|| panic!("actual bounded kernel cleanup body count"));
+    let object = &frame["object"];
+    assert!(
+        if status == 404 {
+            object.is_null()
+        } else {
+            object.as_object().is_some_and(|value| {
+                value.len() == 3
+                    && value.contains_key("Id")
+                    && value.contains_key("Name")
+                    && value.contains_key("Config")
+            }) && object["Id"].as_str().is_some_and(identifier)
+                && object["Name"].is_string()
+                && object["Config"].as_object().is_some_and(|value| {
+                    value.len() == 2 && value.contains_key("Image") && value.contains_key("Labels")
+                })
+                && object["Config"]["Image"].is_string()
+                && object["Config"]["Labels"].as_object().is_some_and(|value| {
+                    value.len() == 1 && value.get(OWNER).is_some_and(Value::is_string)
+                })
+        },
+        "closed actual kernel cleanup ownership projection"
+    );
+    let charged = kernel_cleanup_charge(run.bytes.get(), body_bytes)
+        .unwrap_or_else(|| panic!("checked kernel cleanup body accounting reconciliation"));
+    assert!(
+        charged <= MAX_BYTES,
+        "unchanged aggregate kernel cleanup byte limit"
+    );
+    run.bytes.set(charged);
+    (status, object.clone())
+}
+
+fn kernel_cleanup_with(
+    attempted: &[bool],
+    ids: &[Option<String>],
+    inner: impl FnOnce() -> CleanupDisposition,
+) -> CleanupDisposition {
+    if attempted.len() != 6
+        || ids.len() != 6
+        || attempted
+            .iter()
+            .zip(ids)
+            .any(|(attempted, id)| *attempted && !id.as_deref().is_some_and(identifier))
+    {
+        // No unknown-create name recovery or inner I/O is authorized here.
+        return CleanupDisposition::OuterTeardownRequired;
+    }
+    inner()
+}
+
+fn remove_kernel_container(run: &HealthRun, index: usize) -> bool {
+    let Some(id) = run.ids[index].as_deref().filter(|id| identifier(id)) else {
+        return false;
+    };
+    let (status, value) = kernel_cleanup_inspect(run, &run.names[index]);
+    if status == 404 {
+        return true;
+    }
+    if status != 200 || !owned(run, &value, index, Some(id)) {
+        return false;
+    }
+    if id == required("NATIVE_OUTER_CONTAINER_ID")
+        || run
+            .ids
+            .iter()
+            .enumerate()
+            .any(|(other, registered)| other != index && registered.as_deref() == Some(id))
+    {
+        return false;
+    }
+    let (status, immediate) = kernel_cleanup_inspect(run, id);
+    if status != 200 || !owned(run, &immediate, index, Some(id)) {
+        return false;
+    }
+    run.api(
+        "DELETE",
+        &format!("/v{}/containers/{id}?force=1", run.api),
+        None,
+        true,
+    )
+    .0 == 204
+        && run.inspect(id, true).0 == 404
+        && run.inspect(&run.names[index], true).0 == 404
+}
+
+fn cleanup_kernel(run: &HealthRun) -> CleanupDisposition {
+    kernel_cleanup_with(&run.attempted, &run.ids, || {
+        let mut verified = true;
+        for index in 0..run.names.len() {
+            if run.attempted[index] {
+                verified &= std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    remove_kernel_container(run, index)
+                }))
+                .unwrap_or(false);
+            }
+        }
+        for _ in 0..2 {
+            for index in 0..run.names.len() {
+                if run.attempted[index] {
+                    verified &= std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        run.ids[index]
+                            .as_ref()
+                            .is_some_and(|id| run.inspect(id, true).0 == 404)
+                            && run.inspect(&run.names[index], true).0 == 404
+                    }))
+                    .unwrap_or(false);
+                }
+            }
+        }
+        cleanup_disposition(verified)
+    })
+}
+
+#[test]
+fn kernel_cleanup_guard_and_body_accounting_controls_are_nonpositive_on_unknowns() {
+    let attempted = vec![true; 6];
+    let valid: Vec<_> = (1..=6).map(|value| Some(format!("{value:064x}"))).collect();
+    for invalid in [None, Some("malformed".to_owned()), Some("A".repeat(64))] {
+        let mut ids = valid.clone();
+        ids[2] = invalid;
+        let called = Cell::new(false);
+        assert!(
+            kernel_cleanup_with(&attempted, &ids, || {
+                called.set(true);
+                CleanupDisposition::VerifiedAbsent
+            }) == CleanupDisposition::OuterTeardownRequired
+                && !called.get(),
+            "unknown kernel create ID forbids inner cleanup"
+        );
+    }
+    let called = Cell::new(false);
+    assert!(
+        kernel_cleanup_with(&attempted, &valid, || {
+            called.set(true);
+            CleanupDisposition::VerifiedAbsent
+        }) == CleanupDisposition::VerifiedAbsent
+            && called.get(),
+        "known canonical IDs allow ordinary cleanup"
+    );
+    let full = CLEANUP_INSPECT_BODY_BYTES + CLEANUP_PROJECTION_ENVELOPE;
+    assert!(kernel_cleanup_room(MAX_CALLS - 1, MAX_BYTES - full));
+    assert!(
+        !kernel_cleanup_room(MAX_CALLS, 0)
+            && !kernel_cleanup_room(0, MAX_BYTES - full + 1)
+            && !kernel_cleanup_room(0, usize::MAX),
+        "full body and stream reservation cannot overflow limits"
+    );
+    assert!(kernel_cleanup_charge(full, 8193) == Some(8193 + CLEANUP_PROJECTION_ENVELOPE));
+    assert!(kernel_cleanup_charge(full, CLEANUP_INSPECT_BODY_BYTES) == Some(full));
+    assert!(
+        kernel_cleanup_charge(full, CLEANUP_INSPECT_BODY_BYTES + 1).is_none()
+            && kernel_cleanup_charge(0, 1).is_none(),
+        "unknown/oversize bodies cannot reconcile a reservation"
+    );
+}
+
 #[test]
 #[ignore = "unregistered source preparation; requires exact disposable native harness"]
 fn live_kernel_settings_match_engine() {
@@ -664,8 +891,9 @@ fn live_kernel_settings_match_engine() {
     let before_bytes = run.bytes.get();
     let cleanup_started = Instant::now();
     eprintln!("DOCKERLENS_NATIVE_CHECK: kernel_settings_cleanup");
-    let disposition = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| cleanup(&mut run)))
-        .unwrap_or(CleanupDisposition::OuterTeardownRequired);
+    let disposition =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| cleanup_kernel(&run)))
+            .unwrap_or(CleanupDisposition::OuterTeardownRequired);
     let cleanup_elapsed = cleanup_started.elapsed();
     let cleanup_calls = run.calls.get() - before_calls;
     let cleanup_bytes = run.bytes.get() - before_bytes;

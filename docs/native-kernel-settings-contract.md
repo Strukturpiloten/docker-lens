@@ -1,11 +1,13 @@
 # Diagonal no-new-privileges and IPv4 forwarding source proof
 
-`kernel-settings-v1` is an unregistered source-only preparation for DockerLens
-#39/#31. The primary owns later parent/runner/harness integration. No canonical
-invocation, raw projection, catalogue, product API, workflow, operational pin,
-dependency, ADR or existing documentation changes here. No native resources are
-launched by source/reader/syntax controls. Genuine exact-candidate four-lane
-qualification and independent review remain required. Host capture stays deferred.
+`kernel-settings-v1` is mandatory invocation 26 under
+[ADR 0026](decisions/0026-runtime-settings-source-integration.md). It retains
+source-only raw authority and no selected catalogue admission. The kernel-local
+cleanup repair changes no shared transport/helper, private proof protocol,
+registration, raw projection, catalogue, product API, workflow, operational pin,
+dependency or ADR. No native resources are launched by its pure mocked-transport
+or syntax controls. Fresh exact-candidate four-lane qualification and independent
+review remain required. Host capture stays deferred.
 
 ## Finite configured and actual boundaries
 
@@ -103,16 +105,93 @@ and reserved-body envelope, 100-call/2-MiB cleanup reserve, 46-second ordinary-w
 cutoff and original per-command timers. Seven ordinary captures per fixture,
 context, initial/final outer namespace reads, final ordinary snapshots and the
 16-unit batch reservation yield 70 upstream/71 Debian ordinary units. Actual
-ordinary bytes must fit 2 MiB. Six-slot cleanup uses 54 captures, including two
-full ID/name absence rounds, with at most 552960 bytes under unchanged stream
-envelopes. Positive cleanup must finish within 46 seconds; total execution must
-finish within 180 seconds. These counts do not prove actual native timing.
+ordinary bytes must fit 2 MiB. Six-slot cleanup still requires exactly54 captures
+and at most552960 charged bytes, including two full ID/name absence rounds.
+The charge now conservatively includes consumed ownership-inspect bodies as
+well as actual captured projection/output bytes, as detailed below. Positive
+cleanup must finish within46 seconds; total execution must finish within180
+seconds. These counts do not prove actual native timing.
 
 The inherited exact-owned borrowed-image ledger, authenticated outer cleanup
 owner, one-shot cleanup and terminal handler remain authoritative. Uncertainty
 preserves failure, requests the existing authenticated outer teardown where
 needed and refuses publication. A handoff is not completed teardown. No derived
 image, second cleanup owner or unsafe Drop retry is introduced.
+
+### Kernel-local ownership projection and complete-body accounting
+
+Campaign39142780962 passed the first25 invocations on each of four lanes, then
+failed kernel invocation26. The wrapper preserves the first panic; independent
+source diagnosis placed it in `HealthRun::capture`'s per-stream limit, not the
+aggregate4MiB assertion. No earlier configured/acquisition panic was selected.
+Cleanup ownership GETs previously allowed65536-byte HTTP bodies but forwarded
+the whole body through8192-byte cleanup stdout. Long duplicated Cmd/Args are a
+plausible source of that mismatch; actual campaign response lengths were not
+measured, so this is not a proven payload-length diagnosis or native repair claim.
+
+Only the kernel child uses `scripts/native_kernel_cleanup.py` for its two
+ownership GETs per fixture. It calls the existing `native-unix-http.py`
+`request()` API directly, preserving its actual `(status, complete body bytes)`
+contract. Method is fixed GET, paths are bounded exact1.41/1.56 container-inspect
+paths and Rust retains the original request allowlist. The existing explicit
+socket,7-second HTTP timeout,65536-byte response body, request/header/framing
+bounds and `run.timer(true,false)` absolute-deadline behavior remain unchanged.
+There is no Docker CLI oracle substitution, alternate HTTP parser, shortened
+native command, body minification workaround, retry or enlarged stream budget.
+
+The helper validates the entire consumed native JSON, including ignored fields,
+before projecting only actual status, consumed body-byte count, Id, Name,
+Config.Image and Config.Labels[owner]. Duplicate keys anywhere, nonfinite
+numbers, malformed UTF-8/JSON, unpaired surrogates, malformed required fields,
+oversize bodies/projections and unknown statuses fail with one closed diagnostic
+and no native payload. Actual200 projects the four ownership fields; actual404
+requires a valid closed native error object and projects no ownership object.
+Other HTTP errors, malformed transport frames, timeouts and unknown operations
+remain nonpositive. Native response bodies and unused labels/argv never reach
+the projected stdout.
+
+Projection shape is not ownership authority. The unchanged `owned` predicate
+must match the exact run/name/image and the already-bound canonical ID at BOTH
+the name lookup and immediate ID lookup before an ID-only DELETE. Outer-ID and
+cross-slot alias exclusions remain. No created ID is recovered from a name:
+a six-slot local guard rejects any attempted slot with a missing or
+noncanonical ID before any inner lookup or mutation. It requests the existing
+authenticated outer handoff through the unchanged terminal handler, preserves
+the original failure and disables incompatible Drop retry. A handoff is not
+completed teardown. Shared historical cleanup is not modified.
+
+Before each projected GET, capacity must cover the full65536-byte body plus
+the existing8192 stdout/2048 stderr envelope within the original aggregate
+budget. The runner precharges the full body allowance before I/O. Only a valid
+complete closed helper frame can reconcile its unused reservation to the actual
+consumed-body count; checked arithmetic preserves every actual captured stdout/
+stderr byte. This is reconciliation of unconsumed reservation, not a reset or
+reuse of actual consumed budget. On capture/framing/status/type/oversize/unknown
+failure, the entire body reservation remains charged conservatively. Bodies
+are counted even though they were consumed inside the helper rather than sent
+through captured stdout. Header/framing wire bytes are still separately bounded
+by the existing transport and are not measured by this body-only addition.
+
+DELETE and all absence readbacks remain on the existing transport. On the
+complete path there are12 projected ownership GETs,6 deletes,12 immediate
+ID/name absence GETs and24 GETs across two further complete ID/name absence
+rounds: still54 calls. The private proof reader is unchanged and still demands
+`cleanup_calls=54`, `cleanup_bytes<=54*(8192+2048)=552960`, the original cleanup
+reserve and verified terminal absence. The stricter consumed-body-plus-output
+charge must ALSO fit that unchanged final limit. Passing an individual65536-byte
+synthetic projection or its pre-I/O capacity check is not proof that a whole
+native run fits; if the aggregate final charge or original timing fails, no
+positive private proof may be published. No limits are silently raised.
+
+Pure controls cover large complete synthetic inspect bodies,65536/65537 body
+boundaries, full-body accounting, private constant errors, malformed/duplicate/
+nonfinite/type/status/frame refusals, composed name/ID ownership rejection and
+unknown-created-ID guard ordering. Rust guard/accounting unit controls require
+later primary compilation/execution. Python callback/ownership expectations and
+source controls are not claims of executing Rust cleanup, real native effects,
+actual lengths or successful cleanup. The helper's transport is mocked, not an
+ambient or experimental host daemon. Fresh full-candidate native execution is
+required; earlier25 successes cannot qualify these changed bytes.
 
 ## Private proof, provenance and remaining work
 
@@ -129,10 +208,10 @@ evidence of an unsupported platform.
 The strict CLI takes twelve independent harness facts: capture directory,
 candidate SHA, run token, lane, Engine release, rendering API, daemon mode,
 Debian package (empty upstream), fixture image, outer image, outer ID and daemon
-UID. Success prints nothing. Main must later register the lifecycle child, bind
-candidate/proof path and the same original deadline, provide a dedicated bounded
-outer-owner scope, and validate the fixed proof even without public emission.
-No raw projection or nineteen-argument emitter ABI change is implemented here.
+UID. Success prints nothing. The canonical child retains its separately bound
+candidate/proof path, original deadline, dedicated outer-owner scope and fixed
+proof validation even without public emission under ADR0026. The cleanup repair
+changes neither its closed raw projection nor the nineteen-argument emitter ABI.
 
 Official Docker CLI docs were queried through Context7 `/docker/cli` on
 2026-10-18: `man/docker-run.1.md` documents `--security-opt`, namespaced `--sysctl`

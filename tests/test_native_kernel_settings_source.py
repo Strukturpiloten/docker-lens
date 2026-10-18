@@ -126,7 +126,7 @@ class KernelSettingsSourceTests(unittest.TestCase):
                        '"initial_context_acquisition":{"max_requests":16,"max_body_bytes":2097152,"max_elapsed_seconds":15',
                        '"accounting":"separate_existing_bound"', '"capability_admission":[],"catalogue_admission":false'):
             self.assertIn(needle, source)
-        self.assertEqual(source.count('cleanup(&mutrun)'), 1)
+        self.assertEqual(source.count('cleanup_kernel(&run)'), 1)
         self.assertLess(source.index('terminal_cleanup(&mutrun,&owner,disposition)'), source.index('require_verified_result(result,disposition)'))
         self.assertLess(source.index('require_verified_result(result,disposition)'), source.index('target.publish(&proof)'))
         for forbidden in ('run.cleanup()', 'implDrop', 'run.calls.set(0)', 'run.bytes.set(0)', 'run.deadline='):
@@ -143,6 +143,63 @@ class KernelSettingsSourceTests(unittest.TestCase):
             capabilities = selected.split(f'const {family}_CAPABILITIES:', 1)[1].split('];', 1)[0]
             for capability in ('SecurityOptions', 'Sysctls', 'SysctlIpv4Forward'):
                 self.assertNotIn('Capability::' + capability + ',', capabilities)
+
+    def test_cleanup_projection_reserves_full_body_and_preserves_actual_output_charge(self):
+        source = self.compact()
+        inspect = source.split('fnkernel_cleanup_inspect(', 1)[1].split('fnkernel_cleanup_with(', 1)[0]
+        self.assertIn('run.request_allowed("GET",&path)', inspect)
+        self.assertIn('format!("/v{}/containers/{key}/json",run.api)', inspect)
+        self.assertIn('run.timer(true,false)', inspect)
+        self.assertIn('/scripts/native_kernel_cleanup.py', inspect)
+        self.assertLess(inspect.index('kernel_cleanup_room(run.calls.get(),run.bytes.get())'), inspect.index('run.capture('))
+        self.assertLess(inspect.index('run.bytes.set(reserved)'), inspect.index('run.capture('))
+        self.assertLess(inspect.index('run.capture('), inspect.index('kernel_cleanup_charge(run.bytes.get(),body_bytes)'))
+        self.assertIn('constCLEANUP_INSPECT_BODY_BYTES:usize=65536;', source)
+        self.assertIn('constCLEANUP_PROJECTION_ENVELOPE:usize=8192+2048;', source)
+        charge = source.split('fnkernel_cleanup_charge(', 1)[1].split('fnkernel_cleanup_inspect(', 1)[0]
+        self.assertIn('CLEANUP_INSPECT_BODY_BYTES.checked_sub(actual_body)?', charge)
+        self.assertIn('counted_with_reservation.checked_sub(unused)', charge)
+        self.assertIn('cleanup_bytes<=54*(8192+2048)', source)
+        self.assertNotIn('docker(', inspect)
+
+    def test_cleanup_both_exact_owned_reads_precede_delete_and_two_existing_absence_rounds(self):
+        source = self.compact()
+        remove = source.split('fnremove_kernel_container(', 1)[1].split('fncleanup_kernel(', 1)[0]
+        name_read = remove.index('kernel_cleanup_inspect(run,&run.names[index])')
+        name_owned = remove.index('owned(run,&value,index,Some(id))')
+        id_read = remove.index('kernel_cleanup_inspect(run,id)')
+        id_owned = remove.index('owned(run,&immediate,index,Some(id))')
+        deletion = remove.index('run.api("DELETE"')
+        self.assertLess(name_read, name_owned)
+        self.assertLess(name_owned, id_read)
+        self.assertLess(id_read, id_owned)
+        self.assertLess(id_owned, deletion)
+        self.assertIn('run.inspect(id,true).0==404', remove)
+        self.assertIn('run.inspect(&run.names[index],true).0==404', remove)
+        self.assertNotIn('run.ids[index]=', remove)
+        cleanup = source.split('fncleanup_kernel(', 1)[1].split('#[test]', 1)[0]
+        self.assertIn('kernel_cleanup_with(&run.attempted,&run.ids,||', cleanup)
+        self.assertIn('for_in0..2', cleanup)
+        self.assertIn('run.inspect(id,true).0==404', cleanup)
+        self.assertIn('run.inspect(&run.names[index],true).0==404', cleanup)
+
+    def test_unknown_created_id_has_no_inner_io_and_first_panic_outer_handoff_stay_authoritative(self):
+        source = self.compact()
+        guard = source.split('fnkernel_cleanup_with(', 1)[1].split('fnremove_kernel_container(', 1)[0]
+        self.assertIn('attempted.len()!=6||ids.len()!=6', guard)
+        self.assertIn('*attempted&&!id.as_deref().is_some_and(identifier)', guard)
+        self.assertLess(guard.index('returnCleanupDisposition::OuterTeardownRequired;'), guard.index('inner()'))
+        for forbidden in ('inspect(', 'run.api(', 'kernel_cleanup_inspect('):
+            self.assertNotIn(forbidden, guard)
+        self.assertIn('fnkernel_cleanup_guard_and_body_accounting_controls_are_nonpositive_on_unknowns()', source)
+        terminal = source.index('terminal_cleanup(&mutrun,&owner,disposition)')
+        self.assertLess(source.index('cleanup_kernel(&run)'), terminal)
+        self.assertLess(terminal, source.index('require_verified_result(result,disposition)'))
+        lifecycle = (ROOT / 'src/native_lifecycle_tests.rs').read_text()
+        self.assertIn('Err(error) => std::panic::resume_unwind(error)', lifecycle)
+        self.assertIn('owner.require_teardown()', lifecycle)
+        self.assertIn('run.cleaned = true;', lifecycle)
+
 
 
 if __name__ == '__main__':

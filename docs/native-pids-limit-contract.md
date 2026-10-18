@@ -1,0 +1,123 @@
+# Finite PID-controller source-effect contract
+
+Prepared `pids-limit-v1` child of the existing lifecycle helper, registered as a
+private Rust module for formatting and compilation only. It remains outside the
+canonical twenty-six native invocations.
+This is source-only implementation work for #39/#31/#3, not native qualification,
+raw capability projection, catalogue admission or a compatibility claim. The
+primary owns later canonical registration and complete/four-lane gates. Product output
+stays inert; no pin, API, runner, emitter, schema or historical record changes.
+
+## Six independently authored cases
+
+CLI/literal-rendered pairs explicitly request PidsLimit 16, 64 and unlimited.
+Unlimited means no authored leaf PID ceiling, still inside the unchanged outer
+512-PID boundary; 32 successful child launches do not prove arbitrary capacity.
+Every whole rendered request is checked before once-only submission. One charged
+six-ID Unix-socket acquisition retains the existing 16-request/512KiB envelope.
+
+PID1 supervises one explicit BusyBox ash worker. It opens all control FIFOs before
+the worker starts, and uses builtins during observation. The worker attempts at
+most 32 single-threaded children, each held on an inherited FIFO. An EXIT trap
+saves the original status and holds the original worker alive without forking.
+The finite16 case requires precisely PID1, worker and 14 retained children, one
+failed attempt, a native C-locale EAGAIN fork diagnostic and a matching owned-leaf
+PID-controller denial increment. The controls require 32 retained children and
+no denial. Missed trap, extra task, stale error, exhausted ceiling or ambiguous
+observation rejects the proof, never becoming a generic unsupported result.
+
+The trap design is informed by BusyBox 1.37.0 `shell/ash.c` fork and exit paths,
+read as an external oracle only through Debian's upstream original archive:
+`https://deb.debian.org/debian/pool/main/b/busybox/busybox_1.37.0.orig.tar.bz2`.
+Archive SHA256 is `3311dff32e746499f4df0d5df04d7eb396382d7e108bb9250e7b519b837043a4`;
+source licence is GPLv2-or-later. No implementation is copied or translated, and
+no source or binary is incorporated or redistributed. The actual pinned image's
+trap/diagnostic behaviour remains unverified until genuine execution. This is
+source review, not an executed external runtime oracle; the intended native
+oracle command is `/bin/busybox ash -c PIDS_WORKER dl-pids-worker`, defined in
+the owned Rust source. No worker or observer command was executed in preparation.
+
+## Namespace and controller attribution
+
+Inspect State.Pid is never guessed to be an outer-namespace PID. Before pressure,
+an actual private PID1 observation supplies its namespace inode, start identity
+and UID. A bounded scan of the owned outer container's `/proc` binds these facts
+to exactly one visible PID. An independently observed dockerd namespace depth
+binds State.Pid to the correct NSpid element, including rootlesskit nesting.
+Each fixture namespace must differ from both the daemon and outer observer
+namespaces, including nested layouts. The initial resolver checks executable and
+start identity only for private PID1; exiting non-PID1 members are not probed
+before the bounded idle/reaping barrier. The complete post-barrier inventory
+still checks every member's executable, namespace, identity and leaf membership.
+UID-map translation, namespace identity, process start and parentage remain
+stable across the observation. Each phase rechecks the observer namespaces;
+control writes recheck PID1's namespace, start and mapped UID after opening a
+verified FIFO descriptor. No host `/proc`, namespace entry or guessed
+Docker cgroup path is used. Unknown/ambiguous mappings refuse.
+
+Controller membership and the observer's actual mountinfo resolve v1 controller
+mounts or v2 unified mounts with component-wise mount-root handling. Read actual
+leaf members, current/maximum and denial events; use local counters when present,
+otherwise require an exclusive leaf with no child cgroups. Hierarchical ancestor
+event counters may propagate the leaf event and need not remain unchanged.
+Actual constraining ancestors must retain at least 128 PID slots; the outer must
+retain at least 1GiB memory and 128 slots within its 4GiB/512-PID bounds. Read
+actual RLIMIT_NPROC and native no-OOM evidence. Metadata, generic fork text,
+reported support or an Engine version alone never proves enforcement.
+The worker cannot predate its original PID1; Linux soft NPROC cannot exceed the
+hard limit, with unlimited accepted only according to that ordering. Each
+controller has six distinct live leaf device/inode identities and resolved
+paths, bound to one consistent owned outer mount/root/membership/device tuple.
+Copied leaf facts or a conflicting outer controller binding reject the proof.
+
+## Budgets, custody and cleanup
+
+Only one workload is active. After a held observation, builtins release the
+worker and children; leaf membership must return to the original idle PID1
+before another case starts. Intended work accounting is at most 180 charged
+ordinary calls including the separately charged acquisition, within 2MiB of the
+4MiB charged total. The successful ledger is 16 calls per case (96), 6 upstream
+or 7 Debian context commands, initial outer/image/observer reads (3), the charged
+16-request acquisition allowance, and final image/outer reads (2): 123 upstream
+or 124 Debian ordinary calls. Cleanup retains 100 calls/2MiB and 46 seconds of the original
+180-second deadline. Six terminal removal/absence ledgers require 54 successful
+cleanup captures. Six case ceilings of 15 seconds leave a bounded context/readback
+allowance within the 134-second work window; these are enforced ceilings, not
+evidence of actual native timing. The existing independent context acquisition
+keeps its separate unchanged 16-request/2MiB/15-second envelope, outside these
+charged byte/call counters but inside the same original deadline. Thus charged
+captures plus that context acquisition can consume at most 6MiB overall; no
+context allowance is silently included in the charged 4MiB ledger. At most
+177/178 charged captures including successful cleanup are expected; this is
+not a claim that every command can simultaneously consume its timeout ceiling.
+
+The fixed owner-private direct-child proof is limited to 16KiB. Compact numeric
+PID/start/parent tuples and selected mount/controller facts avoid retaining full
+proc tables or logs. Process rows encode `[outer_pid_delta, private_pid,
+outer_parent_delta, start_delta, uid_delta]` relative to independently bound
+PID1's outer PID, start and mapped UID; separate actual `cgroup.procs` members
+are outer-PID deltas. The reader reverses this encoding before checking every
+identity, parent and membership; no observed member evidence is dropped.
+Serialization and the strict stable no-follow reader both
+enforce that bound; an oversized or incomplete proof cannot be published.
+Authored compact fixtures occupy 15,452–15,748 bytes. These short synthetic paths
+do not establish that genuine cgroup paths fit: the focused long-path case
+retains valid identity/controller evidence but exceeds custody and is refused.
+Larger native evidence needs a separately reviewed scoped exception, not dropped
+facts, truncation or a silent shared limit change.
+
+The authored create body is 1458 bytes with the existing pinned-image reference.
+Duplicated `Config.Cmd`, `Path` and `Args` inspect fields occupy 2564 compact
+bytes, leaving 5628 bytes for all other native fields/framing within the unchanged
+8192-byte cleanup capture limit. The pure check reserves at least 5KiB for that
+unknown remainder; it cannot prove the complete genuine inspect envelope fits.
+Ordinary capture, request-body and cleanup limits stay unchanged and fail closed.
+
+Every attempted create needs a canonical bound ID. Any missing/malformed ID
+requires authenticated outer teardown **before** invoking inner cleanup or name
+recovery. Bound resources retain immediate ownership rechecks, once-only removal,
+two ID/name absence rounds and unchanged borrowed-image/outer snapshots. Cleanup
+ambiguity preserves failure and requests outer teardown, not a positive receipt.
+Public diagnostics remain closed and value-free; private proc/ID/path/error
+evidence never becomes a capability claim. Pure/synthetic checks establish none
+of the outstanding native gates.
