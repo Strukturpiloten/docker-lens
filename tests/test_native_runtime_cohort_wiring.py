@@ -46,6 +46,8 @@ EXPECTED_CALLS = [
     ("native_hostname", "live_hostname_matches_engine"),
     ("native_command_clear", "live_command_clear_matches_engine"),
     ("native_shm_size", "live_shm_size_effects_match_engine"),
+    ("native_supplementary_groups", "live_supplementary_groups_match_engine"),
+    ("native_kernel_settings", "live_kernel_settings_match_engine"),
 ]
 
 
@@ -90,7 +92,7 @@ sys.exit(int(os.environ["STATUS"]))
         end = source.index('\n)\n', owner)
         scoped = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source[owner:end], re.M)
         self.assertEqual(scoped, EXPECTED_CALLS[16:22])
-        self.assertEqual(source.count('export NATIVE_LIFECYCLE_CLEANUP_OWNER='), 2)
+        self.assertEqual(source.count('export NATIVE_LIFECYCLE_CLEANUP_OWNER='), 4)
         self.assertLess(source.index('unset NATIVE_LIFECYCLE_CLEANUP_OWNER'), source.index('run-exact-native-test.sh" native_capture'))
         emission = source.index('python3 "$script_dir/native-evidence.py"')
         self.assertLess(end, emission)
@@ -227,8 +229,8 @@ class RuntimeCohortEvidenceTests(unittest.TestCase):
             self.assertEqual(record["tmpfs_effect_outcomes"], {
                 "admission": "raw_source_only", "catalogue_admission": "unadmitted", "coverage": "explicit_1MiB_0700_and_2MiB_0750_rw_ro_only",
             })
-            self.assertEqual(len(record["capability_outcome"]), 39 if lane.startswith("debian11-") else 41)
-            self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 61 if lane.startswith("debian11-") else 65)
+            self.assertEqual(len(record["capability_outcome"]), 43 if lane.startswith("debian11-") else 45)
+            self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 66 if lane.startswith("debian11-") else 70)
             for capability in ("ContainerInit", "ReadOnlyRootfs", "TmpfsMount", "StopTimeout", "HealthStartInterval"):
                 positive = capability != "HealthStartInterval" or not lane.startswith("debian11-")
                 self.assertEqual(capability in record["capability_outcome"], positive)

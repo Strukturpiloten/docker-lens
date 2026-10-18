@@ -20,8 +20,10 @@ payloads are projected. Compiled selection stays 34/56 and 36/60; HealthDisabled
 was excluded from that slice. [ADR 0024](decisions/0024-health-disabled-raw-source-projection.md)
 separately derives only raw HealthDisabled/DisabledHealthcheck after the unchanged
 complete health-metadata-v1 validation. [ADR 0025](decisions/0025-shm-size-source-integration.md)
-adds raw ShmSize after its separate complete proof; current combined raw totals
-are 39/61 and 41/65 without selecting any of these groups. The original 23 ordered
+adds raw ShmSize after its separate complete proof; [ADR 0026](decisions/0026-runtime-settings-source-integration.md) appends the
+mandatory supplementary/kernel source gates as invocations 25/26; their four
+finite raw groups remain unselected and host capture stays deferred. Current combined raw totals
+are 43/66 and 45/70 without selecting any of these groups. The original 23 ordered
 invocations remain unchanged and ShmSize is mandatory invocation 24. Private v1 protocols and historical schema-root acceptance remain
 unchanged through disconnected public projection definitions.
 
@@ -142,5 +144,5 @@ binary redistribution or public API is introduced.
 
 The focused Python policy controls establish only source validation. This
 change has not executed native lanes. Complete final-edit gates, integrated
-exact-head twenty-four-test four-lane execution and independent review remain the primary's
+exact-head twenty-six-test four-lane execution and independent review remain the primary's
 responsibility. Missing process observations are a real failure, never a skip.

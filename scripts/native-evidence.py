@@ -49,6 +49,14 @@ from native_shm_size_proof import (
     CONTRACT as SHM_SIZE_CONTRACT, FILENAME as SHM_SIZE_FILENAME, read_shm_size_proof,
 )
 
+from native_supplementary_groups_proof import (
+    CONTRACT as SUPPLEMENTARY_GROUPS_CONTRACT, FILENAME as SUPPLEMENTARY_GROUPS_FILENAME,
+    read_supplementary_groups_proof,
+)
+from native_kernel_settings_proof import (
+    CONTRACT as KERNEL_SETTINGS_CONTRACT, FILENAME as KERNEL_SETTINGS_FILENAME, read_kernel_settings_proof,
+)
+
 
 CAPABILITIES = (
     "StandaloneContainer", "NamedVolume", "BridgeNetwork", "PortPublish",
@@ -548,6 +556,23 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
             or type(shm_size["catalogue_admission"]) is not bool or shm_size["catalogue_admission"] is not False):
         raise ValueError("incomplete shm-size source group")
 
+    supplementary_groups = read_supplementary_groups_proof(
+        capture_dir / SUPPLEMENTARY_GROUPS_FILENAME, capture_dir, external_context)
+    if (type(supplementary_groups) is not dict
+            or set(supplementary_groups) != {"contract", "capability_admission", "catalogue_admission"}
+            or type(supplementary_groups["contract"]) is not str or supplementary_groups["contract"] != "supplementary-groups-v1"
+            or type(supplementary_groups["capability_admission"]) is not list or supplementary_groups["capability_admission"] != []
+            or type(supplementary_groups["catalogue_admission"]) is not bool or supplementary_groups["catalogue_admission"] is not False):
+        raise ValueError("incomplete supplementary-groups source group")
+    kernel_settings = read_kernel_settings_proof(
+        capture_dir / KERNEL_SETTINGS_FILENAME, capture_dir, external_context)
+    if (type(kernel_settings) is not dict
+            or set(kernel_settings) != {"contract", "capability_admission", "catalogue_admission"}
+            or type(kernel_settings["contract"]) is not str or kernel_settings["contract"] != "kernel-settings-v1"
+            or type(kernel_settings["capability_admission"]) is not list or kernel_settings["capability_admission"] != []
+            or type(kernel_settings["catalogue_admission"]) is not bool or kernel_settings["catalogue_admission"] is not False):
+        raise ValueError("incomplete kernel-settings source group")
+
     # Only these closed mappings follow the complete, validated native proof
     # files above. They extend raw lane evidence, never the reviewed catalogue.
     # Other network probes and source daemon reports grant no capability here.
@@ -578,6 +603,10 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         "HealthStartPeriod": ["HealthStartPeriodZero", "HealthStartPeriodPositive"],
         "HealthDisabled": ["DisabledHealthcheck"],
         "ShmSize": ["ShmSize"],
+        "SupplementaryGroups": ["SupplementaryGroups"],
+        "SecurityOptions": ["NoNewPrivilegesEnabled", "NoNewPrivilegesDisabled"],
+        "Sysctls": ["Sysctls"],
+        "SysctlIpv4Forward": ["SysctlIpv4Forward"],
     })
     # Only the complete four-shape context/effect/cleanup protocol grants these
     # future raw groups. The historical 22 network markers grant no new group.
@@ -652,6 +681,16 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         "shm_size_outcomes": {
             **RAW_SOURCE_STATUS, "scope": "explicit_1MiB_2MiB_with_observed_omission_only",
             "outcome": "tmpfs_effect_and_ipc_isolation_verified",
+        },
+        "supplementary_groups_contract": SUPPLEMENTARY_GROUPS_CONTRACT,
+        "supplementary_groups_outcomes": {
+            **RAW_SOURCE_STATUS, "scope": "numeric_nonroot_omitted_one_two_groups_only",
+            "outcome": "pid1_membership_and_dac_effects_verified",
+        },
+        "kernel_settings_contract": KERNEL_SETTINGS_CONTRACT,
+        "kernel_settings_outcomes": {
+            **RAW_SOURCE_STATUS, "scope": "diagonal_omitted_false0_true1_only",
+            "outcome": "pid1_exec_inheritance_and_private_namespaces_verified",
         },
         "network_attachment_contract": NETWORK_ATTACHMENT_CONTRACT,
         "network_attachment_probes": network_attachment_probes,

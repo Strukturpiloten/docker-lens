@@ -92,8 +92,8 @@ class HealthMetadataEvidenceTests(unittest.TestCase):
                 self.assertEqual({key: record[key] for key in expected}, expected)
                 self.assertEqual(record["admitted_shapes"]["HealthDisabled"], ["DisabledHealthcheck"])
                 self.assertEqual(record["capability_outcome"]["HealthDisabled"], "available")
-                self.assertEqual(len(record["capability_outcome"]), 39 if lane.startswith("debian11-") else 41)
-                self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 61 if lane.startswith("debian11-") else 65)
+                self.assertEqual(len(record["capability_outcome"]), 43 if lane.startswith("debian11-") else 45)
+                self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 66 if lane.startswith("debian11-") else 70)
                 self.assertEqual(record["health_metadata_probes"], ["ContainerCreateLabels", "ShellHealthcheck",
                                                                    "HealthStartPeriodPositive", "HealthStartPeriodZero"])
 

@@ -17,8 +17,17 @@ mod health_start_interval_boundary;
 #[path = "native_hostname_tests.rs"]
 mod hostname;
 
+#[path = "native_kernel_settings_tests.rs"]
+mod kernel_settings;
+
+#[path = "native_nofile_tests.rs"]
+mod nofile;
+
 #[path = "native_shm_size_tests.rs"]
 mod shm_size;
+
+#[path = "native_supplementary_groups_tests.rs"]
+mod supplementary_groups;
 
 const CONTRACT: &str = "lifecycle-v1";
 const FILENAME: &str = "lifecycle-v1.json";

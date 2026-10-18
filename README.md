@@ -41,7 +41,7 @@ representations retain their existing behavior.
 
 This is candidate pre-merge rehearsal admission. Production merge, main
 admission and release remain blocked until fresh exact-final-candidate complete
-and four-lane twenty-four-test native gates, fresh independently reviewed volume-only
+and four-lane twenty-six-test native gates, fresh independently reviewed volume-only
 consumer rehearsals of all six actual authored fixtures under
 [ADR 0012](docs/decisions/0012-candidate-volume-label-admission.md), and reviewed
 BoxFerry consumers of the actual Nextcloud/Supabase binds and desired external
@@ -56,7 +56,12 @@ requires hostname and command/entrypoint-clear proofs. [ADR 0024](docs/decisions
 adds only HealthDisabled/DisabledHealthcheck after the existing complete
 health-metadata proof validates. [ADR 0025](docs/decisions/0025-shm-size-source-integration.md)
 adds the mandatory twenty-fourth ShmSize source probe and strict proof gate.
-Current raw projection totals are 39/61 capabilities/shapes on Debian and 41/65 upstream, marked
+[ADR 0026](docs/decisions/0026-runtime-settings-source-integration.md) appends
+supplementary groups and diagonal kernel settings as mandatory invocations 25/26
+with separate one-child ownership and strict private gates, even without emission.
+Only four complete finite source groups are added, never selected catalogue facts.
+Host capture remains deferred.
+Current raw projection totals are 43/66 capabilities/shapes on Debian and 45/70 upstream, marked
 `raw_source_only` with `catalogue_admission: unadmitted`. Historical raw bytes
 are preserved unchanged; ADR 0022 separately selects reviewed lifecycle envelopes
 at 34/56 and 36/60. Hostname, both clear groups, HealthDisabled and ShmSize remain unselected.

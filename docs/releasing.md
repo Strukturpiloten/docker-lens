@@ -36,7 +36,11 @@ entrypoint-clear proofs remain mandatory. Those three process groups remain unse
 HealthDisabled/DisabledHealthcheck after the existing complete health-metadata-v1
 validation. [ADR 0025](decisions/0025-shm-size-source-integration.md) adds the
 twenty-fourth ShmSize source invocation and strict proof gate, bringing current
-raw projection totals to Debian 39/61 and upstream 41/65. HealthDisabled and
+raw source slice to Debian 39/61 and upstream 41/65.
+[ADR 0026](decisions/0026-runtime-settings-source-integration.md) appends mandatory
+supplementary/kernel invocations 25/26 and their strict readers; current raw totals
+are Debian 43/66 and upstream 45/70. Its four finite groups remain unselected.
+Host capture remains deferred; no nofile admission is included. HealthDisabled and
 ShmSize remain outside compiled selection. The original 23 native invocations,
 six-child ownership block, strict private protocols and historical evidence stay unchanged.
 Complete milestone coverage, fresh exact-final-candidate native proof,
@@ -57,7 +61,7 @@ For the final current-main candidate require:
 
 - The complete offline gate and package verification below.
 - Fresh successful exact-candidate `Release validation`, including all four
-  independent native lanes, each executing the canonical twenty-four exact test
+  independent native lanes, each executing the canonical twenty-six exact test
   invocations, and its fail-closed final aggregate. A failed, skipped or cancelled
   lane blocks publication. If required work extends the canonical suite, every
   added invocation is mandatory too.

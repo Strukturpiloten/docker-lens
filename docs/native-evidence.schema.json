@@ -147,6 +147,82 @@
     }
   },
   "$defs": {
+    "supplementary_groups_source_projection": {
+      "description": "Disconnected finite raw-only source subset; never reviewed-record or compiled-catalogue admission.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "supplementary_groups_contract",
+        "supplementary_groups_outcomes"
+      ],
+      "properties": {
+        "supplementary_groups_contract": {
+          "const": "supplementary-groups-v1"
+        },
+        "supplementary_groups_outcomes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "admission",
+            "catalogue_admission",
+            "scope",
+            "outcome"
+          ],
+          "properties": {
+            "admission": {
+              "const": "raw_source_only"
+            },
+            "catalogue_admission": {
+              "const": "unadmitted"
+            },
+            "scope": {
+              "const": "numeric_nonroot_omitted_one_two_groups_only"
+            },
+            "outcome": {
+              "const": "pid1_membership_and_dac_effects_verified"
+            }
+          }
+        }
+      }
+    },
+    "kernel_settings_source_projection": {
+      "description": "Disconnected finite raw-only source subset; never reviewed-record or compiled-catalogue admission.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kernel_settings_contract",
+        "kernel_settings_outcomes"
+      ],
+      "properties": {
+        "kernel_settings_contract": {
+          "const": "kernel-settings-v1"
+        },
+        "kernel_settings_outcomes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "admission",
+            "catalogue_admission",
+            "scope",
+            "outcome"
+          ],
+          "properties": {
+            "admission": {
+              "const": "raw_source_only"
+            },
+            "catalogue_admission": {
+              "const": "unadmitted"
+            },
+            "scope": {
+              "const": "diagonal_omitted_false0_true1_only"
+            },
+            "outcome": {
+              "const": "pid1_exec_inheritance_and_private_namespaces_verified"
+            }
+          }
+        }
+      }
+    },
     "shm_size_source_projection": {
       "description": "Disconnected raw-only finite ShmSize subset; not reviewed-record or compiled-catalogue admission.",
       "type": "object", "additionalProperties": false,

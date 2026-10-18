@@ -48,7 +48,10 @@ class PortCapabilityEvidenceTests(unittest.TestCase):
         groups = {**legacy.EXPECTED_RAW_SHAPES, **PORT_GROUPS, **legacy.EXPECTED_LIFECYCLE_SOURCE_SHAPES,
                   "ContainerHostname": ["ContainerHostname"], "CommandClear": ["ClearCommand"],
                   "EntrypointClear": ["ClearEntrypoint"], "HealthDisabled": ["DisabledHealthcheck"],
-                  "ShmSize": ["ShmSize"]}
+                  "ShmSize": ["ShmSize"],
+                  "SupplementaryGroups": ["SupplementaryGroups"],
+                  "SecurityOptions": ["NoNewPrivilegesEnabled", "NoNewPrivilegesDisabled"],
+                  "Sysctls": ["Sysctls"], "SysctlIpv4Forward": ["SysctlIpv4Forward"]}
         if not health_interval:
             del groups["HealthStartInterval"]
         if not ipv6:
@@ -64,9 +67,9 @@ class PortCapabilityEvidenceTests(unittest.TestCase):
         expected = self.expected_groups(identity_version, ipv6, health_interval)
         self.assertEqual(record["admitted_shapes"], expected)
         self.assertEqual(record["capability_outcome"], {name: "available" for name in expected})
-        self.assertEqual(len(expected), (40 if identity_version == 2 else 38) - (not ipv6) + health_interval)
+        self.assertEqual(len(expected), (44 if identity_version == 2 else 42) - (not ipv6) + health_interval)
         self.assertEqual(sum(map(len, expected.values())),
-                         (63 if identity_version == 2 else 61) - (0 if ipv6 else 2) + 2 * health_interval)
+                         (68 if identity_version == 2 else 66) - (0 if ipv6 else 2) + 2 * health_interval)
         self.assertEqual("identity_contract" in record, identity_version == 2)
         self.assertEqual("identity_cases" in record, identity_version == 2)
         for private in (legacy.RUN_ID, "dl-identity-", "configured_user", "cleanup"):

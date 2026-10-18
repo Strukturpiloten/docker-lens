@@ -27,13 +27,14 @@ Durable native boundaries and evidence/admission contracts:
 - [0023: Mandatory process-source probes and closed raw projection](0023-process-source-proof-wiring.md)
 - [0024: Raw-only disabled-health source projection](0024-health-disabled-raw-source-projection.md)
 - [0025: Mandatory ShmSize source integration](0025-shm-size-source-integration.md)
+- [0026: Mandatory runtime-settings source integration](0026-runtime-settings-source-integration.md)
 
 ADR 0022 supersedes ADR 0019's active-cohort selection for candidate rehearsal:
 complete StopTimeout/init/rootfs/tmpfs groups on all lanes, with
 HealthStartInterval upstream-only, at Debian 34/56 and upstream 36/60.
 ADR 0021's raw source markers remain unchanged and do not grant admission.
 ADR 0017's None/false/true, conditional
-schema-3 and pure snapshot boundaries remain; fresh final-candidate twenty-four-test
+schema-3 and pure snapshot boundaries remain; fresh final-candidate twenty-six-test
 native and actual consumer gates still block ready/merge/main admission and
 release. Historical evidence and earlier obligations are preserved.
 ADR 0023 adds mandatory hostname and command-clear invocations 22 and 23, with
@@ -46,5 +47,9 @@ unadmitted outcome metadata. That health-only slice's raw totals were Debian
 38/60 and upstream 40/64 with the original 23 native invocations unchanged.
 ADR 0025 appends mandatory ShmSize invocation 24 with a separate one-child
 cleanup-owner scope, complete private gate and raw-only ShmSize singleton.
-Current combined raw totals are Debian 39/61 and upstream 41/65; compiled
-selection stays 34/56 and 36/60. All five new raw groups remain unselected.
+ADR 0026 appends supplementary groups and kernel settings as invocations 25/26,
+with separate one-child owner scopes and mandatory independent strict readers.
+Only complete SupplementaryGroups, SecurityOptions, Sysctls and SysctlIpv4Forward
+raw groups are added; all four remain unselected and host capture stays deferred.
+Current combined raw totals are Debian 43/66 and upstream 45/70; compiled
+selection stays 34/56 and 36/60. These nine raw groups remain unselected.

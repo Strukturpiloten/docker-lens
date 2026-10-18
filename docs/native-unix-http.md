@@ -83,8 +83,9 @@ Separate TCP/UDP/network-namespace diagnostics retain native curl observations.
 
 The canonical native harness and every host Engine Unix-HTTP Rust test consumer
 use this helper. Their closed route and ownership assertions, byte/request
-budgets, uncertain mutations, absence rounds and all twenty-four exact native
-invocations are preserved. Docker CLI, Compose providers, real Rust acquisition
+budgets, uncertain mutations, absence rounds and the original twenty-four exact
+native invocations are preserved. The appended source gates bring the suite to
+twenty-six invocations. Docker CLI, Compose providers, real Rust acquisition
 and independent fixed native expectations remain separate oracles. The
 TCP/UDP/network-namespace curl probes remain mandatory and unchanged.
 [ADR 0023](decisions/0023-process-source-proof-wiring.md) adds hostname/command-clear source wiring without changing this
@@ -92,11 +93,13 @@ transport. That process slice's raw source counts were Debian 37/59 and upstream
 [ADR 0024](decisions/0024-health-disabled-raw-source-projection.md) separately adds
 raw-only HealthDisabled after the unchanged complete health proof validates;
 [ADR 0025](decisions/0025-shm-size-source-integration.md) adds the separate
-twenty-fourth ShmSize source gate without changing this transport. Current
-combined raw projection totals are Debian 39/61 and upstream 41/65.
+twenty-fourth ShmSize source gate without changing this transport. [ADR 0026](decisions/0026-runtime-settings-source-integration.md) appends the
+mandatory supplementary/kernel source gates as invocations 25/26; their four
+finite raw groups remain unselected and host capture stays deferred. Current
+combined raw projection totals are Debian 43/66 and upstream 45/70.
 [ADR 0022](decisions/0022-reviewed-lifecycle-cohort.md)'s separate compiled selection stays 34/56 and 36/60. Historical
 21-invocation source records remain unchanged; fresh final-candidate qualification
-uses the 24-invocation canonical harness.
+uses the 26-invocation canonical harness.
 
 Local/main/reviewed-native-dispatch/release native definitions all consume
 `scripts/native-conformance.sh`; the complete offline gate discovers

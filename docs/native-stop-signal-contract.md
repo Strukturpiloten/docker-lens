@@ -119,8 +119,10 @@ canonical invocations; that process slice's raw counts were 37/59 and 39/63
 without selecting its three new groups. [ADR 0024](decisions/0024-health-disabled-raw-source-projection.md)
 separately derives only raw HealthDisabled after complete unchanged health-proof
 validation. [ADR 0025](decisions/0025-shm-size-source-integration.md) adds only
-raw ShmSize with mandatory invocation 24. Current combined raw totals are Debian
-39/61 and upstream 41/65 while compiled selection stays 34/56 and 36/60.
+raw ShmSize with mandatory invocation 24. [ADR 0026](decisions/0026-runtime-settings-source-integration.md) appends the
+mandatory supplementary/kernel source gates as invocations 25/26; their four
+finite raw groups remain unselected and host capture stays deferred. Current combined raw totals are Debian
+43/66 and upstream 45/70 while compiled selection stays 34/56 and 36/60.
 HealthDisabled, ShmSize and the three process groups remain unselected;
 the checkpoint counts above remain historical.
 

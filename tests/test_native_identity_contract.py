@@ -81,7 +81,18 @@ class ParameterizedIdentityTests(unittest.TestCase):
                 for capability in ("ContainerUser", "ContainerWorkdir"):
                     self.assertEqual(evidence["admitted_shapes"][capability], [capability])
                     self.assertEqual(evidence["capability_outcome"][capability], "available")
-                self.assertNotIn("SupplementaryGroups", evidence["admitted_shapes"])
+                # The mandatory, independent supplementary proof grants this
+                # raw singleton; the identity proof does not author it.
+                self.assertEqual(evidence["admitted_shapes"]["SupplementaryGroups"], ["SupplementaryGroups"])
+                self.assertEqual(evidence["capability_outcome"]["SupplementaryGroups"], "available")
+                self.assertEqual(evidence["supplementary_groups_contract"], "supplementary-groups-v1")
+                self.assertEqual(evidence["supplementary_groups_outcomes"], {
+                    "admission": "raw_source_only", "catalogue_admission": "unadmitted",
+                    "scope": "numeric_nonroot_omitted_one_two_groups_only",
+                    "outcome": "pid1_membership_and_dac_effects_verified",
+                })
+                for unproved in ("Ulimits", "UlimitNofile"):
+                    self.assertNotIn(unproved, evidence["admitted_shapes"])
                 # The closed boundary outcome names may contain "configured";
                 # the private configured-value object must never be published.
                 for private in ("dl-identity", RUN_ID, "runtime_uid", "rejection_phase", '"configured":'):

@@ -80,7 +80,7 @@ sidecar_attempted=0
 volume_attempted=0
 network_attempted=0
 network_created=0
-# This authority belongs only to the five canonical lifecycle-family invocations below.
+# This authority belongs only to the explicit canonical lifecycle-family owner scopes below.
 unset NATIVE_LIFECYCLE_CLEANUP_OWNER
 cleanup_podman() {
   # The deadline must share root privileges with the Podman client; an
@@ -1024,6 +1024,8 @@ export NATIVE_LIFECYCLE_DEFAULT_EFFECT_PROOF_PATH="$run_dir/lifecycle-default-ef
 export NATIVE_HOSTNAME_PROOF_PATH="$run_dir/hostname-v1.json"
 export NATIVE_COMMAND_CLEAR_PROOF_PATH="$run_dir/command-clear-v1.json"
 export NATIVE_SHM_SIZE_PROOF_PATH="$run_dir/shm-size-v1.json"
+export NATIVE_SUPPLEMENTARY_GROUPS_PROOF_PATH="$run_dir/supplementary-groups-v1.json"
+export NATIVE_KERNEL_SETTINGS_PROOF_PATH="$run_dir/kernel-settings-v1.json"
 export NATIVE_PORT_START_DIAGNOSTIC_PATH="$run_dir/diagnostics/port-start-window.json"
 export NATIVE_IDENTITY_CANDIDATE_SHA
 NATIVE_IDENTITY_CANDIDATE_SHA=$(git -C "$script_dir/.." rev-parse HEAD)
@@ -1042,6 +1044,8 @@ export NATIVE_LIFECYCLE_DEFAULT_EFFECT_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_
 export NATIVE_HOSTNAME_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 export NATIVE_COMMAND_CLEAR_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 export NATIVE_SHM_SIZE_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
+export NATIVE_SUPPLEMENTARY_GROUPS_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
+export NATIVE_KERNEL_SETTINGS_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 if [[ $EUID == 0 ]]; then export NATIVE_PODMAN_USE_SUDO=0; else export NATIVE_PODMAN_USE_SUDO=1; fi
 
 port_start_failure_diagnostic() {
@@ -1162,6 +1166,24 @@ COMMAND_CLEAR_PROOF
 )
 # Always require the fixed private child against independent canonical facts.
 python3 "$script_dir/native_shm_size_proof.py" "$run_dir" "$NATIVE_SHM_SIZE_CANDIDATE_SHA" "$run_id" \
+  "$lane" "$server_version" "$api_version" "$expected_mode" "$installed_docker_package" \
+  "$NATIVE_FIXTURE_IMAGE" "$image" "$NATIVE_OUTER_CONTAINER_ID" "$NATIVE_BIND_RELABEL_DAEMON_UID"
+
+(
+  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1
+"$(dirname "$0")/run-exact-native-test.sh" native_supplementary_groups live_supplementary_groups_match_engine
+)
+# Require the fixed private child even without public manifest emission.
+python3 "$script_dir/native_supplementary_groups_proof.py" "$run_dir" "$NATIVE_SUPPLEMENTARY_GROUPS_CANDIDATE_SHA" "$run_id" \
+  "$lane" "$server_version" "$api_version" "$expected_mode" "$installed_docker_package" \
+  "$NATIVE_FIXTURE_IMAGE" "$image" "$NATIVE_OUTER_CONTAINER_ID" "$NATIVE_BIND_RELABEL_DAEMON_UID"
+
+(
+  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1
+"$(dirname "$0")/run-exact-native-test.sh" native_kernel_settings live_kernel_settings_match_engine
+)
+# Require the fixed private child even without public manifest emission.
+python3 "$script_dir/native_kernel_settings_proof.py" "$run_dir" "$NATIVE_KERNEL_SETTINGS_CANDIDATE_SHA" "$run_id" \
   "$lane" "$server_version" "$api_version" "$expected_mode" "$installed_docker_package" \
   "$NATIVE_FIXTURE_IMAGE" "$image" "$NATIVE_OUTER_CONTAINER_ID" "$NATIVE_BIND_RELABEL_DAEMON_UID"
 

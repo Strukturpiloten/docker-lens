@@ -124,9 +124,11 @@ its three new groups. [ADR 0024](decisions/0024-health-disabled-raw-source-proje
 additionally derives only raw HealthDisabled after complete unchanged health-proof
 validation. [ADR 0025](decisions/0025-shm-size-source-integration.md) adds only
 the separate ShmSize source group and mandatory twenty-fourth invocation.
-Current combined raw totals are Debian 39/61 and upstream 41/65; HealthDisabled,
+[ADR 0026](decisions/0026-runtime-settings-source-integration.md) appends the
+mandatory supplementary/kernel source gates as invocations 25/26; their four
+finite raw groups remain unselected and host capture stays deferred. Current combined raw totals are Debian 43/66 and upstream 45/70; HealthDisabled,
 ShmSize and the three process groups remain unselected. Fresh
-exact-final-candidate twenty-four-test four-lane
+exact-final-candidate twenty-six-test four-lane
 execution, independent review and actual consumer gates remain required before
 ready/merge; source evidence does not qualify a changed candidate. No dependencies,
 software pins, operational images, workflow pins or Renovate extraction change.

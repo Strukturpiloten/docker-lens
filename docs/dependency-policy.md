@@ -1,6 +1,6 @@
 # Dependency and pin policy
 
-The decoder pins serde_json 1.0.151 for pure Engine JSON parsing and BoxFerry's
+The decoder pins serde_json 1.0.154 for pure Engine JSON parsing and BoxFerry's
 reviewed consumer floor. The bounded Unix-socket connector pins socket2 0.6.5
 for connect_timeout. Cargo.lock
 records their dependency graphs and registry checksums. Renovate owns Cargo
@@ -16,6 +16,17 @@ The flag applies only to this invocation; distribution verification and exact
 compiler selection remain required. The
 serde_json pin remains owned by Renovate's existing Cargo manager; no regex
 manager, manager path, grouping rule, or additional dependency is needed.
+
+The next runtime-source milestone aligns this exact pin with BoxFerry's reviewed
+upstream dependency update (BoxFerry PR #113). Its locked 1.0.154 cannot unify
+with DockerLens's earlier exact 1.0.151 requirement; the failed downstream
+source rehearsal is not passing evidence. The registry checksum is the same
+published checksum already recorded by that upstream lockfile, not an invented
+integrity value. Complete parser/decoder, source-consumer and native gates must
+be rerun for the changed candidate. Historical source records retain the
+dependencies used at execution. Renovate's enabled native Cargo manager still
+owns exactly this manifest pin and lockfile; neither location, manager, grouping
+nor approval policy changes, so no Renovate configuration edit is needed.
 
 The Rust 1.98.1 minimum alignment changes no extraction path or dependency
 resolution. The existing toolchain regex extracts exactly one 1.98.1 channel;

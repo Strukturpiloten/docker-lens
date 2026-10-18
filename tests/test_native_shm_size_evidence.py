@@ -56,8 +56,8 @@ class ShmSizeEvidenceTests(unittest.TestCase):
                 self.assertEqual({key: record[key] for key in expected}, expected)
                 self.assertEqual(record["admitted_shapes"]["ShmSize"], ["ShmSize"])
                 self.assertEqual(record["capability_outcome"]["ShmSize"], "available")
-                self.assertEqual(len(record["capability_outcome"]), 39 if lane.startswith("debian11-") else 41)
-                self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 61 if lane.startswith("debian11-") else 65)
+                self.assertEqual(len(record["capability_outcome"]), 43 if lane.startswith("debian11-") else 45)
+                self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 66 if lane.startswith("debian11-") else 70)
                 self.assertEqual(record["admitted_shapes"]["HealthDisabled"], ["DisabledHealthcheck"])
                 for private in ("ipc_namespace", "capacity_bytes", "configured_size_bytes", "statfs_blocks",
                                 "statfs_unit", "payload_bytes", "ordinary_elapsed_ns", "acquisition", "borrowed_image",

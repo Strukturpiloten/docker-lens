@@ -103,7 +103,7 @@ Renovate retains its existing Cargo/Action/toolchain ownership and five-image
 regex, native-image grouping and disabled automerge.
 
 Offline mock/reader tests prove no native compatibility. Independent final-diff
-review, complete final-edit gate and fresh exact-head twenty-four-test four-lane
+review, complete final-edit gate and fresh exact-head twenty-six-test four-lane
 qualification remain required. Raw projection grants no admission; separately
 authenticated cohort selection and actual consumer gates remain required.
 No release, publication, deployment or host runtime change is requested.

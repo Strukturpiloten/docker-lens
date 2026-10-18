@@ -17,7 +17,7 @@ health-metadata-v1 reader validates all four cases, including both inherited
 failing-health and disabled CLI/rendered controls. Its four legacy return/probe
 names remain unchanged. [ADR 0025](decisions/0025-shm-size-source-integration.md)
 adds only raw ShmSize after complete strict validation of the finite source proof.
-Current raw projection totals are Debian 39/61 and upstream 41/65; HealthDisabled,
+Current raw projection totals are Debian 43/66 and upstream 45/70; HealthDisabled,
 ShmSize and the three process groups remain outside compiled selection.
 The stable nineteen-argument emitter binds fixed direct-child proofs to existing
 independent harness context. Closed disconnected schema definitions expose only
@@ -33,6 +33,15 @@ The mandatory twelve-argument CLI reader runs even without public emission.
 The emitter requires an exact typed closed source-only return against independent
 context before mapping ShmSize; its public outcome exposes no actual defaults,
 IPC namespaces, IDs, argv or timestamps. Historical root acceptance stays intact.
+
+[ADR 0026](decisions/0026-runtime-settings-source-integration.md) appends
+supplementary groups and kernel settings as invocations 25/26, each with its own
+one-child cleanup-owner scope and mandatory independent twelve-argument reader.
+The first 24 calls and existing owner blocks remain byte-exact. The nineteen-argument
+emitter requires both fixed private children before four complete raw groups:
+SupplementaryGroups, SecurityOptions, Sysctls and SysctlIpv4Forward. Only finite
+closed outcomes are public; selected catalogue and historical records are unchanged.
+Host capture remains deferred; no nofile source group is integrated.
 
 ## Data flow
 
@@ -182,7 +191,7 @@ and historical evidence remain unchanged. ADR 0018 selects authenticated source
 run `37788762974` at Debian 29/46 and upstream 30/48 for candidate rehearsal;
 ADR 0019 retains those groups and adds only the StopSignal singleton.
 Definitions or offline controls grant no native compatibility. Fresh
-authenticated exact-final-candidate twenty-four-test four-lane execution,
+authenticated exact-final-candidate twenty-six-test four-lane execution,
 independent review and the separate ADR 0012/0016/0018/0019 consumer gates remain
 required before ready/merge. No source run qualifies a changed candidate.
 

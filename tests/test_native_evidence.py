@@ -23,6 +23,8 @@ from test_native_health_start_interval_boundary_proof import fixture as health_b
 from test_native_hostname_proof import fixture as hostname_fixture
 from test_native_command_clear_proof import fixture as command_clear_fixture
 from test_native_shm_size_proof import fixture as shm_size_fixture
+from test_native_supplementary_groups_proof import fixture as supplementary_groups_fixture
+from test_native_kernel_settings_proof import fixture as kernel_settings_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/native-evidence.py"
@@ -83,6 +85,10 @@ EXPECTED_FUTURE_RAW_SHAPES = {
     "EntrypointClear": ["ClearEntrypoint"],
     "HealthDisabled": ["DisabledHealthcheck"],
     "ShmSize": ["ShmSize"],
+    "SupplementaryGroups": ["SupplementaryGroups"],
+    "SecurityOptions": ["NoNewPrivilegesEnabled", "NoNewPrivilegesDisabled"],
+    "Sysctls": ["Sysctls"],
+    "SysctlIpv4Forward": ["SysctlIpv4Forward"],
 }
 SOURCE_PROBES = [
     "DiscoveryMetadata", "ExactContainerId", "ExactContainerName",
@@ -236,8 +242,8 @@ class NativeEvidenceTests(unittest.TestCase):
                     del expected["PortHostIpv6"]
                 self.assertEqual(record["admitted_shapes"], expected)
                 self.assertEqual(record["capability_outcome"], {name: "available" for name in expected})
-                self.assertEqual(len(record["capability_outcome"]), 39 if debian else 41)
-                self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 61 if debian else 65)
+                self.assertEqual(len(record["capability_outcome"]), 43 if debian else 45)
+                self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 66 if debian else 70)
                 for name, shapes in EXPECTED_LIFECYCLE_SOURCE_SHAPES.items():
                     self.assertEqual(tuple(shapes), required[name])
                     if debian and name == "HealthStartInterval":
@@ -354,7 +360,8 @@ class NativeEvidenceTests(unittest.TestCase):
                                      "bind_relabel_shape_vocabulary", "external_network_probes",
                                      "external_network_projection", "lifecycle_source_projection",
                                      "hostname_source_projection", "command_clear_source_projection",
-                                     "health_disabled_source_projection", "shm_size_source_projection"})
+                                     "health_disabled_source_projection", "shm_size_source_projection",
+                                     "supplementary_groups_source_projection", "kernel_settings_source_projection"})
         unchanged = copy.deepcopy(schema)
         for name in ("identity_probes", "identity_container_proof", "native_identity_proof",
                      "identity_container_v2", "identity_case_v2", "native_identity_proof_v2",
@@ -362,7 +369,8 @@ class NativeEvidenceTests(unittest.TestCase):
                      "bind_relabel_capability_vocabulary", "bind_relabel_shape_vocabulary",
                      "external_network_probes", "external_network_projection", "lifecycle_source_projection",
                      "hostname_source_projection", "command_clear_source_projection",
-                     "health_disabled_source_projection", "shm_size_source_projection"):
+                     "health_disabled_source_projection", "shm_size_source_projection",
+                     "supplementary_groups_source_projection", "kernel_settings_source_projection"):
             del unchanged["$defs"][name]
         # Preserve the exact historical #74 root projection: later vocabulary
         # additions do not rewrite historical envelope bytes or admission.
@@ -548,6 +556,10 @@ class NativeEvidenceTests(unittest.TestCase):
                  command_clear_missing: bool = False,
                  shm_size: object = None,
                  shm_size_missing: bool = False,
+                 supplementary_groups: object = None,
+                 supplementary_groups_missing: bool = False,
+                 kernel_settings: object = None,
+                 kernel_settings_missing: bool = False,
                  port_proof_override: object = None) -> tuple[subprocess.CompletedProcess[str], Path]:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -674,10 +686,18 @@ class NativeEvidenceTests(unittest.TestCase):
         command_proof["seed"]["image"] = HEALTH_FIXTURE_IMAGE
         shm_proof = shm_size_fixture(lane)
         shm_proof["context"].update(copy.deepcopy(external["context"]))
+        supplementary_proof = supplementary_groups_fixture(lane)
+        supplementary_proof["context"].update(copy.deepcopy(external["context"]))
+        supplementary_proof["context"]["fixture_image"] = HEALTH_FIXTURE_IMAGE
+        kernel_proof = kernel_settings_fixture(lane)
+        kernel_proof["context"].update(copy.deepcopy(external["context"]))
+        kernel_proof["context"]["fixture_image"] = HEALTH_FIXTURE_IMAGE
         for filename, proof, override, missing in (
             ("hostname-v1.json", hostname_proof, hostname, hostname_missing),
             ("command-clear-v1.json", command_proof, command_clear, command_clear_missing),
             ("shm-size-v1.json", shm_proof, shm_size, shm_size_missing),
+            ("supplementary-groups-v1.json", supplementary_proof, supplementary_groups, supplementary_groups_missing),
+            ("kernel-settings-v1.json", kernel_proof, kernel_settings, kernel_settings_missing),
         ):
             if not missing:
                 private_path = root / filename
@@ -707,7 +727,7 @@ class NativeEvidenceTests(unittest.TestCase):
         self.assertEqual(evidence["acquisition_api"], "1.49")
         self.assertEqual(evidence["rendering_api"], "1.56")
         self.assertEqual(evidence["runtime_components"], {"containerd": "2.3.5", "runc": "1.5.1"})
-        self.assertEqual(len(evidence["capability_outcome"]), 39)
+        self.assertEqual(len(evidence["capability_outcome"]), 43)
         self.assertEqual(set(evidence["capability_outcome"].values()), {"available"})
         self.assertEqual(evidence["admitted_shapes"], EXPECTED_FUTURE_RAW_SHAPES)
         self.assertEqual(evidence["source_probes"], SOURCE_PROBES)
