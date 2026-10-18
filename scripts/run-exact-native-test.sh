@@ -232,11 +232,14 @@ pids_diagnostics=
 if [[ $target == native_pids_limit ]]; then
   pids_diagnostics=$(awk \
     -v stages='^DOCKERLENS_NATIVE_PIDS_STAGE: (case=context role=observer stage=(context|image|outer_observer|daemon_identity|outer_pids_resolve|outer_memory_resolve|acquisition|final_snapshots|proof)|case=(finite16|finite64|unlimited) role=(oracle|rendered) stage=(preflight|create|start|inspect|private_identity|baseline_scan|leaf_pids_resolve|leaf_memory_resolve|baseline_controller|work_start|held_scan|held_controller|release|restored_scan|restored_controller|final_inspect))$' \
-    -v reasons='^DOCKERLENS_NATIVE_PIDS_RESOLVE: reason=(no_controller_mount|root_coordinate_mismatch|outside_owned_descendant|multiple_eligible_mounts)$' \
+    -v reasons='^DOCKERLENS_NATIVE_PIDS_RESOLVE: reason=(no_controller_mount|root_coordinate_mismatch|multiple_eligible_mounts|outside_owned_descendant relation=(equal_owner|outside_owner|mixed))$' \
+    -v controllers='^DOCKERLENS_NATIVE_PIDS_CONTROLLER: reason=(member_ids_mismatch|current_count_mismatch|members_and_current_mismatch)$' \
     '/^thread .* panicked at / || /^DOCKERLENS_NATIVE_CHECK: lifecycle_cleanup(_unverified)?$/ || /^DOCKERLENS_NATIVE_LIFECYCLE_CLEANUP:/ { exit }
      $0 ~ stages { stage=$0; reason=""; seen=0; next }
-     $0 ~ reasons && stage ~ /stage=(outer_pids_resolve|outer_memory_resolve|leaf_pids_resolve|leaf_memory_resolve)$/ {
-       seen++; reason=(seen == 1 ? $0 : "")
+     $0 ~ reasons || $0 ~ controllers {
+       seen++
+       compatible=($0 ~ reasons && stage ~ /stage=(outer_pids_resolve|outer_memory_resolve|leaf_pids_resolve|leaf_memory_resolve)$/) || ($0 ~ controllers && stage ~ /stage=(baseline_controller|held_controller|restored_controller)$/)
+       reason=(seen == 1 && compatible ? $0 : "")
      }
      END { if (stage != "") print stage; if (reason != "") print reason }' <<<"$result")
 fi

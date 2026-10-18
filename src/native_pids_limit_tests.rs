@@ -131,6 +131,42 @@ fn pids_resolution_failure(
     }
 }
 
+fn pids_owned_relation(equal_owner: bool, outside_owner: bool) -> &'static str {
+    match (equal_owner, outside_owner) {
+        (true, false) => " relation=equal_owner",
+        (false, true) => " relation=outside_owner",
+        (true, true) => " relation=mixed",
+        (false, false) => "",
+    }
+}
+
+fn pids_controller_failure(
+    members_match: bool,
+    lines: &[String],
+    expected_current: usize,
+) -> Option<&'static str> {
+    // Diagnose only an already captured, unique canonical CURRENT. Never add a
+    // parsing panic before the original short-circuit membership assertion.
+    let mut currents = lines
+        .iter()
+        .filter_map(|line| line.strip_prefix("CURRENT "));
+    let current = currents.next()?;
+    if currents.next().is_some()
+        || current.is_empty()
+        || !current.bytes().all(|byte| byte.is_ascii_digit())
+        || (current != "0" && current.starts_with('0'))
+    {
+        return None;
+    }
+    let current_matches = current.parse::<u64>().ok()? == expected_current as u64;
+    match (members_match, current_matches) {
+        (false, true) => Some("member_ids_mismatch"),
+        (true, false) => Some("current_count_mismatch"),
+        (false, false) => Some("members_and_current_mismatch"),
+        (true, true) => None,
+    }
+}
+
 // Authored from the finite protocol, not copied from an oracle implementation.
 // A one-line worker gives its only fork site a fixed diagnostic line number.
 const PIDS_WORKER: &str = "set -u; LC_ALL=C; export LC_ALL; n=0; trap 'code=$?; printf \"EXIT %s %s %s\\n\" \"$$\" \"$code\" \"$n\"; IFS= read -r release; [ \"$release\" = RELEASE ] || exit 73' EXIT; printf 'READY %s\\n' \"$$\"; IFS= read -r start; [ \"$start\" = START ] || exit 74; while [ \"$n\" -lt 32 ]; do n=$((n+1)); printf 'TRY %s\\n' \"$n\"; (trap - EXIT; IFS= read -r held <&5) & printf 'CHILD %s\\n' \"$!\"; done; exit 0";
@@ -442,6 +478,8 @@ fn pids_resolve(
     let mut candidates = Vec::new();
     let mut eligible_mount = false;
     let mut rooted_mount = false;
+    let mut equal_owner = false;
+    let mut outside_owner = false;
     for line in lines.iter().filter_map(|line| line.strip_prefix("M ")) {
         let (left, right) = line
             .split_once(" - ")
@@ -473,13 +511,24 @@ fn pids_resolve(
             // canonical path strings even when the owner is the mount root.
             let path: PathBuf = mount.join(leaf).components().collect();
             let outer_path: PathBuf = mount.join(parent).components().collect();
+            equal_owner |= descendant && path == outer_path;
+            outside_owner |= !path.starts_with(&outer_path);
             if (!descendant || path != outer_path) && path.starts_with(&outer_path) {
                 candidates.push(json!({"kind":if tail[0] == "cgroup2" {"v2"} else {"v1"},"mount_id":pids_u64(fields[0]),"root":fields[3],"mountpoint":fields[4],"membership":selected,"path":path,"outer_membership":owner,"outer_path":outer_path,"inode":0,"device":0}));
             }
         }
     }
     if let Some(reason) = pids_resolution_failure(eligible_mount, rooted_mount, candidates.len()) {
-        eprintln!("DOCKERLENS_NATIVE_PIDS_RESOLVE: reason={}", reason.label());
+        let relation = if reason == PidsResolutionFailure::OutsideOwnedDescendant {
+            pids_owned_relation(equal_owner, outside_owner)
+        } else {
+            ""
+        };
+        eprintln!(
+            "DOCKERLENS_NATIVE_PIDS_RESOLVE: reason={}{}",
+            reason.label(),
+            relation
+        );
     }
     assert!(
         candidates.len() == 1,
@@ -821,6 +870,9 @@ fn pids_controller(
     members.sort_unstable();
     let mut expected: Vec<_> = rows.iter().map(|row| row[0].as_u64().unwrap()).collect();
     expected.sort_unstable();
+    if let Some(reason) = pids_controller_failure(members == expected, &lines, rows.len()) {
+        eprintln!("DOCKERLENS_NATIVE_PIDS_CONTROLLER: reason={reason}");
+    }
     assert!(
         members == expected && pids_u64(pids_field(&lines, "CURRENT")) == rows.len() as u64,
         "exclusive single-threaded leaf membership"
@@ -1571,6 +1623,81 @@ fn pids_resolution_diagnostic_classification_uses_only_existing_predicate_observ
         assert_eq!(reason.label(), label);
     }
     assert_eq!(pids_resolution_failure(true, true, 1), None);
+}
+
+#[test]
+fn pids_resolution_ownership_diagnostics_distinguish_equal_and_outside_boundaries() {
+    for (selected, owner, descendant, expected) in [
+        ("/owned", "/owned", true, " relation=equal_owner"),
+        (
+            "/owned-sibling/leaf",
+            "/owned",
+            true,
+            " relation=outside_owner",
+        ),
+        (
+            "/elsewhere/leaf",
+            "/owned",
+            false,
+            " relation=outside_owner",
+        ),
+        ("/owned/leaf", "/owned", true, ""),
+        ("/owned", "/owned", false, ""),
+    ] {
+        let path = pids_safe_path(selected);
+        let outer_path = pids_safe_path(owner);
+        assert_eq!(
+            pids_owned_relation(
+                descendant && path == outer_path,
+                !path.starts_with(&outer_path)
+            ),
+            expected
+        );
+    }
+    assert_eq!(pids_owned_relation(true, true), " relation=mixed");
+}
+
+#[test]
+fn pids_controller_diagnostics_use_only_canonical_existing_current_observations() {
+    for (members_match, current, expected) in [
+        (true, "2", None),
+        (false, "2", Some("member_ids_mismatch")),
+        (true, "3", Some("current_count_mismatch")),
+        (false, "3", Some("members_and_current_mismatch")),
+        (true, "0", Some("current_count_mismatch")),
+    ] {
+        assert_eq!(
+            pids_controller_failure(members_match, &[format!("CURRENT {current}")], 2),
+            expected
+        );
+    }
+    for invalid in [
+        "",
+        "02",
+        "+2",
+        "-2",
+        " 2",
+        "2 ",
+        "2\n",
+        "２",
+        "18446744073709551616",
+    ] {
+        for members_match in [false, true] {
+            assert_eq!(
+                pids_controller_failure(members_match, &[format!("CURRENT {invalid}")], 2),
+                None
+            );
+        }
+    }
+    for lines in [
+        vec![],
+        vec!["MAX 2".into()],
+        vec!["CURRENT 2".into(), "CURRENT 2".into()],
+    ] {
+        for members_match in [false, true] {
+            assert_eq!(pids_controller_failure(members_match, &lines, 2), None);
+        }
+    }
 }
 
 #[test]

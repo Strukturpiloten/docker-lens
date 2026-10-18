@@ -26,6 +26,20 @@ prior passes nor these stopping points qualify the candidate, its public outputs
 runtime compatibility or a specific cgroup/namespace cause. Historical records
 and the failed campaign remain unchanged.
 
+Independently reviewed [run 39169948731, attempt 1](https://github.com/Strukturpiloten/docker-lens/actions/runs/39169948731/attempts/1)
+tested `e2f0f479b5058fb9a5cd237adc95c998da6e6349`. Again each lane passed
+26 invocations and failed PIDs 27 (104 prior passes and four failures, original
+Cargo exits 101); nofile 28 was not reached and no artifacts or cleanup-dependent
+lane successes were produced. Both rootful lanes reached finite16/oracle
+baseline_controller and the conjunction at that source's
+native_pids_limit_tests.rs:824:5. It does not distinguish unequal member IDs from
+unequal current-task count, or both. Both rootless lanes reached finite16/oracle
+leaf_pids_resolve, outside_owned_descendant and exact-one assertion 484:5. That
+reason does not distinguish equality with the observer-derived owner from a path
+outside its component prefix. These are established stopping points, not known
+runtime causes; absent cleanup markers do not prove cleanup completion. Neither
+failure nor the earlier representation repair qualifies this candidate.
+
 ## Decision
 
 The actual PIDs producer emits finite stopping points before context acquisition,
@@ -46,15 +60,34 @@ resolver, without logging raw counts:
 | outside_owned_descendant | At least one root fits, but no mapping passes the existing ownership/strict-descendant predicate. |
 | multiple_eligible_mounts | More than one mapping passes all existing predicates, not merely more than one mounted filesystem. |
 
+For outside_owned_descendant, append only a closed relation: equal_owner means
+the selected path equals the owner while a strict descendant is required;
+outside_owner means the selected path lacks the owner's component prefix. Mixed
+means both refusal predicates were observed across rooted mounts. These are
+existing path predicates, not an authenticated ownership finding. Do not select
+an arbitrary last rejected mount. The original success predicate remains intact.
+
 One mapping emits no refusal classification. The original exact-one assertion,
 mountinfo fields 3/4 and component-wise prefix checks remain authoritative.
 Do not translate/rebase paths, switch to daemon namespace views, relax ownership,
 skip a controller, raise bounds, or infer unsupported behavior from failure.
 
+Immediately before the original exclusive-single-threaded-membership assertion,
+classify the existing member-ID comparison and captured CURRENT comparison as
+member_ids_mismatch, current_count_mismatch or members_and_current_mismatch.
+No classification is emitted when both match. Inspect CURRENT without panicking;
+missing, duplicate, noncanonical or overflowing values emit no classification.
+The original assertion, including its short-circuit evaluation and malformed-value
+failure behavior, remains authoritative. Do not log IDs or counts, perform another
+controller read, change namespace views or treat a mismatch as a proven cause.
+
 Only the PIDs wrapper branch admits actual closed producer stages/classifications.
 Retain the last valid stage before the first panic or cleanup boundary. Accept a
-single classification only beside a resolver stage; duplicate classifications
-are omitted. Later cleanup/secondary panics cannot replace the original causal
+single resolver classification only beside a resolver stage, or a controller
+classification only beside baseline/held/restored_controller. At most two PIDs
+lines leave the wrapper: the stage and one classification. Duplicate or mixed
+classifications are omitted, and a new stage clears the previous classification.
+Later cleanup/secondary panics cannot replace the original causal
 stage or first allowlisted panic location. Original failure status, exact selection,
 numeric-summary requirements and handoff refusal remain unchanged. Native stderr,
 paths, IDs, namespaces, memberships, command payloads and host facts stay private.
@@ -78,6 +111,30 @@ This is an independently demonstrated representation defect, not an established
 cause of failed native campaign 39165508951. Only fresh native execution can
 establish the changed candidate's actual stopping point or qualification.
 
+## Unresolved coordinate and authenticated-boundary evidence
+
+Process rows use the scan's procfs PID coordinates. Controller member IDs use the
+controller reader's current PID namespace. Both commands execute through the
+owned outer container, but the source does not independently prove these PID
+coordinate views equivalent or recheck controller-reader namespaces. The scan's
+PID/mount/cgroup namespace checks do not supply that missing relationship.
+
+The resolver's owner membership comes from the initial observer command itself,
+not an independently authenticated bounded outer-container root. The configured
+outer identity and limits are retained, and the observed controller ceilings are
+checked numerically against 512 PIDs/4 GiB, but no independent binding proves those
+controller paths/inodes represent that exact owned boundary. Matching namespace
+identities alone neither proves unchanged membership nor authenticates the owner.
+Do not replace it with an ancestor, daemon view or mount root to pass containment.
+
+A separate evidence design must independently bind the scan procfs PID view to
+the actual controller-reader PID namespace, bind that reader's namespace/membership
+context, and authenticate each controller boundary to the exact owned outer and
+its unchanged measured 512-PID/4-GiB limits. Any extra observations, private fields
+or requests require separately reviewed acquisition/identity rules, proof readers,
+custody and call/byte/time accounting before implementation. This change collects
+none of that evidence and does not extend the current protocol or footprint.
+
 ## Validation and remaining gates
 
 Independent pure Rust fixtures exercise v1 co-mount/v2 and non-root mount roots,
@@ -85,7 +142,9 @@ component-prefix siblings, untranslated coordinates, duplicates and strict
 descendants. Source guards bind the diagnostic observations to the original
 predicates and stages to actual operations. Mocked wrapper controls cover closed
 vocabulary, first-panic/cleanup ordering, malformed/secret suppression and unchanged
-selection/handoff behavior. They do not execute a native worker or establish a
+selection/handoff behavior. Pure cases also cover both controller conjuncts,
+canonical CURRENT refusal and equal/outside ownership relations. They do not
+execute a native worker or establish a
 runtime cause.
 
 Shared HealthRun, private producer/reader protocol, all budgets, controller and

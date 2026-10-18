@@ -144,9 +144,14 @@ return-contract failure rejects the entire public output. There is no public PID
 projection, capability/shape mapping or schema addition. Raw counts remain
 43/66 and 45/70; selection remains 34/56 and 36/60.
 [ADR 0029](decisions/0029-pids-failure-localization.md) adds actual closed
-source-local stages and resolver-refusal classifications. Only the last valid
-pre-first-panic stage and its single matching refusal classification are exposed
+source-local stages and resolver/controller-refusal classifications. Only the last valid
+pre-first-panic stage and its single phase-compatible classification are exposed
 beside existing shared cleanup/handoff diagnostics and original panic location.
+At most two PIDs lines are projected. Existing equality outcomes distinguish
+member-ID mismatch, current-task-count mismatch or both, and equal-owner versus
+outside-prefix resolver refusal (or mixed rooted refusals). No raw IDs/counts or
+paths are public. Malformed CURRENT receives no classification; the original
+assertion/short-circuit behavior, resolver predicates and all requests stay unchanged.
 These identify source stopping points, never native values, proof or a root cause.
 That PIDs-only slice did not integrate nofile, and host capture remains deferred.
 Source-only wiring and mocked controls are not fresh exact-candidate four-lane
@@ -187,6 +192,27 @@ from that run. An independent pure Rust fixture separately exposed empty-relativ
 trailing separators rejected by the strict reader. Canonical component serialization
 repairs only that proven representation seam; it does not establish the native
 failure's cause. The changed source still needs fresh exact-candidate qualification.
+
+Independently reviewed failed run 39169948731, attempt 1, tested exact candidate
+e2f0f479b5058fb9a5cd237adc95c998da6e6349. Again all four lanes passed 26 then
+failed PIDs 27: 104 prior passes and four failures, original Cargo exits 101.
+Nofile 28 was not reached; no artifacts or cleanup-dependent lane successes were
+produced. Rootful lanes reached finite16/oracle baseline_controller and assertion
+824:5, whose two comparisons were indistinguishable. Rootless lanes reached
+finite16/oracle leaf_pids_resolve and assertion 484:5, with outside_owned_descendant
+not distinguishing equal-owner from outside-prefix refusal. This follow-up adds
+only closed discrimination using existing observations, not a retrospective cause
+or qualification. Missing cleanup markers do not prove completed cleanup.
+
+Source review separately leaves two positive-proof gaps: the scan's procfs PID
+coordinates are not independently bound to the controller reader's current PID
+namespace/context, and observer-derived controller paths/inodes are not independently
+authenticated as the exact owned outer boundary with measured 512-PID/4-GiB limits.
+Existing scan namespace checks, configured outer limits and numerical controller
+ceiling checks do not supply those bindings. ADR 0029 records a separate evidence
+design requiring reviewed acquisition, proof-reader, custody and budget changes
+before collecting new facts. No namespace-view switch, owner/ancestor rebasing,
+extra command or proof-protocol extension is implemented here.
 
 The canonical harness requires twenty-eight exact ignored invocations, retaining the
 original first seventeen in order and adding the separate eighteenth

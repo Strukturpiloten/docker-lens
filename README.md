@@ -66,7 +66,12 @@ validation, even without public emission. It adds no public PIDs fields or
 capability/shape mapping. [ADR 0029](docs/decisions/0029-pids-failure-localization.md)
 adds closed source-local failure diagnostics and canonical joined-path
 representation matching the strict reader, without changing controller/ownership
-predicates or qualifying failed campaign 39165508951. Fresh native qualification remains pending.
+predicates or qualifying failed campaigns 39165508951 and 39169948731. Closed
+follow-up diagnostics distinguish the existing member-ID/current-count comparisons
+and equal-owner/outside-prefix refusals without new observations. Procfs/controller-reader
+PID-coordinate equivalence and an authenticated exact owned controller boundary
+remain unresolved positive-proof requirements, not established runtime causes.
+Fresh native qualification remains pending.
 [ADR 0028](docs/decisions/0028-nofile-private-qualification.md) appends mandatory
 private nofile invocation 28 and its strict independent proof gate, also without
 public emission. Its existing four-case/eight-fixture CLI/rendered experiment retains precise

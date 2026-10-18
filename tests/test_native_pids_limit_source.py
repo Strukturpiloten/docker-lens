@@ -196,7 +196,7 @@ class PidsLimitSourceTests(unittest.TestCase):
             "leaf_memory_resolve", "baseline_controller", "work_start", "held_scan", "held_controller", "release",
             "restored_scan", "restored_controller", "final_inspect", "acquisition", "final_snapshots", "proof",
         })
-        self.assertEqual(source.count("eprintln!("), 2)
+        self.assertEqual(source.count("eprintln!("), 3)
 
     def test_resolution_diagnostics_do_not_change_mapping_or_assertion(self):
         source = SOURCE.read_text()
@@ -206,6 +206,9 @@ class PidsLimitSourceTests(unittest.TestCase):
         self.assertIn('selected_path.strip_prefix(&root)', resolver)
         self.assertIn('owner_path.strip_prefix(&root)', resolver)
         self.assertIn('(!descendant || path != outer_path) && path.starts_with(&outer_path)', resolver)
+        self.assertIn('equal_owner |= descendant && path == outer_path;', resolver)
+        self.assertIn('outside_owner |= !path.starts_with(&outer_path);', resolver)
+        self.assertIn('pids_owned_relation(equal_owner, outside_owner)', resolver)
         self.assertLess(resolver.index("continue;"), resolver.index("eligible_mount = true;"))
         self.assertLess(resolver.index("owner_path.strip_prefix(&root)"), resolver.index("rooted_mount = true;"))
         self.assertLess(resolver.index("rooted_mount = true;"), resolver.index("path.starts_with(&outer_path)"))
@@ -213,8 +216,31 @@ class PidsLimitSourceTests(unittest.TestCase):
         self.assertRegex(resolver, r'assert!\(\s*candidates.len\(\) == 1,\s*"unique controller mount-root resolution"')
         for name in ("pids_resolution_handles_v1_comount_and_v2_nonroot_mount_roots",
                      "pids_resolution_keeps_untranslated_sibling_duplicate_and_strict_descendant_refusals",
-                     "pids_resolution_diagnostic_classification_uses_only_existing_predicate_observations"):
+                     "pids_resolution_diagnostic_classification_uses_only_existing_predicate_observations",
+                     "pids_resolution_ownership_diagnostics_distinguish_equal_and_outside_boundaries"):
             self.assertIn("fn " + name + "()", source)
+
+    def test_controller_diagnostics_preserve_original_short_circuit_and_never_query(self):
+        source = SOURCE.read_text()
+        controller = source.split("fn pids_controller(", 1)[1].split("fn ", 1)[0]
+        original = ('assert!( members == expected && pids_u64(pids_field(&lines, "CURRENT")) '
+                    '== rows.len() as u64, "exclusive single-threaded leaf membership" );')
+        self.assertIn(original, re.sub(r"\s+", " ", controller))
+        diagnostic = "pids_controller_failure(members == expected, &lines, rows.len())"
+        self.assertLess(controller.index(diagnostic), controller.index('"exclusive single-threaded'))
+        helper = source.split("fn pids_controller_failure(", 1)[1].split("// Authored", 1)[0]
+        for required in ('line.strip_prefix("CURRENT ")', 'currents.next()?', 'currents.next().is_some()',
+                         'current.is_empty()', 'byte.is_ascii_digit()', "current.starts_with('0')",
+                         'current.parse::<u64>().ok()?', '(true, true) => None'):
+            self.assertIn(required, helper)
+        for forbidden in ("pids_field(", "pids_u64(", "assert!", "unwrap", "panic!", "run.",
+                          "pids_shell(", "docker(", "eprintln!"):
+            self.assertNotIn(forbidden, helper)
+        labels = re.findall(r'Some\("([a-z_]+)"\)', helper)
+        self.assertEqual(set(labels), {"member_ids_mismatch", "current_count_mismatch",
+                                       "members_and_current_mismatch"})
+        self.assertEqual(controller.count("pids_shell("), 1)
+        self.assertIn('fn pids_controller_diagnostics_use_only_canonical_existing_current_observations()', source)
 
 
 if __name__ == "__main__":

@@ -19,11 +19,25 @@ membership coordinates and ownership predicates do not change. This is not an
 established cause of the failed native campaign. Actual closed case/role/operation stages precede
 commands and each of the four outer/leaf controller resolutions. The wrapper keeps
 the last valid stage before the first panic or cleanup boundary and only a single
-matching resolver-refusal classification. Native stderr, paths, IDs, namespace
+phase-compatible resolver or controller classification (at most two PIDs lines).
+Native stderr, paths, IDs, namespace
 values, memberships and command payloads remain private. Refusal categories
 distinguish no controller mount, no common mount-root coordinates, failed owned
 descendancy and multiple fully matching mounts; they never translate paths or
 relax the original exact-one predicate. Diagnostics are not proof or a root cause.
+
+The outside_owned_descendant reason additionally distinguishes relation=equal_owner
+from relation=outside_owner using the already evaluated equality/component-prefix
+predicates; relation=mixed conservatively retains both observations across rooted
+mounts. Controller classifications distinguish member_ids_mismatch,
+current_count_mismatch and members_and_current_mismatch from existing captured
+values, never raw IDs/counts. A matching controller observation emits no reason;
+missing, duplicate, malformed or overflowing CURRENT also emits none. Original
+assertions and short-circuit behavior remain intact; no extra request is made.
+The wrapper omits duplicate/mixed classifications, clears them at each new stage
+and ignores later output for this classification; shared cleanup/handoff reporting
+is unchanged. These outcomes cannot identify a
+runtime cause or authenticate an ownership boundary.
 
 Failed exact-source run 39165508951 (attempt 1, be19402cccb94e20659acb04b1c267efe4390250)
 passed 26 prior invocations per lane then failed PIDs 27 on all four: 104 prior
@@ -33,6 +47,15 @@ lane successes. At that source, rootful first panics were shared command-success
 the last shared marker, not a demonstrated phase. No private proof/raw output was
 available. Those failures remain unqualified; this change adds localization, not
 a speculative namespace/controller fix. Host capture remains deferred.
+
+Failed exact-source run 39169948731 (attempt 1, e2f0f479b5058fb9a5cd237adc95c998da6e6349)
+also passed the first 26 per lane and failed PIDs 27 everywhere: 104 prior passes,
+four failed attempts, no artifacts or cleanup-dependent lane successes; nofile 28
+was not reached. Rootful finite16/oracle baseline_controller stopped at that
+source's conjunction 824:5 without identifying either failed comparison. Rootless
+finite16/oracle leaf_pids_resolve stopped at 484:5 with outside_owned_descendant,
+which did not distinguish equality from outside-prefix refusal. The new closed
+discrimination does not retroactively resolve those ambiguities or prove cleanup.
 
 ## Six independently authored cases
 
@@ -80,6 +103,19 @@ stable across the observation. Each phase rechecks the observer namespaces;
 control writes recheck PID1's namespace, start and mapped UID after opening a
 verified FIFO descriptor. No host `/proc`, namespace entry or guessed
 Docker cgroup path is used. Unknown/ambiguous mappings refuse.
+
+The existing observations do not independently prove that the scan's procfs PID
+coordinates equal the controller reader's current PID namespace, nor recheck that
+reader's namespace context. The supposed owner membership is the initial observer
+command's own membership, not independently authenticated as the bounded outer
+root. Configured outer identity/limits and numerical 512-PID/4-GiB controller checks
+do not independently bind the selected controller paths/inodes to that exact owned
+boundary. Namespace equality alone establishes neither membership nor ownership.
+These remain unresolved positive-proof requirements, not established explanations
+for either failed campaign. No ancestor, daemon-view or mount-root rebasing is
+authorized. ADR 0029 proposes a separate reviewed evidence design for procfs/reader
+coordinate binding and authenticated controller-boundary binding, including any
+new protocol/custody/accounting needed; this change collects no new observations.
 
 Controller membership and the observer's actual mountinfo resolve v1 controller
 mounts or v2 unified mounts with component-wise mount-root handling. Read actual

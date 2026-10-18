@@ -182,10 +182,13 @@ else:
                 self.assertIn(stage, result.stderr)
         source = (ROOT / "src/native_pids_limit_tests.rs").read_text()
         self.assertIn('"DOCKERLENS_NATIVE_PIDS_STAGE: case={case} role={role} stage={}"', source)
-        self.assertIn('"DOCKERLENS_NATIVE_PIDS_RESOLVE: reason={}"', source)
+        self.assertIn('"DOCKERLENS_NATIVE_PIDS_RESOLVE: reason={}{}"', source)
+        self.assertIn('"DOCKERLENS_NATIVE_PIDS_CONTROLLER: reason={reason}"', source)
 
     def test_last_pre_first_panic_stage_and_matching_resolution_survive_cleanup(self):
-        reasons = ("no_controller_mount", "root_coordinate_mismatch", "outside_owned_descendant", "multiple_eligible_mounts")
+        reasons = ("no_controller_mount", "root_coordinate_mismatch", "multiple_eligible_mounts",
+                   "outside_owned_descendant relation=equal_owner",
+                   "outside_owned_descendant relation=outside_owner", "outside_owned_descendant relation=mixed")
         for fields in ("case=context role=observer stage=outer_pids_resolve",
                        "case=context role=observer stage=outer_memory_resolve",
                        "case=finite16 role=oracle stage=leaf_pids_resolve",
@@ -240,6 +243,82 @@ else:
                        actual + "\n" + classification + "\n" + classification):
             result = self.wrapper(output + "\n" + FAILED, 101)[0]
             self.assertNotIn("DOCKERLENS_NATIVE_PIDS_RESOLVE:", result.stderr)
+
+    def test_each_controller_conjunct_has_one_closed_pre_first_panic_classification(self):
+        reasons = ("member_ids_mismatch", "current_count_mismatch", "members_and_current_mismatch")
+        for phase in ("baseline_controller", "held_controller", "restored_controller"):
+            for reason in reasons:
+                with self.subTest(phase=phase, reason=reason):
+                    stage = f"DOCKERLENS_NATIVE_PIDS_STAGE: case=finite16 role=oracle stage={phase}"
+                    classification = "DOCKERLENS_NATIVE_PIDS_CONTROLLER: reason=" + reason
+                    panic = f"thread '{SELECTED}' panicked at src/native_pids_limit_tests.rs:824:5:"
+                    later = "DOCKERLENS_NATIVE_PIDS_CONTROLLER: reason=member_ids_mismatch"
+                    output = "\n".join((stage, classification, panic, SECRET,
+                                        "DOCKERLENS_NATIVE_CHECK: lifecycle_cleanup_unverified",
+                                        "DOCKERLENS_NATIVE_PIDS_STAGE: case=context role=observer stage=proof",
+                                        later, FAILED))
+                    result = self.wrapper(output, 101)[0]
+                    diagnostics = [line for line in result.stderr.splitlines()
+                                   if line.startswith("DOCKERLENS_NATIVE_PIDS_")]
+                    self.assertEqual(diagnostics, [stage, classification])
+                    self.assertNotEqual(result.returncode, 0)
+                    for expected in ("(exit 101)", "source=native_pids_limit_tests line=824 column=5"):
+                        self.assertIn(expected, result.stderr)
+                    self.assertNotIn(SECRET, result.stdout + result.stderr)
+
+    def test_controller_refusals_require_exact_phase_and_no_duplicate_or_mixed_reason(self):
+        prefix = "DOCKERLENS_NATIVE_PIDS_STAGE: case=finite64 role=rendered stage="
+        stage = prefix + "held_controller"
+        classification = "DOCKERLENS_NATIVE_PIDS_CONTROLLER: reason=current_count_mismatch"
+        resolver = "DOCKERLENS_NATIVE_PIDS_RESOLVE: reason=root_coordinate_mismatch"
+        for output in (classification,
+                       prefix + "held_scan\n" + classification,
+                       prefix + "leaf_pids_resolve\n" + classification,
+                       stage + "\n" + resolver,
+                       stage + "\n" + classification + "\n" + classification,
+                       stage + "\n" + classification + "\n" + resolver,
+                       stage + "\n" + resolver + "\n" + classification,
+                       stage + "\n" + classification + "\n" + prefix + "restored_scan"):
+            with self.subTest(output=output):
+                result = self.wrapper(output + "\n" + FAILED, 101)[0]
+                self.assertNotIn("DOCKERLENS_NATIVE_PIDS_CONTROLLER:", result.stderr)
+                self.assertNotIn("DOCKERLENS_NATIVE_PIDS_RESOLVE:", result.stderr)
+        # A new stage resets the single-classification slot instead of carrying
+        # an earlier phase's valid observation into the next operation.
+        next_stage = prefix + "restored_controller"
+        next_reason = "DOCKERLENS_NATIVE_PIDS_CONTROLLER: reason=member_ids_mismatch"
+        result = self.wrapper("\n".join((stage, classification, next_stage, next_reason, FAILED)), 101)[0]
+        diagnostics = [line for line in result.stderr.splitlines() if line.startswith("DOCKERLENS_NATIVE_PIDS_")]
+        self.assertEqual(diagnostics, [next_stage, next_reason])
+
+    def test_new_diagnostics_never_expose_native_data_or_replace_first_panic(self):
+        stage = "DOCKERLENS_NATIVE_PIDS_STAGE: case=finite16 role=oracle stage=baseline_controller"
+        valid = "DOCKERLENS_NATIVE_PIDS_CONTROLLER: reason=members_and_current_mismatch"
+        malformed = [valid + " " + SECRET, valid + "\r" + SECRET, " " + valid,
+                     "DOCKERLENS_NATIVE_PIDS_CONTROLLER: reason=" + SECRET,
+                     valid + " members=123 current=456",
+                     "DOCKERLENS_NATIVE_PIDS_RESOLVE: reason=outside_owned_descendant",
+                     "DOCKERLENS_NATIVE_PIDS_RESOLVE: reason=outside_owned_descendant relation=" + SECRET,
+                     "DOCKERLENS_NATIVE_PIDS_RESOLVE: reason=outside_owned_descendant relation=equal_owner path=/" + SECRET]
+        for invalid in malformed:
+            with self.subTest(invalid=invalid):
+                actual = ("DOCKERLENS_NATIVE_PIDS_STAGE: case=finite16 role=oracle stage=leaf_pids_resolve"
+                          if invalid.startswith("DOCKERLENS_NATIVE_PIDS_RESOLVE:") else stage)
+                result = self.wrapper("\n".join((actual, invalid, FAILED)), 101)[0]
+                diagnostics = [line for line in result.stderr.splitlines() if line.startswith("DOCKERLENS_NATIVE_PIDS_")]
+                self.assertEqual(diagnostics, [actual])
+                self.assertNotIn(SECRET, result.stdout + result.stderr)
+        for boundary in (f"thread 'worker' panicked at /private/{SECRET}:1:1:",
+                         "DOCKERLENS_NATIVE_CHECK: lifecycle_cleanup",
+                         "DOCKERLENS_NATIVE_LIFECYCLE_CLEANUP: owner=native_conformance_outer_v1 scope=outer_container_and_data_volume state=required"):
+            result = self.wrapper("\n".join((stage, boundary, valid,
+                                             f"thread '{SELECTED}' panicked at src/native_pids_limit_tests.rs:999:1:",
+                                             FAILED)), 101)[0]
+            diagnostics = [line for line in result.stderr.splitlines() if line.startswith("DOCKERLENS_NATIVE_PIDS_")]
+            self.assertEqual(diagnostics, [stage])
+            self.assertNotIn(SECRET, result.stdout + result.stderr)
+            if boundary.startswith("thread"):
+                self.assertNotIn("line=999", result.stderr)
 
     def test_context_effect_cleanup_and_custody_failures_refuse_entire_output(self):
         for lane in LANES:
