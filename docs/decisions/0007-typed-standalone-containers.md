@@ -61,6 +61,33 @@ evidence; a positive fact for one cannot admit another. This finite subset
 does not close the full application migration contract: #30/#31 must extend
 it where the ledger and application rehearsal require further settings.
 
+## Finite memory target policy supplement
+
+Finite authored memory is accepted only in the inclusive byte range
+`6_291_456..=i64::MAX` (6 MiB through the Engine signed-byte bound). Smaller
+positive values and signed overflow fail with the existing closed
+`InvalidContainerSetting`; no clamping, unit conversion or rounding is performed.
+Omission stays distinct from explicit `MemoryLimit::Unlimited`, which renders
+literal zero: no authored leaf cap, not infinite capacity. Daemon, controller and
+ancestor constraints still apply. Finite values and explicit zero both require
+the separate memory-limit capability; numeric validation grants no catalogue
+support, native acceptance or enforcement claim. Observation decoding does not
+apply this target policy: signed negative, zero and below-floor evidence remains
+present/effective, while missing/null/redacted states remain distinct.
+
+The [official Docker memory documentation](https://docs.docker.com/engine/containers/resource_constraints/)
+documents the `6m` minimum. Source review on 2026-10-18 verified the 6,291,456-byte
+constant and strict-below-minimum predicate in exact Debian
+[`docker.io 20.10.5+dfsg1-1+deb11u2`](https://sources.debian.org/src/docker.io/20.10.5%2Bdfsg1-1%2Bdeb11u2/engine/daemon/daemon_unix.go/#L69)
+(constant line 69, check line 405) and upstream
+[`docker-v29.8.1`](https://github.com/moby/moby/blob/docker-v29.8.1/daemon/daemon_unix.go#L64)
+(constant line 64, check line 383). These Apache-2.0 source references establish
+the bounded numeric policy only, before unsupported-controller handling in both
+daemon modes; they establish no page-alignment requirement. No oracle source was
+copied or mechanically translated; no external source or binary is redistributed.
+Fresh exact-candidate native evidence remains separate and mandatory before any
+compatibility or effect claim. Host capture remains deferred.
+
 This contract does not claim declarative readiness, external data, image building,
 Swarm, or execution of any request.
 
