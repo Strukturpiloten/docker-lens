@@ -68,7 +68,7 @@ sys.exit(0 if "--list" in sys.argv else int(os.environ["STATUS"]))
         for call in original[23:27] + [(TARGET, TEST)]:
             self.assertEqual(source.count(scope + prefix + " ".join(call) + '\n)'), 1)
         reader = source.index('python3 "$script_dir/native_nofile_proof.py"')
-        self.assertLess(source.index('python3 "$script_dir/native_pids_limit_proof.py"'), reader)
+        self.assertLess(source.index('python3 "$script_dir/native_pids_limit_v2_proof.py"'), reader)
         self.assertLess(reader, source.index('if [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]', reader))
         invocation = source[reader:source.index('\n\n', reader)].replace('\\\n', ' ')
         self.assertEqual(len(shlex.split(invocation)) - 2, 12)

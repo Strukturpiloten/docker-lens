@@ -1031,7 +1031,7 @@ export NATIVE_COMMAND_CLEAR_PROOF_PATH="$run_dir/command-clear-v1.json"
 export NATIVE_SHM_SIZE_PROOF_PATH="$run_dir/shm-size-v1.json"
 export NATIVE_SUPPLEMENTARY_GROUPS_PROOF_PATH="$run_dir/supplementary-groups-v1.json"
 export NATIVE_KERNEL_SETTINGS_PROOF_PATH="$run_dir/kernel-settings-v1.json"
-export NATIVE_PIDS_LIMIT_PROOF_PATH="$run_dir/pids-limit-v1.json"
+export NATIVE_PIDS_LIMIT_PROOF_PATH="$run_dir/pids-limit-v2.json"
 export NATIVE_NOFILE_PROOF_PATH="$run_dir/nofile-v1.json"
 export NATIVE_PORT_START_DIAGNOSTIC_PATH="$run_dir/diagnostics/port-start-window.json"
 export NATIVE_IDENTITY_CANDIDATE_SHA
@@ -1201,7 +1201,7 @@ python3 "$script_dir/native_kernel_settings_proof.py" "$run_dir" "$NATIVE_KERNEL
 "$(dirname "$0")/run-exact-native-test.sh" native_pids_limit live_pids_limit_effects_match_engine
 )
 # Private positive qualification only; always validate even without emission.
-python3 "$script_dir/native_pids_limit_proof.py" "$run_dir" "$NATIVE_PIDS_LIMIT_CANDIDATE_SHA" "$run_id" \
+python3 "$script_dir/native_pids_limit_v2_proof.py" "$run_dir" "$NATIVE_PIDS_LIMIT_CANDIDATE_SHA" "$run_id" \
   "$lane" "$server_version" "$api_version" "$expected_mode" "$installed_docker_package" \
   "$NATIVE_FIXTURE_IMAGE" "$image" "$NATIVE_OUTER_CONTAINER_ID" "$NATIVE_BIND_RELABEL_DAEMON_UID"
 

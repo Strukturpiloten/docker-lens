@@ -73,7 +73,7 @@ else:
         self.assertEqual(source.count(scope), 6)
         kernel_reader = source.index('python3 "$script_dir/native_kernel_settings_proof.py"')
         child = source.index(scope + prefix + f'{TARGET} {TEST}\n)')
-        reader = source.index('python3 "$script_dir/native_pids_limit_proof.py"')
+        reader = source.index('python3 "$script_dir/native_pids_limit_v2_proof.py"')
         self.assertLess(kernel_reader, child)
         self.assertLess(child, reader)
         self.assertLess(reader, source.index('if [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]', reader))
@@ -83,7 +83,7 @@ else:
                             '"$server_version"', '"$api_version"', '"$expected_mode"', '"$installed_docker_package"',
                             '"$NATIVE_FIXTURE_IMAGE"', '"$image"', '"$NATIVE_OUTER_CONTAINER_ID"', '"$NATIVE_BIND_RELABEL_DAEMON_UID"'):
             self.assertIn(independent, invocation)
-        self.assertIn('export NATIVE_PIDS_LIMIT_PROOF_PATH="$run_dir/pids-limit-v1.json"', source)
+        self.assertIn('export NATIVE_PIDS_LIMIT_PROOF_PATH="$run_dir/pids-limit-v2.json"', source)
         self.assertIn('export NATIVE_PIDS_LIMIT_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA', source)
 
     def test_exact_private_selection_original_deadline_and_numeric_summary_required(self):
@@ -158,7 +158,7 @@ else:
                 self.assertNotIn("pids_limit", destination.read_text())
                 self.assertEqual(len(record["capability_outcome"]), 43 if lane.startswith("debian11-") else 45)
                 self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 66 if lane.startswith("debian11-") else 70)
-                proof = destination.parent.parent / "pids-limit-v1.json"
+                proof = destination.parent.parent / "pids-limit-v2.json"
                 self.assertLessEqual(proof.stat().st_size, 16 * 1024)
                 result, destination = canonical.ExternalNetworkEvidenceTests.emit(self, lane, pids_limit_missing=True)
                 self.assertNotEqual(result.returncode, 0)
@@ -324,10 +324,11 @@ else:
         for lane in LANES:
             result, destination = canonical.ExternalNetworkEvidenceTests.emit(self, lane)
             self.assertEqual(result.returncode, 0, result.stderr)
-            path = destination.parent.parent / "pids-limit-v1.json"
+            path = destination.parent.parent / "pids-limit-v2.json"
             original = json.loads(path.read_text())
             destination.unlink()
-            for mutation in ("partial", "context", "effect", "cleanup", "typed", "extra", "oversize", "mode", "symlink"):
+            for mutation in ("partial", "context", "effect", "cleanup", "typed", "extra", "coordinate",
+                             "multiview", "namespace", "tuple", "oversize", "mode", "symlink"):
                 with self.subTest(lane=lane, mutation=mutation):
                     proof = copy.deepcopy(original)
                     if mutation == "partial":
@@ -342,6 +343,14 @@ else:
                         proof["catalogue_admission"] = 0
                     elif mutation == "extra":
                         proof[SECRET] = SECRET
+                    elif mutation == "coordinate":
+                        proof["coordinates"][6][1] = 1
+                    elif mutation == "multiview":
+                        proof["coordinates"][0][2] = [0, 1]
+                    elif mutation == "namespace":
+                        proof["coordinates"][9][3] = 1
+                    elif mutation == "tuple":
+                        proof["cases"][0]["held"].pop()
                     path.write_text(json.dumps(proof, separators=(",", ":")))
                     if mutation == "oversize":
                         path.write_text(" " * (16 * 1024 + 1))
@@ -361,9 +370,10 @@ else:
         spec = importlib.util.spec_from_file_location("pids_wiring_emitter", legacy.SCRIPT)
         emitter = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(emitter)
-        valid = {"contract": "pids-limit-v1", "capability_admission": [], "catalogue_admission": False,
+        valid = {"contract": "pids-limit-v2", "capability_admission": [], "catalogue_admission": False,
                  "scope": emitter.PIDS_LIMIT_SCOPE}
-        invalid = [None, [], False, {}, {key: value for key, value in valid.items() if key != "scope"},
+        invalid = [None, [], False, {}, {**valid, "contract": "pids-limit-v1"},
+                   {key: value for key, value in valid.items() if key != "scope"},
                    {**valid, SECRET: SECRET}, {**valid, "contract": SECRET}, {**valid, "capability_admission": ()},
                    {**valid, "capability_admission": ["PidsLimit"]}, {**valid, "catalogue_admission": 0},
                    {**valid, "scope": SECRET}, {**valid, "scope": []}]
@@ -387,6 +397,39 @@ else:
                             emitter.emit(*paths, *arguments)
                         self.assertEqual(call.call_count, 1)
                     self.assertFalse(destination.exists())
+
+
+    def test_current_consumers_require_v2_with_no_legacy_file_or_schema_fallback(self):
+        from test_native_pids_limit_proof import fixture as historical_fixture
+        harness = (ROOT / "scripts/native-conformance.sh").read_text()
+        emitter = legacy.SCRIPT.read_text()
+        self.assertIn('python3 "$script_dir/native_pids_limit_v2_proof.py"', harness)
+        self.assertNotIn('python3 "$script_dir/native_pids_limit_proof.py"', harness)
+        self.assertIn('from native_pids_limit_v2_proof import', emitter)
+        self.assertNotIn('from native_pids_limit_proof import', emitter)
+        for lane in LANES:
+            with self.subTest(lane=lane):
+                result, destination = canonical.ExternalNetworkEvidenceTests.emit(self, lane)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                current = destination.parent.parent / "pids-limit-v2.json"
+                original = json.loads(current.read_text())
+                self.assertEqual(original["schema_version"], 2)
+                self.assertEqual(original["contract"], "pids-limit-v2")
+                self.assertEqual(len(original["coordinates"]), 37)
+                self.assertLessEqual(current.stat().st_size, 15 * 1024)
+                destination.unlink()
+                current.rename(current.with_name("pids-limit-v1.json"))
+                canonical.ExternalNetworkEvidenceTests.rerun(self, result, destination)
+                historical = historical_fixture(lane)
+                historical["context"] = copy.deepcopy(original["context"])
+                current.write_text(json.dumps(historical, separators=(",", ":")))
+                current.chmod(0o600)
+                canonical.ExternalNetworkEvidenceTests.rerun(self, result, destination)
+                historical["schema_version"] = 2
+                historical["contract"] = "pids-limit-v2"
+                historical["coordinates"] = copy.deepcopy(original["coordinates"])
+                current.write_text(json.dumps(historical, separators=(",", ":")))
+                canonical.ExternalNetworkEvidenceTests.rerun(self, result, destination)
 
 
 if __name__ == "__main__":

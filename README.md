@@ -78,6 +78,14 @@ before fixture pull or native tests. Refusal uses existing owned-resource cleanu
 This necessary prerequisite is not a PIDs fix, negative qualification or positive
 effect proof. Rootful behavior and all 28 mandatory tests remain unchanged; actual
 rootless delegation and rootful PID-coordinate/boundary proof gaps remain open.
+
+[ADR 0031](docs/decisions/0031-pids-reader-coordinate-proof.md) defines the private
+PIDs-v2 successor: all 37 actual context/scan/controller readers retain strictly
+checked procfs/PID-namespace coordinates. Lossless phase tuples keep these
+witnesses within the unchanged 16 KiB custody cap, with a checked 1 KiB reserve.
+Historical v1 proof remains immutable and is not a current fallback. Source-only
+validation does not establish native alignment or an outer boundary; rootless
+fixture delegation and fresh native/application qualification remain required.
 [ADR 0028](docs/decisions/0028-nofile-private-qualification.md) appends mandatory
 private nofile invocation 28 and its strict independent proof gate, also without
 public emission. Its existing four-case/eight-fixture CLI/rendered experiment retains precise

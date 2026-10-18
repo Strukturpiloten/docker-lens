@@ -25,7 +25,7 @@ from test_native_command_clear_proof import fixture as command_clear_fixture
 from test_native_shm_size_proof import fixture as shm_size_fixture
 from test_native_supplementary_groups_proof import fixture as supplementary_groups_fixture
 from test_native_kernel_settings_proof import fixture as kernel_settings_fixture
-from test_native_pids_limit_proof import fixture as pids_limit_fixture
+from test_native_pids_limit_v2_proof import fixture as pids_limit_fixture
 from test_native_nofile_proof import fixture as nofile_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -708,14 +708,14 @@ class NativeEvidenceTests(unittest.TestCase):
             ("shm-size-v1.json", shm_proof, shm_size, shm_size_missing),
             ("supplementary-groups-v1.json", supplementary_proof, supplementary_groups, supplementary_groups_missing),
             ("kernel-settings-v1.json", kernel_proof, kernel_settings, kernel_settings_missing),
-            ("pids-limit-v1.json", pids_proof, pids_limit, pids_limit_missing),
+            ("pids-limit-v2.json", pids_proof, pids_limit, pids_limit_missing),
             ("nofile-v1.json", nofile_proof, nofile, nofile_missing),
         ):
             if not missing:
                 private_path = root / filename
                 # Match the existing PIDs producer's compact 16KiB custody;
                 # preserve every field, never truncate an oversized proof.
-                serialization = {"separators": (",", ":")} if filename == "pids-limit-v1.json" else {}
+                serialization = {"separators": (",", ":")} if filename == "pids-limit-v2.json" else {}
                 private_path.write_text(json.dumps(proof if override is None else override, **serialization), encoding="utf-8")
                 private_path.chmod(0o600)
         result = subprocess.run(

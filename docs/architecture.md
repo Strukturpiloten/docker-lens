@@ -71,6 +71,14 @@ Raw 43/66 and 45/70 and selected 34/56 and 36/60 totals remain unchanged. Existi
 custody elsewhere, all native behavior and the 46-second reserve stay unchanged.
 Source wiring is not passing native qualification; host capture remains deferred.
 
+[ADR 0031](decisions/0031-pids-reader-coordinate-proof.md) defines the current
+private PIDs-v2 successor with retained coordinates for all 37 observer reads
+and lossless fixed phase tuples. The strict successor checks original-byte
+custody and coordinates before reusing the unchanged pure semantic predicates.
+Both current consumers require v2; historical v1 is not a fallback. This changes
+no public admission, native invocation or budget, and does not establish actual
+native alignment or the still-unresolved exact outer controller boundary.
+
 ## Data flow
 
 1. An explicitly supplied endpoint and selector create a bounded read request

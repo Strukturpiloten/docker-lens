@@ -1,13 +1,34 @@
 # Finite PID-controller source-effect contract
 
-The prepared `pids-limit-v1` child of the existing lifecycle helper is mandatory
-private invocation 27 under [ADR 0027](decisions/0027-pids-limit-private-qualification.md).
-The canonical harness and unchanged nineteen-argument emitter require its strict
-private proof even without public PIDs projection. The private protocol, reader and
-16 KiB custody limit remain unchanged. This is source-only integration for
+The PIDs child of the existing lifecycle helper is mandatory private invocation
+27 under [ADR 0027](decisions/0027-pids-limit-private-qualification.md).
+[ADR 0031](decisions/0031-pids-reader-coordinate-proof.md) defines its private
+`pids-limit-v2` successor with retained reader-coordinate witnesses; historical
+v1 evidence and reader remain unchanged, with no current fallback. The canonical
+harness and unchanged nineteen-argument emitter require the strict successor
+even without public PIDs projection. The 16 KiB custody ceiling remains unchanged.
+This is source-only integration for
 #39/#31/#3, not passing native qualification, catalogue admission or a compatibility
 claim. The primary owns complete/four-lane gates. Product output stays inert;
 no pin, public API, schema or historical record changes.
+
+## Retained per-reader coordinates
+
+Each actual context/scan/controller shell reads its own status inline, requiring
+one NSpid entry and `$$ == Pid == NSpid[0]`, then anchors namespace links through
+that same observed PID. The 37 witnesses retain shell PID, proc/NSpid differences
+and differences from the initial observer's three namespaces. The strict reader
+independently checks exact integer types and bounds before enforcing every old
+semantic predicate. No PID translation or namespace entry is introduced.
+
+Eighteen phase objects become fixed ten-slot tuples without losing a datum.
+Both sides enforce compact serialized size at most 15 KiB within the existing
+16 KiB custody cap, leaving 1 KiB for a future separately reviewed boundary
+contract. This is an actual serialization guard, not padding or a claimed
+outer-boundary proof. The twelve/nineteen-argument interfaces, 28 native calls,
+owner scopes, accounting and 180-second/46-second budgets remain unchanged.
+Synthetic round trips and source checks do not demonstrate native coordinate
+alignment, rootless delegation, ownership or compatibility.
 
 ## Early rootless positive-qualification prerequisite
 

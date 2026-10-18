@@ -1,6 +1,7 @@
-"""Prepared-source guards and sh -n only; never execute any worker or observer."""
+"""Source/syntax guards and synthetic format sizing; never execute any worker or observer."""
 
 import json
+from copy import deepcopy
 from pathlib import Path
 import re
 import subprocess
@@ -25,7 +26,7 @@ class PidsLimitSourceTests(unittest.TestCase):
         scripts = shell_constants()
         self.assertEqual(set(scripts), {"PIDS_PARENT", "PIDS_WORKER", "PIDS_PRIVATE_IDENTITY",
                                        "PIDS_OUTER_CONTEXT", "PIDS_SCAN", "PIDS_CONTROLLER_READ",
-                                       "PIDS_CONTROL", "PIDS_PREFLIGHT"})
+                                       "PIDS_CONTROL", "PIDS_PREFLIGHT", "PIDS_COORDINATE_PREFIX"})
         for name, script in scripts.items():
             with self.subTest(name=name):
                 result = subprocess.run(["sh", "-n"], input=script, text=True, capture_output=True, check=False)
@@ -248,7 +249,7 @@ class PidsLimitSourceTests(unittest.TestCase):
         live = source.split("fn pids_controller(", 1)[1].split("fn pids_controller_frame(", 1)[0]
         pure = source.split("fn pids_controller_frame(", 1)[1].split("fn pids_control(", 1)[0]
         self.assertEqual(live.count("pids_shell("), 1)
-        delegation = "pids_controller_frame(bytes, rows, phase, pids, memory)"
+        delegation = "pids_controller_frame(bytes, rows, phase, pids, memory, coordinates)"
         self.assertEqual(live.count(delegation), 1)
         self.assertLess(live.index('pids["kind"] == memory["kind"]'), live.index("pids_shell("))
         self.assertLess(live.index("pids_shell("), live.index(delegation))
@@ -266,6 +267,84 @@ class PidsLimitSourceTests(unittest.TestCase):
         fixture = source.split("fn pids_raw_frame_fixture()", 1)[1].split("fn pids_raw_scan_rows(", 1)[0]
         self.assertIn('R 903 9 2579 50008 1000 903 79 9', fixture)
         self.assertIn('MEMBER 2579\\nMEMBER 4317\\nMEMBER 903', fixture)
+
+    def test_coordinate_prefix_is_inline_builtin_shared_and_pid_anchored(self):
+        source = SOURCE.read_text()
+        scripts = shell_constants()
+        prefix = scripts["PIDS_COORDINATE_PREFIX"]
+        shell = source.split("fn pids_shell(", 1)[1].split("struct PidsCoordinates", 1)[0]
+        self.assertIn("[PIDS_OUTER_CONTEXT, PIDS_SCAN, PIDS_CONTROLLER_READ].contains(&script)", shell)
+        self.assertEqual(shell.count("PIDS_COORDINATE_PREFIX"), 1)
+        self.assertIn('format!("{PIDS_COORDINATE_PREFIX}\\n{script}")', shell)
+        for fragment in ('done </proc/self/status', '[ "$coords_lines" -le 128 ]',
+                         '[ "$coords_pid_seen" -eq 0 ]', '[ "$coords_chain_seen" -eq 0 ]',
+                         '[ -z "$coords_extra" ]', '[ "$coords_count" -le 8 ]',
+                         '[ "$coords_count" -eq 1 ]', '[ "$coords_pid" = "$$" ]',
+                         '[ "$coords_first" = "$$" ]', '[ "$$" -le 4194304 ]',
+                         "printf 'SELF %s %s %s\\n'", "''|0|0[0-9]*|*[!0-9]*) exit 79"):
+            self.assertIn(fragment, prefix)
+        for namespace in ("pid", "mnt", "cgroup"):
+            self.assertIn(f'readlink "/proc/$coords_pid/ns/{namespace}"', prefix)
+        for forbidden in ("$(", "set --", "cat ", "/proc/self/ns/", "nsenter", "/host/proc"):
+            self.assertNotIn(forbidden, prefix.replace("$((", ""))
+        for name in ("PIDS_OUTER_CONTEXT", "PIDS_SCAN", "PIDS_CONTROLLER_READ"):
+            self.assertNotIn("/proc/self/ns/", scripts[name])
+            result = subprocess.run(["sh", "-n"], input=prefix + "\n" + scripts[name],
+                                    text=True, capture_output=True, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_coordinate_accumulation_precedes_comparison_and_private_tuple_compaction(self):
+        source = SOURCE.read_text()
+        controller = source.split("fn pids_controller_frame(", 1)[1].split("fn pids_control(", 1)[0]
+        self.assertLess(controller.index("coordinates.observe(&lines)"), controller.index("for mapping in"))
+        self.assertLess(controller.index("coordinates.observe(&lines)"), controller.index("members == expected"))
+        live = re.sub(r"\s+", " ", source.split("fn live_pids_limit_effects_match_engine()", 1)[1])
+        positions = [live.index("PidsCoordinates::new(&context)")]
+        for rows, phase in (("baseline", "ready"), ("held", "exit_barrier"), ("restored", "idle")):
+            scan = f'pids_scan(&run, &context, namespace, depth, init_start, "{phase}", &mut coordinates)'
+            controller_call = f'pids_controller(&run, &{rows}_rows, "{phase}", &mut pids, &mut memory, &mut coordinates)'
+            # Rustfmt may wrap argument lists with a trailing comma.
+            normalized = re.sub(r"\(\s+", "(", re.sub(r",\s*\)", ")", live))
+            positions.extend((normalized.index(scan), normalized.index(controller_call)))
+        self.assertEqual(positions, sorted(positions))
+        self.assertLess(live.index("coordinates.finish()"), live.index("pids_private_v2(&mut proof, coordinates)"))
+        self.assertIn('const PIDS_CONTRACT: &str = "pids-limit-v2";', source)
+        self.assertIn('const PIDS_FILENAME: &str = "pids-limit-v2.json";', source)
+        self.assertIn('"schema_version":2', source)
+        self.assertIn("PIDS_PROOF_BYTES - PIDS_OUTER_BINDING_RESERVE", source)
+        self.assertIn("const PIDS_OUTER_BINDING_RESERVE: usize = 1024;", source)
+
+    def test_compact_layout_losslessly_fits_historical_fixtures_with_future_reserve(self):
+        from test_native_pids_limit_proof import fixture
+
+        fields = ("rows", "members", "pids_current", "pids_max", "denials", "oom_kills",
+                  "outer_pids", "outer_memory", "ancestor_headroom", "phase")
+        source = SOURCE.read_text()
+        table = source.split("const PIDS_PHASE_FIELDS:", 1)[1].split("];", 1)[0]
+        self.assertEqual(tuple(re.findall(r'"([a-z_]+)"', table)), fields)
+        size = lambda value: len(json.dumps(value, separators=(",", ":")).encode())
+        for lane in ("debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless"):
+            for kind in ("v1", "v2"):
+                for nested in (False, True):
+                    with self.subTest(lane=lane, kind=kind, nested=nested):
+                        original = fixture(lane, kind, nested)
+                        compact = deepcopy(original)
+                        compact.update(schema_version=2, contract="pids-limit-v2")
+                        for case in compact["cases"]:
+                            for phase in ("baseline", "held", "restored"):
+                                self.assertEqual(set(case[phase]), set(fields))
+                                case[phase] = [case[phase][key] for key in fields]
+                        self.assertEqual(size(original) - size(compact), 2178)
+                        compact["coordinates"] = [[4194304, 0, [0], 0, 0, 0] for _ in range(37)]
+                        self.assertEqual(size(original) - size(compact), 1348)
+                        self.assertLessEqual(size(compact), 15360)
+                        expanded = deepcopy(compact)
+                        del expanded["coordinates"]
+                        expanded.update(schema_version=1, contract="pids-limit-v1")
+                        for case in expanded["cases"]:
+                            for phase in ("baseline", "held", "restored"):
+                                case[phase] = dict(zip(fields, case[phase], strict=True))
+                        self.assertEqual(expanded, original)
 
 
 if __name__ == "__main__":

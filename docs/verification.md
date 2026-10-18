@@ -136,13 +136,24 @@ Its separate one-child outer-cleanup owner scope preserves all first 26 calls/or
 and earlier owner blocks. The once-created 180-second wrapper deadline also binds
 PIDs; its existing 46-second cleanup reserve and 16 KiB custody maximum do not grow.
 The independent twelve-argument CLI reader always runs, even without emission.
-The unchanged nineteen-argument emitter requires the fixed `pids-limit-v1.json`
-child against its existing independent external context and exactly typed
+As introduced by ADR 0027, the nineteen-argument emitter required the fixed
+`pids-limit-v1.json` child against independent external context and exactly typed
 `contract`, `capability_admission`, `catalogue_admission`, `scope` return keys:
 `pids-limit-v1`, `[]`, `false`, and the existing reader's scope. Every proof or
 return-contract failure rejects the entire public output. There is no public PIDs
 projection, capability/shape mapping or schema addition. Raw counts remain
 43/66 and 45/70; selection remains 34/56 and 36/60.
+[ADR 0031](decisions/0031-pids-reader-coordinate-proof.md) supersedes only that
+active child/reader with private schema 2 and `pids-limit-v2.json`. Both canonical
+consumers require the v2 reader and exact four-key v2 return, without a legacy
+file/schema fallback. Original bytes pass unchanged 16 KiB custody before
+expansion. All 37 reader-coordinate witnesses and exact phase tuples are checked
+before every original pure semantic predicate. Actual compact serialization
+must also fit 15 KiB, reserving 1 KiB without padding for a separate future
+outer-boundary contract. Historical v1 reader/tests/records stay unchanged.
+No request, invocation, public projection, accounting or budget is relaxed.
+Source/synthetic evidence is not actual native coordinate/ownership evidence;
+all fresh native, consumer and application gates remain mandatory.
 [ADR 0030](decisions/0030-rootless-positive-pids-prerequisite.md) adds an early
 rootless-only prerequisite for that unchanged positive contract: the already
 collected, sanitized cgroup driver/version must be systemd/v2. After ENV reporting

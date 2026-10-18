@@ -1,5 +1,6 @@
-//! Prepared pids-limit-v1 child, registered as canonical private source invocation 27.
+//! Private pids-limit-v2 coordinate evidence, registered as native source invocation 27.
 //! Fresh native qualification remains pending; this wiring does not claim native support.
+//! Coordinate agreement does not authenticate the still-unproved outer controller boundary.
 //! Only disposable owned fixtures mutate.
 //! No report, synthetic oracle, or test-local capability fact admits a catalogue group.
 
@@ -8,13 +9,44 @@ use crate::acquisition::ReadRequest;
 use crate::observation::{Availability, Origin};
 use crate::target::PidsLimit;
 
-const PIDS_CONTRACT: &str = "pids-limit-v1";
-const PIDS_FILENAME: &str = "pids-limit-v1.json";
+const PIDS_CONTRACT: &str = "pids-limit-v2";
+const PIDS_FILENAME: &str = "pids-limit-v2.json";
 const PIDS_SCOPE: &str = "finite16_finite64_unlimited_32_child_attempts_only";
 const PIDS_CASES: [(&str, i64); 3] = [("finite16", 16), ("finite64", 64), ("unlimited", -1)];
 const PIDS_CAPTURE_CALLS: usize = 16;
 const PIDS_CAPTURE_BYTES: usize = 512 * 1024;
 const PIDS_PROOF_BYTES: usize = 16 * 1024;
+// Planning reserve only: no padding or claim that a future boundary proof fits.
+const PIDS_OUTER_BINDING_RESERVE: usize = 1024;
+
+// Read by the observing shell itself, without command substitution or a child.
+// Do not change positional arguments supplied to the three observer programs.
+const PIDS_COORDINATE_PREFIX: &str = r#"set -eu; LC_ALL=C; export LC_ALL
+coords_pid=; coords_chain=; coords_pid_seen=0; coords_chain_seen=0; coords_lines=0
+while read -r coords_key coords_a coords_b coords_c coords_d coords_e coords_f coords_g coords_h coords_extra; do
+  coords_lines=$((coords_lines+1)); [ "$coords_lines" -le 128 ]
+  case "$coords_key" in
+    Pid:) [ "$coords_pid_seen" -eq 0 ]; coords_pid_seen=1
+      [ -z "$coords_b$coords_c$coords_d$coords_e$coords_f$coords_g$coords_h$coords_extra" ]; coords_pid=$coords_a;;
+    NSpid:) [ "$coords_chain_seen" -eq 0 ]; coords_chain_seen=1; [ -z "$coords_extra" ]
+      coords_chain="$coords_a $coords_b $coords_c $coords_d $coords_e $coords_f $coords_g $coords_h";;
+  esac
+done </proc/self/status
+[ "$coords_pid_seen" -eq 1 ]; [ "$coords_chain_seen" -eq 1 ]
+coords_count=0; coords_first=
+for coords_value in "$$" "$coords_pid" $coords_chain; do
+  case "$coords_value" in ''|0|0[0-9]*|*[!0-9]*) exit 79;; esac
+done
+for coords_value in $coords_chain; do
+  coords_count=$((coords_count+1)); [ "$coords_count" -le 8 ]; coords_first=$coords_value
+done
+[ "$$" -le 4194304 ]; [ "$coords_count" -eq 1 ]
+[ "$coords_pid" = "$$" ]; [ "$coords_first" = "$$" ]
+printf 'SELF %s %s %s\n' "$$" "$coords_pid" "$coords_chain"
+printf 'PIDNS '; readlink "/proc/$coords_pid/ns/pid"
+printf 'MNTNS '; readlink "/proc/$coords_pid/ns/mnt"
+printf 'CGNS '; readlink "/proc/$coords_pid/ns/cgroup"
+"#;
 
 // Source-local stopping points, not proof outcomes or native values.
 #[derive(Clone, Copy)]
@@ -200,9 +232,6 @@ printf '%s %s ' "$start" "$uid"; readlink /proc/1/ns/pid"#;
 // Owned-outer observer only. No host proc mount or namespace entry is permitted.
 // Mountinfo is collected once; later reads bind the same namespace identities.
 const PIDS_OUTER_CONTEXT: &str = r#"set -eu; LC_ALL=C; export LC_ALL
-printf 'PIDNS '; readlink /proc/self/ns/pid
-printf 'MNTNS '; readlink /proc/self/ns/mnt
-printf 'CGNS '; readlink /proc/self/ns/cgroup
 n=0; while IFS= read -r line; do n=$((n+1)); [ "$n" -le 256 ]; printf 'M %s\n' "$line"; done </proc/self/mountinfo
 while IFS= read -r line; do printf 'S %s\n' "$line"; done </proc/self/cgroup
 count=0; visited=0
@@ -219,9 +248,6 @@ done
 
 const PIDS_SCAN: &str = r#"set -eu; LC_ALL=C; export LC_ALL
 namespace=$1; depth=$2; expected_start=$3; phase=$4; init=
-printf 'PIDNS '; readlink /proc/self/ns/pid
-printf 'MNTNS '; readlink /proc/self/ns/mnt
-printf 'CGNS '; readlink /proc/self/ns/cgroup
 visited=0
 # Resolve only the original PID1 before the idle/reaping barrier. Other members
 # may be exiting normally here; complete member checks follow the barrier.
@@ -403,14 +429,153 @@ fn pids_field<'a>(lines: &'a [String], key: &str) -> &'a str {
 }
 
 fn pids_shell(run: &HealthRun, script: &str, args: &[String]) -> Vec<u8> {
-    let mut command = vec![
-        "sh".into(),
-        "-c".into(),
-        script.into(),
-        "dl-pids-observer".into(),
-    ];
+    let script = if [PIDS_OUTER_CONTEXT, PIDS_SCAN, PIDS_CONTROLLER_READ].contains(&script) {
+        format!("{PIDS_COORDINATE_PREFIX}\n{script}")
+    } else {
+        script.to_owned()
+    };
+    let mut command = vec!["sh".into(), "-c".into(), script, "dl-pids-observer".into()];
     command.extend_from_slice(args);
     run.outer(&command, false)
+}
+
+struct PidsCoordinates {
+    namespaces: [u64; 3],
+    witnesses: Vec<Value>,
+}
+
+impl PidsCoordinates {
+    fn new(context: &[String]) -> Self {
+        let namespaces = Self::namespaces(context);
+        let mut coordinates = Self {
+            namespaces,
+            witnesses: Vec::with_capacity(37),
+        };
+        coordinates.observe(context);
+        coordinates
+    }
+
+    fn namespaces(lines: &[String]) -> [u64; 3] {
+        [
+            pids_namespace(pids_field(lines, "PIDNS"), "pid"),
+            pids_namespace(pids_field(lines, "MNTNS"), "mnt"),
+            pids_namespace(pids_field(lines, "CGNS"), "cgroup"),
+        ]
+    }
+
+    fn observe(&mut self, lines: &[String]) {
+        let fields: Vec<_> = pids_field(lines, "SELF").split_whitespace().collect();
+        assert!(
+            (3..=10).contains(&fields.len()),
+            "bounded complete observer coordinate row"
+        );
+        let fields: Vec<_> = fields.into_iter().map(pids_u64).collect();
+        let shell = fields[0];
+        let proc_pid = fields[1];
+        let chain = &fields[2..];
+        assert!(
+            (1..=4194304).contains(&shell)
+                && chain.len() == 1
+                && proc_pid == shell
+                && chain[0] == shell,
+            "procfs and observing shell share one PID coordinate"
+        );
+        let namespaces = Self::namespaces(lines);
+        assert!(
+            namespaces.iter().all(|value| *value > 0) && namespaces == self.namespaces,
+            "same initial observer namespaces before controller comparison"
+        );
+        let chain: Vec<_> = chain
+            .iter()
+            .map(|pid| i128::from(*pid) - i128::from(shell))
+            .collect();
+        let deltas: Vec<_> = namespaces
+            .iter()
+            .zip(self.namespaces)
+            .map(|(actual, initial)| i128::from(*actual) - i128::from(initial))
+            .collect();
+        assert!(
+            self.witnesses.len() < 37,
+            "finite ordered observer coordinate witnesses"
+        );
+        self.witnesses.push(json!([
+            shell,
+            i128::from(proc_pid) - i128::from(shell),
+            chain,
+            deltas[0],
+            deltas[1],
+            deltas[2]
+        ]));
+    }
+
+    fn finish(self) -> Vec<Value> {
+        assert!(
+            self.witnesses.len() == 37,
+            "complete ordered observer coordinate witnesses"
+        );
+        self.witnesses
+    }
+}
+
+const PIDS_PHASE_FIELDS: [&str; 10] = [
+    "rows",
+    "members",
+    "pids_current",
+    "pids_max",
+    "denials",
+    "oom_kills",
+    "outer_pids",
+    "outer_memory",
+    "ancestor_headroom",
+    "phase",
+];
+
+fn pids_compact_phase(phase: &mut Value) {
+    let mut fields = phase.take().as_object().unwrap().clone();
+    assert!(
+        fields.len() == PIDS_PHASE_FIELDS.len()
+            && PIDS_PHASE_FIELDS
+                .iter()
+                .all(|key| fields.contains_key(*key)),
+        "all original private phase fields retained"
+    );
+    *phase = Value::Array(
+        PIDS_PHASE_FIELDS
+            .iter()
+            .map(|key| fields.remove(*key).unwrap())
+            .collect(),
+    );
+}
+
+fn pids_private_v2(proof: &mut Value, coordinates: Vec<Value>) {
+    assert!(
+        coordinates.len() == 37,
+        "all coordinate observations before private serialization"
+    );
+    assert!(
+        proof["schema_version"] == 2 && proof["contract"] == PIDS_CONTRACT,
+        "private coordinate successor only"
+    );
+    proof["coordinates"] = json!(coordinates);
+    let cases = proof["cases"].as_array_mut().unwrap();
+    assert!(cases.len() == 6, "six unchanged private cases");
+    for case in cases {
+        for phase in ["baseline", "held", "restored"] {
+            pids_compact_phase(&mut case[phase]);
+        }
+    }
+}
+
+fn pids_proof_budget(proof: &Value) {
+    let size = serde_json::to_vec(proof).unwrap().len();
+    assert!(
+        size <= PIDS_PROOF_BYTES,
+        "bounded private PID proof before publication"
+    );
+    assert!(
+        size <= PIDS_PROOF_BYTES - PIDS_OUTER_BINDING_RESERVE,
+        "private coordinate proof retains future outer-boundary planning reserve"
+    );
 }
 
 fn pids_safe_path(path: &str) -> PathBuf {
@@ -741,6 +906,7 @@ fn pids_scan(
     depth: u64,
     started: u64,
     phase: &str,
+    coordinates: &mut PidsCoordinates,
 ) -> Vec<String> {
     let lines = pids_lines(
         pids_shell(
@@ -754,7 +920,7 @@ fn pids_scan(
             ],
         ),
         &[
-            "PIDNS", "MNTNS", "CGNS", "INIT", "U", "G", "L", "F", "R", "T",
+            "SELF", "PIDNS", "MNTNS", "CGNS", "INIT", "U", "G", "L", "F", "R", "T",
         ],
     );
     for key in ["PIDNS", "MNTNS", "CGNS"] {
@@ -763,6 +929,7 @@ fn pids_scan(
             "stable owned observer namespaces at every phase"
         );
     }
+    coordinates.observe(&lines);
     lines
 }
 
@@ -809,6 +976,7 @@ fn pids_controller(
     phase: &str,
     pids: &mut Value,
     memory: &mut Value,
+    coordinates: &mut PidsCoordinates,
 ) -> (Value, String) {
     assert!(
         pids["kind"] == memory["kind"],
@@ -825,7 +993,7 @@ fn pids_controller(
             pids["kind"].as_str().unwrap().into(),
         ],
     );
-    pids_controller_frame(bytes, rows, phase, pids, memory)
+    pids_controller_frame(bytes, rows, phase, pids, memory, coordinates)
 }
 
 // Keep raw membership comparison and subsequent proof packing on the live path.
@@ -836,10 +1004,15 @@ fn pids_controller_frame(
     phase: &str,
     pids: &mut Value,
     memory: &mut Value,
+    coordinates: &mut PidsCoordinates,
 ) -> (Value, String) {
     let lines = pids_lines(
         bytes,
         &[
+            "SELF",
+            "PIDNS",
+            "MNTNS",
+            "CGNS",
             "STAT",
             "MAX",
             "CURRENT",
@@ -855,6 +1028,7 @@ fn pids_controller_frame(
             "CEILING",
         ],
     );
+    coordinates.observe(&lines);
     for mapping in [pids, memory] {
         let key = format!("STAT {}", mapping["path"].as_str().unwrap());
         let fields: Vec<_> = pids_field(&lines, &key).split_whitespace().collect();
@@ -1121,8 +1295,9 @@ fn live_pids_limit_effects_match_engine() {
         pids_stage(None, PidsOperation::OuterObserver);
         let context = pids_lines(
             pids_shell(&run, PIDS_OUTER_CONTEXT, &[]),
-            &["PIDNS", "MNTNS", "CGNS", "M", "S", "D"],
+            &["SELF", "PIDNS", "MNTNS", "CGNS", "M", "S", "D"],
         );
+        let mut coordinates = PidsCoordinates::new(&context);
         pids_stage(None, PidsOperation::DaemonIdentity);
         let daemon: Vec<_> = pids_field(&context, "D").split_whitespace().collect();
         assert!(daemon.len() >= 4, "observed daemon namespace chain");
@@ -1216,7 +1391,15 @@ fn live_pids_limit_effects_match_engine() {
                 "six distinct independently bound private PID namespaces, separate from daemon and observer"
             );
             pids_stage(Some(index), PidsOperation::BaselineScan);
-            let baseline_lines = pids_scan(&run, &context, namespace, depth, init_start, "ready");
+            let baseline_lines = pids_scan(
+                &run,
+                &context,
+                namespace,
+                depth,
+                init_start,
+                "ready",
+                &mut coordinates,
+            );
             let baseline_rows = pids_rows(&baseline_lines);
             assert!(
                 baseline_rows.len() == 2,
@@ -1291,13 +1474,26 @@ fn live_pids_limit_effects_match_engine() {
             );
             let nproc = pids_nproc(&baseline_lines, &baseline_rows);
             pids_stage(Some(index), PidsOperation::BaselineController);
-            let (baseline, event_source) =
-                pids_controller(&run, &baseline_rows, "ready", &mut pids, &mut memory);
+            let (baseline, event_source) = pids_controller(
+                &run,
+                &baseline_rows,
+                "ready",
+                &mut pids,
+                &mut memory,
+                &mut coordinates,
+            );
             pids_stage(Some(index), PidsOperation::WorkStart);
             pids_control(&run, outer_init, namespace, init_start, uid, "START");
             pids_stage(Some(index), PidsOperation::HeldScan);
-            let held_lines =
-                pids_scan(&run, &context, namespace, depth, init_start, "exit_barrier");
+            let held_lines = pids_scan(
+                &run,
+                &context,
+                namespace,
+                depth,
+                init_start,
+                "exit_barrier",
+                &mut coordinates,
+            );
             let held_rows = pids_rows(&held_lines);
             let finite = index < 2;
             let successes = if finite { 14 } else { 32 };
@@ -1375,8 +1571,14 @@ fn live_pids_limit_effects_match_engine() {
                 "specific C-locale native EAGAIN envelope, never generic fork text"
             );
             pids_stage(Some(index), PidsOperation::HeldController);
-            let (held, held_source) =
-                pids_controller(&run, &held_rows, "exit_barrier", &mut pids, &mut memory);
+            let (held, held_source) = pids_controller(
+                &run,
+                &held_rows,
+                "exit_barrier",
+                &mut pids,
+                &mut memory,
+                &mut coordinates,
+            );
             assert!(
                 held_source == event_source
                     && held["denials"].as_u64().unwrap()
@@ -1387,7 +1589,15 @@ fn live_pids_limit_effects_match_engine() {
             pids_stage(Some(index), PidsOperation::Release);
             pids_control(&run, outer_init, namespace, init_start, uid, "RELEASE");
             pids_stage(Some(index), PidsOperation::RestoredScan);
-            let restored_lines = pids_scan(&run, &context, namespace, depth, init_start, "idle");
+            let restored_lines = pids_scan(
+                &run,
+                &context,
+                namespace,
+                depth,
+                init_start,
+                "idle",
+                &mut coordinates,
+            );
             let restored_rows = pids_rows(&restored_lines);
             assert!(
                 restored_rows == vec![baseline_rows[0].clone()],
@@ -1402,8 +1612,14 @@ fn live_pids_limit_effects_match_engine() {
                 "original worker status preserved through release with no new output"
             );
             pids_stage(Some(index), PidsOperation::RestoredController);
-            let (restored, restored_source) =
-                pids_controller(&run, &restored_rows, "idle", &mut pids, &mut memory);
+            let (restored, restored_source) = pids_controller(
+                &run,
+                &restored_rows,
+                "idle",
+                &mut pids,
+                &mut memory,
+                &mut coordinates,
+            );
             assert!(
                 restored_source == event_source
                     && restored["denials"] == held["denials"]
@@ -1425,7 +1641,14 @@ fn live_pids_limit_effects_match_engine() {
         pids_stage(None, PidsOperation::Acquisition);
         let acquisition = pids_acquisition(&run);
         let observer = json!({"pid_namespace":pids_namespace(pids_field(&context,"PIDNS"),"pid"),"mount_namespace":pids_namespace(pids_field(&context,"MNTNS"),"mnt"),"cgroup_namespace":pids_namespace(pids_field(&context,"CGNS"),"cgroup"),"daemon_pid_namespace":daemon_ns,"daemon_depth":depth,"daemon_uid":daemon_uid,"cgroup_kind":observer_kind.unwrap(),"outer_process_ceiling":512});
-        (daemon_uid, image, cases, acquisition, observer)
+        (
+            daemon_uid,
+            image,
+            cases,
+            acquisition,
+            observer,
+            coordinates.finish(),
+        )
     }));
     let calls = run.calls.get();
     let bytes = run.bytes.get();
@@ -1440,7 +1663,7 @@ fn live_pids_limit_effects_match_engine() {
     let cleanup_calls = run.calls.get() - calls;
     let cleanup_bytes = run.bytes.get() - bytes;
     terminal_cleanup(&mut run, &owner, disposition);
-    let (daemon_uid, image, cases, acquisition, observer) =
+    let (daemon_uid, image, cases, acquisition, observer, coordinates) =
         require_verified_result(result, disposition);
     pids_stage(None, PidsOperation::FinalSnapshots);
     assert!(
@@ -1470,11 +1693,9 @@ fn live_pids_limit_effects_match_engine() {
             && started.elapsed() <= Duration::from_secs(180),
         "actual bounded PID accounting"
     );
-    let proof = json!({"schema_version":1,"contract":PIDS_CONTRACT,"capability_admission":[],"catalogue_admission":false,"scope":PIDS_SCOPE,"context":{"candidate_sha":run.candidate,"run_id":run.run,"lane":run.lane,"engine_release":run.engine,"rendering_api":run.api,"acquisition_api":if run.lane.starts_with("debian11-"){"1.41"}else{"1.49"},"mode":if run.mode==DaemonMode::Rootless{"rootless"}else{"rootful"},"docker_package":if run.lane.starts_with("debian11-"){"20.10.5+dfsg1-1+deb11u2"}else{""},"fixture_image":run.base,"daemon_uid":daemon_uid,"outer":owner.snapshot},"borrowed_image":{"id":image["id"],"identity":"unchanged","removal":"not_owned"},"observer":observer,"cases":cases,"acquisition":acquisition,"accounting":{"ordinary_calls":run.calls.get()-cleanup_calls,"ordinary_bytes":run.bytes.get()-cleanup_bytes,"cleanup_calls":cleanup_calls,"cleanup_bytes":cleanup_bytes,"ordinary_elapsed_ns":ordinary.as_nanos() as u64,"cleanup_elapsed_ns":cleanup_elapsed.as_nanos() as u64,"elapsed_ns":started.elapsed().as_nanos() as u64,"deadline_seconds":180,"cleanup_reserve_seconds":46},"cleanup":{"containers":"absent","rounds":2,"outstanding":0,"uncertain":false}});
-    assert!(
-        serde_json::to_vec(&proof).unwrap().len() <= PIDS_PROOF_BYTES,
-        "bounded private PID proof before publication"
-    );
+    let mut proof = json!({"schema_version":2,"contract":PIDS_CONTRACT,"capability_admission":[],"catalogue_admission":false,"scope":PIDS_SCOPE,"context":{"candidate_sha":run.candidate,"run_id":run.run,"lane":run.lane,"engine_release":run.engine,"rendering_api":run.api,"acquisition_api":if run.lane.starts_with("debian11-"){"1.41"}else{"1.49"},"mode":if run.mode==DaemonMode::Rootless{"rootless"}else{"rootful"},"docker_package":if run.lane.starts_with("debian11-"){"20.10.5+dfsg1-1+deb11u2"}else{""},"fixture_image":run.base,"daemon_uid":daemon_uid,"outer":owner.snapshot},"borrowed_image":{"id":image["id"],"identity":"unchanged","removal":"not_owned"},"observer":observer,"cases":cases,"acquisition":acquisition,"accounting":{"ordinary_calls":run.calls.get()-cleanup_calls,"ordinary_bytes":run.bytes.get()-cleanup_bytes,"cleanup_calls":cleanup_calls,"cleanup_bytes":cleanup_bytes,"ordinary_elapsed_ns":ordinary.as_nanos() as u64,"cleanup_elapsed_ns":cleanup_elapsed.as_nanos() as u64,"elapsed_ns":started.elapsed().as_nanos() as u64,"deadline_seconds":180,"cleanup_reserve_seconds":46},"cleanup":{"containers":"absent","rounds":2,"outstanding":0,"uncertain":false}});
+    pids_private_v2(&mut proof, coordinates);
+    pids_proof_budget(&proof);
     pids_stage(None, PidsOperation::Proof);
     target.publish(&proof);
 }
@@ -1717,13 +1938,14 @@ fn pids_controller_diagnostics_use_only_canonical_existing_current_observations(
 // Private PID order is deliberately the reverse of noncontiguous outer PID order.
 fn pids_raw_frame_fixture() -> (&'static str, &'static str) {
     (
-        "PIDNS pid:[700]\nMNTNS mnt:[701]\nCGNS cgroup:[702]\nINIT 4317\n\
+        "SELF 88 88 88\nPIDNS pid:[700]\nMNTNS mnt:[701]\nCGNS cgroup:[702]\nINIT 4317\n\
 U 0 1000 1\nG 0::/owned/leaf\nL Max processes 4096 4096 processes\n\
 F state WORKER 2\nF out READY 2\n\
 R 2579 2 4317 50003 1000 2579 72 2\nT 2579 Max processes 4096 4096 processes\n\
 R 4317 1 77 50000 1000 4317 71 1\nT 4317 Max processes 4096 4096 processes\n\
 R 903 9 2579 50008 1000 903 79 9\nT 903 Max processes 4096 4096 processes\nEND\n",
-        "STAT /sys/fs/cgroup/owned/leaf 41 1701\nSTAT /sys/fs/cgroup/owned 41 1700\n\
+        "SELF 99 99 99\nPIDNS pid:[700]\nMNTNS mnt:[701]\nCGNS cgroup:[702]\n\
+STAT /sys/fs/cgroup/owned/leaf 41 1701\nSTAT /sys/fs/cgroup/owned 41 1700\n\
 MAX 16\nCURRENT 3\nSOURCE pids.events.local\nDENIALS 0\n\
 MEMBER 2579\nMEMBER 4317\nMEMBER 903\n\
 OUTERPIDS 11\nOUTERMAX 512\nOUTERMEMORY 1048576\nOUTERMEMMAX 4294967296\n\
@@ -1732,11 +1954,21 @@ OOM 0\nANCESTOR 11\nCEILING 512\nEND\n",
 }
 
 fn pids_raw_scan_rows(frame: &str) -> Vec<Value> {
-    pids_rows(&pids_lines(
+    let lines = pids_lines(
         frame.as_bytes().to_vec(),
         &[
-            "PIDNS", "MNTNS", "CGNS", "INIT", "U", "G", "L", "F", "R", "T",
+            "SELF", "PIDNS", "MNTNS", "CGNS", "INIT", "U", "G", "L", "F", "R", "T",
         ],
+    );
+    let mut coordinates = pids_raw_coordinates();
+    coordinates.observe(&lines);
+    pids_rows(&lines)
+}
+
+fn pids_raw_coordinates() -> PidsCoordinates {
+    PidsCoordinates::new(&pids_lines(
+        b"SELF 77 77 77\nPIDNS pid:[700]\nMNTNS mnt:[701]\nCGNS cgroup:[702]\nEND\n".to_vec(),
+        &["SELF", "PIDNS", "MNTNS", "CGNS"],
     ))
 }
 
@@ -1748,6 +1980,7 @@ fn pids_raw_controller(frame: &str, rows: &[Value]) -> (Value, String) {
         "baseline",
         &mut mapping.clone(),
         &mut mapping.clone(),
+        &mut pids_raw_coordinates(),
     )
 }
 
@@ -1781,10 +2014,110 @@ fn pids_raw_frames_compare_outer_members_before_delta_encoding() {
 }
 
 #[test]
+fn pids_coordinate_witnesses_retain_all_37_actual_observations_in_order() {
+    let mut coordinates = pids_raw_coordinates();
+    let mut expected = vec![json!([77, 0, [0], 0, 0, 0])];
+    for pid in (101..136).chain([4194304]) {
+        let lines = vec![
+            format!("SELF {pid} {pid} {pid}"),
+            "PIDNS pid:[700]".into(),
+            "MNTNS mnt:[701]".into(),
+            "CGNS cgroup:[702]".into(),
+        ];
+        coordinates.observe(&lines);
+        expected.push(json!([pid, 0, [0], 0, 0, 0]));
+    }
+    assert_eq!(coordinates.finish(), expected);
+    assert!(std::panic::catch_unwind(|| pids_raw_coordinates().finish()).is_err());
+}
+
+#[test]
+fn pids_coordinate_witnesses_refuse_legacy_malformed_nested_or_changed_views() {
+    let (_, controller) = pids_raw_frame_fixture();
+    let rows = pids_raw_scan_rows(pids_raw_frame_fixture().0);
+    for frame in [
+        controller.replace("SELF 99 99 99\n", ""),
+        controller.replace("SELF 99 99 99", "SELF 99 99"),
+        controller.replace("SELF 99 99 99", "SELF 99 99 99 1"),
+        controller.replace("SELF 99 99 99", "SELF 99 99 99 99"),
+        controller.replace("SELF 99 99 99", "SELF 99 98 99"),
+        controller.replace("SELF 99 99 99", "SELF 99 99 98"),
+        controller.replace("SELF 99 99 99", "SELF 0 0 0"),
+        controller.replace("SELF 99 99 99", "SELF 099 99 99"),
+        controller.replace("SELF 99 99 99", "SELF +99 99 99"),
+        controller.replace("SELF 99 99 99", "SELF 4194305 4194305 4194305"),
+        controller.replace("SELF 99 99 99", "SELF 18446744073709551616 99 99"),
+        controller.replace("SELF 99 99 99", "SELF 99 99 1 2 3 4 5 6 7 8 9"),
+        controller.replace("SELF 99 99 99\n", "SELF 99 99 99\nSELF 99 99 99\n"),
+        controller.replace("PIDNS pid:[700]", "PIDNS pid:[703]"),
+        controller.replace("MNTNS mnt:[701]", "MNTNS mnt:[703]"),
+        controller.replace("CGNS cgroup:[702]", "CGNS cgroup:[703]"),
+        controller.replace("PIDNS pid:[700]\n", "PIDNS pid:[700]\nPIDNS pid:[700]\n"),
+    ] {
+        assert!(std::panic::catch_unwind(|| pids_raw_controller(&frame, &rows)).is_err());
+    }
+}
+
+#[test]
+fn pids_private_v2_phase_tuples_preserve_every_original_value() {
+    let (scan, controller) = pids_raw_frame_fixture();
+    let snapshot = pids_raw_controller(controller, &pids_raw_scan_rows(scan)).0;
+    let mut proof = json!({"schema_version":2,"contract":PIDS_CONTRACT,"unchanged":[true,"canary"],"cases":(0..6).map(|index| json!({"case":index,"baseline":snapshot,"held":snapshot,"restored":snapshot,"unchanged":[index,"case-canary"]})).collect::<Vec<_>>()});
+    let original = proof.clone();
+    let mut coordinates = pids_raw_coordinates();
+    for pid in 100..136 {
+        coordinates.observe(&[
+            format!("SELF {pid} {pid} {pid}"),
+            "PIDNS pid:[700]".into(),
+            "MNTNS mnt:[701]".into(),
+            "CGNS cgroup:[702]".into(),
+        ]);
+    }
+    pids_private_v2(&mut proof, coordinates.finish());
+    pids_proof_budget(&proof);
+    assert_eq!(proof["coordinates"].as_array().unwrap().len(), 37);
+    for case in proof["cases"].as_array_mut().unwrap() {
+        for phase in ["baseline", "held", "restored"] {
+            let tuple = case[phase].as_array().unwrap();
+            assert_eq!(tuple.len(), 10);
+            // Independently specified slots, not the producer's field table.
+            case[phase] = json!({"rows":tuple[0],"members":tuple[1],"pids_current":tuple[2],"pids_max":tuple[3],"denials":tuple[4],"oom_kills":tuple[5],"outer_pids":tuple[6],"outer_memory":tuple[7],"ancestor_headroom":tuple[8],"phase":tuple[9]});
+        }
+    }
+    proof.as_object_mut().unwrap().remove("coordinates");
+    assert_eq!(proof, original);
+    let mut extra_field = snapshot.clone();
+    extra_field["new-undisposed-field"] = json!(1);
+    assert!(std::panic::catch_unwind(move || pids_compact_phase(&mut extra_field)).is_err());
+    let mut legacy = original;
+    legacy["schema_version"] = json!(1);
+    legacy["contract"] = json!("pids-limit-v1");
+    assert!(
+        std::panic::catch_unwind(move || pids_private_v2(&mut legacy, vec![Value::Null; 37]))
+            .is_err()
+    );
+}
+
+#[test]
+fn pids_private_v2_custody_keeps_exact_outer_binding_reserve() {
+    pids_proof_budget(&json!("x".repeat(15358)));
+    for size in [15359, 16382, 16383] {
+        assert!(std::panic::catch_unwind(|| pids_proof_budget(&json!("x".repeat(size)))).is_err());
+    }
+}
+
+#[test]
 fn pids_raw_controller_frames_keep_membership_and_parser_refusals() {
     let (scan, controller) = pids_raw_frame_fixture();
     let rows = pids_raw_scan_rows(scan);
     for (frame, expected_panic) in [
+        (
+            controller
+                .replace("PIDNS pid:[700]", "PIDNS pid:[703]")
+                .replace("CURRENT 3\n", "CURRENT 03\n")
+                .replace("MEMBER 903\n", "MEMBER 9\n"),
+            "same initial observer namespaces before controller comparison",
+        ),
         (
             controller.replace(
                 "MEMBER 2579\nMEMBER 4317\nMEMBER 903",

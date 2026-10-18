@@ -172,7 +172,7 @@ else:
         from test_native_shm_size_proof import fixture as shm_fixture
         from test_native_supplementary_groups_proof import fixture as supplementary_fixture
         from test_native_kernel_settings_proof import fixture as kernel_fixture
-        from test_native_pids_limit_proof import fixture as pids_fixture
+        from test_native_pids_limit_v2_proof import fixture as pids_fixture
         from test_native_nofile_proof import fixture as nofile_fixture
 
         harness = (ROOT / "scripts/native-conformance.sh").read_text()
@@ -265,7 +265,7 @@ else:
                             path = root / {"hostname": "hostname-v1.json", "command": "command-clear-v1.json",
                                            "shm": "shm-size-v1.json",
                                            "supplementary": "supplementary-groups-v1.json",
-                                           "kernel": "kernel-settings-v1.json", "pids": "pids-limit-v1.json",
+                                           "kernel": "kernel-settings-v1.json", "pids": "pids-limit-v2.json",
                                            "nofile": "nofile-v1.json"}[family]
                             serialization = {"separators": (",", ":")} if family == "pids" else {}
                             path.write_text(json.dumps(proof, **serialization))
