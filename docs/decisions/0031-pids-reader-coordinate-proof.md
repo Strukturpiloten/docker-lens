@@ -2,6 +2,10 @@
 
 Status: accepted bounded source contract; implementation and native qualification pending.
 
+[ADR 0033](0033-original-outer-custody.md) supersedes only the unused boundary
+reserve and unresolved original-root handoff below. Its connected source contract
+retains every coordinate and semantic predicate; it is not native qualification.
+
 ## Context
 
 Run 39173069422 at 19f1ce4 failed PIDs invocation 27 on every lane. The

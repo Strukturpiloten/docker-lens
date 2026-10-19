@@ -76,8 +76,14 @@ private PIDs-v2 successor with retained coordinates for all 37 observer reads
 and lossless fixed phase tuples. The strict successor checks original-byte
 custody and coordinates before reusing the unchanged pure semantic predicates.
 Both current consumers require v2; historical v1 is not a fallback. This changes
-no public admission, native invocation or budget, and does not establish actual
-native alignment or the still-unresolved exact outer controller boundary.
+no public admission, native invocation or shared budget.
+[ADR 0033](decisions/0033-original-outer-custody.md) connects original-root OCI/log
+custody and the ten-slot private boundary using the existing reserve. Its concrete
+broker/runtime/coordinator and bounded stdin consumers remain unqualified source.
+A fixed same-envelope partition fits four authored connected scenarios; native
+whole-harness fit, fresh complete/native gates and actual downstream consumers
+are still required. No native alignment, outer ownership, rootless delegation
+or new compatibility claim follows from source/fake tests.
 
 ## Data flow
 

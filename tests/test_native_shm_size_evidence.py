@@ -5,12 +5,12 @@ import importlib.util
 import json
 import os
 from pathlib import Path
-import subprocess
 import unittest
 from unittest.mock import patch
 
 import test_native_evidence as legacy
 import test_native_external_network_evidence as canonical
+from native_harness_syntax import assert_positive_emitter_rerun, authored_emitter_authority, emitter_cli, run_emitter
 
 LANES = ("debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless")
 SECRET = "PRIVATE_SHM_SIZE_CANARY"
@@ -74,6 +74,7 @@ class ShmSizeEvidenceTests(unittest.TestCase):
             self.assertFalse(destination.exists())
             result, destination = canonical.ExternalNetworkEvidenceTests.emit(self, lane)
             self.assertEqual(result.returncode, 0, result.stderr)
+            assert_positive_emitter_rerun(self, result, destination)
             destination.unlink()
             path = destination.parent.parent / "shm-size-v1.json"
             original = json.loads(path.read_text())
@@ -99,10 +100,7 @@ class ShmSizeEvidenceTests(unittest.TestCase):
                     else:
                         proof[SECRET] = SECRET
                     path.write_text(json.dumps(proof))
-                    rejected = subprocess.run(result.args, capture_output=True, text=True, check=False, timeout=5,
-                                              env={**os.environ, "NATIVE_FIXTURE_IMAGE": legacy.HEALTH_FIXTURE_IMAGE,
-                                                   "NATIVE_OUTER_CONTAINER_ID": "f" * 64,
-                                                   "NATIVE_BIND_RELABEL_DAEMON_UID": "1000" if lane.endswith("rootless") else "0"})
+                    rejected = run_emitter(result)
                     self.assertNotEqual(rejected.returncode, 0)
                     self.assertFalse(destination.exists())
                     self.assertEqual(rejected.stdout, "")
@@ -121,21 +119,27 @@ class ShmSizeEvidenceTests(unittest.TestCase):
             result, destination = canonical.ExternalNetworkEvidenceTests.emit(self, lane)
             self.assertEqual(result.returncode, 0, result.stderr)
             destination.unlink()
-            paths = [Path(value) for value in result.args[2:15]]
-            arguments = result.args[15:]
+            cli = emitter_cli(result)
+            paths = [Path(value) for value in cli[:13]]
+            arguments = cli[13:]
             real_reader = emitter.read_shm_size_proof
+            environment = {"NATIVE_FIXTURE_IMAGE": legacy.HEALTH_FIXTURE_IMAGE,
+                           "NATIVE_OUTER_CONTAINER_ID": "f" * 64,
+                           "NATIVE_BIND_RELABEL_DAEMON_UID": "1000" if lane.endswith("rootless") else "0"}
+            with authored_emitter_authority(cli) as outer_context, patch.dict(os.environ, environment):
+                emitter.emit(*paths, *arguments, outer_context=outer_context)
+            self.assertTrue(destination.exists())
+            destination.unlink()
             for value in invalid:
                 with self.subTest(lane=lane, value=value):
                     def validated_bad_return(*args):
                         self.assertEqual(real_reader(*args), valid)
                         return copy.deepcopy(value)
 
-                    with patch.dict(os.environ, {"NATIVE_FIXTURE_IMAGE": legacy.HEALTH_FIXTURE_IMAGE,
-                                                 "NATIVE_OUTER_CONTAINER_ID": "f" * 64,
-                                                 "NATIVE_BIND_RELABEL_DAEMON_UID": "1000" if lane.endswith("rootless") else "0"}), \
+                    with authored_emitter_authority(cli) as outer_context, patch.dict(os.environ, environment), \
                             patch.object(emitter, "read_shm_size_proof", side_effect=validated_bad_return) as call:
                         with self.assertRaisesRegex(ValueError, "^incomplete shm-size source group$"):
-                            emitter.emit(*paths, *arguments)
+                            emitter.emit(*paths, *arguments, outer_context=outer_context)
                         self.assertEqual(call.call_count, 1)
                     self.assertFalse(destination.exists())
 

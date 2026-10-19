@@ -9,25 +9,31 @@ import json
 import os
 from pathlib import Path
 import struct
+import secrets
 from threading import Event, Thread, Timer
 import time
 import unittest
 from unittest.mock import patch
 
 import native_outer_broker_protocol as protocol
-from native_outer_broker_protocol import Binding, Empty, Endpoint, Ledger, OCIReceipt, ProtocolError, RecheckedReceipt, StartedReceipt
+from native_outer_broker_protocol import Binding, DatabaseReceipt, Empty, Endpoint, ExpectationClaim, Ledger, OCIReceipt, PidsTiming, PidsWindow, PreflightReceipt, ProtocolError, RecheckedReceipt, StartedReceipt
 
 BINDING = Binding("a" * 64, "b" * 40, "39173069422", "1", "c" * 64, "sha256:" + "d" * 64)
 ID = "e" * 64
+FULL_DIGEST = "f" * 64
+PROFILE = {"operating_system":"linux","rootless":False,"remote":False,"podman_version":"4.9.3",
+           "runtime_name":"crun","runtime_version":"1.14.1","cgroup_manager":"systemd","cgroup_version":"v2"}
 STARTED = "2026-10-19T12:34:56.123456789Z"
 CANARY = "PRIVATE_BROKER_CANARY_/host/original-oci"
 
 
-def packet(verb="create", kind="request", sequence=1, container_id=None, payload=None):
+def packet(verb="preflight", kind="request", sequence=1, container_id=None, payload=None):
     # Independent envelope schema, no use of Endpoint._packet or canonical().
-    return {"v": 1, "kind": kind, "session": "a" * 64, "candidate": "b" * 40,
-            "run_id": "39173069422", "run_attempt": "1", "launch_digest": "c" * 64,
+    return {"v": 2, "kind": kind, "session": "a" * 64, "candidate": "b" * 40,
+            "execution_origin": "github_actions",
+            "run_id": "39173069422", "run_attempt": "1", "intent_digest": "c" * 64,
             "image_digest": "sha256:" + "d" * 64, "sequence": sequence,
+            "expectation_digest": FULL_DIGEST if verb not in ("preflight", "create", "initialize") else None,
             "container_id": container_id, "verb": verb, "payload": {} if payload is None else payload}
 
 
@@ -46,13 +52,17 @@ def budget(seconds=2, max_calls=10000, max_bytes=1048576, clock=time.monotonic, 
                   now + seconds + 3, clock, cancelled)
 
 
+def window(ledger):
+    return PidsWindow(int(ledger.limits["custody"] * 1_000_000_000), lambda: int(ledger.clock() * 1_000_000_000))
+
+
 @contextmanager
 def peers(ledger=None, client_binding=BINDING, broker_binding=BINDING):
     request_r, request_w = os.pipe()
     reply_r, reply_w = os.pipe()
     ledger = budget() if ledger is None else ledger
-    client = Endpoint("client", client_binding, reply_r, request_w, ledger)
-    broker = Endpoint("broker", broker_binding, request_r, reply_w, ledger)
+    client = Endpoint("client", client_binding, reply_r, request_w, ledger, pids_window=window(ledger))
+    broker = Endpoint("broker", broker_binding, request_r, reply_w, ledger, pids_window=window(ledger))
     try:
         yield client, broker, ledger
     finally:
@@ -61,6 +71,33 @@ def peers(ledger=None, client_binding=BINDING, broker_binding=BINDING):
 
 
 class BrokerProtocolTests(unittest.TestCase):
+    def test_prepaid_header_never_physically_reads_unfunded_role_bytes(self):
+        from native_outer_coordinator import Allowance, Reservation, ReservedBudget
+        for remaining in (0, 1, 3):
+            with self.subTest(remaining=remaining):
+                reserved = ReservedBudget(Reservation(secrets.token_hex(32), 1, "protocol", "test",
+                                                      Allowance(0, remaining, 100), time.monotonic_ns() + 5_000_000_000),
+                                          time.monotonic_ns, lambda: False)
+                now = time.monotonic()
+                ledger = Ledger(100, 1024, now + 2, now + 3, now + 4, now + 4,
+                                time.monotonic, lambda: False, reserved_budget=reserved)
+                with peers(ledger) as (client, broker, _ledger):
+                    os.write(client.write_fd, b"\0\0\0\x01x")
+                    with patch.object(protocol.os, "read", side_effect=AssertionError("unfunded read")):
+                        with self.assertRaises(ProtocolError):
+                            broker.receive()
+                self.assertEqual(reserved.used.source_bytes, 0)
+
+    def test_local_origin_has_null_ci_fields_and_cannot_accept_hosted_envelope(self):
+        local = replace(BINDING, execution_origin="local_process", run_id=None, run_attempt=None)
+        with peers(client_binding=local, broker_binding=local) as (client, broker, _ledger):
+            self.preflight(client, broker)
+            self.assertEqual((client.binding.execution_origin, client.binding.run_id, client.binding.run_attempt),
+                             ("local_process", None, None))
+        with peers(client_binding=local, broker_binding=local) as (client, broker, _ledger):
+            os.write(client.write_fd, wire(packet()))
+            self.refused(broker.receive, broker)
+
     def refused(self, operation, endpoint=None):
         stdout, stderr = io.StringIO(), io.StringIO()
         with redirect_stdout(stdout), redirect_stderr(stderr):
@@ -83,10 +120,12 @@ class BrokerProtocolTests(unittest.TestCase):
                     endpoint.receive()
             self.assertEqual((endpoint.ledger.calls, endpoint.ledger.bytes), (calls, size))
 
-    def exchange(self, client, broker, verb, payload, container_id=None):
-        client.request(verb)
+    def exchange(self, client, broker, verb, payload, container_id=None, request_payload=None):
+        if verb == "create":
+            self.preflight(client, broker)
+        client.request(verb, request_payload)
         message = broker.receive()
-        self.assertEqual((message.verb, type(message.payload)), (verb, Empty))
+        self.assertEqual((message.verb, type(message.payload)), (verb, PidsTiming if verb == "begin_pids" else Empty))
         errors = []
 
         def respond():
@@ -105,22 +144,62 @@ class BrokerProtocolTests(unittest.TestCase):
         self.assertEqual(errors, [])
         return result
 
+    def preflight(self, client, broker):
+        if client.phase != "new":
+            return
+        config = {"User":"","ExposedPorts":{},"Env":[],"Entrypoint":[],"Cmd":[],"Volumes":{},
+                  "WorkingDir":"","Labels":{},"StopSignal":"","ArgsEscaped":False}
+        facts = PreflightReceipt(PROFILE, "9"*64, BINDING.image_digest,
+                                 ("registry.invalid/image@" + BINDING.image_digest,), "linux", "amd64",
+                                 ("sha256:" + "8"*64,), {"config":config,"healthcheck":None})
+        self.exchange(client, broker, "preflight", facts)
+
+    def initialize(self, client, broker):
+        facts = DatabaseReceipt(23456, "9"*64, BINDING.image_digest, "/owned/static",
+                                "/owned/run/hostname", "/owned/run/hosts", "/owned/run/resolv.conf",
+                                {"name":"dl-native-data-AbCd1234","mountpoint":"/owned/volume/data","owner":"AbCd1234"})
+        return self.exchange(client, broker, "initialize", facts)
+
+    def bind_oci(self, client, broker, original):
+        self.initialize(client, broker)
+        client.request("bind_expectation", ExpectationClaim(FULL_DIGEST))
+        broker.receive()
+        errors = []
+        def respond():
+            try:
+                broker.respond(original, expectation_digest=FULL_DIGEST)
+            except BaseException as error:
+                errors.append(error)
+        thread = Thread(target=respond)
+        thread.start()
+        try:
+            result = client.receive()
+        finally:
+            thread.join(timeout=3)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, [])
+        return result
+
+    def begin_pids(self, client, broker, timing):
+        self.exchange(client, broker, "begin_pids", timing, request_payload=timing)
+        self.exchange(client, broker, "pids_before_producer", RecheckedReceipt(client.oci_sha256, 23456, client.started_at))
+
     def ready(self, client, broker):
         self.exchange(client, broker, "create", Empty(), ID)
         value = receipt()
-        self.exchange(client, broker, "initialize", value)
+        self.bind_oci(client, broker, value)
         self.exchange(client, broker, "start", StartedReceipt(23456, STARTED))
         return value
 
     def test_full_closed_transaction_and_raw_oci_once_at_maximum_size(self):
         with peers() as (client, broker, ledger):
             created = self.exchange(client, broker, "create", Empty(), ID)
-            self.assertEqual((created.sequence, created.container_id), (1, ID))
+            self.assertEqual((created.sequence, created.container_id), (2, ID))
             self.assertEqual((client.id, broker.id), (ID, ID))
             raw = (b"\x00\xff" + CANARY.encode()) * 2000
             raw = (raw + b"X" * 65536)[:65536]
             original = receipt(raw)
-            initialized = self.exchange(client, broker, "initialize", original)
+            initialized = self.bind_oci(client, broker, original)
             self.assertEqual(initialized.payload.raw, raw)
             self.assertEqual(initialized.payload.sha256, hashlib.sha256(raw).hexdigest())
             self.assertNotIn(CANARY, repr(initialized))
@@ -141,24 +220,27 @@ class BrokerProtocolTests(unittest.TestCase):
 
     def test_independent_literal_create_request_and_canonical_wire(self):
         # Literal independent canonical field order and values.
-        raw = (b'{"candidate":"' + b"b" * 40 + b'","container_id":null,"image_digest":"sha256:' + b"d" * 64 +
-               b'","kind":"request","launch_digest":"' + b"c" * 64 + b'","payload":{},"run_attempt":"1",'
-               b'"run_id":"39173069422","sequence":1,"session":"' + b"a" * 64 + b'","v":1,"verb":"create"}')
+        raw = (b'{"candidate":"' + b"b" * 40 + b'","container_id":null,"execution_origin":"github_actions","expectation_digest":null,"image_digest":"sha256:' + b"d" * 64 +
+               b'","intent_digest":"' + b"c" * 64 + b'","kind":"request","payload":{},"run_attempt":"1",'
+               b'"run_id":"39173069422","sequence":2,"session":"' + b"a" * 64 + b'","v":2,"verb":"create"}')
         with peers() as (_client, broker, _ledger):
+            self.preflight(_client, broker)
             os.write(_client.write_fd, struct.pack(">I", len(raw)) + raw)
             message = broker.receive()
-            self.assertEqual((message.verb, message.container_id, message.sequence), ("create", None, 1))
+            self.assertEqual((message.verb, message.container_id, message.sequence), ("create", None, 2))
             self.assertEqual(broker.cleanup_obligation, "unknown_create")
         with peers() as (client, broker, _ledger):
+            self.preflight(client, broker)
             client.request("create")
             header = os.read(broker.read_fd, 4)
             self.assertEqual(struct.unpack(">I", header)[0], len(raw))
             self.assertEqual(os.read(broker.read_fd, len(raw)), raw)
 
     def test_exact_envelope_keys_types_binding_and_no_arbitrary_verbs_or_payload(self):
-        changes = {"session": "f" * 64, "candidate": "f" * 40, "launch_digest": "f" * 64,
+        changes = {"session": "f" * 64, "candidate": "f" * 40, "intent_digest": "f" * 64,
+                   "execution_origin": "local_process",
                    "image_digest": "sha256:" + "f" * 64, "run_id": "39173069423", "run_attempt": "2",
-                   "sequence": True, "v": True, "container_id": ID, "kind": "reply",
+                   "sequence": True, "v": 1, "container_id": ID, "kind": "reply",
                    "verb": "OPEN", "payload": {"path": CANARY}}
         for key, value in changes.items():
             with self.subTest(key=key), peers() as (client, broker, _ledger):
@@ -183,8 +265,8 @@ class BrokerProtocolTests(unittest.TestCase):
 
     def test_noncanonical_duplicate_nonfinite_nonascii_and_bad_json(self):
         normal = wire(packet())[4:]
-        invalids = [normal + b" ", normal.replace(b'"v":1', b'"v":1,"v":1'),
-                    normal.replace(b'"v":1', b'"v":NaN'), normal.replace(b'"v":1', b'"v":1.0'),
+        invalids = [normal + b" ", normal.replace(b'"v":2', b'"v":2,"v":2'),
+                    normal.replace(b'"v":2', b'"v":NaN'), normal.replace(b'"v":2', b'"v":2.0'),
                     normal.replace(b'"payload":{}', b'"payload":[]'), b"\xff", b"[]", b"null", b"{", b"[" * 3000 + b"]" * 3000]
         for raw in invalids:
             with peers() as (client, broker, _ledger):
@@ -192,22 +274,23 @@ class BrokerProtocolTests(unittest.TestCase):
                 self.refused(broker.receive, broker)
 
     def test_sequence_replay_id_mutation_wrong_reply_and_initialize_once(self):
-        for field, replacement in (("sequence", 1), ("sequence", 3), ("container_id", "f" * 64),
+        for field, replacement in (("sequence", 1), ("sequence", 4), ("container_id", "f" * 64),
                                    ("container_id", None), ("verb", "start")):
             with peers() as (client, broker, _ledger):
                 self.exchange(client, broker, "create", Empty(), ID)
-                altered = packet("initialize", sequence=2, container_id=ID)
+                altered = packet("initialize", sequence=3, container_id=ID)
                 altered[field] = replacement
                 os.write(client.write_fd, wire(altered))
                 self.refused(broker.receive, broker)
         with peers() as (client, broker, _ledger):
             self.exchange(client, broker, "create", Empty(), ID)
-            self.exchange(client, broker, "initialize", receipt())
+            self.bind_oci(client, broker, receipt())
             self.refused(lambda: client.request("initialize"), client)
-        for field, replacement in (("session", "f" * 64), ("container_id", "not-an-id"), ("sequence", 2)):
+        for field, replacement in (("session", "f" * 64), ("container_id", "not-an-id"), ("sequence", 3)):
             with peers() as (client, broker, _ledger):
+                self.preflight(client, broker)
                 client.request("create")
-                altered = packet(kind="reply", container_id=ID)
+                altered = packet("create", kind="reply", sequence=2, container_id=ID)
                 altered[field] = replacement
                 os.write(broker.write_fd, wire(altered))
                 self.refused(client.receive, client)
@@ -220,17 +303,19 @@ class BrokerProtocolTests(unittest.TestCase):
         for key, value in list(changes.items()) + [("raw", b"x" * 65537), ("mode", 0o040700), ("links", True), ("uid", False)]:
             with self.subTest(key=key), peers() as (client, broker, _ledger):
                 self.exchange(client, broker, "create", Empty(), ID)
-                client.request("initialize")
+                self.initialize(client, broker)
+                client.request("bind_expectation", ExpectationClaim(FULL_DIGEST))
                 broker.receive()
-                self.refused(lambda: broker.respond(replace(good, **{key: value})), broker)
+                self.refused(lambda: broker.respond(replace(good, **{key: value}), expectation_digest=FULL_DIGEST), broker)
         valid_payload = {"raw": base64.b64encode(good.raw).decode(), "device": 9, "inode": 1234, "uid": 0,
                          "mode": 0o100640, "links": 1, "size": len(good.raw), "sha256": good.sha256, "init_pid": 23456}
         for replacement in ("!", "é", base64.b64encode(good.raw).decode() + "=", True):
             with peers() as (client, broker, _ledger):
                 self.exchange(client, broker, "create", Empty(), ID)
-                client.request("initialize")
+                self.initialize(client, broker)
+                client.request("bind_expectation", ExpectationClaim(FULL_DIGEST))
                 altered = dict(valid_payload, raw=replacement)
-                os.write(broker.write_fd, wire(packet("initialize", "reply", 2, ID, altered)))
+                os.write(broker.write_fd, wire(packet("bind_expectation", "reply", 4, ID, altered)))
                 self.refused(client.receive, client)
 
     def test_started_and_recheck_facts_pin_exact_pid_time_and_original_digest(self):
@@ -239,7 +324,7 @@ class BrokerProtocolTests(unittest.TestCase):
                       StartedReceipt(23456, "0001-01-01T01:00:00+01:00"), StartedReceipt(23456, CANARY)):
             with peers() as (client, broker, _ledger):
                 self.exchange(client, broker, "create", Empty(), ID)
-                self.exchange(client, broker, "initialize", receipt())
+                self.bind_oci(client, broker, receipt())
                 client.request("start")
                 broker.receive()
                 self.refused(lambda: broker.respond(value), broker)
@@ -271,6 +356,7 @@ class BrokerProtocolTests(unittest.TestCase):
     def test_validated_create_id_survives_decode_cancel_and_partial_reply_failure(self):
         cancelled = Event()
         with peers(budget(cancelled=cancelled.is_set)) as (client, broker, _ledger):
+            self.preflight(client, broker)
             client.request("create")
             broker.receive()
             broker.respond(Empty(), ID)
@@ -286,6 +372,7 @@ class BrokerProtocolTests(unittest.TestCase):
             self.assertEqual((client.id, client.cleanup_obligation), (ID, "live_id"))
         cancelled = Event()
         with peers(budget(cancelled=cancelled.is_set)) as (client, broker, _ledger):
+            self.preflight(client, broker)
             client.request("create")
             broker.receive()
             real_write = os.write
@@ -304,6 +391,7 @@ class BrokerProtocolTests(unittest.TestCase):
     def test_timeout_cancel_and_backpressure_are_bounded_and_permanent(self):
         ledger = budget(seconds=0.03)
         with peers(ledger) as (client, _broker, _ledger):
+            self.preflight(client, _broker)
             client.request("create")
             began = time.monotonic()
             self.refused(client.receive, client)
@@ -311,6 +399,7 @@ class BrokerProtocolTests(unittest.TestCase):
             self.assertEqual(client.cleanup_obligation, "unknown_create")
         cancelled = Event()
         with peers(budget(cancelled=cancelled.is_set)) as (client, _broker, _ledger):
+            self.preflight(client, _broker)
             client.request("create")
             timer = Timer(0.01, cancelled.set)
             timer.start()
@@ -325,24 +414,24 @@ class BrokerProtocolTests(unittest.TestCase):
                 except BlockingIOError:
                     break
             began = time.monotonic()
-            self.refused(lambda: client.request("create"), client)
+            self.refused(lambda: client.request("preflight"), client)
             self.assertLess(time.monotonic() - began, 0.3)
 
     def test_aggregate_ledger_budget_never_resets_on_request_or_new_endpoint(self):
         ledger = budget(max_bytes=700)
         with peers(ledger) as (client, broker, _ledger):
-            client.request("create")
+            client.request("preflight")
             self.refused(broker.receive, broker)  # Same conservative ledger charges both ends.
             self.assertGreater(ledger.bytes, 400)
         with peers(budget(max_calls=1)) as (client, _broker, _ledger):
-            self.refused(lambda: client.request("create"), client)
+            self.refused(lambda: client.request("preflight"), client)
         ledger = budget()
         with peers(ledger):
             pass
         request_r, request_w = os.pipe()
         reply_r, reply_w = os.pipe()
         try:
-            self.refused(lambda: Endpoint("client", BINDING, reply_r, request_w, ledger))
+            self.refused(lambda: Endpoint("client", BINDING, reply_r, request_w, ledger, pids_window=window(ledger)))
         finally:
             os.close(request_r)
             os.close(reply_w)
@@ -366,11 +455,11 @@ class BrokerProtocolTests(unittest.TestCase):
         with peers(ledger) as (client, broker, _ledger):
             self.exchange(client, broker, "create", Empty(), ID)
             now[0] = 1.5
-            os.write(client.write_fd, wire(packet("initialize", sequence=2, container_id=ID)))
+            os.write(client.write_fd, wire(packet("initialize", sequence=3, container_id=ID)))
             self.refused(broker.receive, broker)
         for replacement in (replace(BINDING, session="f" * 64), replace(BINDING, candidate="f" * 40)):
             with peers(client_binding=BINDING, broker_binding=replacement) as (client, broker, _ledger):
-                client.request("create")
+                client.request("preflight")
                 self.refused(broker.receive, broker)
         for startup, custody, cleanup, watchdog in ((121, 122, 123, 124), (1, 2, 3, 1801),
                                                   (1, 2, 3, 2), (1, float("nan"), 3, 4)):
@@ -384,7 +473,7 @@ class BrokerProtocolTests(unittest.TestCase):
         with peers() as (client, broker, _ledger):
             self.exchange(client, broker, "create", Empty(), ID)
             original = receipt()
-            self.exchange(client, broker, "initialize", original)
+            self.bind_oci(client, broker, original)
             result = self.exchange(client, broker, "start", StartedReceipt(23456, started))
             self.assertEqual(result.payload.started_at, started)
             self.exchange(client, broker, "recheck", RecheckedReceipt(original.sha256, 23456, started))
@@ -438,8 +527,9 @@ class BrokerProtocolTests(unittest.TestCase):
         for payload in variants:
             with peers() as (client, broker, _ledger):
                 self.exchange(client, broker, "create", Empty(), ID)
-                client.request("initialize")
-                os.write(broker.write_fd, wire(packet("initialize", "reply", 2, ID, payload)))
+                self.initialize(client, broker)
+                client.request("bind_expectation", ExpectationClaim(FULL_DIGEST))
+                os.write(broker.write_fd, wire(packet("bind_expectation", "reply", 4, ID, payload)))
                 self.refused(client.receive, client)
 
     def test_pipe_endpoint_validation_no_inheritance_and_no_runtime_surface(self):
@@ -447,13 +537,146 @@ class BrokerProtocolTests(unittest.TestCase):
             for fd in (client.read_fd, client.write_fd, broker.read_fd, broker.write_fd):
                 self.assertFalse(os.get_inheritable(fd))
                 self.assertFalse(os.get_blocking(fd))
-        for change in (replace(BINDING, run_id="01"), replace(BINDING, launch_digest=CANARY),
+        for change in (replace(BINDING, run_id="01"), replace(BINDING, intent_digest=CANARY),
                        replace(BINDING, candidate="b" * 64), replace(BINDING, run_attempt=True)):
             read_fd, write_fd = os.pipe()
-            self.refused(lambda: Endpoint("client", change, read_fd, write_fd, budget()))
+            ledger = budget()
+            self.refused(lambda: Endpoint("client", change, read_fd, write_fd, ledger, pids_window=window(ledger)))
         source = (Path(__file__).resolve().parents[1] / "scripts/native_outer_broker_protocol.py").read_text()
         for forbidden in ("subprocess", "sudo", "os.open(", "socket", "if __name__", "print(", "native_outer_lifecycle", "ProtocolError(raw"):
             self.assertNotIn(forbidden, source)
+
+    def pids_budget(self, now):
+        return Ledger(10000, 1048576, 110, 600, 610, 620, lambda: now[0], lambda: False)
+
+    def test_v2_once_only_actual_pids_window_seals_before_later_lane_checks(self):
+        now = [10.0]
+        ledger = self.pids_budget(now)
+        with peers(ledger) as (client, broker, _):
+            original = self.ready(client, broker)
+            calls, size, limits = ledger.calls, ledger.bytes, dict(ledger.limits)
+            timing = PidsTiming(10_000_000_000, 190_000_000_000)
+            self.begin_pids(client, broker, timing)
+            self.assertEqual((client.phase, broker.phase), ("pids_producing", "pids_producing"))
+            self.assertGreater(ledger.calls, calls)
+            self.assertGreater(ledger.bytes, size)
+            self.assertEqual(ledger.limits, limits)
+            checked = RecheckedReceipt(original.sha256, 23456, STARTED)
+            self.exchange(client, broker, "pids_before_reader", checked)
+            # Mandatory-reader/reporting use the remaining original window,
+            # not a reset work deadline or a new 46-second allowance.
+            now[0] = 180.0
+            self.exchange(client, broker, "seal_pids", checked)
+            self.assertTrue(client.pids_window.sealed and broker.pids_window.sealed)
+            now[0] = 250.0  # Invocation 28 is outside PIDs time, inside lane.
+            self.exchange(client, broker, "recheck", checked)
+            self.exchange(client, broker, "teardown", Empty())
+
+    def test_v2_begin_rejects_late_oversized_renewed_or_credit_bearing_installation(self):
+        for timing in (PidsTiming(True, 190_000_000_000), PidsTiming(10_000_000_000, 191_000_000_000),
+                       PidsTiming(11_000_000_000, 190_000_000_000), PidsTiming(10_000_000_000, 56_000_000_000)):
+            now = [10.0]
+            with peers(self.pids_budget(now)) as (client, broker, _):
+                self.ready(client, broker)
+                self.refused(lambda: client.request("begin_pids", timing), client)
+        now = [10.0]
+        with peers(self.pids_budget(now)) as (client, broker, _):
+            self.ready(client, broker)
+            timing = PidsTiming(10_000_000_000, 190_000_000_000)
+            self.begin_pids(client, broker, timing)
+            self.refused(lambda: client.request("begin_pids", timing), client)
+        for field in ("calls", "bytes", "io_calls", "reset", "cleanup_deadline_ns"):
+            now = [10.0]
+            with peers(self.pids_budget(now)) as (client, broker, _):
+                self.ready(client, broker)
+                altered = packet("begin_pids", sequence=6, container_id=ID,
+                                 payload={"start_ns": 10_000_000_000, "deadline_ns": 190_000_000_000, field: 1})
+                os.write(client.write_fd, wire(altered))
+                self.refused(broker.receive, broker)
+
+    def test_v2_active_expiry_and_unsealed_lane_check_fail_but_teardown_uses_outer_deadline(self):
+        for verb, when in (("recheck", 11.0), ("pids_before_reader", 190.0), ("seal_pids", 190.0)):
+            now = [10.0]
+            with peers(self.pids_budget(now)) as (client, broker, _):
+                self.ready(client, broker)
+                timing = PidsTiming(10_000_000_000, 190_000_000_000)
+                self.begin_pids(client, broker, timing)
+                now[0] = when
+                self.refused(lambda: client.request(verb), client)
+        now = [10.0]
+        with peers(self.pids_budget(now)) as (client, broker, _):
+            self.ready(client, broker)
+            timing = PidsTiming(10_000_000_000, 190_000_000_000)
+            self.begin_pids(client, broker, timing)
+            now[0] = 189.0
+            client.request("teardown")
+            broker.receive()  # Known cleanup before active transport expires.
+            now[0] = 200.0
+            broker.respond(Empty())
+            client.receive()
+            self.assertTrue(client.closed and broker.closed)
+
+    def test_v2_begin_adoption_precedes_ack_and_lost_ack_cannot_retry(self):
+        now = [10.0]
+        with peers(self.pids_budget(now)) as (client, broker, _):
+            self.ready(client, broker)
+            timing = PidsTiming(10_000_000_000, 190_000_000_000)
+            client.request("begin_pids", timing)
+            message = broker.receive()
+            self.assertEqual(message.payload, timing)
+            self.assertEqual(broker.pids_window.timing, timing)
+            client.close()
+            self.refused(lambda: broker.respond(timing), broker)
+            self.assertEqual(broker.pids_window.timing, timing)
+
+    def test_v2_partial_frame_crossing_pids_deadline_poisoned_before_body(self):
+        now = [10.0]
+        with peers(self.pids_budget(now)) as (client, broker, _):
+            self.ready(client, broker)
+            timing = PidsTiming(10_000_000_000, 190_000_000_000)
+            self.begin_pids(client, broker, timing)
+            client.request("pids_before_reader")
+            real_read = os.read
+            reads = []
+            def read(fd, size):
+                reads.append(size)
+                result = real_read(fd, size)
+                if fd == broker.read_fd:
+                    now[0] = 190.0
+                return result
+            with patch.object(protocol.os, "read", side_effect=read):
+                self.refused(broker.receive, broker)
+            self.assertEqual(reads, [4])
+            self.assertEqual(broker.cleanup_obligation, "live_id")
+            self.assertGreater(broker.ledger.check("cleanup"), 0)
+
+    def test_v2_withheld_ack_and_late_ack_cannot_use_lane_custody_time(self):
+        now = [10.0]
+        with peers(self.pids_budget(now)) as (client, broker, _):
+            original = self.ready(client, broker)
+            timing = PidsTiming(10_000_000_000, 190_000_000_000)
+            self.begin_pids(client, broker, timing)
+            client.request("pids_before_reader")
+            broker.receive()
+            class Selector:
+                def __enter__(self):
+                    return self
+                def __exit__(self, *_args):
+                    pass
+                def register(self, *_args):
+                    pass
+                def select(self, timeout):
+                    self_timeout.append(timeout)
+                    now[0] = 190.0
+                    return []
+            self_timeout = []
+            with patch.object(protocol.selectors, "DefaultSelector", Selector):
+                self.refused(client.receive, client)
+            self.assertLessEqual(self_timeout[0], 0.05)
+            # Root side must not write an ACK after the installed deadline.
+            with patch.object(protocol.os, "write", side_effect=AssertionError("no late ACK")):
+                self.refused(lambda: broker.respond(RecheckedReceipt(original.sha256, 23456, STARTED)), broker)
+            self.assertGreater(broker.ledger.check("cleanup"), 0)
 
 
 if __name__ == "__main__":

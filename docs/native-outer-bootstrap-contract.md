@@ -1,8 +1,11 @@
 # Original-PID1 bootstrap source component
 
-Status: **unwired source component; no native or boundary qualification**.
-Continues DockerLens #39/#31 under #3. The canonical harness, current PIDs-v2
-reader, mandatory tests, public output and selected capabilities are unchanged.
+Status: connected validation-source component; no native or boundary qualification.
+Continues DockerLens #39/#31 under #3.
+[ADR 0033](decisions/0033-original-outer-custody.md) connects this component to
+the canonical original-object owners and private consumers. All mandatory tests,
+public output and selected capabilities retain their existing requirements;
+complete-path fit and fresh native qualification remain open.
 
 `scripts/native_outer_bootstrap.py` prepares inert bootstrap arguments and
 strictly decodes a caller-supplied private k8s-file log snapshot. Calling its
@@ -11,7 +14,7 @@ read host `/proc`, change the host, or create native evidence. The tests author
 their observations independently; parsing a synthetic frame does not prove its
 origin or truth.
 
-## Intended handoff
+## Original-PID1 handoff contract
 
 The inline shell is intended to run as the original outer PID1, before the
 image's Docker/rootlesskit launcher. It checks inline shell/proc/single-NSpid
@@ -23,8 +26,8 @@ bounded stdout frame and an exact original-argv exec tail. Unknown, split or
 changed mapping fails; there is no ancestor search, rebase or numerical-limit
 fallback.
 
-The wrapper necessarily changes the initial OCI argv. Its future effective-spec
-receipt must bind the approved wrapper prefix and byte-exact original argv tail,
+The wrapper necessarily changes the initial OCI argv. Its effective-spec
+expectation binds the approved wrapper prefix and byte-exact original argv tail,
 not claim unchanged OCI args. User, environment, working directory and original
 stdin/stdout/stderr must survive handoff. Observation failures are suppressed;
 an ordinary original-command exec failure can remain in the private startup log
@@ -48,7 +51,7 @@ controller mappings using closed exception text. Returned data stays private.
 It authenticates neither a container nor the log inode, OCI spec, runtime,
 original boundary or later controller object.
 
-Before harness integration, a single reviewed lifecycle coordinator must bind
+The connected lifecycle coordinator must bind
 fresh exact-ID create/init/Created/start continuity, the actual runtime/handler
 profile, held effective configuration and runtime-consumed config relationship,
 absent later hooks/resource overrides, image/owner/user/env/cwd/argv expectations,
@@ -56,7 +59,7 @@ held original log inode and immutable frame prefix, and final rechecks. The
 failure-only port diagnostic and its short prefix hash are not proof and must
 not be promoted into this role.
 
-Then the Rust producer and independent mandatory reader need the same bounded
+The Rust producer and independent mandatory reader require the same bounded
 lifecycle context and original-object rechecks, all 37 existing reader-coordinate
 witnesses and every original positive effect/cleanup predicate. Actual compact
 serialization must fit the unchanged 16-KiB custody ceiling including the
@@ -74,9 +77,12 @@ validation, independent review, actual six-authored-fixture consumers, real
 application migrations and package checks remain required. Rootless systemd/user
 manager/delegation fixtures remain unresolved. No release is ready/requested.
 
-This helper has no canonical local/main/dispatch/release consumer yet; all
-continue using the unchanged harness. Other Lens products and the website have
-no consumer, and BoxFerry has no product dependency on this private helper.
-No dependency, operational pin or pin location changes: existing Cargo,
-toolchain, GitHub Actions and five-image Renovate ownership/extraction remain
-unchanged. Reviewed source-oracle versions are evidence, not floating tool pins.
+Local/main/trusted-dispatch/release use the same canonical validation harness.
+Its connected source is not qualified by the component tests above; the
+experimental same-envelope partition needs genuine whole-harness/native fit
+despite passing the authored scenarios in ADR 0033. Other Lens
+products and the website have no consumer, and BoxFerry has no product dependency
+on this private helper. Existing toolchain, Action and five-image extraction
+locations remain unchanged. The separate safe-clock dev pin is Cargo-owned as
+documented in dependency-policy.md; reviewed source-oracle versions remain
+evidence constraints, not floating installation pins.

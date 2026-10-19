@@ -1,0 +1,269 @@
+{
+  "schema_version": 1,
+  "purpose": "historical_independent_image_account_expectations",
+  "source_receipt_sha256": "sha256:ab61771e18c56e68ebcaf76e394a0d2466cda97edcecf14f0a44300777b35859",
+  "podman_identity_rules_commit": "8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f",
+  "runtime_or_compatibility_qualification": false,
+  "images": [
+    {
+      "lane": "upstream-rootful",
+      "architecture": "amd64",
+      "canonical_reference": "ghcr.io/strukturpiloten/docker-29-rootful:v29.8.1@sha256:bc71d19fbcd6d84d1452f61e6c3cbac77b6acaba214d7eb830b79124d1a4d563",
+      "index_digest": "sha256:bc71d19fbcd6d84d1452f61e6c3cbac77b6acaba214d7eb830b79124d1a4d563",
+      "platform_manifest_digest": "sha256:0a96ed5b580d1b00803b67f04ba0428c1ee7d6bc0711ec26cc999fcc79f15a3a",
+      "config_digest": "sha256:e31279af907a1c9ce120ce4164f30a74c3493bf09b9081a43eb884b8d6e5bc27",
+      "image_user": "",
+      "uid": 0,
+      "gid": 0,
+      "additional_gids": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        6,
+        10,
+        11,
+        20,
+        26,
+        27
+      ],
+      "home": "/root",
+      "passwd_sha256": "sha256:31a94f06f17bc3b9085fccab1d0fa6ee9e79c4a1e4d91f617fa5de95863be015",
+      "group_sha256": "sha256:6fb6ab5a5526e6f4896b70c7e3c350fd475158a1f0d7b5fc0f3f9bd57f1c3be8",
+      "ordered_layers": [
+        {
+          "diff_id": "sha256:74d97c428c51a828f9051a7a40a53ff1fc99e54fc30323ce36760701b0b7f711",
+          "digest": "sha256:037d3b3b9a4e78a4e6c5ad715e8032a02514921186c5929a1345b2ab8f64afd0"
+        },
+        {
+          "diff_id": "sha256:d33bf4709bde65f17394180df0355d88377d2e04996b975c9d32a94c1d8463dd",
+          "digest": "sha256:c58daaf78e84fe2d8222135f053f8acfdffd5301ae0e2243493a35e5ed50e87d"
+        }
+      ],
+      "os": "linux",
+      "variant": "",
+      "config_semantic_sha256": "sha256:b94d7a41a7f3882662810b6f04c88f46fae20fdb594507331dac7c082b1e473f"
+    },
+    {
+      "lane": "upstream-rootful",
+      "architecture": "arm64",
+      "canonical_reference": "ghcr.io/strukturpiloten/docker-29-rootful:v29.8.1@sha256:bc71d19fbcd6d84d1452f61e6c3cbac77b6acaba214d7eb830b79124d1a4d563",
+      "index_digest": "sha256:bc71d19fbcd6d84d1452f61e6c3cbac77b6acaba214d7eb830b79124d1a4d563",
+      "platform_manifest_digest": "sha256:6f23d0a2f8aae93d3bf85bb88262f6b70f95764197fff1170b9e7431ae9162d9",
+      "config_digest": "sha256:51b2578566b1dc957bcc9d07883d4c488788989c06e2f9b7910d115a072c7111",
+      "image_user": "",
+      "uid": 0,
+      "gid": 0,
+      "additional_gids": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        6,
+        10,
+        11,
+        20,
+        26,
+        27
+      ],
+      "home": "/root",
+      "passwd_sha256": "sha256:31a94f06f17bc3b9085fccab1d0fa6ee9e79c4a1e4d91f617fa5de95863be015",
+      "group_sha256": "sha256:6fb6ab5a5526e6f4896b70c7e3c350fd475158a1f0d7b5fc0f3f9bd57f1c3be8",
+      "ordered_layers": [
+        {
+          "diff_id": "sha256:1b349a3334531b575b01d409540dd8aca14ef29abddacd50f36643d7c949db4b",
+          "digest": "sha256:fa930c8918ce7eb49f0c6604261623333b7b16bc0f16ee168ad50e3aa0739ea8"
+        },
+        {
+          "diff_id": "sha256:8ad8922841832d98b27d888ce3689fdabb29cc276c98e581fc1f157e11db3057",
+          "digest": "sha256:f2db3e1e76c9c89b5ee315dbf0aa045b7a6f08801b7cad7ff5a5171b5b8916ac"
+        }
+      ],
+      "os": "linux",
+      "variant": "v8",
+      "config_semantic_sha256": "sha256:b94d7a41a7f3882662810b6f04c88f46fae20fdb594507331dac7c082b1e473f"
+    },
+    {
+      "lane": "upstream-rootless",
+      "architecture": "amd64",
+      "canonical_reference": "ghcr.io/strukturpiloten/docker-29-rootless:v29.8.1@sha256:075f6b6e6f15960ebf3bca6496331ee6b0e32d96b7824cbac382ae5b296f0d7c",
+      "index_digest": "sha256:075f6b6e6f15960ebf3bca6496331ee6b0e32d96b7824cbac382ae5b296f0d7c",
+      "platform_manifest_digest": "sha256:b378c3f30db685c7505b7950222bf6ca2848345c0a3d06ec703834e86e3222f5",
+      "config_digest": "sha256:dd4a9d9f482b37db05b5d9f897c05e3030351320360aad9e4986aaa154200d1f",
+      "image_user": "docker",
+      "uid": 1000,
+      "gid": 1000,
+      "additional_gids": [
+        1000
+      ],
+      "home": "/home/docker",
+      "passwd_sha256": "sha256:3abae04500b1ad582cdc36650b28ad3d358ff8afc33a36f62392c65585029a37",
+      "group_sha256": "sha256:b8716a09cd0443be9a0d46c8e54c25ce19201ff2c17bec63eb07979e6ddbc2fd",
+      "ordered_layers": [
+        {
+          "diff_id": "sha256:74d97c428c51a828f9051a7a40a53ff1fc99e54fc30323ce36760701b0b7f711",
+          "digest": "sha256:037d3b3b9a4e78a4e6c5ad715e8032a02514921186c5929a1345b2ab8f64afd0"
+        },
+        {
+          "diff_id": "sha256:7021f6b153270a186475e1cd1d29efe2f434f60356f7eb5db738bf3194e7ea34",
+          "digest": "sha256:8cf35bd347a56e90f2785b58991d0b9387861bd78d0c0174105ce1a7a0a76c41"
+        }
+      ],
+      "os": "linux",
+      "variant": "",
+      "config_semantic_sha256": "sha256:2d523039d13fe69199549e99e43c1f1cecbee5e195fe04dcbb3024f0bfab67f3"
+    },
+    {
+      "lane": "upstream-rootless",
+      "architecture": "arm64",
+      "canonical_reference": "ghcr.io/strukturpiloten/docker-29-rootless:v29.8.1@sha256:075f6b6e6f15960ebf3bca6496331ee6b0e32d96b7824cbac382ae5b296f0d7c",
+      "index_digest": "sha256:075f6b6e6f15960ebf3bca6496331ee6b0e32d96b7824cbac382ae5b296f0d7c",
+      "platform_manifest_digest": "sha256:dc7857d1b8483a60010c298981ab15bca79389d0f68cfd955d6dddf790df773d",
+      "config_digest": "sha256:f54e2405addb3ba51083d5cada03defd0417df809473077171d1d9c9f8087efd",
+      "image_user": "docker",
+      "uid": 1000,
+      "gid": 1000,
+      "additional_gids": [
+        1000
+      ],
+      "home": "/home/docker",
+      "passwd_sha256": "sha256:3abae04500b1ad582cdc36650b28ad3d358ff8afc33a36f62392c65585029a37",
+      "group_sha256": "sha256:b8716a09cd0443be9a0d46c8e54c25ce19201ff2c17bec63eb07979e6ddbc2fd",
+      "ordered_layers": [
+        {
+          "diff_id": "sha256:1b349a3334531b575b01d409540dd8aca14ef29abddacd50f36643d7c949db4b",
+          "digest": "sha256:fa930c8918ce7eb49f0c6604261623333b7b16bc0f16ee168ad50e3aa0739ea8"
+        },
+        {
+          "diff_id": "sha256:52cff61806f9076d30b071783ccc0631d9342b793227a48926474268610d08f9",
+          "digest": "sha256:b20e55ebed95e66568eff95f211ab1ebee9247786e3159fda66b1d2973751e0b"
+        }
+      ],
+      "os": "linux",
+      "variant": "v8",
+      "config_semantic_sha256": "sha256:2d523039d13fe69199549e99e43c1f1cecbee5e195fe04dcbb3024f0bfab67f3"
+    },
+    {
+      "lane": "debian11-rootful",
+      "architecture": "amd64",
+      "canonical_reference": "ghcr.io/strukturpiloten/docker-debian-11-rootful:v1.0.0@sha256:656ab906588fcf0acfc66e48ff22e1cd56003495ea43b7066f307db9c7f63124",
+      "index_digest": "sha256:656ab906588fcf0acfc66e48ff22e1cd56003495ea43b7066f307db9c7f63124",
+      "platform_manifest_digest": "sha256:2ab588cf43aba046463ddd37e2d266d3908b53c004db7294f7ef44bb3b70fe96",
+      "config_digest": "sha256:ea0b8d05561b82fb1d48b3e767f09207cb58e7b4476d261e329061272ed58825",
+      "image_user": "root",
+      "uid": 0,
+      "gid": 0,
+      "additional_gids": [
+        0
+      ],
+      "home": "/root",
+      "passwd_sha256": "sha256:bb48d7df8b30b502fa582e8d15c44ffd7f0cfb853a1244e26e56d554228a27a3",
+      "group_sha256": "sha256:504349dafedbe21ab0fdfc76fe1f66a06f68bebfe971783e19677797312b4e7f",
+      "ordered_layers": [
+        {
+          "diff_id": "sha256:1458e228c554da8c30a51629bfcb526c8bb67c6d2b1ea42a7b08a01b09533f3b",
+          "digest": "sha256:f4972d7168cff9f35cf62415f4bf7f3152bdb208ddc4e9ca8298a91d4cb381f0"
+        },
+        {
+          "diff_id": "sha256:f8086b9fad7b35644b2d61b18b72e95ff8f15a4af8d2ac1cf0506afee7fe0e0e",
+          "digest": "sha256:a88ebe2e0acba33e49736f706759127a5cb2b5b68dc7cce8fe4ea05c7b3c71f3"
+        }
+      ],
+      "os": "linux",
+      "variant": "",
+      "config_semantic_sha256": "sha256:a7a3809a19b65024e0d9b148869682a4f0e644b26d16b890b782aa96a0289c11"
+    },
+    {
+      "lane": "debian11-rootful",
+      "architecture": "arm64",
+      "canonical_reference": "ghcr.io/strukturpiloten/docker-debian-11-rootful:v1.0.0@sha256:656ab906588fcf0acfc66e48ff22e1cd56003495ea43b7066f307db9c7f63124",
+      "index_digest": "sha256:656ab906588fcf0acfc66e48ff22e1cd56003495ea43b7066f307db9c7f63124",
+      "platform_manifest_digest": "sha256:03b2374a375e984107b97f88ad595836b434f5220a3d3418b997fe31e2d0224f",
+      "config_digest": "sha256:ff46be97b6a795424458f0a805576d1573e4894278894f0e1ecbc86f44453eb6",
+      "image_user": "root",
+      "uid": 0,
+      "gid": 0,
+      "additional_gids": [
+        0
+      ],
+      "home": "/root",
+      "passwd_sha256": "sha256:bb48d7df8b30b502fa582e8d15c44ffd7f0cfb853a1244e26e56d554228a27a3",
+      "group_sha256": "sha256:504349dafedbe21ab0fdfc76fe1f66a06f68bebfe971783e19677797312b4e7f",
+      "ordered_layers": [
+        {
+          "diff_id": "sha256:a53e13893844f610c3c3c5b09e3e78fffba1a734778f2a06795d082cf3a2989c",
+          "digest": "sha256:83a1b353e4f43e7dadd87a12714a0372b56bd118fa6d231b1a5e8384bbd63507"
+        },
+        {
+          "diff_id": "sha256:b08687eba4c4b2f7fa3fc357e1f268d7442ac10c85e26b37464a0e2f888c2f71",
+          "digest": "sha256:5e084d821c140b4293ba287671412902d647f336b871df295ea31884f0e86147"
+        }
+      ],
+      "os": "linux",
+      "variant": "v8",
+      "config_semantic_sha256": "sha256:a7a3809a19b65024e0d9b148869682a4f0e644b26d16b890b782aa96a0289c11"
+    },
+    {
+      "lane": "debian11-rootless",
+      "architecture": "amd64",
+      "canonical_reference": "ghcr.io/strukturpiloten/docker-debian-11-rootless:v1.0.0@sha256:44eadaa886f56d64a3b47fdcee6a812045e0faf6ca207501fd35d1118840f41f",
+      "index_digest": "sha256:44eadaa886f56d64a3b47fdcee6a812045e0faf6ca207501fd35d1118840f41f",
+      "platform_manifest_digest": "sha256:0a63ed3c6da494cbb71ca9758c9be9b45a75f588d8e56742cc13304cd3751762",
+      "config_digest": "sha256:3aaa48f0055652aa5211bfc8bd4cae94ec85c7531c26b13657bb38e067e71233",
+      "image_user": "1000:1000",
+      "uid": 1000,
+      "gid": 1000,
+      "additional_gids": [
+        1000
+      ],
+      "home": "/home/docker",
+      "passwd_sha256": "sha256:bb48d7df8b30b502fa582e8d15c44ffd7f0cfb853a1244e26e56d554228a27a3",
+      "group_sha256": "sha256:504349dafedbe21ab0fdfc76fe1f66a06f68bebfe971783e19677797312b4e7f",
+      "ordered_layers": [
+        {
+          "diff_id": "sha256:1458e228c554da8c30a51629bfcb526c8bb67c6d2b1ea42a7b08a01b09533f3b",
+          "digest": "sha256:f4972d7168cff9f35cf62415f4bf7f3152bdb208ddc4e9ca8298a91d4cb381f0"
+        },
+        {
+          "diff_id": "sha256:27e21035bbc1913399140c4e1d09502fadf9a6fa1432650872dd9c9794b40537",
+          "digest": "sha256:c458bbd0cca27435a571e60b7fefb6c45c690d62575ce7a129784d45609aba7a"
+        }
+      ],
+      "os": "linux",
+      "variant": "",
+      "config_semantic_sha256": "sha256:8c59b8ceb6677f89a3f1d7e43460f418f172df2c962a8890471a61f376061a60"
+    },
+    {
+      "lane": "debian11-rootless",
+      "architecture": "arm64",
+      "canonical_reference": "ghcr.io/strukturpiloten/docker-debian-11-rootless:v1.0.0@sha256:44eadaa886f56d64a3b47fdcee6a812045e0faf6ca207501fd35d1118840f41f",
+      "index_digest": "sha256:44eadaa886f56d64a3b47fdcee6a812045e0faf6ca207501fd35d1118840f41f",
+      "platform_manifest_digest": "sha256:c2f15ed54363fde7e81b07b9719a387184e40298eec9080e2a07ddf427a01f8d",
+      "config_digest": "sha256:21f46fcbc9318b526c46cbfdc415c636ed84e2c94ce4644b65303742ac9eb8dc",
+      "image_user": "1000:1000",
+      "uid": 1000,
+      "gid": 1000,
+      "additional_gids": [
+        1000
+      ],
+      "home": "/home/docker",
+      "passwd_sha256": "sha256:bb48d7df8b30b502fa582e8d15c44ffd7f0cfb853a1244e26e56d554228a27a3",
+      "group_sha256": "sha256:504349dafedbe21ab0fdfc76fe1f66a06f68bebfe971783e19677797312b4e7f",
+      "ordered_layers": [
+        {
+          "diff_id": "sha256:a53e13893844f610c3c3c5b09e3e78fffba1a734778f2a06795d082cf3a2989c",
+          "digest": "sha256:83a1b353e4f43e7dadd87a12714a0372b56bd118fa6d231b1a5e8384bbd63507"
+        },
+        {
+          "diff_id": "sha256:d38b316851cf80f75fbde7aba5706efa009a5292e34c129fad6f44c17b49c0b2",
+          "digest": "sha256:48129313f3b287ac91323e47128bec0e9920e3d3b9da44b4d1781691756b2994"
+        }
+      ],
+      "os": "linux",
+      "variant": "v8",
+      "config_semantic_sha256": "sha256:8c59b8ceb6677f89a3f1d7e43460f418f172df2c962a8890471a61f376061a60"
+    }
+  ]
+}

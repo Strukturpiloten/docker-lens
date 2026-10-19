@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from native_harness_syntax import authored_emitter_authority, logical_owner_scopes, native_calls, emitter_cli, rerun_emitter, run_emitter
 from unittest.mock import patch
 
 import test_native_evidence as legacy
@@ -57,18 +58,19 @@ sys.exit(0 if "--list" in sys.argv else int(os.environ["STATUS"]))
 
     def test_twenty_eighth_call_preserves_first_twenty_seven_and_five_owner_blocks(self):
         source = (ROOT / "scripts/native-conformance.sh").read_text()
-        calls = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source, re.M)
+        calls = native_calls(source)
         original = EXPECTED_CALLS + [("native_pids_limit", "live_pids_limit_effects_match_engine")]
         self.assertEqual(calls, original + [(TARGET, TEST)])
         prefix = '"$(dirname "$0")/run-exact-native-test.sh" '
         scope = '(\n  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1\n'
-        self.assertEqual(source.count(scope), 6)
+        self.assertEqual(source.count(scope), 5)
+        self.assertEqual(len(logical_owner_scopes(source)), 6)
         block = scope + "\n".join(prefix + " ".join(call) for call in original[16:22]) + '\n)'
         self.assertEqual(source.count(block), 1)
-        for call in original[23:27] + [(TARGET, TEST)]:
+        for call in original[23:26] + [(TARGET, TEST)]:
             self.assertEqual(source.count(scope + prefix + " ".join(call) + '\n)'), 1)
         reader = source.index('python3 "$script_dir/native_nofile_proof.py"')
-        self.assertLess(source.index('python3 "$script_dir/native_pids_limit_v2_proof.py"'), reader)
+        self.assertLess(source.index('canonical_phase reader'), reader)
         self.assertLess(reader, source.index('if [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]', reader))
         invocation = source[reader:source.index('\n\n', reader)].replace('\\\n', ' ')
         self.assertEqual(len(shlex.split(invocation)) - 2, 12)
@@ -194,12 +196,9 @@ sys.exit(0 if "--list" in sys.argv else int(os.environ["STATUS"]))
                                 sample.update(witness["kernel"])
                 destination.unlink()
                 private.write_text(json.dumps(proof, separators=(",", ":")))
-                result = subprocess.run(result.args, capture_output=True, text=True, check=False, timeout=5,
-                                        env={**os.environ, "NATIVE_FIXTURE_IMAGE": legacy.HEALTH_FIXTURE_IMAGE,
-                                             "NATIVE_OUTER_CONTAINER_ID": "f" * 64,
-                                             "NATIVE_BIND_RELABEL_DAEMON_UID": "1000" if lane.endswith("rootless") else "0"})
+                result = run_emitter(result)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(len(result.args) - 2, 19)
+                self.assertEqual(len(emitter_cli(result)), 19)
                 record = json.loads(destination.read_text())
                 self.assertEqual(len(record["capability_outcome"]), 43 if lane.startswith("debian11-") else 45)
                 self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 66 if lane.startswith("debian11-") else 70)
@@ -240,7 +239,7 @@ sys.exit(0 if "--list" in sys.argv else int(os.environ["STATUS"]))
                     backing = path.with_name("nofile-private-backing.json")
                     path.rename(backing)
                     path.symlink_to(backing)
-                canonical.ExternalNetworkEvidenceTests.rerun(self, result, destination)
+                rerun_emitter(self, result, destination)
                 if path.is_symlink():
                     path.unlink()
                     backing.rename(path)
@@ -275,19 +274,20 @@ sys.exit(0 if "--list" in sys.argv else int(os.environ["STATUS"]))
             result, destination = canonical.ExternalNetworkEvidenceTests.emit(self, lane)
             self.assertEqual(result.returncode, 0, result.stderr)
             destination.unlink()
-            paths, arguments = [Path(value) for value in result.args[2:15]], result.args[15:]
+            paths, arguments = [Path(value) for value in emitter_cli(result)[:13]], emitter_cli(result)[13:]
             real = emitter.read_nofile_proof
             for value in invalid:
                 def wrong_return(*args):
                     self.assertEqual(real(*args), valid)
                     return copy.deepcopy(value)
 
-                with patch.dict(os.environ, {"NATIVE_FIXTURE_IMAGE": legacy.HEALTH_FIXTURE_IMAGE,
+                with authored_emitter_authority(emitter_cli(result)) as outer_context, \
+                            patch.dict(os.environ, {"NATIVE_FIXTURE_IMAGE": legacy.HEALTH_FIXTURE_IMAGE,
                                              "NATIVE_OUTER_CONTAINER_ID": "f" * 64,
                                              "NATIVE_BIND_RELABEL_DAEMON_UID": "1000" if lane.endswith("rootless") else "0"}), \
                         patch.object(emitter, "read_nofile_proof", side_effect=wrong_return) as call:
                     with self.assertRaisesRegex(ValueError, "^incomplete nofile private qualification$"):
-                        emitter.emit(*paths, *arguments)
+                        emitter.emit(*paths, *arguments, outer_context=outer_context)
                     self.assertEqual(call.call_count, 1)
                 self.assertFalse(destination.exists())
 

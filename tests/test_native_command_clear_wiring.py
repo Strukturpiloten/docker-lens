@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from native_harness_syntax import native_calls, shell_tail, bind_tail_pids_proof
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -51,7 +52,7 @@ else:
 
     def test_twenty_third_registration_and_mandatory_independent_reader(self):
         harness = (ROOT / "scripts/native-conformance.sh").read_text()
-        calls = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', harness, re.M)
+        calls = native_calls(harness)
         self.assertEqual(len(calls), 28)
         self.assertEqual(calls[26:27], [("native_pids_limit", "live_pids_limit_effects_match_engine")])
         self.assertEqual(calls[27:], [("native_nofile", "live_nofile_limits_and_effects_match_engine")])
@@ -179,7 +180,7 @@ else:
         tail = harness.split('python3 "$script_dir/native_hostname_proof.py"', 1)[1].split(
             '\nif [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]', 1)[0]
         tail = 'python3 "$script_dir/native_hostname_proof.py"' + tail
-        tail = tail.replace('"$(dirname "$0")/run-exact-native-test.sh"', "command_wrapper")
+        tail = shell_tail(tail, "command_wrapper")
         for lane in ("debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless"):
             for fault in ("none", "hostname_missing", "hostname_context", "command_missing",
                           "command_effect", "command_cleanup", "native_failure", "shm_missing",
@@ -194,6 +195,9 @@ else:
                     hostname = hostname_fixture(lane)
                     context = hostname["context"]
                     context["outer"]["socket_source"] = str(root / "socket")
+                    # The independent outer-image authority now checks an
+                    # actual repository/tag/digest shape, including a slash.
+                    context["outer"]["image"] = "example.invalid/" + context["outer"]["image"]
                     command = command_fixture(lane)
                     command["context"] = json.loads(json.dumps(context))
                     command["seed"]["image"] = context["fixture_image"]
@@ -205,6 +209,7 @@ else:
                     kernel["context"] = json.loads(json.dumps(context))
                     pids = pids_fixture(lane)
                     pids["context"] = json.loads(json.dumps(context))
+                    bind_tail_pids_proof(pids, root, lane, context["outer"]["image"], context["candidate_sha"])
                     nofile = nofile_fixture(lane)
                     nofile["context"] = json.loads(json.dumps(context))
                     env = dict(os.environ, script_dir=str(ROOT / "scripts"), run_dir=str(root),

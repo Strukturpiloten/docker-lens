@@ -6,6 +6,7 @@ import shlex
 import subprocess
 import tempfile
 import unittest
+from native_harness_syntax import native_calls
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -99,8 +100,7 @@ class ExternalNetworkWiringTests(unittest.TestCase):
 
     def test_fixed_proof_and_verified_context_precede_last_invocation_and_emission(self):
         harness = (ROOT / "scripts/native-conformance.sh").read_text()
-        invocations = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$',
-                                 harness, re.MULTILINE)
+        invocations = native_calls(harness)
         self.assertEqual(len(invocations), 28)
         self.assertEqual(invocations[26], ("native_pids_limit", "live_pids_limit_effects_match_engine"))
         self.assertEqual(invocations[27:], [("native_nofile", "live_nofile_limits_and_effects_match_engine")])
@@ -112,11 +112,11 @@ class ExternalNetworkWiringTests(unittest.TestCase):
                      "export NATIVE_EXTERNAL_NETWORK_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA",
                      '"$script_dir/native-daemon-uid.py"'):
             self.assertLess(harness.index(fact), harness.index(command))
-        self.assertLess(harness.index(command), harness.index('python3 "$script_dir/native-evidence.py"'))
+        self.assertLess(harness.index(command), harness.index('canonical_phase emitter'))
 
     def test_emitter_keeps_nineteen_positional_arguments_and_fixed_private_child(self):
         harness = (ROOT / "scripts/native-conformance.sh").read_text().replace("\\\n", "")
-        emitter_line = next(line for line in harness.splitlines() if 'python3 "$script_dir/native-evidence.py"' in line)
+        emitter_line = next(line for line in harness.splitlines() if 'canonical_phase emitter' in line)
         self.assertEqual(len(shlex.split(emitter_line)) - 2, 19)
         self.assertNotIn("NATIVE_EXTERNAL_NETWORK_PROOF_PATH", emitter_line)
         emitter = (ROOT / "scripts/native-evidence.py").read_text()

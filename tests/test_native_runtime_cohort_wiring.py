@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from native_harness_syntax import logical_owner_scopes, native_calls, rerun_emitter
 from pathlib import Path
 
 import test_native_external_network_evidence as external
@@ -86,17 +87,18 @@ sys.exit(int(os.environ["STATUS"]))
 
     def test_twenty_two_invocations_are_exact_and_owner_scope_is_six(self):
         source = (ROOT / "scripts/native-conformance.sh").read_text()
-        calls = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source, re.M)
+        calls = native_calls(source)
         self.assertEqual(calls[:26], EXPECTED_CALLS)
         self.assertEqual(calls[26:27], [("native_pids_limit", "live_pids_limit_effects_match_engine")])
         self.assertEqual(calls[27:], [("native_nofile", "live_nofile_limits_and_effects_match_engine")])
         owner = source.index('(\n  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1\n')
         end = source.index('\n)\n', owner)
-        scoped = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source[owner:end], re.M)
+        scoped = native_calls(source[owner:end])
         self.assertEqual(scoped, EXPECTED_CALLS[16:22])
-        self.assertEqual(source.count('export NATIVE_LIFECYCLE_CLEANUP_OWNER='), 6)
+        self.assertEqual(source.count('export NATIVE_LIFECYCLE_CLEANUP_OWNER='), 5)
+        self.assertEqual(len(logical_owner_scopes(source)), 6)
         self.assertLess(source.index('unset NATIVE_LIFECYCLE_CLEANUP_OWNER'), source.index('run-exact-native-test.sh" native_capture'))
-        emission = source.index('python3 "$script_dir/native-evidence.py"')
+        emission = source.index('canonical_phase emitter')
         self.assertLess(end, emission)
         protocol = source[emission:source.index('\nfi', emission)].replace('\\\n', ' ')
         self.assertEqual(len(shlex.split(protocol)) - 2, 19)
@@ -214,7 +216,7 @@ sys.exit(int(os.environ["STATUS"]))
 class RuntimeCohortEvidenceTests(unittest.TestCase):
     run_emit = external.ExternalNetworkEvidenceTests.run_emit
     emit = external.ExternalNetworkEvidenceTests.emit
-    rerun = external.ExternalNetworkEvidenceTests.rerun
+    rerun = rerun_emitter
 
     def test_four_lanes_emit_only_closed_unadmitted_fields_and_existing_counts(self):
         for lane in ("debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless"):

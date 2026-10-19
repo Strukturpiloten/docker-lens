@@ -9,6 +9,7 @@ from dataclasses import FrozenInstanceError, replace
 import io
 import json
 import os
+import secrets
 from pathlib import Path
 import stat
 import tempfile
@@ -19,7 +20,9 @@ from unittest.mock import patch
 from native_outer_bootstrap import BOOTSTRAP
 import native_outer_lifecycle as lifecycle
 from native_outer_lifecycle import (CandidateContext, CleanupIdentity, InspectSnapshot, LaunchExpectation,
-                                    LifecycleCustody, LifecycleError, MountExpectation, RuntimeProfile, State)
+                                    CallerLogCustody, LifecycleCustody, LifecycleError, MountExpectation,
+                                    RootOCICustody, RuntimeProfile, State)
+from native_outer_coordinator import Allowance, ReservationBook, ReservedBudget
 
 ID = "a" * 64
 DIGEST = "sha256:" + "b" * 64
@@ -663,6 +666,126 @@ class OuterLifecycleTests(unittest.TestCase):
                 self.assertEqual(owner.cleanup_calls, 1)
                 owner.close()
                 self.assertEqual(owner.cleanup_calls, 1)
+
+
+class SplitCustodyTests(unittest.TestCase):
+    def budgets(self, fixture):
+        book = ReservationBook(secrets.token_hex(32), {"lane": Allowance(16, 1048576, 4096)}, {"lane": 400_000_000_000})
+        root = book.claim_before_spawn(book.reserve("root", "lane", Allowance(16, 1000000, 3600)))
+        caller = book.claim_before_spawn(book.reserve("caller", "lane", Allowance(0, 48576, 496)))
+        return (ReservedBudget(root, lambda: int(fixture.now * 1e9), lambda: fixture.cancelled),
+                ReservedBudget(caller, lambda: int(fixture.now * 1e9), lambda: fixture.cancelled))
+
+    def test_initialize_holds_original_before_binding_and_replacement_refuses(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = Fixture(Path(temporary))
+            root_budget, _caller_budget = self.budgets(fixture)
+            with fixture.ownership():
+                root = RootOCICustody(fixture.expectation, PROFILE, fixture.ops, str(fixture.log), root_budget,
+                                      100.0, 300.0, 400.0, lambda: fixture.now, lambda: fixture.cancelled)
+                root.create()
+                root.initialize()
+                self.assertFalse(root._bound)
+                original = os.fstat(root._oci.fd)
+                self.assertEqual(original.st_ino, fixture.oci.stat().st_ino)
+                fixture.oci.rename(fixture.oci.with_name("old-config.json"))
+                fixture.oci.write_bytes(root._oci.raw)
+                fixture.oci.chmod(0o600)
+                with self.assertRaises(LifecycleError):
+                    root.bind_expectation(fixture.expectation)
+                self.assertEqual(root.state, State.POISONED)
+                self.assertEqual(root._fds, [])
+
+    def test_unbound_oci_is_not_returned_or_started(self):
+        for action in ("original_oci", "arm"):
+            with tempfile.TemporaryDirectory() as temporary:
+                fixture = Fixture(Path(temporary))
+                root_budget, _caller_budget = self.budgets(fixture)
+                with fixture.ownership():
+                    root = RootOCICustody(fixture.expectation, PROFILE, fixture.ops, str(fixture.log), root_budget,
+                                          100.0, 300.0, 400.0, lambda: fixture.now, lambda: fixture.cancelled)
+                    root.create()
+                    root.initialize()
+                    with self.assertRaises(LifecycleError):
+                        getattr(root, action)()
+                    self.assertNotIn("start", [call[0] for call in fixture.ops.calls])
+
+    def test_root_never_creates_or_holds_caller_log_and_disposal_is_separate(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = Fixture(Path(temporary))
+            root_budget, caller_budget = self.budgets(fixture)
+            with fixture.ownership():
+                root = RootOCICustody(fixture.expectation, PROFILE, fixture.ops, str(fixture.log), root_budget,
+                                      100.0, 300.0, 400.0, lambda: fixture.now, lambda: fixture.cancelled)
+                root.create()
+                self.assertFalse(fixture.log.exists())
+                root.initialize()
+                root.bind_expectation(fixture.expectation)
+                raw, info, pid = root.original_oci()
+                self.assertEqual((raw, info.uid, pid), (fixture.oci.read_bytes(), 0, 12345))
+                caller = CallerLogCustody(fixture.expectation, str(fixture.log), caller_budget,
+                                          100.0, 300.0, lambda: fixture.now, lambda: fixture.cancelled)
+                try:
+                    caller.empty()
+                    root.arm()
+                    caller.empty()
+                    self.assertEqual(root.start(), (12345, STARTED))
+                    caller.capture()
+                    original_log = os.fstat(caller._log.fd)
+                    self.assertNotIn(caller._log.fd, root._fds)
+                    self.assertFalse(hasattr(root, "_log"))
+                    root.recheck()
+                    self.assertEqual(caller.recheck()[2].start, 123456)
+                    held = list(root._fds)
+                    root.close()
+                    for descriptor in held:
+                        with self.assertRaises(OSError):
+                            os.fstat(descriptor)
+                    self.assertEqual(os.fstat(caller._log.fd).st_ino, original_log.st_ino)
+                    self.assertEqual(fixture.ops.calls[-1][0], "cleanup")
+                    self.assertGreater(root_budget.used.source_bytes, len(raw))
+                    self.assertGreater(caller_budget.used.source_bytes, 0)
+                finally:
+                    root.close()
+                    caller.close()
+
+    def test_caller_log_replacement_cannot_be_hidden_by_root_custody(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = Fixture(Path(temporary))
+            root_budget, caller_budget = self.budgets(fixture)
+            with fixture.ownership():
+                root = RootOCICustody(fixture.expectation, PROFILE, fixture.ops, str(fixture.log), root_budget,
+                                      100.0, 300.0, 400.0, lambda: fixture.now, lambda: fixture.cancelled)
+                caller = CallerLogCustody(fixture.expectation, str(fixture.log), caller_budget,
+                                          100.0, 300.0, lambda: fixture.now, lambda: fixture.cancelled)
+                try:
+                    root.create()
+                    root.initialize()
+                    root.bind_expectation(fixture.expectation)
+                    root.arm()
+                    root.start()
+                    caller.capture()
+                    fixture.log.rename(fixture.diagnostics / "old-log")
+                    fixture.log.write_bytes(literal_frame())
+                    fixture.log.chmod(0o600)
+                    root.recheck()  # Root does not assert caller-log custody.
+                    with self.assertRaises(LifecycleError):
+                        caller.recheck()
+                    self.assertEqual(caller._fds, [])
+                finally:
+                    root.close()
+                    caller.close()
+
+    def test_runtime_mount_hierarchy_and_env_map_order_do_not_create_drift(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = Fixture(Path(temporary))
+            value = oci_fixture(fixture.expectation)
+            value["mounts"].reverse()
+            value["process"]["env"].reverse()
+            fixture.write_oci(json.dumps(value).encode())
+            with fixture.ownership(), fixture.owner() as owner:
+                OuterLifecycleTests().through(owner)
+                self.assertEqual(owner.candidate_context().frame.start, 123456)
 
 
 if __name__ == "__main__":

@@ -152,7 +152,7 @@ class PidsLimitSourceTests(unittest.TestCase):
 
     def test_actual_closed_stages_precede_each_named_operation(self):
         source = SOURCE.read_text()
-        body = re.sub(r"\s+", " ", source.split("fn live_pids_limit_effects_match_engine()", 1)[1])
+        body = re.sub(r"\s+", " ", source.split("fn live_pids_limit_effects_match_engine()", 1)[1].split("\n#[test]", 1)[0])
         context = {
             "Context": "let daemon_uid = run.context();",
             "Image": "let image = image_snapshot(&run);",
@@ -162,7 +162,7 @@ class PidsLimitSourceTests(unittest.TestCase):
             "OuterMemoryResolve": 'let outer_memory = pids_resolve(',
             "Acquisition": "let acquisition = pids_acquisition(&run);",
             "FinalSnapshots": "assert!( !run.image_attempted",
-            "Proof": "target.publish(&proof);",
+            "Proof": "private.require_active(true); target.publish(&proof); private.require_active(true);",
         }
         cases = {
             "Preflight": "let preflight_lines = pids_lines(",
@@ -189,6 +189,7 @@ class PidsLimitSourceTests(unittest.TestCase):
         calls = re.findall(r"pids_stage\((None|Some\(index\)), PidsOperation::(\w+)\);", body)
         self.assertEqual(set(calls), {("None", item) for item in context} | {("Some(index)", item) for item in cases})
         self.assertEqual(len(calls), 25)
+        self.assertEqual(body.count("target.publish(&proof);"), 1)
         labels = dict(re.findall(r'Self::(\w+) => "([a-z_]+)"', source.split("impl PidsOperation", 1)[1].split("fn pids_stage", 1)[0]))
         self.assertEqual(set(labels), set(context) | set(cases))
         self.assertEqual(set(labels.values()), {
@@ -298,8 +299,17 @@ class PidsLimitSourceTests(unittest.TestCase):
         controller = source.split("fn pids_controller_frame(", 1)[1].split("fn pids_control(", 1)[0]
         self.assertLess(controller.index("coordinates.observe(&lines)"), controller.index("for mapping in"))
         self.assertLess(controller.index("coordinates.observe(&lines)"), controller.index("members == expected"))
-        live = re.sub(r"\s+", " ", source.split("fn live_pids_limit_effects_match_engine()", 1)[1])
-        positions = [live.index("PidsCoordinates::new(&context)")]
+        live = re.sub(r"\s+", " ", source.split("fn live_pids_limit_effects_match_engine()", 1)[1].split("\n#[test]", 1)[0])
+        authenticated = 'PidsCoordinates::authenticated(&context, &private.value["boundary"])'
+        self.assertEqual(live.count(authenticated), 1)
+        self.assertNotIn("PidsCoordinates::new(", live)
+        self.assertEqual(live.count("for index in 0..6 {"), 1)
+        self.assertEqual(live.count("pids_scan("), 3)
+        self.assertEqual(live.count("pids_controller("), 3)
+        self.assertEqual(controller.count("coordinates.observe(&lines)"), 1)
+        scan_body = source.split("fn pids_scan(", 1)[1].split("fn pids_nproc(", 1)[0]
+        self.assertEqual(scan_body.count("coordinates.observe(&lines)"), 1)
+        positions = [live.index(authenticated)]
         for rows, phase in (("baseline", "ready"), ("held", "exit_barrier"), ("restored", "idle")):
             scan = f'pids_scan(&run, &context, namespace, depth, init_start, "{phase}", &mut coordinates)'
             controller_call = f'pids_controller(&run, &{rows}_rows, "{phase}", &mut pids, &mut memory, &mut coordinates)'
@@ -308,6 +318,18 @@ class PidsLimitSourceTests(unittest.TestCase):
             positions.extend((normalized.index(scan), normalized.index(controller_call)))
         self.assertEqual(positions, sorted(positions))
         self.assertLess(live.index("coordinates.finish()"), live.index("pids_private_v2(&mut proof, coordinates)"))
+        # The authenticated constructor still contributes the first witness;
+        # every subsequent observer authenticates before retaining its tuple.
+        constructor = source.split("fn authenticated(", 1)[1].split("fn authenticate(", 1)[0]
+        self.assertIn("boundary: Some(boundary.clone())", constructor)
+        self.assertIn("coordinates.observe(context);", constructor)
+        observer = source.split("fn observe(", 1)[1].split("fn finish(", 1)[0]
+        self.assertLess(observer.index("self.authenticate(lines);"), observer.index('pids_field(lines, "SELF")'))
+        self.assertLess(observer.index("self.witnesses.len() < 37"), observer.index("self.witnesses.push("))
+        finish = source.split("fn finish(", 1)[1].split("const PIDS_PHASE_FIELDS:", 1)[0]
+        self.assertIn("self.witnesses.len() == 37", finish)
+        packing = source.split("fn pids_private_v2(", 1)[1].split("fn pids_proof_budget(", 1)[0]
+        self.assertLess(packing.index("coordinates.len() == 37"), packing.index('proof["coordinates"]'))
         self.assertIn('const PIDS_CONTRACT: &str = "pids-limit-v2";', source)
         self.assertIn('const PIDS_FILENAME: &str = "pids-limit-v2.json";', source)
         self.assertIn('"schema_version":2', source)

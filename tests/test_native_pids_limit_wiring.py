@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from native_harness_syntax import authored_emitter_authority, invocations, logical_owner_scopes, native_calls, emitter_cli, rerun_emitter
 from unittest.mock import patch
 
 import test_native_evidence as legacy
@@ -61,19 +62,20 @@ else:
     def test_twenty_seventh_invocation_preserves_prior_calls_and_all_owner_blocks(self):
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         prefix = '"$(dirname "$0")/run-exact-native-test.sh" '
-        calls = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source, re.M)
+        calls = native_calls(source)
         self.assertEqual(calls[:26], EXPECTED_CALLS)
         self.assertEqual(calls[26:27], [(TARGET, TEST)])
         self.assertEqual(calls[27:], [("native_nofile", "live_nofile_limits_and_effects_match_engine")])
         scope = '(\n  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1\n'
         old = scope + "\n".join(prefix + " ".join(call) for call in EXPECTED_CALLS[16:22]) + '\n)'
         self.assertEqual(source.count(old), 1)
-        for call in EXPECTED_CALLS[23:26] + [(TARGET, TEST)]:
+        for call in EXPECTED_CALLS[23:26]:
             self.assertEqual(source.count(scope + prefix + " ".join(call) + '\n)'), 1)
-        self.assertEqual(source.count(scope), 6)
+        self.assertEqual(source.count(scope), 5)
+        self.assertEqual(len(logical_owner_scopes(source)), 6)
         kernel_reader = source.index('python3 "$script_dir/native_kernel_settings_proof.py"')
-        child = source.index(scope + prefix + f'{TARGET} {TEST}\n)')
-        reader = source.index('python3 "$script_dir/native_pids_limit_v2_proof.py"')
+        child = next(item.start for item in invocations(source) if (item.target, item.test) == (TARGET, TEST))
+        reader = source.index('canonical_phase reader')
         self.assertLess(kernel_reader, child)
         self.assertLess(child, reader)
         self.assertLess(reader, source.index('if [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]', reader))
@@ -131,7 +133,7 @@ else:
         result = self.wrapper("DOCKERLENS_NATIVE_CHECK: health_metadata_context\n" + FAILED, 101)[0]
         self.assertIn("DOCKERLENS_NATIVE_CHECK: health_metadata_context", result.stderr)
         wrapper = (ROOT / "scripts/run-exact-native-test.sh").read_text()
-        self.assertNotRegex(wrapper, r"pids_limit_(?:context|effects|capture|proof|cleanup|evidence)")
+        self.assertNotRegex(wrapper, r"DOCKERLENS_NATIVE_CHECK: pids_limit_(?:context|effects|capture|proof|cleanup|evidence)")
 
     def test_four_lanes_require_private_proof_without_public_projection_or_abi_changes(self):
         from test_reviewed_catalog import required_shapes
@@ -151,7 +153,7 @@ else:
             with self.subTest(lane=lane):
                 result, destination = canonical.ExternalNetworkEvidenceTests.emit(self, lane)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(len(result.args) - 2, 19)
+                self.assertEqual(len(emitter_cli(result)), 19)
                 record = json.loads(destination.read_text())
                 self.assertNotIn("PidsLimit", record["capability_outcome"])
                 self.assertNotIn("PidsLimit", record["admitted_shapes"])
@@ -360,7 +362,7 @@ else:
                         backing = path.with_name("private-backing.json")
                         path.rename(backing)
                         path.symlink_to(backing)
-                    canonical.ExternalNetworkEvidenceTests.rerun(self, result, destination)
+                    rerun_emitter(self, result, destination)
                     if path.is_symlink():
                         path.unlink()
                         backing.rename(path)
@@ -381,7 +383,7 @@ else:
             result, destination = canonical.ExternalNetworkEvidenceTests.emit(self, lane)
             self.assertEqual(result.returncode, 0, result.stderr)
             destination.unlink()
-            paths, arguments = [Path(value) for value in result.args[2:15]], result.args[15:]
+            paths, arguments = [Path(value) for value in emitter_cli(result)[:13]], emitter_cli(result)[13:]
             real = emitter.read_pids_limit_proof
             for value in invalid:
                 with self.subTest(lane=lane, value=value):
@@ -389,12 +391,13 @@ else:
                         self.assertEqual(real(*args), valid)
                         return copy.deepcopy(value)
 
-                    with patch.dict(os.environ, {"NATIVE_FIXTURE_IMAGE": legacy.HEALTH_FIXTURE_IMAGE,
+                    with authored_emitter_authority(emitter_cli(result)) as outer_context, \
+                            patch.dict(os.environ, {"NATIVE_FIXTURE_IMAGE": legacy.HEALTH_FIXTURE_IMAGE,
                                                  "NATIVE_OUTER_CONTAINER_ID": "f" * 64,
                                                  "NATIVE_BIND_RELABEL_DAEMON_UID": "1000" if lane.endswith("rootless") else "0"}), \
                             patch.object(emitter, "read_pids_limit_proof", side_effect=wrong_return) as call:
                         with self.assertRaisesRegex(ValueError, "^incomplete pids-limit private qualification$"):
-                            emitter.emit(*paths, *arguments)
+                            emitter.emit(*paths, *arguments, outer_context=outer_context)
                         self.assertEqual(call.call_count, 1)
                     self.assertFalse(destination.exists())
 
@@ -403,7 +406,7 @@ else:
         from test_native_pids_limit_proof import fixture as historical_fixture
         harness = (ROOT / "scripts/native-conformance.sh").read_text()
         emitter = legacy.SCRIPT.read_text()
-        self.assertIn('python3 "$script_dir/native_pids_limit_v2_proof.py"', harness)
+        self.assertIn('canonical_phase reader', harness)
         self.assertNotIn('python3 "$script_dir/native_pids_limit_proof.py"', harness)
         self.assertIn('from native_pids_limit_v2_proof import', emitter)
         self.assertNotIn('from native_pids_limit_proof import', emitter)
@@ -419,17 +422,17 @@ else:
                 self.assertLessEqual(current.stat().st_size, 15 * 1024)
                 destination.unlink()
                 current.rename(current.with_name("pids-limit-v1.json"))
-                canonical.ExternalNetworkEvidenceTests.rerun(self, result, destination)
+                rerun_emitter(self, result, destination)
                 historical = historical_fixture(lane)
                 historical["context"] = copy.deepcopy(original["context"])
                 current.write_text(json.dumps(historical, separators=(",", ":")))
                 current.chmod(0o600)
-                canonical.ExternalNetworkEvidenceTests.rerun(self, result, destination)
+                rerun_emitter(self, result, destination)
                 historical["schema_version"] = 2
                 historical["contract"] = "pids-limit-v2"
                 historical["coordinates"] = copy.deepcopy(original["coordinates"])
                 current.write_text(json.dumps(historical, separators=(",", ":")))
-                canonical.ExternalNetworkEvidenceTests.rerun(self, result, destination)
+                rerun_emitter(self, result, destination)
 
 
 if __name__ == "__main__":

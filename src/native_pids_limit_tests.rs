@@ -3,6 +3,10 @@
 //! Coordinate agreement does not authenticate the still-unproved outer controller boundary.
 //! Only disposable owned fixtures mutate.
 //! No report, synthetic oracle, or test-local capability fact admits a catalogue group.
+//! The private anonymous-stdin context reserves existing producer resources;
+//! source records are independently validated by Python, never treated as an
+//! authority merely because Rust parsed them. Every actual observer rechecks
+//! the original PID1 and controller root before using native membership rows.
 
 use super::*;
 use crate::acquisition::ReadRequest;
@@ -16,8 +20,476 @@ const PIDS_CASES: [(&str, i64); 3] = [("finite16", 16), ("finite64", 64), ("unli
 const PIDS_CAPTURE_CALLS: usize = 16;
 const PIDS_CAPTURE_BYTES: usize = 512 * 1024;
 const PIDS_PROOF_BYTES: usize = 16 * 1024;
-// Planning reserve only: no padding or claim that a future boundary proof fits.
+// The existing 1 KiB reserve contains only the closed original-boundary tuple.
 const PIDS_OUTER_BINDING_RESERVE: usize = 1024;
+const PIDS_CONTEXT_BYTES: usize = 131072;
+
+fn pids_keys(value: &Value, keys: &[&str]) {
+    let object = value
+        .as_object()
+        .unwrap_or_else(|| panic!("private context object"));
+    assert!(
+        object.len() == keys.len() && keys.iter().all(|key| object.contains_key(*key)),
+        "closed private context keys"
+    );
+}
+
+// serde_json's Value accepts repeated object keys. Scan the already valid JSON
+// recursively and reject duplicates at every depth, including opaque sources.
+fn pids_unique_json(bytes: &[u8]) -> Value {
+    fn space(bytes: &[u8], at: &mut usize) {
+        while bytes.get(*at).is_some_and(u8::is_ascii_whitespace) {
+            *at += 1;
+        }
+    }
+    fn string(bytes: &[u8], at: &mut usize) -> String {
+        let start = *at;
+        *at += 1;
+        loop {
+            match bytes[*at] {
+                b'\\' => *at += 2,
+                b'"' => {
+                    *at += 1;
+                    break;
+                }
+                _ => *at += 1,
+            }
+        }
+        serde_json::from_slice(&bytes[start..*at]).unwrap_or_else(|_| panic!("private JSON string"))
+    }
+    fn item(bytes: &[u8], at: &mut usize) {
+        space(bytes, at);
+        match bytes[*at] {
+            b'{' => {
+                *at += 1;
+                let mut keys = BTreeSet::new();
+                loop {
+                    space(bytes, at);
+                    if bytes[*at] == b'}' {
+                        *at += 1;
+                        break;
+                    }
+                    assert!(
+                        keys.insert(string(bytes, at)),
+                        "unique private context keys"
+                    );
+                    space(bytes, at);
+                    *at += 1; // colon, validated by serde_json
+                    item(bytes, at);
+                    space(bytes, at);
+                    if bytes[*at] == b',' {
+                        *at += 1;
+                    }
+                }
+            }
+            b'[' => {
+                *at += 1;
+                loop {
+                    space(bytes, at);
+                    if bytes[*at] == b']' {
+                        *at += 1;
+                        break;
+                    }
+                    item(bytes, at);
+                    space(bytes, at);
+                    if bytes[*at] == b',' {
+                        *at += 1;
+                    }
+                }
+            }
+            b'"' => {
+                string(bytes, at);
+            }
+            _ => {
+                while bytes
+                    .get(*at)
+                    .is_some_and(|byte| !byte.is_ascii_whitespace() && !b",]}".contains(byte))
+                {
+                    *at += 1;
+                }
+            }
+        }
+    }
+    let value = serde_json::from_slice(bytes).unwrap_or_else(|_| panic!("private context JSON"));
+    item(bytes, &mut 0);
+    value
+}
+
+struct PidsPrivateContext {
+    value: Value,
+    limits: [[usize; 2]; 2],
+    deadline: Instant,
+    timing: PrivateCaptureTiming,
+    input_bytes: usize,
+}
+
+impl PidsPrivateContext {
+    fn stdin() -> Self {
+        use std::os::unix::fs::FileTypeExt;
+        let link =
+            fs::read_link("/proc/self/fd/0").unwrap_or_else(|_| panic!("private context pipe"));
+        assert!(
+            link.to_str()
+                .is_some_and(|link| link.starts_with("pipe:[") && link.ends_with(']'))
+                && fs::metadata("/proc/self/fd/0")
+                    .is_ok_and(|metadata| metadata.file_type().is_fifo()),
+            "anonymous private context stdin"
+        );
+        struct Input {
+            cutoff: Instant,
+            source: File,
+        }
+        impl Read for Input {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                loop {
+                    if Instant::now() >= self.cutoff {
+                        return Err(std::io::ErrorKind::TimedOut.into());
+                    }
+                    match self.source.read(buffer) {
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(Duration::from_millis(5))
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                        result => return result,
+                    }
+                }
+            }
+        }
+        let epoch = required("NATIVE_PIDS_LIMIT_DEADLINE_EPOCH")
+            .parse::<u64>()
+            .unwrap_or_else(|_| panic!("private context cutoff"));
+        let remaining = (UNIX_EPOCH + Duration::from_secs(epoch))
+            .duration_since(SystemTime::now())
+            .ok()
+            .and_then(|remaining| remaining.checked_sub(Duration::from_secs(46)))
+            .unwrap_or_else(|| panic!("private context reserve"));
+        let cutoff = Instant::now() + remaining.min(Duration::from_secs(134));
+        let source = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open("/proc/self/fd/0")
+            .unwrap_or_else(|_| panic!("private nonblocking context pipe"));
+        Self::read(Input { cutoff, source })
+    }
+
+    fn read(source: impl Read) -> Self {
+        let mut bytes = Vec::new();
+        source
+            .take((PIDS_CONTEXT_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)
+            .unwrap_or_else(|_| panic!("private context read"));
+        assert!(
+            !bytes.is_empty() && bytes.len() <= PIDS_CONTEXT_BYTES,
+            "bounded private context"
+        );
+        Self::parse(&bytes)
+    }
+
+    fn parse(bytes: &[u8]) -> Self {
+        // Anchor before sampling CLOCK_MONOTONIC: conversion and parsing time
+        // can only shorten the original deadline, never renew its remainder.
+        let anchor = Instant::now();
+        let now_ns = private_monotonic_ns();
+        let context = Self::parse_at(bytes, anchor, now_ns);
+        context.require_active(false);
+        context
+    }
+
+    fn parse_at(bytes: &[u8], anchor: Instant, now_ns: u64) -> Self {
+        assert!(
+            !bytes.is_empty() && bytes.len() <= PIDS_CONTEXT_BYTES,
+            "bounded private context"
+        );
+        let value = pids_unique_json(bytes);
+        pids_keys(
+            &value,
+            &[
+                "schema_version",
+                "contract",
+                "binding",
+                "source",
+                "boundary",
+                "pids",
+            ],
+        );
+        assert!(
+            value["schema_version"].as_u64() == Some(1)
+                && value["contract"] == "outer-private-context-v1",
+            "private context version"
+        );
+        let binding = &value["binding"];
+        pids_keys(
+            binding,
+            &[
+                "session",
+                "execution_origin",
+                "candidate_sha",
+                "ci_run_id",
+                "ci_run_attempt",
+                "owner",
+                "lane",
+                "outer_id",
+                "intent_digest",
+                "expectation_digest",
+            ],
+        );
+        for key in ["session", "outer_id", "intent_digest", "expectation_digest"] {
+            assert!(
+                binding[key].as_str().is_some_and(identifier),
+                "private context digest"
+            );
+        }
+        assert!(
+            binding["candidate_sha"]
+                .as_str()
+                .is_some_and(|text| text.len() == 40
+                    && text
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())),
+            "private context candidate"
+        );
+        match binding["execution_origin"].as_str() {
+            Some("github_actions") => {
+                for key in ["ci_run_id", "ci_run_attempt"] {
+                    assert!(
+                        binding[key]
+                            .as_str()
+                            .is_some_and(|text| (1..=20).contains(&text.len())
+                                && !text.starts_with('0')
+                                && text.bytes().all(|byte| byte.is_ascii_digit())),
+                        "private CI identity"
+                    );
+                }
+            }
+            Some("local_process") => assert!(
+                binding["ci_run_id"].is_null() && binding["ci_run_attempt"].is_null(),
+                "private local identity"
+            ),
+            _ => panic!("closed private execution origin"),
+        }
+        assert!(
+            binding["owner"].as_str().is_some_and(
+                |text| text.len() == 8 && text.bytes().all(|byte| byte.is_ascii_alphanumeric())
+            ),
+            "private context owner"
+        );
+        assert!(
+            matches!(
+                binding["lane"].as_str(),
+                Some(
+                    "debian11-rootful"
+                        | "debian11-rootless"
+                        | "upstream-rootful"
+                        | "upstream-rootless"
+                )
+            ),
+            "private context lane"
+        );
+        pids_keys(
+            &value["source"],
+            &["intent", "preflight", "database", "oci", "log"],
+        );
+        assert!(
+            value["source"]
+                .as_object()
+                .unwrap()
+                .values()
+                .all(Value::is_object),
+            "private opaque source records"
+        );
+        let pids = &value["pids"];
+        pids_keys(
+            pids,
+            &[
+                "start_ns",
+                "deadline_ns",
+                "deadline_epoch",
+                "producer_reservation",
+                "external_reservation",
+            ],
+        );
+        let start = pids["start_ns"]
+            .as_u64()
+            .filter(|number| *number > 0)
+            .unwrap_or_else(|| panic!("private start"));
+        let end = pids["deadline_ns"]
+            .as_u64()
+            .unwrap_or_else(|| panic!("private deadline"));
+        let timing = PrivateCaptureTiming {
+            start_ns: start,
+            deadline_ns: end,
+        };
+        assert!(
+            timing.remaining(now_ns, false).is_some(),
+            "original private admission deadline"
+        );
+        pids["deadline_epoch"]
+            .as_u64()
+            .filter(|number| *number > 0)
+            .unwrap_or_else(|| panic!("private epoch"));
+        let remaining = timing
+            .remaining(now_ns, true)
+            .unwrap_or_else(|| panic!("original private deadline"));
+        let allocation = |name: &str| {
+            let record = &pids[name];
+            pids_keys(
+                record,
+                &[
+                    "ordinary_calls",
+                    "ordinary_bytes",
+                    "cleanup_calls",
+                    "cleanup_bytes",
+                ],
+            );
+            let number = |key: &str| {
+                usize::try_from(
+                    record[key]
+                        .as_u64()
+                        .unwrap_or_else(|| panic!("private allocation integer")),
+                )
+                .unwrap_or_else(|_| panic!("private allocation size"))
+            };
+            [
+                [number("ordinary_calls"), number("ordinary_bytes")],
+                [number("cleanup_calls"), number("cleanup_bytes")],
+            ]
+        };
+        let limits = allocation("producer_reservation");
+        let external = allocation("external_reservation");
+        for (phase, maxima) in [
+            [180, MAX_BYTES - CLEANUP_BYTES],
+            [CLEANUP_CALLS, CLEANUP_BYTES],
+        ]
+        .iter()
+        .enumerate()
+        {
+            for (kind, maximum) in maxima.iter().enumerate() {
+                assert!(
+                    limits[phase][kind]
+                        .checked_add(external[phase][kind])
+                        .is_some_and(|sum| sum <= *maximum),
+                    "private aggregate allocation"
+                );
+            }
+        }
+        Self::boundary(&value);
+        Self {
+            value,
+            limits,
+            deadline: anchor
+                .checked_add(remaining)
+                .unwrap_or_else(|| panic!("private deadline range")),
+            timing,
+            input_bytes: bytes.len(),
+        }
+    }
+
+    fn boundary(value: &Value) {
+        let boundary = value["boundary"]
+            .as_array()
+            .filter(|items| items.len() == 10)
+            .unwrap_or_else(|| panic!("private boundary tuple"));
+        assert!(boundary[0].as_u64() == Some(1), "private boundary version");
+        for (position, length) in [(1, 3), (2, 3), (3, 3), (4, 2)] {
+            assert!(
+                boundary[position]
+                    .as_array()
+                    .is_some_and(|items| items.len() == length
+                        && items.iter().all(|item| item.as_u64().is_some())),
+                "private boundary numbers"
+            );
+        }
+        let number = |position: usize, field: usize| boundary[position][field].as_u64().unwrap();
+        assert!(
+            (1..=4194304).contains(&number(1, 0))
+                && number(1, 1) > 0
+                && number(1, 2) <= u64::from(u32::MAX),
+            "private original PID1"
+        );
+        assert!(
+            (0..3).all(|field| number(2, field) > 0)
+                && number(3, 0) > 0
+                && number(3, 1) > 0
+                && number(3, 2) <= u64::from(u32::MAX)
+                && (0..2).all(|field| number(4, field) > 0),
+            "private original root"
+        );
+        assert!(
+            (5..=8).all(|position| boundary[position].as_str().is_some_and(identifier))
+                && boundary[7] == value["binding"]["intent_digest"]
+                && boundary[8] == value["binding"]["expectation_digest"],
+            "private boundary binding"
+        );
+        assert!(
+            boundary[9].as_array().is_some_and(|image| image.len() == 3
+                && image[0].as_str().is_some_and(identifier)
+                && image[1].as_str().is_some_and(image_identifier)
+                && matches!(image[2].as_u64(), Some(0 | 1))),
+            "private image identity"
+        );
+        assert!(
+            serde_json::to_vec(&json!({"boundary": boundary}))
+                .unwrap()
+                .len()
+                < PIDS_OUTER_BINDING_RESERVE,
+            "private boundary size"
+        );
+    }
+
+    fn bind(&self, run: &HealthRun) {
+        self.bind_expected(
+            &run.candidate,
+            &run.run,
+            &run.lane,
+            &required("NATIVE_OUTER_CONTAINER_ID"),
+            required("NATIVE_PIDS_LIMIT_DEADLINE_EPOCH")
+                .parse::<u64>()
+                .unwrap_or_else(|_| panic!("private invocation deadline")),
+        );
+        assert!(
+            run.outer == format!("dl-native-{}", run.run),
+            "private native run binding"
+        );
+    }
+
+    fn bind_expected(&self, candidate: &str, owner: &str, lane: &str, outer_id: &str, epoch: u64) {
+        let binding = &self.value["binding"];
+        assert!(
+            binding["candidate_sha"] == candidate
+                && binding["owner"] == owner
+                && binding["lane"] == lane
+                && binding["outer_id"] == outer_id
+                && self.value["pids"]["deadline_epoch"].as_u64() == Some(epoch),
+            "private context invocation binding"
+        );
+    }
+
+    fn budget(&self) -> Arc<PrivateCaptureBudget> {
+        let budget = Arc::new(PrivateCaptureBudget {
+            limits: self.limits,
+            state: Mutex::new(PrivateCaptureState::default()),
+            changed: Condvar::new(),
+            deadline: self.deadline,
+            timing: Some(self.timing),
+        });
+        assert!(
+            budget.debit(false, 0, self.input_bytes),
+            "private context source debit"
+        );
+        budget
+    }
+
+    fn require_active(&self, cleanup: bool) {
+        assert!(
+            Instant::now() < self.deadline
+                && self
+                    .timing
+                    .remaining(private_monotonic_ns(), cleanup)
+                    .is_some(),
+            "original private absolute deadline"
+        );
+    }
+}
 
 // Read by the observing shell itself, without command substitution or a child.
 // Do not change positional arguments supplied to the three observer programs.
@@ -46,6 +518,34 @@ printf 'SELF %s %s %s\n' "$$" "$coords_pid" "$coords_chain"
 printf 'PIDNS '; readlink "/proc/$coords_pid/ns/pid"
 printf 'MNTNS '; readlink "/proc/$coords_pid/ns/mnt"
 printf 'CGNS '; readlink "/proc/$coords_pid/ns/cgroup"
+auth_start=; auth_fields=0
+read -r auth_line </proc/1/stat; auth_rest=${auth_line##*) }
+for auth_item in $auth_rest; do
+  auth_fields=$((auth_fields+1)); [ "$auth_fields" != 20 ] || auth_start=$auth_item
+done
+[ -n "$auth_start" ]; printf 'AUTHSTART %s\n' "$auth_start"
+auth_uid_seen=0; auth_lines=0
+while read -r auth_key auth_a auth_b auth_c auth_d auth_extra; do
+  auth_lines=$((auth_lines+1)); [ "$auth_lines" -le 128 ]
+  if [ "$auth_key" = Uid: ]; then
+    [ "$auth_uid_seen" -eq 0 ]; auth_uid_seen=1; [ -z "$auth_extra" ]
+    printf 'AUTHUID %s %s %s %s\n' "$auth_a" "$auth_b" "$auth_c" "$auth_d"
+  fi
+done </proc/1/status
+[ "$auth_uid_seen" -eq 1 ]
+printf 'AUTHPIDNS '; readlink /proc/1/ns/pid
+printf 'AUTHMNTNS '; readlink /proc/1/ns/mnt
+printf 'AUTHCGNS '; readlink /proc/1/ns/cgroup
+auth_lines=0
+while IFS= read -r auth_line; do
+  auth_lines=$((auth_lines+1)); [ "$auth_lines" -le 1 ]
+  printf 'AUTHMEMBER %s\n' "$auth_line"
+done </proc/1/cgroup
+[ "$auth_lines" -eq 1 ]; test -d /sys/fs/cgroup; test ! -L /sys/fs/cgroup
+printf 'AUTHROOT '; stat -Lc '%d %i' /sys/fs/cgroup
+IFS= read -r auth_pids </sys/fs/cgroup/pids.max
+IFS= read -r auth_memory </sys/fs/cgroup/memory.max
+printf 'AUTHMAX %s %s\n' "$auth_pids" "$auth_memory"
 "#;
 
 // Source-local stopping points, not proof outcomes or native values.
@@ -412,7 +912,7 @@ fn pids_lines(bytes: Vec<u8>, allowed: &[&str]) -> Vec<String> {
         lines.iter().filter(|line| line.as_str() == "END").count() == 1
             && lines.iter().take(lines.len() - 1).all(|line| line
                 .split_once(' ')
-                .is_some_and(|(key, _)| allowed.contains(&key))),
+                .is_some_and(|(key, _)| allowed.contains(&key) || PIDS_AUTH_KEYS.contains(&key))),
         "closed complete PID frame keys"
     );
     lines
@@ -442,7 +942,19 @@ fn pids_shell(run: &HealthRun, script: &str, args: &[String]) -> Vec<u8> {
 struct PidsCoordinates {
     namespaces: [u64; 3],
     witnesses: Vec<Value>,
+    boundary: Option<Value>,
 }
+
+const PIDS_AUTH_KEYS: [&str; 8] = [
+    "AUTHSTART",
+    "AUTHUID",
+    "AUTHPIDNS",
+    "AUTHMNTNS",
+    "AUTHCGNS",
+    "AUTHMEMBER",
+    "AUTHROOT",
+    "AUTHMAX",
+];
 
 impl PidsCoordinates {
     fn new(context: &[String]) -> Self {
@@ -450,9 +962,88 @@ impl PidsCoordinates {
         let mut coordinates = Self {
             namespaces,
             witnesses: Vec::with_capacity(37),
+            boundary: None,
         };
         coordinates.observe(context);
         coordinates
+    }
+
+    fn authenticated(context: &[String], boundary: &Value) -> Self {
+        let mut coordinates = Self {
+            namespaces: Self::namespaces(context),
+            witnesses: Vec::with_capacity(37),
+            boundary: Some(boundary.clone()),
+        };
+        coordinates.observe(context);
+        let mappings: Vec<_> = context
+            .iter()
+            .filter_map(|line| line.strip_prefix("M "))
+            .filter_map(|line| {
+                let (left, right) = line.split_once(" - ")?;
+                let fields: Vec<_> = left.split_whitespace().collect();
+                (right.split_whitespace().next() == Some("cgroup2")
+                    && fields.len() >= 6
+                    && fields[4] == "/sys/fs/cgroup")
+                    .then_some(fields)
+            })
+            .collect();
+        assert!(mappings.len() == 1, "one authenticated controller mount");
+        let mount = &mappings[0];
+        assert!(
+            mount[3] == "/"
+                && pids_u64(mount[0]) == boundary[3][0].as_u64().unwrap()
+                && pids_u64(mount[1]) == boundary[3][1].as_u64().unwrap()
+                && mount[2] == format!("0:{}", boundary[3][2].as_u64().unwrap()),
+            "original authenticated controller mount"
+        );
+        coordinates
+    }
+
+    fn authenticate(&self, lines: &[String]) {
+        let Some(boundary) = &self.boundary else {
+            return;
+        };
+        assert!(
+            pids_u64(pids_field(lines, "AUTHSTART")) == boundary[1][1].as_u64().unwrap(),
+            "same original PID1 start"
+        );
+        let uid: Vec<_> = pids_field(lines, "AUTHUID")
+            .split_whitespace()
+            .map(pids_u64)
+            .collect();
+        assert!(
+            uid.len() == 4 && uid.iter().all(|uid| Some(*uid) == boundary[1][2].as_u64()),
+            "same original PID1 credentials"
+        );
+        for (index, key, kind) in [
+            (0, "AUTHPIDNS", "pid"),
+            (1, "AUTHMNTNS", "mnt"),
+            (2, "AUTHCGNS", "cgroup"),
+        ] {
+            assert!(
+                Some(pids_namespace(pids_field(lines, key), kind)) == boundary[2][index].as_u64()
+                    && Some(self.namespaces[index]) == boundary[2][index].as_u64(),
+                "same original PID1 and observer namespaces"
+            );
+        }
+        assert!(
+            matches!(pids_field(lines, "AUTHMEMBER"), "0::/" | "0::/init.scope"),
+            "bounded original PID1 relocation"
+        );
+        let root: Vec<_> = pids_field(lines, "AUTHROOT")
+            .split_whitespace()
+            .map(pids_u64)
+            .collect();
+        assert!(
+            root.len() == 2
+                && Some(root[0]) == boundary[4][0].as_u64()
+                && Some(root[1]) == boundary[4][1].as_u64(),
+            "same original controller root object"
+        );
+        assert!(
+            pids_field(lines, "AUTHMAX") == "512 4294967296",
+            "unchanged original root ceilings"
+        );
     }
 
     fn namespaces(lines: &[String]) -> [u64; 3] {
@@ -464,6 +1055,7 @@ impl PidsCoordinates {
     }
 
     fn observe(&mut self, lines: &[String]) {
+        self.authenticate(lines);
         let fields: Vec<_> = pids_field(lines, "SELF").split_whitespace().collect();
         assert!(
             (3..=10).contains(&fields.len()),
@@ -572,9 +1164,15 @@ fn pids_proof_budget(proof: &Value) {
         size <= PIDS_PROOF_BYTES,
         "bounded private PID proof before publication"
     );
+    let mut main = proof.clone();
+    if let Some(object) = main.as_object_mut() {
+        object.remove("boundary");
+    }
+    let main_size = serde_json::to_vec(&main).unwrap().len();
     assert!(
-        size <= PIDS_PROOF_BYTES - PIDS_OUTER_BINDING_RESERVE,
-        "private coordinate proof retains future outer-boundary planning reserve"
+        main_size <= PIDS_PROOF_BYTES - PIDS_OUTER_BINDING_RESERVE
+            && size.saturating_sub(main_size) <= PIDS_OUTER_BINDING_RESERVE,
+        "private main and original boundary proof allowances"
     );
 }
 
@@ -1162,6 +1760,7 @@ fn pids_acquisition(run: &HealthRun) -> Value {
             && run.bytes.get() + PIDS_CAPTURE_BYTES + 2 * 73742 <= MAX_BYTES - CLEANUP_BYTES,
         "charged PID acquisition and final snapshot reserve"
     );
+    private_capture_debit(false, PIDS_CAPTURE_CALLS, PIDS_CAPTURE_BYTES);
     run.calls.set(run.calls.get() + PIDS_CAPTURE_CALLS);
     run.bytes.set(run.bytes.get() + PIDS_CAPTURE_BYTES);
     let maximum = run
@@ -1269,11 +1868,17 @@ fn pids_acquisition(run: &HealthRun) -> Value {
 #[ignore = "explicit isolated native Engine and cleanup-owner context required"]
 fn live_pids_limit_effects_match_engine() {
     let started = Instant::now();
+    let private = PidsPrivateContext::stdin();
+    // Declared before HealthRun: ordinary panic unwinding keeps the original
+    // separate cleanup reservation installed through HealthRun::drop.
+    let _private_scope = PrivateCaptureScope::enter(private.budget());
     let target = ProofTarget::new_for("NATIVE_PIDS_LIMIT_PROOF_PATH", PIDS_FILENAME);
     let mut run = HealthRun::new_for(
         "NATIVE_PIDS_LIMIT_CANDIDATE_SHA",
         "NATIVE_PIDS_LIMIT_DEADLINE_EPOCH",
     );
+    private.bind(&run);
+    run.deadline = run.deadline.min(private.deadline);
     run.names = PIDS_CASES
         .into_iter()
         .flat_map(|(name, _)| {
@@ -1297,7 +1902,7 @@ fn live_pids_limit_effects_match_engine() {
             pids_shell(&run, PIDS_OUTER_CONTEXT, &[]),
             &["SELF", "PIDNS", "MNTNS", "CGNS", "M", "S", "D"],
         );
-        let mut coordinates = PidsCoordinates::new(&context);
+        let mut coordinates = PidsCoordinates::authenticated(&context, &private.value["boundary"]);
         pids_stage(None, PidsOperation::DaemonIdentity);
         let daemon: Vec<_> = pids_field(&context, "D").split_whitespace().collect();
         assert!(daemon.len() >= 4, "observed daemon namespace chain");
@@ -1307,10 +1912,10 @@ fn live_pids_limit_effects_match_engine() {
         );
         let depth = daemon.len() as u64 - 3;
         let daemon_ns = pids_namespace(daemon.last().unwrap(), "pid");
-        let outer_members: Vec<_> = context
-            .iter()
-            .filter_map(|line| line.strip_prefix("S ").map(str::to_owned))
-            .collect();
+        // Original namespace root is authenticated by the held bootstrap/OCI
+        // context and rechecked live. A later observer/init.scope membership
+        // cannot select a descendant merely because its limits look equal.
+        let outer_members = vec!["0::/".to_owned()];
         pids_stage(None, PidsOperation::OuterPidsResolve);
         let outer_pids = pids_resolve(&context, &outer_members, "pids", &outer_members, false);
         pids_stage(None, PidsOperation::OuterMemoryResolve);
@@ -1695,9 +2300,12 @@ fn live_pids_limit_effects_match_engine() {
     );
     let mut proof = json!({"schema_version":2,"contract":PIDS_CONTRACT,"capability_admission":[],"catalogue_admission":false,"scope":PIDS_SCOPE,"context":{"candidate_sha":run.candidate,"run_id":run.run,"lane":run.lane,"engine_release":run.engine,"rendering_api":run.api,"acquisition_api":if run.lane.starts_with("debian11-"){"1.41"}else{"1.49"},"mode":if run.mode==DaemonMode::Rootless{"rootless"}else{"rootful"},"docker_package":if run.lane.starts_with("debian11-"){"20.10.5+dfsg1-1+deb11u2"}else{""},"fixture_image":run.base,"daemon_uid":daemon_uid,"outer":owner.snapshot},"borrowed_image":{"id":image["id"],"identity":"unchanged","removal":"not_owned"},"observer":observer,"cases":cases,"acquisition":acquisition,"accounting":{"ordinary_calls":run.calls.get()-cleanup_calls,"ordinary_bytes":run.bytes.get()-cleanup_bytes,"cleanup_calls":cleanup_calls,"cleanup_bytes":cleanup_bytes,"ordinary_elapsed_ns":ordinary.as_nanos() as u64,"cleanup_elapsed_ns":cleanup_elapsed.as_nanos() as u64,"elapsed_ns":started.elapsed().as_nanos() as u64,"deadline_seconds":180,"cleanup_reserve_seconds":46},"cleanup":{"containers":"absent","rounds":2,"outstanding":0,"uncertain":false}});
     pids_private_v2(&mut proof, coordinates);
+    proof["boundary"] = private.value["boundary"].clone();
     pids_proof_budget(&proof);
     pids_stage(None, PidsOperation::Proof);
+    private.require_active(true);
     target.publish(&proof);
+    private.require_active(true);
 }
 
 #[test]
@@ -2214,6 +2822,401 @@ fn pids_unknown_create_never_enters_inner_cleanup() {
             }) == CleanupDisposition::OuterTeardownRequired
                 && !called.get(),
             "unbound create requires outer teardown before any recovery"
+        );
+    }
+}
+
+fn pids_private_context_fixture() -> Value {
+    let epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 180;
+    let start = private_monotonic_ns();
+    json!({
+        "schema_version":1,"contract":"outer-private-context-v1",
+        "binding":{"session":"1".repeat(64),"execution_origin":"github_actions","candidate_sha":"a".repeat(40),"ci_run_id":"1","ci_run_attempt":"1","owner":"A1B2C3D4","lane":"debian11-rootful","outer_id":"2".repeat(64),"intent_digest":"3".repeat(64),"expectation_digest":"4".repeat(64)},
+        "source":{"intent":{},"preflight":{},"database":{},"oci":{},"log":{}},
+        "boundary":[1,[23,55,0],[700,701,702],[11,10,9],[41,1700],"5".repeat(64),"6".repeat(64),"3".repeat(64),"4".repeat(64),["7".repeat(64),format!("sha256:{}","8".repeat(64)),0]],
+        "pids":{"start_ns":start,"deadline_ns":start + 180 * SECOND,"deadline_epoch":epoch,"producer_reservation":{"ordinary_calls":124,"ordinary_bytes":1572864,"cleanup_calls":54,"cleanup_bytes":1048576},"external_reservation":{"ordinary_calls":56,"ordinary_bytes":524288,"cleanup_calls":46,"cleanup_bytes":1048576}}
+    })
+}
+
+#[test]
+fn pids_private_context_is_closed_bounded_and_reserves_input_once() {
+    let value = pids_private_context_fixture();
+    let bytes = serde_json::to_vec(&value).unwrap();
+    let context = PidsPrivateContext::read(bytes.as_slice());
+    assert_eq!(context.value, value);
+    let budget = context.budget();
+    assert_eq!(budget.state.lock().unwrap().spent[0], [0, bytes.len()]);
+    assert!(budget.debit(false, 16, PIDS_CAPTURE_BYTES));
+    assert_eq!(
+        budget.state.lock().unwrap().spent[0],
+        [16, bytes.len() + PIDS_CAPTURE_BYTES]
+    );
+    for pointer in [
+        "/unexpected",
+        "/binding/unexpected",
+        "/source/unexpected",
+        "/pids/unexpected",
+        "/pids/producer_reservation/unexpected",
+        "/pids/external_reservation/unexpected",
+    ] {
+        let mut invalid = value.clone();
+        let (parent, key) = pointer.rsplit_once('/').unwrap();
+        invalid
+            .pointer_mut(parent)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert(key.into(), json!(0));
+        assert!(
+            std::panic::catch_unwind(|| PidsPrivateContext::parse(
+                &serde_json::to_vec(&invalid).unwrap()
+            ))
+            .is_err()
+        );
+    }
+    for (pointer, replacement) in [
+        ("/schema_version", json!(true)),
+        ("/contract", json!("outer-private-context-v2")),
+        ("/binding/session", json!("a".repeat(63))),
+        ("/binding/ci_run_id", json!("01")),
+        ("/binding/owner", json!("../owner")),
+        ("/binding/lane", json!("other")),
+        ("/source/oci", json!([])),
+        ("/pids/start_ns", json!(true)),
+        ("/pids/deadline_ns", json!(46 * SECOND + 1)),
+        ("/pids/deadline_ns", json!(180 * SECOND + 2)),
+        ("/pids/deadline_epoch", json!(0)),
+        ("/pids/producer_reservation/ordinary_calls", json!(125)),
+        ("/pids/producer_reservation/cleanup_calls", json!(55)),
+        ("/pids/producer_reservation/ordinary_bytes", json!(1572865)),
+        ("/pids/producer_reservation/cleanup_bytes", json!(1048577)),
+        ("/pids/producer_reservation/ordinary_calls", json!(u64::MAX)),
+        ("/boundary/0", json!(true)),
+        ("/boundary/1/0", json!(0)),
+        ("/boundary/1/1", json!(0)),
+        ("/boundary/1/2", json!(u64::from(u32::MAX) + 1)),
+        ("/boundary/2/1", json!(0)),
+        ("/boundary/3/0", json!(0)),
+        ("/boundary/4/1", json!(false)),
+        ("/boundary/7", json!("9".repeat(64))),
+        ("/boundary/9/2", json!(2)),
+    ] {
+        let mut invalid = value.clone();
+        *invalid.pointer_mut(pointer).unwrap() = replacement;
+        assert!(
+            std::panic::catch_unwind(|| PidsPrivateContext::parse(
+                &serde_json::to_vec(&invalid).unwrap()
+            ))
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn pids_private_context_rejects_recursive_escaped_duplicates_and_overflow() {
+    for bytes in [
+        br#"{"a":1,"a":2}"#.as_slice(),
+        br#"{"a":1,"\u0061":2}"#.as_slice(),
+        br#"{"source":{"opaque":[{"a":1,"a":2}]}}"#.as_slice(),
+    ] {
+        assert!(std::panic::catch_unwind(|| pids_unique_json(bytes)).is_err());
+    }
+    assert_eq!(
+        pids_unique_json(br#"{"a":{"escaped\"key":[true,null,"x"]}}"#),
+        json!({"a":{"escaped\"key":[true,null,"x"]}})
+    );
+    let consumed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    struct Endless(Arc<std::sync::atomic::AtomicUsize>);
+    impl Read for Endless {
+        fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+            bytes.fill(b'x');
+            self.0.fetch_add(bytes.len(), Ordering::Relaxed);
+            Ok(bytes.len())
+        }
+    }
+    let held = Arc::clone(&consumed);
+    assert!(std::panic::catch_unwind(|| PidsPrivateContext::read(Endless(held))).is_err());
+    assert_eq!(consumed.load(Ordering::Relaxed), PIDS_CONTEXT_BYTES + 1);
+    assert!(std::panic::catch_unwind(|| PidsPrivateContext::read(std::io::empty())).is_err());
+}
+
+fn pids_authenticated_frame() -> Vec<String> {
+    [
+        "SELF 77 77 77",
+        "PIDNS pid:[700]",
+        "MNTNS mnt:[701]",
+        "CGNS cgroup:[702]",
+        "AUTHSTART 55",
+        "AUTHUID 0 0 0 0",
+        "AUTHPIDNS pid:[700]",
+        "AUTHMNTNS mnt:[701]",
+        "AUTHCGNS cgroup:[702]",
+        "AUTHMEMBER 0::/",
+        "AUTHROOT 41 1700",
+        "AUTHMAX 512 4294967296",
+        "M 11 10 0:9 / /sys/fs/cgroup rw - cgroup2 cgroup rw",
+    ]
+    .map(str::to_owned)
+    .to_vec()
+}
+
+#[test]
+fn pids_authenticated_root_is_rechecked_on_all_37_observers() {
+    let boundary = pids_private_context_fixture()["boundary"].clone();
+    let lines = pids_authenticated_frame();
+    let mut coordinates = PidsCoordinates::authenticated(&lines, &boundary);
+    for index in 1..37 {
+        let mut next = lines.clone();
+        if index % 2 == 1 {
+            next[9] = "AUTHMEMBER 0::/init.scope".into();
+        }
+        coordinates.observe(&next);
+    }
+    assert_eq!(coordinates.finish().len(), 37);
+    for (key, bad) in [
+        ("AUTHSTART", "56"),
+        ("AUTHUID", "0 0 1 0"),
+        ("AUTHUID", "0 0 0"),
+        ("AUTHPIDNS", "pid:[703]"),
+        ("AUTHMNTNS", "mnt:[703]"),
+        ("AUTHCGNS", "cgroup:[703]"),
+        ("AUTHMEMBER", "0::/same-limits-child"),
+        ("AUTHROOT", "41 1701"),
+        ("AUTHROOT", "42 1700"),
+        ("AUTHMAX", "511 4294967296"),
+        ("AUTHMAX", "512 4294967295"),
+        ("M", "12 10 0:9 / /sys/fs/cgroup rw - cgroup2 cgroup rw"),
+        ("M", "11 12 0:9 / /sys/fs/cgroup rw - cgroup2 cgroup rw"),
+        ("M", "11 10 0:8 / /sys/fs/cgroup rw - cgroup2 cgroup rw"),
+        (
+            "M",
+            "11 10 0:9 /descendant /sys/fs/cgroup rw - cgroup2 cgroup rw",
+        ),
+    ] {
+        let mut changed = lines.clone();
+        *changed
+            .iter_mut()
+            .find(|line| line.starts_with(&format!("{key} ")))
+            .unwrap() = format!("{key} {bad}");
+        assert!(
+            std::panic::catch_unwind(|| PidsCoordinates::authenticated(&changed, &boundary))
+                .is_err()
+        );
+    }
+    for key in PIDS_AUTH_KEYS {
+        let prefix = format!("{key} ");
+        let mut missing = lines.clone();
+        missing.retain(|line| !line.starts_with(&prefix));
+        assert!(
+            std::panic::catch_unwind(|| PidsCoordinates::authenticated(&missing, &boundary))
+                .is_err()
+        );
+        let mut duplicate = lines.clone();
+        duplicate.push(
+            lines
+                .iter()
+                .find(|line| line.starts_with(&prefix))
+                .unwrap()
+                .clone(),
+        );
+        assert!(
+            std::panic::catch_unwind(|| PidsCoordinates::authenticated(&duplicate, &boundary))
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn pids_private_boundary_uses_only_the_existing_reserved_proof_space() {
+    let mut proof = json!({"payload":"x".repeat(15340)});
+    let main_size = serde_json::to_vec(&proof).unwrap().len();
+    assert!(main_size <= 15360);
+    proof["boundary"] = pids_private_context_fixture()["boundary"].clone();
+    assert!(serde_json::to_vec(&proof).unwrap().len() > 15360);
+    pids_proof_budget(&proof);
+    proof["boundary"] = json!("x".repeat(1024));
+    assert!(std::panic::catch_unwind(|| pids_proof_budget(&proof)).is_err());
+}
+
+#[test]
+fn pids_private_context_binds_independent_invocation_values_without_printing_sources() {
+    let value = pids_private_context_fixture();
+    let context = PidsPrivateContext::parse(&serde_json::to_vec(&value).unwrap());
+    let candidate = "a".repeat(40);
+    let outer_id = "2".repeat(64);
+    let epoch = value["pids"]["deadline_epoch"].as_u64().unwrap();
+    context.bind_expected(&candidate, "A1B2C3D4", "debian11-rootful", &outer_id, epoch);
+    for (candidate, owner, lane, outer_id, epoch) in [
+        (
+            "wrong",
+            "A1B2C3D4",
+            "debian11-rootful",
+            outer_id.as_str(),
+            epoch,
+        ),
+        (
+            candidate.as_str(),
+            "wrong",
+            "debian11-rootful",
+            outer_id.as_str(),
+            epoch,
+        ),
+        (
+            candidate.as_str(),
+            "A1B2C3D4",
+            "upstream-rootful",
+            outer_id.as_str(),
+            epoch,
+        ),
+        (
+            candidate.as_str(),
+            "A1B2C3D4",
+            "debian11-rootful",
+            "wrong",
+            epoch,
+        ),
+        (
+            candidate.as_str(),
+            "A1B2C3D4",
+            "debian11-rootful",
+            outer_id.as_str(),
+            epoch + 1,
+        ),
+    ] {
+        assert!(
+            std::panic::catch_unwind(
+                || context.bind_expected(candidate, owner, lane, outer_id, epoch)
+            )
+            .is_err()
+        );
+    }
+    let canary = "PRIVATE_CONTEXT_CANARY_9d7e3a";
+    let mut source = value.clone();
+    source["source"]["oci"] = json!({"protected":canary});
+    source["binding"]["candidate_sha"] = json!(canary);
+    let raw = serde_json::to_vec(&source).unwrap();
+    for raw in [
+        raw,
+        format!("{{\"source\":\"{canary}\",\"source\":null}}").into_bytes(),
+        format!("{{\"{canary}\"").into_bytes(),
+    ] {
+        let panic = std::panic::catch_unwind(|| PidsPrivateContext::parse(&raw))
+            .err()
+            .unwrap();
+        let message = panic
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("");
+        assert!(
+            !message.contains(canary),
+            "private context panic is value-free"
+        );
+    }
+}
+
+#[test]
+fn pids_private_context_rejects_expired_future_or_delayed_original_monotonic_time() {
+    let mut value = pids_private_context_fixture();
+    let start = 1000 * SECOND;
+    let end = start + 180 * SECOND;
+    value["pids"]["start_ns"] = json!(start);
+    value["pids"]["deadline_ns"] = json!(end);
+    let bytes = serde_json::to_vec(&value).unwrap();
+    let anchor = Instant::now();
+    let early = PidsPrivateContext::parse_at(&bytes, anchor, start + 5 * SECOND);
+    assert_eq!(early.deadline, anchor + Duration::from_secs(175));
+    let late = PidsPrivateContext::parse_at(
+        &bytes,
+        anchor + Duration::from_secs(115),
+        start + 120 * SECOND,
+    );
+    assert_eq!(late.deadline, early.deadline);
+    for now in [
+        start - 1,
+        end - 46 * SECOND,
+        end - 1,
+        end,
+        end + 1,
+        u64::MAX,
+    ] {
+        assert!(
+            std::panic::catch_unwind(|| PidsPrivateContext::parse_at(&bytes, anchor, now)).is_err()
+        );
+    }
+    // Repeated parsing and arbitrary wall-clock labels cannot renew D. Epoch
+    // is only a separately bound custody label after anonymous-pipe admission.
+    for epoch in [1, u64::MAX] {
+        value["pids"]["deadline_epoch"] = json!(epoch);
+        let context = PidsPrivateContext::parse_at(
+            &serde_json::to_vec(&value).unwrap(),
+            anchor,
+            start + 5 * SECOND,
+        );
+        assert_eq!(context.deadline, early.deadline);
+        assert!(context.timing.remaining(end, true).is_none());
+    }
+    for (start, end, now) in [
+        (1, 180 * SECOND + 1, 180 * SECOND + 2),
+        (u64::MAX - 10, u64::MAX, u64::MAX - 5),
+        (100, 99, 100),
+    ] {
+        value["pids"]["start_ns"] = json!(start);
+        value["pids"]["deadline_ns"] = json!(end);
+        assert!(
+            std::panic::catch_unwind(|| PidsPrivateContext::parse_at(
+                &serde_json::to_vec(&value).unwrap(),
+                anchor,
+                now
+            ))
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn pids_private_context_execution_origin_has_no_partial_or_implicit_fallback() {
+    let github = pids_private_context_fixture();
+    PidsPrivateContext::parse(&serde_json::to_vec(&github).unwrap());
+    let mut local = github.clone();
+    local["binding"]["execution_origin"] = json!("local_process");
+    local["binding"]["ci_run_id"] = Value::Null;
+    local["binding"]["ci_run_attempt"] = Value::Null;
+    PidsPrivateContext::parse(&serde_json::to_vec(&local).unwrap());
+    for (origin, ci_run, ci_attempt) in [
+        (Value::Null, Value::Null, Value::Null),
+        (json!("local"), Value::Null, Value::Null),
+        (json!("local_process"), json!("1"), Value::Null),
+        (json!("local_process"), Value::Null, json!("1")),
+        (json!("local_process"), json!("1"), json!("1")),
+        (json!("github_actions"), Value::Null, Value::Null),
+        (json!("github_actions"), json!("1"), Value::Null),
+        (json!("github_actions"), Value::Null, json!("1")),
+        (json!("github_actions"), json!("01"), json!("1")),
+    ] {
+        let mut invalid = github.clone();
+        invalid["binding"]["execution_origin"] = origin;
+        invalid["binding"]["ci_run_id"] = ci_run;
+        invalid["binding"]["ci_run_attempt"] = ci_attempt;
+        assert!(
+            std::panic::catch_unwind(|| PidsPrivateContext::parse(
+                &serde_json::to_vec(&invalid).unwrap()
+            ))
+            .is_err()
+        );
+    }
+    for key in ["execution_origin", "ci_run_id", "ci_run_attempt"] {
+        let mut invalid = local.clone();
+        invalid["binding"].as_object_mut().unwrap().remove(key);
+        assert!(
+            std::panic::catch_unwind(|| PidsPrivateContext::parse(
+                &serde_json::to_vec(&invalid).unwrap()
+            ))
+            .is_err()
         );
     }
 }

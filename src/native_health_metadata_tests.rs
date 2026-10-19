@@ -15,7 +15,7 @@ use crate::version::{
     DaemonMode, FactProvenance, ValidatedCapabilities,
 };
 use serde_json::{Value, json};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
@@ -23,7 +23,8 @@ use std::num::{NonZeroU16, NonZeroU32, NonZeroU64};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const OWNER: &str = "io.dockerlens.native-run";
@@ -259,6 +260,223 @@ fn stream(mut source: impl Read, cap: usize) -> (Vec<u8>, bool) {
     (bytes, overflow)
 }
 
+// Only the selected private PIDs invocation installs this guard. Each native
+// command is still one call; stream reads never become native-command calls.
+// A scoped thread-local avoids changing unrelated fixtures' HealthRun literals.
+thread_local! {
+    static PRIVATE_CAPTURE_BUDGET: RefCell<Option<Arc<PrivateCaptureBudget>>> = const { RefCell::new(None) };
+}
+
+struct PrivateCaptureBudget {
+    limits: [[usize; 2]; 2],
+    state: Mutex<PrivateCaptureState>,
+    changed: Condvar,
+    deadline: Instant,
+    timing: Option<PrivateCaptureTiming>,
+}
+
+#[derive(Clone, Copy)]
+struct PrivateCaptureTiming {
+    start_ns: u64,
+    deadline_ns: u64,
+}
+
+fn private_monotonic_ns() -> u64 {
+    let time = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
+    private_monotonic_parts(i128::from(time.tv_sec), i128::from(time.tv_nsec))
+        .unwrap_or_else(|| panic!("private monotonic clock range"))
+}
+
+fn private_monotonic_parts(seconds: i128, nanos: i128) -> Option<u64> {
+    let seconds = u64::try_from(seconds).ok()?.checked_mul(SECOND)?;
+    let nanos = u64::try_from(nanos).ok().filter(|nanos| *nanos < SECOND)?;
+    seconds.checked_add(nanos)
+}
+
+impl PrivateCaptureTiming {
+    fn remaining(self, now_ns: u64, cleanup: bool) -> Option<Duration> {
+        let span = self.deadline_ns.checked_sub(self.start_ns)?;
+        if self.start_ns == 0
+            || !(46 * SECOND < span && span <= 180 * SECOND)
+            || now_ns < self.start_ns
+        {
+            return None;
+        }
+        let end = self
+            .deadline_ns
+            .checked_sub(if cleanup { 0 } else { 46 * SECOND })?;
+        end.checked_sub(now_ns)
+            .filter(|remaining| *remaining > 0)
+            .map(Duration::from_nanos)
+    }
+}
+
+#[derive(Default)]
+struct PrivateCaptureState {
+    spent: [[usize; 2]; 2],
+    reading: [usize; 2],
+    waiting: [usize; 2],
+    failed: [bool; 2],
+}
+
+impl PrivateCaptureBudget {
+    fn debit(&self, cleanup: bool, calls: usize, bytes: usize) -> bool {
+        let phase = usize::from(cleanup);
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|_| panic!("private accounting lock"));
+        let next_calls = state.spent[phase][0].checked_add(calls);
+        let next_bytes = state.spent[phase][1].checked_add(bytes);
+        let valid = !state.failed[phase]
+            && self.active(cleanup)
+            && next_calls.is_some_and(|value| value <= self.limits[phase][0])
+            && next_bytes.is_some_and(|value| {
+                value
+                    .checked_add(state.reading[phase])
+                    .is_some_and(|total| total <= self.limits[phase][1])
+            });
+        if valid {
+            state.spent[phase] = [next_calls.unwrap(), next_bytes.unwrap()];
+        } else {
+            state.failed[phase] = true;
+        }
+        valid
+    }
+
+    fn phase_deadline(&self, cleanup: bool) -> Instant {
+        if cleanup {
+            self.deadline
+        } else {
+            self.deadline - Duration::from_secs(46)
+        }
+    }
+
+    fn active(&self, cleanup: bool) -> bool {
+        self.active_at(cleanup, self.timing.map_or(0, |_| private_monotonic_ns()))
+    }
+
+    fn active_at(&self, cleanup: bool, now_ns: u64) -> bool {
+        Instant::now() < self.phase_deadline(cleanup)
+            && self
+                .timing
+                .is_none_or(|timing| timing.remaining(now_ns, cleanup).is_some())
+    }
+
+    fn begin_read(&self, cleanup: bool, maximum: usize) -> usize {
+        let phase = usize::from(cleanup);
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|_| panic!("private accounting lock"));
+        loop {
+            if state.failed[phase] || !self.active(cleanup) {
+                state.failed[phase] = true;
+                self.changed.notify_all();
+                return 0;
+            }
+            let available =
+                self.limits[phase][1].saturating_sub(state.spent[phase][1] + state.reading[phase]);
+            let count = maximum.min(available);
+            if count > 0 {
+                state.reading[phase] += count;
+                return count;
+            }
+            if state.reading[phase] == 0 {
+                state.failed[phase] = true;
+                self.changed.notify_all();
+                return 0;
+            }
+            // A peer holds temporary read claims, not spent bytes. Recheck the
+            // original phase clock while waiting for its actual result. The
+            // unchanged command timeout also bounds the pipe reader itself.
+            state.waiting[phase] += 1;
+            self.changed.notify_all();
+            state = self
+                .changed
+                .wait_timeout(state, Duration::from_millis(5))
+                .unwrap_or_else(|_| panic!("private accounting wait"))
+                .0;
+            state.waiting[phase] -= 1;
+        }
+    }
+
+    fn end_read(&self, cleanup: bool, reserved: usize, actual: usize, failed: bool) {
+        let phase = usize::from(cleanup);
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|_| panic!("private accounting lock"));
+        state.reading[phase] -= reserved;
+        // Release only the unread, in-flight claim. Actual source bytes are
+        // irrevocably charged, including the overflow lookahead byte.
+        state.spent[phase][1] += actual;
+        state.failed[phase] |= failed;
+        self.changed.notify_all();
+    }
+}
+
+struct PrivateCaptureScope;
+
+impl PrivateCaptureScope {
+    fn enter(budget: Arc<PrivateCaptureBudget>) -> Self {
+        PRIVATE_CAPTURE_BUDGET.with(|slot| {
+            assert!(slot.borrow().is_none(), "single private capture scope");
+            *slot.borrow_mut() = Some(budget);
+        });
+        Self
+    }
+}
+
+impl Drop for PrivateCaptureScope {
+    fn drop(&mut self) {
+        PRIVATE_CAPTURE_BUDGET.with(|slot| *slot.borrow_mut() = None);
+    }
+}
+
+fn private_capture_budget() -> Option<Arc<PrivateCaptureBudget>> {
+    PRIVATE_CAPTURE_BUDGET.with(|slot| slot.borrow().clone())
+}
+
+fn private_capture_debit(cleanup: bool, calls: usize, bytes: usize) {
+    if let Some(budget) = private_capture_budget() {
+        assert!(
+            budget.debit(cleanup, calls, bytes),
+            "private producer reservation"
+        );
+    }
+}
+
+fn reserved_stream(
+    mut source: impl Read,
+    cap: usize,
+    budget: &PrivateCaptureBudget,
+    cleanup: bool,
+    failed: &AtomicBool,
+) -> (Vec<u8>, bool) {
+    let mut bytes = Vec::new();
+    let mut buffer = [0; 4096];
+    loop {
+        let reserved = budget.begin_read(cleanup, buffer.len().min(cap + 1 - bytes.len()));
+        if reserved == 0 {
+            failed.store(true, Ordering::Release);
+            return (bytes, true);
+        }
+        let result = source.read(&mut buffer[..reserved]);
+        let count = result.as_ref().copied().unwrap_or(0);
+        let overflow = result.is_err() || count > cap - bytes.len();
+        budget.end_read(cleanup, reserved, count, overflow);
+        bytes.extend_from_slice(&buffer[..count.min(cap - bytes.len())]);
+        if overflow {
+            failed.store(true, Ordering::Release);
+            return (bytes, true);
+        }
+        if count == 0 {
+            return (bytes, false);
+        }
+    }
+}
+
 fn capture_room(calls: usize, bytes: usize, cleanup: bool) -> bool {
     let calls_limit = if cleanup {
         MAX_CALLS
@@ -418,10 +636,15 @@ impl HealthRun {
         let cutoff = required(deadline_key)
             .parse::<u64>()
             .unwrap_or_else(|_| panic!("shared suite cutoff"));
-        let remaining = (UNIX_EPOCH + Duration::from_secs(cutoff))
-            .duration_since(SystemTime::now())
-            .unwrap_or_else(|_| panic!("expired suite cutoff"))
-            .min(Duration::from_secs(180));
+        let remaining = if let Some(budget) = private_capture_budget() {
+            assert!(budget.active(false), "original private suite cutoff");
+            budget.deadline.saturating_duration_since(Instant::now())
+        } else {
+            (UNIX_EPOCH + Duration::from_secs(cutoff))
+                .duration_since(SystemTime::now())
+                .unwrap_or_else(|_| panic!("expired suite cutoff"))
+                .min(Duration::from_secs(180))
+        };
         assert!(
             remaining > Duration::from_secs(46),
             "cleanup reserve at entry"
@@ -467,7 +690,8 @@ impl HealthRun {
             ids: vec![None; 9],
             attempted: vec![false; 9],
             absence_lookup,
-            deadline: Instant::now() + remaining,
+            deadline: private_capture_budget()
+                .map_or_else(|| Instant::now() + remaining, |budget| budget.deadline),
             calls: Cell::new(0),
             bytes: Cell::new(0),
             facts: None,
@@ -501,10 +725,18 @@ impl HealthRun {
             capture_room(self.calls.get(), self.bytes.get(), cleanup),
             "reserved native command/byte budget"
         );
+        if let Some(input) = input {
+            assert!(input.len() <= 4096, "bounded native request");
+        }
+        let selected_private = private_capture_budget().is_some();
+        private_capture_debit(cleanup, 1, input.map_or(0, <[u8]>::len));
         self.calls.set(self.calls.get() + 1);
         command.stdout(Stdio::piped()).stderr(Stdio::piped());
         if input.is_some() {
             command.stdin(Stdio::piped());
+        } else {
+            // A native subprocess must not inherit the private context pipe.
+            command.stdin(Stdio::null());
         }
         let mut child = command
             .spawn()
@@ -517,10 +749,25 @@ impl HealthRun {
             .stderr
             .take()
             .unwrap_or_else(|| panic!("private stderr"));
-        let out = std::thread::spawn(move || stream(stdout, if cleanup { 8192 } else { 65550 }));
-        let err = std::thread::spawn(move || stream(stderr, if cleanup { 2048 } else { 8192 }));
+        let failed = Arc::new(AtomicBool::new(false));
+        let collect = |source, cap| {
+            let budget = private_capture_budget();
+            let failed = Arc::clone(&failed);
+            std::thread::spawn(move || match budget {
+                Some(budget) => reserved_stream(source, cap, &budget, cleanup, &failed),
+                None => stream(source, cap),
+            })
+        };
+        // The two child pipe types differ, so erase only their Read interface.
+        let out = collect(
+            Box::new(stdout) as Box<dyn Read + Send>,
+            if cleanup { 8192 } else { 65550 },
+        );
+        let err = collect(
+            Box::new(stderr) as Box<dyn Read + Send>,
+            if cleanup { 2048 } else { 8192 },
+        );
         if let Some(input) = input {
-            assert!(input.len() <= 4096, "bounded native request");
             child
                 .stdin
                 .take()
@@ -528,9 +775,30 @@ impl HealthRun {
                 .write_all(input)
                 .unwrap_or_else(|_| panic!("private native request write"));
         }
-        let status = child
-            .wait()
-            .unwrap_or_else(|_| panic!("bounded native command wait"));
+        let status = if !selected_private {
+            child
+                .wait()
+                .unwrap_or_else(|_| panic!("bounded native command wait"))
+        } else {
+            loop {
+                if let Some(status) = child
+                    .try_wait()
+                    .unwrap_or_else(|_| panic!("bounded native command wait"))
+                {
+                    break status;
+                }
+                if failed.load(Ordering::Acquire) {
+                    // Overflow drops the read ends immediately. Keep the
+                    // existing timeout/sudo supervisor alive so its original
+                    // TERM/kill-after deadline still bounds root children.
+                    // Killing only that supervisor could orphan its command.
+                    break child
+                        .wait()
+                        .unwrap_or_else(|_| panic!("bounded native command wait"));
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        };
         let (output, overflow) = out.join().unwrap_or_else(|_| panic!("private stdout join"));
         let (error, error_overflow) = err.join().unwrap_or_else(|_| panic!("private stderr join"));
         self.bytes
@@ -543,6 +811,7 @@ impl HealthRun {
             status.success(),
             "original native command must complete successfully"
         );
+        private_capture_debit(cleanup, 0, 0);
         output
     }
 
@@ -1889,4 +2158,274 @@ fn health_metadata_exhausted_work_budget_preserves_authenticated_cleanup_capacit
     assert!(calls <= MAX_CALLS && bytes <= MAX_BYTES);
     assert!(!capture_room(MAX_CALLS, bytes, true));
     assert!(!capture_room(calls, MAX_BYTES, true));
+}
+
+fn private_budget_fixture(limits: [[usize; 2]; 2]) -> Arc<PrivateCaptureBudget> {
+    Arc::new(PrivateCaptureBudget {
+        limits,
+        state: Mutex::new(PrivateCaptureState::default()),
+        changed: Condvar::new(),
+        deadline: Instant::now() + Duration::from_secs(180),
+        timing: None,
+    })
+}
+
+#[test]
+fn private_pids_streams_charge_fragmented_stdout_and_stderr_together() {
+    struct Fragmented {
+        remaining: usize,
+    }
+    impl Read for Fragmented {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            let count = self.remaining.min(buffer.len()).min(2);
+            buffer[..count].fill(b'x');
+            self.remaining -= count;
+            Ok(count)
+        }
+    }
+    let budget = private_budget_fixture([[1, 64], [1, 16]]);
+    assert!(budget.debit(false, 1, 3)); // explicit request input
+    let jobs: Vec<_> = [8, 6]
+        .into_iter()
+        .map(|length| {
+            let budget = Arc::clone(&budget);
+            std::thread::spawn(move || {
+                reserved_stream(
+                    Fragmented { remaining: length },
+                    length,
+                    &budget,
+                    false,
+                    &AtomicBool::new(false),
+                )
+            })
+        })
+        .collect();
+    for job in jobs {
+        assert!(!job.join().unwrap().1);
+    }
+    let state = budget.state.lock().unwrap();
+    assert_eq!(state.spent[0], [1, 17]);
+    assert_eq!(state.reading, [0, 0]);
+}
+
+#[test]
+fn private_pids_dual_overflow_counts_both_lookaheads_without_draining() {
+    struct Together {
+        barrier: Arc<std::sync::Barrier>,
+    }
+    impl Read for Together {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            self.barrier.wait();
+            buffer.fill(b'x');
+            Ok(buffer.len())
+        }
+    }
+    let budget = private_budget_fixture([[1, 64], [1, 16]]);
+    let barrier = Arc::new(std::sync::Barrier::new(2));
+    let jobs: Vec<_> = [8, 4]
+        .into_iter()
+        .map(|cap| {
+            let budget = Arc::clone(&budget);
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                let failed = AtomicBool::new(false);
+                let (bytes, overflow) =
+                    reserved_stream(Together { barrier }, cap, &budget, false, &failed);
+                assert!(overflow && bytes.len() == cap && failed.load(Ordering::Acquire));
+            })
+        })
+        .collect();
+    for job in jobs {
+        job.join().unwrap();
+    }
+    let state = budget.state.lock().unwrap();
+    assert_eq!(state.spent[0][1], 14);
+    assert_eq!(state.reading, [0, 0]);
+    assert!(state.failed[0] && !state.failed[1]);
+}
+
+#[test]
+fn private_pids_exhausted_ordinary_budget_keeps_cleanup_through_panic() {
+    struct Cleanup;
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            private_capture_debit(true, 1, 7);
+        }
+    }
+    let budget = private_budget_fixture([[16, 512 * 1024], [54, 1024]]);
+    let held = Arc::clone(&budget);
+    assert!(
+        std::panic::catch_unwind(move || {
+            let _scope = PrivateCaptureScope::enter(held);
+            let _cleanup = Cleanup;
+            private_capture_debit(false, 16, 512 * 1024);
+            private_capture_debit(false, 1, 0);
+        })
+        .is_err()
+    );
+    assert!(private_capture_budget().is_none());
+    let state = budget.state.lock().unwrap();
+    assert_eq!(state.spent, [[16, 512 * 1024], [1, 7]]);
+    assert!(state.failed[0] && !state.failed[1]);
+}
+
+#[test]
+fn private_pids_source_limit_and_read_failure_are_closed() {
+    struct Broken;
+    impl Read for Broken {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::ErrorKind::Other.into())
+        }
+    }
+    for cap in [0, 1, 4097] {
+        let budget = private_budget_fixture([[1, cap + 1], [1, 16]]);
+        let (bytes, overflow) = reserved_stream(
+            std::io::repeat(b'x'),
+            cap,
+            &budget,
+            false,
+            &AtomicBool::new(false),
+        );
+        assert!(overflow && bytes.len() == cap);
+        assert_eq!(budget.state.lock().unwrap().spent[0][1], cap + 1);
+        assert!(budget.debit(true, 1, 16));
+    }
+    let budget = private_budget_fixture([[1, 1], [1, 16]]);
+    assert!(reserved_stream(Broken, 8, &budget, false, &AtomicBool::new(false)).1);
+    assert_eq!(budget.state.lock().unwrap().reading, [0, 0]);
+    assert!(budget.debit(true, 1, 16));
+}
+
+#[test]
+fn private_pids_temporary_full_claim_allows_fragmented_stdout_and_stderr_eof() {
+    struct PausedPartial {
+        entered: std::sync::mpsc::Sender<usize>,
+        release: Arc<std::sync::Barrier>,
+        first: bool,
+    }
+    impl Read for PausedPartial {
+        fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+            if !self.first {
+                return Ok(0);
+            }
+            self.first = false;
+            self.entered.send(bytes.len()).unwrap();
+            self.release.wait();
+            bytes[..2].fill(b'x');
+            Ok(2)
+        }
+    }
+    let budget = private_budget_fixture([[1, 4], [1, 16]]);
+    let release = Arc::new(std::sync::Barrier::new(2));
+    let (entered, receiving) = std::sync::mpsc::channel();
+    let out_budget = Arc::clone(&budget);
+    let out_release = Arc::clone(&release);
+    let out = std::thread::spawn(move || {
+        reserved_stream(
+            PausedPartial {
+                entered,
+                release: out_release,
+                first: true,
+            },
+            8,
+            &out_budget,
+            false,
+            &AtomicBool::new(false),
+        )
+    });
+    assert_eq!(receiving.recv_timeout(Duration::from_secs(2)).unwrap(), 4);
+    let err_budget = Arc::clone(&budget);
+    let err = std::thread::spawn(move || {
+        reserved_stream(
+            std::io::empty(),
+            8,
+            &err_budget,
+            false,
+            &AtomicBool::new(false),
+        )
+    });
+    // Observe the actual Condvar wait before releasing stdout's four-byte
+    // claim. Stderr must not confuse that claim with four consumed bytes.
+    let until = Instant::now() + Duration::from_secs(2);
+    let mut state = budget.state.lock().unwrap();
+    while state.waiting[0] == 0 && !state.failed[0] && Instant::now() < until {
+        state = budget
+            .changed
+            .wait_timeout(state, Duration::from_millis(5))
+            .unwrap()
+            .0;
+    }
+    let waited = state.waiting[0] > 0 && !state.failed[0];
+    drop(state);
+    release.wait();
+    let stdout = out.join().unwrap();
+    let stderr = err.join().unwrap();
+    assert!(waited && !stdout.1 && !stderr.1 && stdout.0.len() == 2 && stderr.0.is_empty());
+    let state = budget.state.lock().unwrap();
+    assert_eq!(state.spent[0], [0, 2]);
+    assert_eq!(state.reading, [0, 0]);
+    assert_eq!(state.waiting, [0, 0]);
+    assert!(!state.failed[0]);
+    drop(state);
+    // Two remaining credits cannot consume this actual three-byte response.
+    let (_, refused) = reserved_stream(
+        std::io::Cursor::new(b"xxx"),
+        8,
+        &budget,
+        false,
+        &AtomicBool::new(false),
+    );
+    assert!(refused && budget.state.lock().unwrap().spent[0][1] == 4);
+    assert!(budget.debit(true, 1, 16));
+}
+
+#[test]
+fn private_pids_monotonic_parts_and_original_phase_deadlines_are_checked() {
+    assert_eq!(private_monotonic_parts(7, 9), Some(7 * SECOND + 9));
+    assert_eq!(private_monotonic_parts(-1, 0), None);
+    assert_eq!(private_monotonic_parts(1, -1), None);
+    assert_eq!(private_monotonic_parts(1, i128::from(SECOND)), None);
+    assert_eq!(
+        private_monotonic_parts(i128::from(u64::MAX / SECOND), i128::from(u64::MAX % SECOND)),
+        Some(u64::MAX)
+    );
+    assert_eq!(
+        private_monotonic_parts(i128::from(u64::MAX / SECOND + 1), 0),
+        None
+    );
+    let timing = PrivateCaptureTiming {
+        start_ns: 100 * SECOND,
+        deadline_ns: 280 * SECOND,
+    };
+    assert!(timing.remaining(100 * SECOND - 1, false).is_none());
+    assert_eq!(
+        timing.remaining(110 * SECOND, false),
+        Some(Duration::from_secs(124))
+    );
+    assert_eq!(
+        timing.remaining(220 * SECOND, false),
+        Some(Duration::from_secs(14))
+    );
+    assert!(timing.remaining(234 * SECOND, false).is_none());
+    assert_eq!(
+        timing.remaining(234 * SECOND, true),
+        Some(Duration::from_secs(46))
+    );
+    assert!(timing.remaining(280 * SECOND, true).is_none());
+    assert!(timing.remaining(u64::MAX, true).is_none());
+    // A deliberately later Instant cutoff cannot bypass retained S/D at a
+    // subsequent operation. Every production call samples CLOCK_MONOTONIC;
+    // these injected samples force expiry without sleeping or a host-age rule.
+    let budget = PrivateCaptureBudget {
+        limits: [[1, 4], [1, 4]],
+        state: Mutex::new(PrivateCaptureState::default()),
+        changed: Condvar::new(),
+        deadline: Instant::now() + Duration::from_secs(180),
+        timing: Some(timing),
+    };
+    assert!(budget.active_at(false, 110 * SECOND));
+    assert!(!budget.active_at(false, 234 * SECOND));
+    assert!(budget.active_at(true, 234 * SECOND));
+    assert!(!budget.active_at(true, 280 * SECOND));
+    assert!(!budget.active_at(true, 100 * SECOND - 1));
 }

@@ -7,10 +7,15 @@ The PIDs child of the existing lifecycle helper is mandatory private invocation
 v1 evidence and reader remain unchanged, with no current fallback. The canonical
 harness and unchanged nineteen-argument emitter require the strict successor
 even without public PIDs projection. The 16 KiB custody ceiling remains unchanged.
+[ADR 0033](decisions/0033-original-outer-custody.md) supersedes the unused boundary
+reserve and unresolved original-root handoff with connected source; it does not
+turn historical failed campaigns into qualified native evidence.
 This is source-only integration for
 #39/#31/#3, not passing native qualification, catalogue admission or a compatibility
 claim. The primary owns complete/four-lane gates. Product output stays inert;
-no pin, public API, schema or historical record changes.
+no native operational-pin, public API, public evidence-schema or historical
+record changes. The dev-only clock pin and private custody-schema additions are
+documented separately in ADR 0033 and the dependency policy.
 
 ## Retained per-reader coordinates
 
@@ -22,11 +27,12 @@ independently checks exact integer types and bounds before enforcing every old
 semantic predicate. No PID translation or namespace entry is introduced.
 
 Eighteen phase objects become fixed ten-slot tuples without losing a datum.
-Both sides enforce compact serialized size at most 15 KiB within the existing
-16 KiB custody cap, leaving 1 KiB for a future separately reviewed boundary
-contract. This is an actual serialization guard, not padding or a claimed
-outer-boundary proof. The twelve/nineteen-argument interfaces, 28 native calls,
-owner scopes, accounting and 180-second/46-second budgets remain unchanged.
+Both sides enforce compact main-proof size at most 15 KiB within the existing
+16 KiB custody cap. ADR 0033 now uses the remaining 1 KiB for one closed ten-slot
+original-boundary record; the complete packet still cannot exceed 16 KiB. These
+are serialization guards, not native boundary or packet-fit evidence. The
+twelve/nineteen-argument interfaces, 28 native calls, owner scopes and aggregate
+180-second/46-second budgets remain unchanged.
 Synthetic round trips and source checks do not demonstrate native coordinate
 alignment, rootless delegation, ownership or compatibility.
 
@@ -146,18 +152,18 @@ control writes recheck PID1's namespace, start and mapped UID after opening a
 verified FIFO descriptor. No host `/proc`, namespace entry or guessed
 Docker cgroup path is used. Unknown/ambiguous mappings refuse.
 
-The existing observations do not independently prove that the scan's procfs PID
-coordinates equal the controller reader's current PID namespace, nor recheck that
-reader's namespace context. The supposed owner membership is the initial observer
-command's own membership, not independently authenticated as the bounded outer
-root. Configured outer identity/limits and numerical 512-PID/4-GiB controller checks
-do not independently bind the selected controller paths/inodes to that exact owned
-boundary. Namespace equality alone establishes neither membership nor ownership.
-These remain unresolved positive-proof requirements, not established explanations
-for either failed campaign. No ancestor, daemon-view or mount-root rebasing is
-authorized. ADR 0029 proposes a separate reviewed evidence design for procfs/reader
-coordinate binding and authenticated controller-boundary binding, including any
-new protocol/custody/accounting needed; this change collects no new observations.
+The historical observations alone did not bind the scan's procfs coordinates to
+each controller reader or authenticate the initial observer membership as the
+bounded outer root. Numerical 512-PID/4-GiB checks and namespace equality cannot
+supply either missing identity. ADR 0031 adds all 37 actual reader-coordinate
+witnesses. ADR 0033 connects the retained original OCI inode and ancestor
+descriptors to the producer and independent reader through bounded private stdin;
+each actual reader rechecks the original PID1/start/UID, namespaces and controller
+identity. PID1 relocation or a later equal-limit descendant cannot replace that
+original root. No ancestor, daemon-view or mount-root rebasing is authorized.
+This connected source is not a genuine native observation: coordinate, boundary
+and positive-effect qualification remain open until the exact candidate passes.
+Neither source correction establishes the cause of the historical failures.
 
 Controller membership and the observer's actual mountinfo resolve v1 controller
 mounts or v2 unified mounts with component-wise mount-root handling. Read actual
@@ -194,6 +200,22 @@ captures plus that context acquisition can consume at most 6MiB overall; no
 context allowance is silently included in the charged 4MiB ledger. At most
 177/178 charged captures including successful cleanup are expected; this is
 not a claim that every command can simultaneously consume its timeout ceiling.
+
+ADR 0033 adds physical source-I/O claims and disjoint, once-preclaimed roles
+within the original aggregate envelopes; it does not relabel these historical
+123/124 ordinary or 54 cleanup capture counters as complete connected accounting.
+Contexts, acquisition, protocol frames, native dual streams, private proof I/O
+and immutable source-record reads must all be covered. Actual bytes stay spent
+after cancellation or expiry; only unused claims are released, and an in-flight
+claim cannot cross phases. Reader/emitter bootstrap spends are admitted once
+into the original role rather than gaining a new pool. Original monotonic S/D
+remains authoritative through blocking I/O, completion and publication. PIDs
+producer cleanup and original-root recovery share the existing cleanup envelope;
+the same once-only recovery reservation cannot be renewed. ADR 0033 records the
+former caller-slice refusal and experimental fixed redistribution within the
+unchanged aggregate. Four authored connected scenarios fit that candidate;
+partial fixtures and the synthetic phase driver do not qualify genuine native
+metadata I/O, payload variability or the complete native workload.
 
 The fixed owner-private direct-child proof is limited to 16KiB. Compact numeric
 PID/start/parent tuples and selected mount/controller facts avoid retaining full

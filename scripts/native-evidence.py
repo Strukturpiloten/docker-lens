@@ -8,6 +8,31 @@ import stat
 import sys
 from pathlib import Path
 
+
+def bounded_stream_read(source, limit):
+    data = bytearray()
+    while len(data) < limit:
+        part = os.read(source.fileno(), limit - len(data))
+        if not part:
+            break
+        data.extend(part)
+    return bytes(data)
+
+
+def bounded_source_read(path, limit):
+    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    with os.fdopen(descriptor, "rb") as source:
+        before = os.fstat(source.fileno())
+        if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= limit:
+            raise ValueError("invalid bounded native evidence source")
+        raw = bounded_stream_read(source, limit + 1)
+        after = os.fstat(source.fileno())
+        if (len(raw) != before.st_size or len(raw) > limit
+                or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+                != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)):
+            raise ValueError("native evidence source changed")
+        return raw
+
 from native_identity_proof import CASES as IDENTITY_CASES, CONTRACT as IDENTITY_CONTRACT, validate_identity_v2
 from native_health_metadata_proof import CONTRACT as HEALTH_METADATA_CONTRACT, read_health_metadata_proof
 from native_stop_signal_proof import (
@@ -164,7 +189,7 @@ def read_identity_proof(path: Path, lane: str, mode: str, api: str,
                 or before.st_uid != os.geteuid() or before.st_mode & 0o077
                 or before.st_nlink != 1):
             raise ValueError("invalid private identity proof")
-        payload = source.read(16385)
+        payload = bounded_stream_read(source, 16385)
         after = os.fstat(source.fileno())
     if (len(payload) != before.st_size
             or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns,
@@ -214,7 +239,7 @@ def read_volume_probes(path: Path) -> list[str]:
         metadata = os.fstat(source.fileno())
         if not stat.S_ISREG(metadata.st_mode) or not 0 < metadata.st_size <= 4096:
             raise ValueError("invalid native volume probe file")
-        payload = source.read(4097)
+        payload = bounded_stream_read(source, 4097)
     if len(payload) != metadata.st_size:
         raise ValueError("native volume probe file changed")
     probes = json.loads(payload)
@@ -233,7 +258,7 @@ def read_volume_label_probes(path: Path) -> list[str]:
         metadata = os.fstat(source.fileno())
         if not stat.S_ISREG(metadata.st_mode) or not 0 < metadata.st_size <= 4096:
             raise ValueError("invalid native volume label probe file")
-        payload = source.read(4097)
+        payload = bounded_stream_read(source, 4097)
     if len(payload) != metadata.st_size:
         raise ValueError("native volume label probe file changed")
     probes = json.loads(payload)
@@ -259,7 +284,7 @@ def read_network_proof(path: Path) -> list[str]:
         metadata = os.fstat(source.fileno())
         if not stat.S_ISREG(metadata.st_mode) or not 0 < metadata.st_size <= 4096:
             raise ValueError("invalid native network proof file")
-        payload = source.read(4097)
+        payload = bounded_stream_read(source, 4097)
     if len(payload) != metadata.st_size:
         raise ValueError("native network proof file changed")
     proof = json.loads(payload, object_pairs_hook=unique_proof_object)
@@ -317,9 +342,9 @@ def read_port_proof(path: Path, capture_dir: Path, lane: str, engine: str,
                     or before.st_uid != os.geteuid() or stat.S_IMODE(before.st_mode) != 0o600
                     or before.st_nlink != 1):
                 raise ValueError("invalid private native port proof")
-            payload = source.read(4097)
+            payload = bounded_stream_read(source, 4097)
             source.seek(0)
-            repeated_payload = source.read(4097)
+            repeated_payload = bounded_stream_read(source, 4097)
             after = os.fstat(source.fileno())
         current_parent = os.fstat(directory_fd)
         current_ancestor = os.fstat(ancestor_fd)
@@ -421,7 +446,7 @@ def read_port_proof(path: Path, capture_dir: Path, lane: str, engine: str,
 
 
 def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path: Path, volume_path: Path, volume_label_path: Path, identity_path: Path, port_path: Path, health_metadata_path: Path, network_attachment_path: Path, bind_relabel_path: Path, capture_dir: Path, destination: Path, lane: str, image: str,
-         mode: str, package: str, candidate_sha: str, run_id: str) -> None:
+         mode: str, package: str, candidate_sha: str, run_id: str, *, outer_context=None, source_budget=None) -> None:
     if lane not in LANES or mode != lane.rsplit("-", 1)[1]:
         raise ValueError("invalid native lane or mode")
     if not re.fullmatch(r"[0-9a-f]{40}", candidate_sha):
@@ -441,7 +466,7 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
     elif package:
         raise ValueError("upstream image has no Debian Engine package")
 
-    version = json.loads(version_path.read_text(encoding="utf-8"))
+    version = json.loads(bounded_source_read(version_path, 65536))
     engine = version.get("Version")
     maximum = version.get("ApiVersion")
     minimum = version.get("MinAPIVersion")
@@ -472,7 +497,7 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
 
     if shapes_path.stat().st_size > 4096:
         raise ValueError("native shape evidence exceeds closed limit")
-    shapes = json.loads(shapes_path.read_text(encoding="utf-8"))
+    shapes = json.loads(bounded_source_read(shapes_path, 4096))
     if not isinstance(shapes, dict) or set(shapes) != set(CAPABILITIES):
         raise ValueError("native capability shape set is incomplete")
     for name, expected in REQUIRED_SHAPES.items():
@@ -484,7 +509,7 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
 
     if source_path.stat().st_size > 4096:
         raise ValueError("native source evidence exceeds closed limit")
-    source_probes = json.loads(source_path.read_text(encoding="utf-8"))
+    source_probes = json.loads(bounded_source_read(source_path, 4096))
     if (not isinstance(source_probes, list) or len(source_probes) != len(SOURCE_PROBES)
             or any(not isinstance(probe, str) for probe in source_probes)
             or set(source_probes) != set(SOURCE_PROBES)):
@@ -579,7 +604,7 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         raise ValueError("incomplete kernel-settings source group")
 
     # Mandatory private qualification, not a raw capability/shape projection.
-    pids_limit = read_pids_limit_proof(capture_dir / PIDS_LIMIT_FILENAME, capture_dir, external_context)
+    pids_limit = read_pids_limit_proof(capture_dir / PIDS_LIMIT_FILENAME, capture_dir, external_context, outer_context)
     if (type(pids_limit) is not dict
             or set(pids_limit) != {"contract", "capability_admission", "catalogue_admission", "scope"}
             or type(pids_limit["contract"]) is not str or pids_limit["contract"] != "pids-limit-v2"
@@ -760,15 +785,22 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         record["identity_contract"] = IDENTITY_CONTRACT
         record["identity_cases"] = list(IDENTITY_CASES)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(json.dumps(record, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    serialized = json.dumps(record, sort_keys=True, indent=2) + "\n"
+    if source_budget is not None:
+        source_budget.debit(source_bytes=len(serialized.encode("utf-8")), io_calls=3)
+    destination.write_text(serialized, encoding="utf-8")
 
 
 if __name__ == "__main__":
     if len(sys.argv) != 20:
         raise SystemExit("usage: native-evidence.py VERSION_JSON SHAPES_JSON SOURCE_JSON NETWORK_JSON VOLUME_JSON VOLUME_LABEL_JSON IDENTITY_JSON PORT_JSON HEALTH_METADATA_JSON NETWORK_ATTACHMENT_JSON BIND_RELABEL_JSON CAPTURE_DIR DESTINATION LANE IMAGE MODE PACKAGE SHA RUN_ID")
     try:
-        emit(Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]), Path(sys.argv[4]),
-             Path(sys.argv[5]), Path(sys.argv[6]), Path(sys.argv[7]), Path(sys.argv[8]),
-             Path(sys.argv[9]), Path(sys.argv[10]), Path(sys.argv[11]), Path(sys.argv[12]), Path(sys.argv[13]), *sys.argv[14:])
+        from native_outer_coordinator import metered_source_reads, read_consumer_input
+        outer_context, budget = read_consumer_input(sys.stdin.buffer, "emitter")
+        with metered_source_reads(budget):
+            emit(Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]), Path(sys.argv[4]),
+                 Path(sys.argv[5]), Path(sys.argv[6]), Path(sys.argv[7]), Path(sys.argv[8]),
+                 Path(sys.argv[9]), Path(sys.argv[10]), Path(sys.argv[11]), Path(sys.argv[12]), Path(sys.argv[13]), *sys.argv[14:],
+                 outer_context=outer_context, source_budget=budget)
     except (ValueError, OSError, json.JSONDecodeError, RecursionError):
         raise SystemExit("native evidence rejected") from None

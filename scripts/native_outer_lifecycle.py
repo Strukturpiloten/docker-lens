@@ -1,13 +1,10 @@
-"""Unwired, private lifecycle/custody seam; no runtime adapter or proof writer.
+"""Private original-object custody for the exclusive fixed outer owner.
 
-RuntimeOps describes normalized, independently acquired observations, NOT Podman
-JSON. Only fake operations are supplied by this component. Expected launches and
-runtime facts must come from independent reviewed inputs, never the OCI being
-checked. This does not establish actual image defaults or native qualification.
-
-The owner must remain alive while future independent consumers use bounded
-copies of candidate data. Final publication and those consumers do not exist
-here. The caller owns run-directory disposal and any unknown-create recovery.
+RuntimeOps uses normalized independent observations, not native JSON. The root
+owner holds OCI and every ancestor from initialization through all consumers;
+the separate caller creates and holds the log from birth. Binding full launch
+expectations precedes start and never copies defaults from target OCI.
+Source implementation and offline controls do not establish native admission.
 """
 
 from dataclasses import dataclass
@@ -23,6 +20,7 @@ import stat
 from typing import Protocol
 
 from native_outer_bootstrap import build_bootstrap_argv, parse_bootstrap_log
+from native_outer_coordinator import bounded_source_io
 
 OCI_LIMIT = 65536
 LOG_WINDOW = 2048
@@ -48,6 +46,21 @@ def integer(value, low=0, high=(1 << 64) - 1):
 
 def text(value, limit=4096):
     return type(value) is str and 0 < len(value) <= limit and "\0" not in value and len(value.encode("utf-8")) <= limit
+
+
+def environment_map(values):
+    """Podman 4.9.3 emits a Go map: order is not a process-env identity."""
+    require(type(values) in (list, tuple) and len(values) <= 128)
+    result = {}
+    total = 0
+    for value in values:
+        require(text(value, 4096) and "=" in value)
+        name, item = value.split("=", 1)
+        require(re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", name) is not None and name not in result)
+        result[name] = item
+        total += len(value.encode("utf-8"))
+    require(total <= 16384)
+    return result
 
 
 def path_parts(path):
@@ -128,10 +141,9 @@ class CleanupIdentity:
 
 
 class RuntimeOps(Protocol):
-    """Future adapter must bound operations and verify cleanup ownership, never names.
+    """Bounded operations with exact-ID cleanup, never name-derived authority.
 
-    Every deadline is already absolute; adapters cannot renew it. Normalization
-    and actual runtime acquisition are future independently reviewed work.
+    Every deadline is already absolute; the fixed adapter cannot renew it.
     """
     def create(self, expectation, log_path, deadline): ...
     def initialize(self, container_id, deadline): ...
@@ -385,7 +397,7 @@ def _validate_oci(raw, expectation, container_id):
     require(type(process) is dict and type(linux) is dict and type(annotations) is dict)
     args = build_bootstrap_argv(expectation.nonce, list(expectation.original_argv))
     require(type(process.get("args")) is list and process["args"] == args)
-    require(type(process.get("env")) is list and process["env"] == list(expectation.environment))
+    require(type(process.get("env")) is list and environment_map(process["env"]) == environment_map(expectation.environment))
     require(process.get("cwd") == expectation.cwd and process.get("terminal") is False)
     user = process.get("user")
     require(type(user) is dict and set(user) == {"uid", "gid", "additionalGids"})
@@ -405,7 +417,7 @@ def _validate_oci(raw, expectation, container_id):
             require(set(namespace) == {"type"})
         elif "path" in namespace:
             path_parts(namespace["path"])
-    require({"pid", "mount", "cgroup"} <= seen)
+    require({"pid", "mount", "cgroup"} <= seen and "user" not in seen)
     require(annotations.get("run.oci.systemd.subgroup") == "container")
     require(annotations.get("run.oci.delegate-cgroup", "") == "")
     require(annotations.get("io.kubernetes.cri.container-type") == "sandbox")
@@ -420,7 +432,18 @@ def _validate_oci(raw, expectation, container_id):
         require(type(actual) is dict and set(actual) == set(expected))
         require(all(type(actual[key]) is type(item) and actual[key] == item for key, item in expected.items()))
     expected_mounts = [mount.wire() for mount in expectation.standard_mounts + expectation.user_mounts]
-    require(type(value.get("mounts")) is list and value["mounts"] == expected_mounts)
+    mounts = value.get("mounts")
+    require(type(mounts) is list and len(mounts) == len(expected_mounts))
+    by_destination = {}
+    for mount in mounts:
+        require(type(mount) is dict and set(mount) == {"destination", "type", "source", "options"})
+        destination = mount["destination"]
+        path_parts(destination)
+        require(destination not in by_destination)
+        by_destination[destination] = mount
+    # Podman sorts the mount hierarchy. Only array order is normalized; every
+    # destination/type/source/option (including option ordering) remains exact.
+    require(by_destination == {mount["destination"]: mount for mount in expected_mounts})
 
 
 def _started(value):
@@ -636,7 +659,7 @@ class LifecycleCustody:
         require(self._log.prefix is not None)
         identity = CleanupIdentity(self._id, self.expectation.name, self.expectation.image_digest, self.expectation.owner)
         launch = (tuple(build_bootstrap_argv(self.expectation.nonce, list(self.expectation.original_argv))),
-                  self.expectation.environment, self.expectation.uid, self.expectation.gid,
+                  tuple(sorted(environment_map(self.expectation.environment).items())), self.expectation.uid, self.expectation.gid,
                   self.expectation.additional_gids, self.expectation.cwd)
         self._candidate = CandidateContext(self.profile, identity, self._pid, self._started_at,
                                             self._oci.original, self._oci.raw, self._oci.sha256,
@@ -689,3 +712,209 @@ class LifecycleCustody:
 
     def __exit__(self, *_args):
         self.close()
+
+
+class _ReservedDescriptors:
+    """FD custody charged to an already-reserved, process-local budget slice."""
+    def _checkpoint(self):
+        self.budget.check()
+        now = self.clock()
+        require(type(now) in (int, float) and math.isfinite(now)
+                and self._last_clock <= now < self._deadline() and self.cancelled() is False)
+        self._last_clock = now
+
+    def _io(self, operation, *args, **kwargs):
+        self._checkpoint()
+        self.budget.debit(io_calls=1)
+        result = operation(*args, **kwargs)
+        self._checkpoint()
+        return result
+
+    def _open(self, path, flags, mode=0o777, **kwargs):
+        self._checkpoint()
+        self.budget.debit(io_calls=1)
+        descriptor = os.open(path, flags, mode, **kwargs)
+        self._fds.append(descriptor)
+        self._checkpoint()
+        return descriptor
+
+    def _read(self, descriptor, size):
+        self._checkpoint()
+        raw = bounded_source_io(self.budget, size, lambda maximum: os.pread(descriptor, maximum, 0))
+        self._checkpoint()
+        return raw
+
+    def _close_descriptors(self):
+        for descriptor in reversed(self._fds):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        self._fds.clear()
+
+
+class RootOCICustody(_ReservedDescriptors):
+    """Root owner of original runtime OCI and ancestors, never caller log FDs.
+
+    The fixed adapter owns native command charging/verified absence. This owner
+    charges every held-file read and metadata operation to its prepaid slice.
+    Caller log-empty/frame checks belong to the independent caller owner.
+    """
+    def __init__(self, expectation, profile, ops, log_path, budget, startup_deadline, custody_deadline,
+                 cleanup_deadline, clock, cancelled):
+        self.expectation, self.profile, self.ops, self.log_path = expectation, profile, ops, log_path
+        self.budget, self.clock, self.cancelled = budget, clock, cancelled
+        self.startup_deadline, self.custody_deadline, self.cleanup_deadline = startup_deadline, custody_deadline, cleanup_deadline
+        self._fds, self._id, self._oci = [], None, None
+        self._bound = False
+        self._pid = self._started_at = None
+        self._create_pending = self._cleanup_attempted = False
+        self.cleanup_obligation, self.cleanup_calls, self.runtime_calls = "none", 0, 0
+        self.state = State.NEW
+        self._last_clock = clock()
+        try:
+            require(type(profile) is RuntimeProfile and type(profile.rootless) is bool and type(profile.remote) is bool
+                    and profile == RuntimeProfile("linux", False, False, "4.9.3", "crun", "1.14.1", "systemd", "v2"))
+            require(all(type(value) in (int, float) and math.isfinite(value) for value in
+                        (self._last_clock, startup_deadline, custody_deadline, cleanup_deadline)))
+            require(0 < startup_deadline - self._last_clock <= 120
+                    and startup_deadline <= custody_deadline < cleanup_deadline
+                    and cleanup_deadline - self._last_clock <= 1800)
+            LifecycleCustody._expectations(self)
+            path_parts(log_path)
+            self._checkpoint()
+        except BaseException:
+            self._poison()
+            raise LifecycleError() from None
+
+    def _deadline(self):
+        return self.custody_deadline if self.state == State.STARTED else self.startup_deadline
+
+    _operation = LifecycleCustody._operation
+    _inspect = LifecycleCustody._inspect
+    _dispose = LifecycleCustody._dispose
+
+    @phase(State.CREATED)
+    def initialize(self):
+        # Custody starts immediately after init, before the owned database
+        # paths used by the independent expectation are returned to the caller.
+        self._operation("initialize", self._id)
+        snapshot = self._inspect(False)
+        self._pid = snapshot.pid
+        self._oci = _HeldOCI(self, snapshot.oci_config_path)
+        self.state = State.INITIALIZED
+
+    @phase(State.INITIALIZED)
+    def bind_expectation(self, expectation):
+        require(not self._bound and type(expectation) is LaunchExpectation)
+        previous = self.expectation
+        # Only independently owned storage/runtime paths may become available
+        # after create. All launch identity and process policy stays immutable.
+        for field in LaunchExpectation.__dataclass_fields__:
+            if field not in ("standard_mounts", "user_mounts"):
+                require(getattr(expectation, field) == getattr(previous, field))
+        require(tuple((item.destination, item.kind, item.options) for item in expectation.user_mounts)
+                == tuple((item.destination, item.kind, item.options) for item in previous.user_mounts))
+        self.expectation = expectation
+        LifecycleCustody._expectations(self)
+        self._oci.recheck()
+        _validate_oci(self._oci.raw, expectation, self._id)
+        self._bound = True
+
+    @phase(State.NEW)
+    def create(self):
+        self._operation("create", self.expectation, self.log_path)
+        self.state = State.CREATED
+        return self._id
+
+    @phase(State.INITIALIZED)
+    def original_oci(self):
+        require(self._bound)
+        self._oci.recheck()
+        return self._oci.raw, self._oci.original, self._pid
+
+    @phase(State.INITIALIZED)
+    def arm(self):
+        require(self._bound)
+        self._oci.recheck()
+        self.state = State.ARMED
+
+    @phase(State.ARMED)
+    def start(self):
+        self._inspect(False)
+        self._oci.recheck()
+        self._operation("start", self._id)
+        snapshot = self._inspect(True)
+        self._started_at = snapshot.started_at
+        self._oci.recheck()
+        self.state = State.STARTED
+        return self._pid, self._started_at
+
+    @phase(State.STARTED)
+    def recheck(self):
+        self._inspect(True)
+        self._oci.recheck()
+        return self._oci.sha256, self._pid, self._started_at
+
+    def _poison(self):
+        self.state = State.POISONED
+        self._dispose()
+
+    def close(self):
+        self._dispose()
+        if self.state is not State.POISONED:
+            self.state = State.CLOSED
+
+
+class CallerLogCustody(_ReservedDescriptors):
+    """Unprivileged owner creating and retaining the original log from birth."""
+    def __init__(self, expectation, log_path, budget, startup_deadline, custody_deadline, clock, cancelled):
+        self.expectation, self.log_path, self.budget = expectation, log_path, budget
+        self.startup_deadline, self.custody_deadline = startup_deadline, custody_deadline
+        self.clock, self.cancelled, self._last_clock = clock, cancelled, clock()
+        self._fds, self._log, self.captured = [], None, False
+        try:
+            require(all(type(value) in (int, float) and math.isfinite(value) for value in
+                        (self._last_clock, startup_deadline, custody_deadline)))
+            require(0 < startup_deadline - self._last_clock <= 120
+                    and startup_deadline <= custody_deadline and custody_deadline - self._last_clock <= 1800)
+            LifecycleCustody._expectations(self)
+            self._checkpoint()
+            self._log = _HeldLog(self, log_path)
+        except BaseException:
+            self.close()
+            raise LifecycleError() from None
+
+    def _deadline(self):
+        return self.custody_deadline if self.captured else self.startup_deadline
+
+    def empty(self):
+        try:
+            require(not self.captured)
+            self._log.recheck()
+            require(self._log.last_size == 0)
+        except BaseException:
+            self.close()
+            raise LifecycleError() from None
+
+    def capture(self):
+        try:
+            require(not self.captured)
+            self._log.capture()
+            self._checkpoint()
+            self.captured = True
+        except BaseException:
+            self.close()
+            raise LifecycleError() from None
+
+    def recheck(self):
+        try:
+            require(self.captured)
+            self._log.recheck()
+            return self._log.fixed, self._log.prefix, self._log.frame
+        except BaseException:
+            self.close()
+            raise LifecycleError() from None
+
+    def close(self):
+        self._close_descriptors()

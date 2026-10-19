@@ -447,26 +447,51 @@ class PidsLimitV2ProofTests(unittest.TestCase):
                     reader.read_pids_limit_v2_proof(target, parent, context)
 
     def test_cli_exact_twelve_arguments_current_filename_and_fixed_private_failure(self):
+        from native_outer_coordinator import serialize_consumer_context
+        from test_native_outer_authority import authority_fixture
         for lane in LANES:
-            proof = fixture(lane)
             with tempfile.TemporaryDirectory() as directory:
                 parent = Path(directory)
-                proof["context"]["outer"]["socket_source"] = str(parent / "socket")
+                outer_context, context, _account, _options, _prefix, proof = authority_fixture(lane, directory)
+                proof["boundary"] = outer_context["boundary"]
+                proof["observer"].update(zip(("pid_namespace", "mount_namespace", "cgroup_namespace"), outer_context["boundary"][2]))
+                proof["observer"]["daemon_pid_namespace"] = outer_context["boundary"][2][0]
                 target = self.write(parent, proof)
-                context = proof["context"]
                 arguments = [str(parent), context["candidate_sha"], context["run_id"], lane,
                              context["engine_release"], context["rendering_api"], context["mode"],
                              context["docker_package"], context["fixture_image"], context["outer"]["image"],
                              context["outer"]["id"], str(context["daemon_uid"])]
                 command = [sys.executable, str(ROOT / "scripts/native_pids_limit_v2_proof.py")]
-                success = subprocess.run(command + arguments, capture_output=True, text=True, timeout=5, check=False)
+                missing = subprocess.run(command + arguments, input="", capture_output=True, text=True, timeout=5, check=False)
+                self.assertEqual((missing.returncode, missing.stdout, missing.stderr), (1, "", FAILURE + "\n"))
+                # Only source acquisition is authored/injected in this actual
+                # child. Its stdin schema, budget, proof custody and all37
+                # coordinate predicates are the production reader's code.
+                code = '''import sys
+import native_outer_coordinator as c
+import native_pids_limit_v2_proof as r
+from test_native_outer_authority import authority_fixture
+_ctx,_expected,account,options,prefix,_proof=authority_fixture(sys.argv[4],sys.argv[1])
+original=c.derive_consumer_authority
+c.derive_consumer_authority=lambda value,expected,budget=None:original(value,expected,account_loader=lambda *_:account,socket_options=lambda _:options,log_reader=lambda _i,_l,p:p==prefix)
+try:r.main(sys.argv[1:])
+except (OSError,ValueError):raise SystemExit("invalid private pids limit proof") from None
+'''
+                fake_command = [sys.executable, "-c", code]
+                environment = {**os.environ, "PYTHONPATH": str(ROOT / "scripts") + ":" + str(ROOT / "tests"),
+                               "NATIVE_PIDS_LIMIT_DEADLINE_EPOCH": str(outer_context["pids"]["deadline_epoch"])}
+                encoded = serialize_consumer_context(outer_context).decode("ascii")
+                success = subprocess.run(fake_command + arguments, input=encoded, env=environment,
+                                         capture_output=True, text=True, timeout=5, check=False)
                 self.assertEqual((success.returncode, success.stdout, success.stderr), (0, "", ""))
                 for invalid in (arguments[:-1], arguments + [SECRET], arguments[:-1] + [SECRET]):
-                    result = subprocess.run(command + invalid, capture_output=True, text=True, timeout=5, check=False)
+                    result = subprocess.run(fake_command + invalid, input=encoded, env=environment,
+                                            capture_output=True, text=True, timeout=5, check=False)
                     self.assertNotEqual(result.returncode, 0)
                     self.assertEqual((result.stdout, result.stderr), ("", FAILURE + "\n"))
                 target.rename(parent / legacy.FILENAME)
-                result = subprocess.run(command + arguments, capture_output=True, text=True, timeout=5, check=False)
+                result = subprocess.run(fake_command + arguments, input=encoded, env=environment,
+                                        capture_output=True, text=True, timeout=5, check=False)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(result.stderr, FAILURE + "\n")
 

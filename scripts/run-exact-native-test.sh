@@ -47,26 +47,45 @@ fi
 # libtest returns success for zero selected tests. Check the ignored-only list
 # first, then require exactly one executed success in the final summary.
 list_status=0
-listing=$(timeout 180 cargo test --locked "${cargo_target[@]}" -- --ignored --list 2>&1) || list_status=$?
-if (( list_status != 0 )); then
-  echo "failed to list required ignored native test $target::$test_name (exit $list_status)" >&2
-  exit 1
+if [[ ${DOCKERLENS_CANONICAL_CHILD:-} != 1 ]]; then
+  listing=$(timeout 180 cargo test --locked "${cargo_target[@]}" -- --ignored --list </dev/null 2>&1) || list_status=$?
+  if (( list_status != 0 )); then
+    echo "failed to list required ignored native test $target::$test_name (exit $list_status)" >&2
+    exit 1
+  fi
+  if [[ $(grep -Fxc "$selected: test" <<<"$listing" || true) != 1 ]]; then
+    echo "required ignored native test $target::$test_name is absent" >&2
+    exit 1
+  fi
 fi
-if [[ $(grep -Fxc "$selected: test" <<<"$listing" || true) != 1 ]]; then
-  echo "required ignored native test $target::$test_name is absent" >&2
-  exit 1
+if [[ ${DOCKERLENS_CANONICAL_PIDS:-} == 1 ]]; then
+  [[ $target == native_pids_limit && $test_name == live_pids_limit_effects_match_engine ]] || exit 1
+  # The closed phase contains only the existing reader ABI plus selected inner
+  # ID. Listing has completed before the coordinator samples S and original D.
+  exec /usr/bin/python3 -E -s "${BASH_SOURCE[0]%/*}/native_outer_canonical.py" producer \
+    "$NATIVE_CAPTURE_DIR" "$NATIVE_PIDS_LIMIT_CANDIDATE_SHA" "${NATIVE_CAPTURE_DIR##*.}" \
+    "$NATIVE_LANE" "$NATIVE_ENGINE_VERSION" "$NATIVE_API_VERSION" "$NATIVE_DAEMON_MODE" "$NATIVE_DOCKER_PACKAGE" \
+    "$NATIVE_FIXTURE_IMAGE" "$NATIVE_OUTER_IMAGE" "$NATIVE_OUTER_CONTAINER_ID" "$NATIVE_BIND_RELABEL_DAEMON_UID" "$NATIVE_CONTAINER_ID"
 fi
 run_status=0
 # Bind optional failure diagnostics to this invocation's existing hard timeout.
 # The native test reserves its own cleanup and reporting margin before this time.
-run_deadline_epoch=$(( $(date +%s) + 180 ))
+if [[ ${DOCKERLENS_CANONICAL_CHILD:-} == 1 ]]; then
+  [[ $target == native_pids_limit && $test_name == live_pids_limit_effects_match_engine && ${NATIVE_PIDS_LIMIT_DEADLINE_EPOCH:-} =~ ^[0-9]+$ ]] || exit 1
+  run_deadline_epoch=$NATIVE_PIDS_LIMIT_DEADLINE_EPOCH
+  run_timeout_seconds=$((run_deadline_epoch - $(date +%s)))
+  (( run_timeout_seconds > 0 && run_timeout_seconds <= 180 )) || exit 1
+else
+  run_deadline_epoch=$(( $(date +%s) + 180 ))
+  run_timeout_seconds=180
+fi
 if [[ $target == native_pids_limit ]]; then
   export NATIVE_PIDS_LIMIT_DEADLINE_EPOCH=$run_deadline_epoch
 fi
 if [[ $target == native_nofile ]]; then
   export NATIVE_NOFILE_DEADLINE_EPOCH=$run_deadline_epoch
 fi
-result=$(NATIVE_NETWORK_TEST_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_HEALTH_METADATA_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_STOP_SIGNAL_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_LIFECYCLE_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_RUNTIME_FILESYSTEM_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_TMPFS_EFFECT_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_HEALTH_START_INTERVAL_BOUNDARY_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_LIFECYCLE_DEFAULT_EFFECT_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_HOSTNAME_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_COMMAND_CLEAR_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_SHM_SIZE_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_SUPPLEMENTARY_GROUPS_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_KERNEL_SETTINGS_DEADLINE_EPOCH=$run_deadline_epoch timeout 180 cargo test --locked "${cargo_target[@]}" -- --ignored --exact "$selected" 2>&1) || run_status=$?
+result=$(NATIVE_NETWORK_TEST_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_HEALTH_METADATA_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_STOP_SIGNAL_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_LIFECYCLE_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_RUNTIME_FILESYSTEM_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_TMPFS_EFFECT_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_HEALTH_START_INTERVAL_BOUNDARY_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_LIFECYCLE_DEFAULT_EFFECT_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_HOSTNAME_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_COMMAND_CLEAR_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_SHM_SIZE_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_SUPPLEMENTARY_GROUPS_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_KERNEL_SETTINGS_DEADLINE_EPOCH=$run_deadline_epoch timeout "$run_timeout_seconds" cargo test --locked "${cargo_target[@]}" -- --ignored --exact "$selected" 2>&1) || run_status=$?
 # Only libtest's numeric summary is safe to print. Test and compiler output can
 # contain protected native values, socket payloads, or authored secrets.
 summary=$(grep -Eo '^test result: (ok|FAILED)\. [0-9]+ passed; [0-9]+ failed; [0-9]+ ignored; [0-9]+ measured; [0-9]+ filtered out;' <<<"$result" | tail -n 1 || true)

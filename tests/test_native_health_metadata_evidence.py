@@ -2,11 +2,10 @@
 
 import copy
 import json
-import os
-import subprocess
 import unittest
 
 import test_native_evidence as legacy
+from native_harness_syntax import assert_positive_emitter_rerun, run_emitter
 from test_native_health_metadata_proof import P, context, proof
 
 
@@ -106,6 +105,7 @@ class HealthMetadataEvidenceTests(unittest.TestCase):
             self.assertFalse(destination.exists())
             result, destination = canonical.ExternalNetworkEvidenceTests.emit(self, lane)
             self.assertEqual(result.returncode, 0, result.stderr)
+            assert_positive_emitter_rerun(self, result, destination)
             destination.unlink()
             path = destination.parent.parent / "health-metadata.json"
             original = json.loads(path.read_text())
@@ -144,10 +144,7 @@ class HealthMetadataEvidenceTests(unittest.TestCase):
             for mutation, value in mutations:
                 with self.subTest(lane=lane, mutation=mutation):
                     path.write_text(json.dumps(value))
-                    rejected = subprocess.run(result.args, capture_output=True, text=True, check=False, timeout=5,
-                                              env={**os.environ, "NATIVE_FIXTURE_IMAGE": legacy.HEALTH_FIXTURE_IMAGE,
-                                                   "NATIVE_OUTER_CONTAINER_ID": "f" * 64,
-                                                   "NATIVE_BIND_RELABEL_DAEMON_UID": "1000" if lane.endswith("-rootless") else "0"})
+                    rejected = run_emitter(result)
                     self.assertNotEqual(rejected.returncode, 0)
                     self.assertFalse(destination.exists())
                     self.assertEqual(rejected.stdout, "")

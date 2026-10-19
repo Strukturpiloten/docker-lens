@@ -7,27 +7,36 @@ The scaffold policy tests check alignment and MSRV failure propagation through
 the shared local, PR/main, native-dispatch, and release offline gate. Earlier
 verification records below retain the Rust versions used at those checkpoints.
 
-## Unwired original-PID1 bootstrap source component
+## Connected outer-custody source; acceptance remains pending
 
-The [bootstrap component contract](native-outer-bootstrap-contract.md) describes
-the pure argument builder, original-PID1 observation source and strict private
-log-frame decoder. Synthetic controls and shell syntax checks do not run the
-bootstrap, read host `/proc` or establish native/boundary qualification. The
-canonical harness and current mandatory PIDs-v2 reader are unchanged. Lifecycle
-configuration/log custody and original-object integration remain required; a
-parsed frame alone cannot satisfy them or the original proof-size/timing budgets.
+[ADR 0033](decisions/0033-original-outer-custody.md) connects the
+[bootstrap](native-outer-bootstrap-contract.md),
+[lifecycle custody](native-outer-lifecycle-contract.md), concrete runtime,
+root broker and canonical coordinator. Wire v2 binds independently derived
+intent/expectations, original OCI/log custody, all 37 PIDs observations and both
+mandatory private consumers. The exact 28 invocations and six logical cleanup
+owners remain; the PIDs owner is coordinated directly rather than through a
+shell subshell so private IPC descriptors are not lost.
 
-## Unwired in-memory lifecycle custody prerequisite
+This is unqualified source, not a passing integrated/native harness. The former
+200000-byte caller slice refused actual source prepayment; that negative remains
+tested. ADR 0033 records the experimental static 288000/290000/470576-byte
+partition within the same 1 MiB envelope. Four authored connected scenarios
+exercise the unpatched parent/child plan, real independent source loaders and
+readers/emitter, but use a synthetic six-phase shell, authored native/producer
+effects and mocked metadata custody. They do not qualify genuine metadata I/O,
+native variability or the complete 28-test workload. Isolated emitter sizing,
+Rust monotonic/stream controls and fake-process launcher checks likewise
+establish only their bounded offline behavior.
+Physical read claims, bootstrap spend adoption and control-transport accounting
+must retain the existing shared limits and original deadlines throughout.
 
-The [lifecycle custody component](native-outer-lifecycle-contract.md) holds
-original OCI/log objects through a single-use, injected-operation lifecycle.
-Independent fake/tempfile controls cover identity, inode/byte/prefix drift,
-deadlines, resource accounting and cancellation; they do not execute a runtime
-or establish actual image defaults, profile admission, cleanup or native proof.
-There is no concrete runtime/signal adapter, CLI, proof/report writer or
-canonical consumer. Activation must include both proof consumers, original
-boundary rechecks, all 37 witnesses, actual serialization fit and final custody
-checks together. Existing complete/native/application/package gates remain.
+Fresh final-source complete checks, independent review, actual serialization and
+whole-actor fit, four genuine native lanes, six authored-fixture consumers, six
+application migrations and package/published-dependency gates remain mandatory.
+No fixture sizing, parsed bootstrap frame, source-only review or prior campaign
+supplies native ownership, rootless delegation, effects or cleanup evidence.
+Host capture is deferred; no release/publication follows from this source work.
 
 ## Diagnostic CI-job outer-runtime sample
 
@@ -213,8 +222,10 @@ consumers require the v2 reader and exact four-key v2 return, without a legacy
 file/schema fallback. Original bytes pass unchanged 16 KiB custody before
 expansion. All 37 reader-coordinate witnesses and exact phase tuples are checked
 before every original pure semantic predicate. Actual compact serialization
-must also fit 15 KiB, reserving 1 KiB without padding for a separate future
-outer-boundary contract. Historical v1 reader/tests/records stay unchanged.
+must also fit 15 KiB. [ADR 0033](decisions/0033-original-outer-custody.md) uses
+the remaining 1 KiB for the closed ten-slot original-boundary record, without
+padding or increasing the complete 16 KiB ceiling. Historical v1
+reader/tests/records stay unchanged.
 No request, invocation, public projection, accounting or budget is relaxed.
 Source/synthetic evidence is not actual native coordinate/ownership evidence;
 all fresh native, consumer and application gates remain mandatory.
@@ -1821,11 +1832,19 @@ needs fresh complete checks and native validation. Never substitute the historic
 source SHA for the final candidate SHA or infer an API version from a release
 label. Public resolver and inert rendering tests cover the admitted records.
 
-The [outer broker protocol](native-outer-broker-protocol.md) is a separate
-unwired stdlib source component, discovered by the existing offline Python gate.
-Independent authored packets and real anonymous-pipe controls cover closed
-identity/sequence framing, once-only bounded OCI transport, cancellation,
-backpressure, replay and absolute startup/custody/cleanup deadlines. Teardown
-acknowledgement remains unverified, never authenticated native absence. No real
-privileged helper, runtime adapter, cross-process aggregate budget enforcement,
-canonical native consumer, capability admission or proof-size allowance changes.
+The [outer broker protocol](native-outer-broker-protocol.md) now has connected
+validation source under [ADR 0033](decisions/0033-original-outer-custody.md):
+concrete runtime/broker, caller-owned-log coordinator, phase relay and private
+Rust producer/independent reader/emitter contexts. Independent authored packets
+and real anonymous-pipe controls cover closed identity/sequence framing,
+once-only bounded OCI transport, cancellation, backpressure, replay and original
+absolute deadlines. Disjoint preclaimed slices and physical I/O claims cover
+actual spend without refunds or new role pools; source wiring does not establish
+complete native-path fit. The former caller-slice failure remains tested; the
+experimental fixed candidate passes four authored connected scenarios without
+growing the total allowance or removing byte-continuity checks. That synthetic
+phase driver and its metadata/native mocks do not qualify genuine payloads or
+the full native harness. Teardown acknowledgement is never authenticated native
+absence. Fresh complete, four-lane native, downstream
+consumer/application and package gates remain required; this source changes no
+capability admission or aggregate/proof-size allowance.

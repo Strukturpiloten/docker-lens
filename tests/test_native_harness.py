@@ -1,6 +1,7 @@
 """Fault injection for exact resource cleanup and ignored native test selection."""
 
 import json
+import ast
 import os
 import re
 import shlex
@@ -10,16 +11,48 @@ import sys
 import tempfile
 import time
 import unittest
+from native_harness_syntax import ROOT_BOUNDARY_COVERAGE, native_calls, invocations, logical_owner_scopes, fake_teardown_boundary, shell_fault_campaign
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class NativeHarnessTests(unittest.TestCase):
+    def test_shared_parser_rejects_unknown_syntax_and_keeps_six_logical_owners(self):
+        source = (ROOT / "scripts/native-conformance.sh").read_text()
+        calls = native_calls(source)
+        self.assertEqual(len(calls), 28)
+        self.assertEqual(logical_owner_scopes(source), [calls[16:22], *([call] for call in calls[23:28])])
+        direct = next(item for item in invocations(source) if item.target == "native_pids_limit")
+        self.assertIn('<&"$canonical_read" >&"$canonical_write"', direct.command)
+        with self.assertRaisesRegex(AssertionError, "unrecognized native runner syntax"):
+            native_calls(source.replace(direct.command, direct.command + " unexpected"))
+        coordinator = (ROOT / "scripts/native_outer_canonical.py").read_text()
+        with self.assertRaises(AssertionError):
+            logical_owner_scopes(source, coordinator.replace('"NATIVE_LIFECYCLE_CLEANUP_OWNER": "native_conformance_outer_v1"',
+                                                           '"NATIVE_LIFECYCLE_CLEANUP_OWNER": "wrong_owner"'))
+
+    def test_shell_campaign_root_coverage_maps_to_actual_named_production_controls(self):
+        tree = ast.parse(Path(__file__).read_text())
+        campaign = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+                        and node.name == "test_owned_resources_are_cleaned_after_early_failures")
+        fault_loop = next(node for node in ast.walk(campaign) if isinstance(node, ast.For)
+                          and isinstance(node.target, ast.Tuple)
+                          and [item.id for item in node.target.elts] == ["lane", "fault"])
+        actual_faults = {item.elts[1].value for item in fault_loop.iter.elts}
+        self.assertTrue({case for cases in ROOT_BOUNDARY_COVERAGE for case in cases} <= actual_faults)
+        for cases, identifiers in ROOT_BOUNDARY_COVERAGE.items():
+            self.assertTrue(cases)
+            for identifier in identifiers:
+                with self.subTest(cases=cases, identifier=identifier):
+                    module, classname, method = identifier.split(".")
+                    tree = ast.parse((ROOT / "tests" / (module + ".py")).read_text())
+                    cls = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == classname)
+                    self.assertTrue(any(isinstance(node, ast.FunctionDef) and node.name == method for node in cls.body))
+
     def test_port_publication_is_independent_eleventh_mandatory_check_before_manifest(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text()
-        invocations = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$',
-                                 source, re.MULTILINE)
+        invocations = native_calls(source)
         self.assertEqual(invocations, [
             ("native_capture", "live_engine_capture_decodes"),
             ("acquisition", "live_read_only_acquisition_matches_oracle"),
@@ -51,7 +84,7 @@ class NativeHarnessTests(unittest.TestCase):
             ("native_nofile", "live_nofile_limits_and_effects_match_engine"),
         ])
         self.assertLess(source.index('native_port live_port_publications_match_engine'),
-                        source.index('python3 "$script_dir/native-evidence.py"'))
+                        source.index('canonical_phase emitter'))
         self.assertIn('export NATIVE_IDENTITY_PROBES_PATH="$run_dir/identity-probes.json"', source)
         self.assertIn('export NATIVE_PORT_PROBES_PATH="$run_dir/port-probes.json"', source)
         self.assertIn('export NATIVE_PORT_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA', source)
@@ -259,7 +292,7 @@ esac
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
         helpers = "cleanup_podman() {" + source.split("cleanup_podman() {", 1)[1].split(
             "\ntrap cleanup EXIT", 1
-        )[0] + "\n"
+        )[0] + "\n" + fake_teardown_boundary()
         self.assertIn('native_success_summary="native conformance passed:', source)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -307,9 +340,15 @@ else exit 50; fi
             env = os.environ.copy()
             env.update(PATH=f"{root}:{env['PATH']}", FAKE_STATE=str(root),
                        FAKE_OUTER_ID="a" * 64, FAKE_SIDECAR_ID="b" * 64)
-            for mode in ("success", "container_leftover", "network_error"):
-                with self.subTest(mode=mode), tempfile.TemporaryDirectory(
-                    prefix="dockerlens-native.", dir="/tmp",
+            custom_tmp = root / "nondefault-tmp"
+            custom_tmp.mkdir(mode=0o700)
+            # Match the production cleanup root, including a nondefault root;
+            # never weaken its refusal to remove a directory outside TMPDIR.
+            for temp_root, mode in ((base, mode) for base in (os.environ.get("TMPDIR") or "/tmp", str(custom_tmp))
+                                    for mode in ("success", "container_leftover", "network_error")):
+                env["TMPDIR"] = temp_root
+                with self.subTest(mode=mode, temp_root=temp_root), tempfile.TemporaryDirectory(
+                    prefix="dockerlens-native.", dir=temp_root,
                 ) as temporary:
                     for role in ("container", "sidecar", "network", "volume"):
                         (root / role).touch()
@@ -337,8 +376,8 @@ else exit 50; fi
                                      if mode == "success" else "")
                     self.assertEqual(
                         (root / "removals").read_text().splitlines(),
-                        ["rm --force --time 0 " + "a" * 64,
-                         "rm --force --time 0 " + "b" * 64] + ([] if mode == "container_leftover" else [
+                        ["rm --force --time 0 " + "a" * 64] + ([] if mode == "container_leftover" else [
+                         "rm --force --time 0 " + "b" * 64,
                          "network rm dl-native-net-synthetic",
                          "volume rm dl-native-data-synthetic"]),
                     )
@@ -1166,7 +1205,7 @@ fi
         selected = '"$(dirname "$0")/run-exact-native-test.sh" native_network live_network_render_matches_engine'
         internal = '"$(dirname "$0")/run-exact-native-test.sh" native_network live_internal_network_blocks_external_egress'
         target = '"$(dirname "$0")/run-exact-native-test.sh" native_target live_target_render_matches_engine'
-        manifest = 'python3 "$script_dir/native-evidence.py"'
+        manifest = 'canonical_phase emitter'
         self.assertEqual(source.count(selected), 1)
         self.assertEqual(source.count(internal), 1)
         self.assertLess(source.index(target), source.index(selected))
@@ -1308,7 +1347,7 @@ fi
     def test_source_probe_is_exact_and_precedes_manifest_emission(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
         selected = '"$(dirname "$0")/run-exact-native-test.sh" native_selection live_native_selection_and_source_observations'
-        manifest = 'python3 "$script_dir/native-evidence.py"'
+        manifest = 'canonical_phase emitter'
         self.assertEqual(source.count(selected), 1)
         self.assertLess(source.index(selected), source.index(manifest))
         self.assertIn('"$NATIVE_SOURCE_PROBES_PATH"', source)
@@ -1321,7 +1360,7 @@ fi
                       'live_network_membership_matches_engine')
         self.assertEqual(source.count(membership), 1)
         self.assertLess(source.index(baseline), source.index(membership))
-        self.assertLess(source.index(membership), source.index('python3 "$script_dir/native-evidence.py"'))
+        self.assertLess(source.index(membership), source.index('canonical_phase emitter'))
 
     def test_membership_failure_markers_remain_closed_and_private(self) -> None:
         for marker in ("source_network_membership", "membership_cleanup_unverified"):
@@ -1354,7 +1393,7 @@ fi
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
         selected = ('"$(dirname "$0")/run-exact-native-test.sh" native_volume '
                     'live_existing_volume_prerequisite_matches_engine')
-        manifest = 'python3 "$script_dir/native-evidence.py"'
+        manifest = 'canonical_phase emitter'
         self.assertEqual(source.count(selected), 1)
         self.assertLess(source.index(selected), source.index(manifest))
         self.assertIn('export NATIVE_VOLUME_PROBES_PATH="$run_dir/volume-probes.json"', source)
@@ -1364,7 +1403,7 @@ fi
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
         selected = ('"$(dirname "$0")/run-exact-native-test.sh" native_volume_label '
                     'live_created_volume_labels_match_engine')
-        manifest = 'python3 "$script_dir/native-evidence.py"'
+        manifest = 'canonical_phase emitter'
         self.assertEqual(source.count(selected), 1)
         self.assertLess(source.index(selected), source.index(manifest))
         self.assertIn('export NATIVE_VOLUME_LABEL_PROBES_PATH="$run_dir/volume-label-probes.json"', source)
@@ -1605,7 +1644,7 @@ fi
         self.assertEqual(source.count(diagnostic), 1)
         self.assertLess(source.index('echo "DOCKERLENS_NATIVE_ENV:'), source.index(diagnostic))
         self.assertLess(source.index(diagnostic), source.index('"${inner_docker[@]}" pull "$FIXTURE_IMAGE"'))
-        calls = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" \w+ \w+$', source, re.M)
+        calls = [item.command for item in invocations(source)]
         self.assertEqual(len(calls), 28)
         self.assertTrue(all(source.index(diagnostic) < source.index(call) for call in calls))
         guard = source.split('if [[ $expected_mode == rootless ]]; then\n  # Necessary', 1)[1].split(
@@ -1620,7 +1659,7 @@ fi
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         helpers = "cleanup_podman() {" + source.split("cleanup_podman() {", 1)[1].split(
             "\ntrap cleanup EXIT", 1
-        )[0] + "\ntrap cleanup EXIT\n"
+        )[0] + fake_teardown_boundary() + "\ntrap cleanup EXIT\n"
         observations = "docker_root=$(timeout " + source.split("docker_root=$(timeout ", 1)[1].split(
             "\n# Docker CLI errors", 1
         )[0] + "\n"
@@ -1882,6 +1921,9 @@ esac
                         self.assertFalse((state / "error_inspected-bridge").exists())
 
     def test_owned_resources_are_cleaned_after_early_failures(self) -> None:
+        # Shell fault coverage with an explicit synthetic root boundary. Actual
+        # broker/OCI/EOF contracts are independently mapped below.
+        source = (ROOT / "scripts/native-conformance.sh").read_text()
         fake_podman = """#!/usr/bin/env bash
 set -eu
 state=$FAKE_NATIVE_STATE
@@ -2060,6 +2102,11 @@ logs)
    touch "$state/state_error_inspected"
    echo 'bind: address already in use private-canary'
  fi
+ elif [[ $* == *'{{.ID}}'* ]]; then
+   for name; do :; done
+   read -r expected < "$state/expected-container"
+   [[ $name == "$expected" ]] || exit 66
+   echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
  elif [[ $* == *HostConfig.Privileged* ]]; then echo true
     elif [[ $* == *'.Mounts'* ]]; then
       read -r log_path < "$state/daemon-log-path"
@@ -2153,7 +2200,9 @@ esac
                 env = os.environ.copy()
                 env.update(PATH=f"{bin_dir}:{env['PATH']}",
                            FAKE_NATIVE_STATE=str(state), FAKE_NATIVE_FAULT=fault, TMPDIR=str(root))
-                command = ["bash", str(ROOT / "scripts/native-conformance.sh"), lane]
+                campaign = root / "shell-fault-campaign.sh"
+                campaign.write_text(shell_fault_campaign(source))
+                command = ["bash", str(campaign), lane]
                 if fault == "cancel_after_sidecar":
                     process = subprocess.Popen(
                         command, env=env, stdout=subprocess.PIPE,
@@ -2192,6 +2241,7 @@ esac
                     "run", "run_partial", "container_query_error", "container_remains", "container_inspect_partial"))
                 self.assertEqual((state / "sidecar").exists(), fault in (
                     "sidecar_start", "sidecar_start_classifier_failure", "cancel_after_sidecar",
+                    "run", "run_partial", "container_query_error", "container_remains", "container_inspect_partial",
                     "sidecar_identity_bad", "sidecar_query_error", "sidecar_remains", "sidecar_inspect_partial", "sidecar_inspect_hang"))
                 self.assertEqual((state / "network").exists(), container_unverified or fault in (
                     "network_create", "network_query_error", "network_remains", "network_inspect_partial"))

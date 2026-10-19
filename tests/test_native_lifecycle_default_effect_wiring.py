@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from native_harness_syntax import logical_owner_scopes, native_calls, rerun_emitter, run_emitter
 from pathlib import Path
 
 import test_native_external_network_evidence as external
@@ -56,7 +57,7 @@ sys.exit(int(os.environ["STATUS"]))
     def test_twenty_first_required_registration_preserves_protocol_and_six_owner_scope(self):
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         invocation = f'"$(dirname "$0")/run-exact-native-test.sh" {TARGET} {TEST}'
-        calls = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source, re.M)
+        calls = native_calls(source)
         self.assertEqual(len(calls), 28)
         self.assertEqual(calls[26:27], [("native_pids_limit", "live_pids_limit_effects_match_engine")])
         self.assertEqual(calls[27:], [("native_nofile", "live_nofile_limits_and_effects_match_engine")])
@@ -64,14 +65,15 @@ sys.exit(int(os.environ["STATUS"]))
         self.assertEqual(source.count(invocation), 1)
         owner = source.index('(\n  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1\n')
         end = source.index('\n)\n', owner)
-        owned_calls = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source[owner:end], re.M)
+        owned_calls = native_calls(source[owner:end])
         self.assertEqual(owned_calls, calls[16:22])
-        self.assertEqual(source.count("export NATIVE_LIFECYCLE_CLEANUP_OWNER="), 6)
+        self.assertEqual(source.count("export NATIVE_LIFECYCLE_CLEANUP_OWNER="), 5)
+        self.assertEqual(len(logical_owner_scopes(source)), 6)
         self.assertLess(source.index("unset NATIVE_LIFECYCLE_CLEANUP_OWNER"), owner)
         for line in (f'export NATIVE_LIFECYCLE_DEFAULT_EFFECT_PROOF_PATH="$run_dir/{FILENAME}"',
                      'export NATIVE_LIFECYCLE_DEFAULT_EFFECT_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA'):
             self.assertIn(line, source)
-        start = source.index('python3 "$script_dir/native-evidence.py"')
+        start = source.index('canonical_phase emitter')
         self.assertLess(end, start)
         protocol = source[start:source.index('\nfi', start)].replace('\\\n', ' ')
         self.assertEqual(len(shlex.split(protocol)) - 2, 19)
@@ -174,7 +176,7 @@ class DefaultEffectEvidenceTests(unittest.TestCase):
     # Use the central authored whole-emitter fixture, not isolated reader mocks.
     run_emit = external.ExternalNetworkEvidenceTests.run_emit
     emit = external.ExternalNetworkEvidenceTests.emit
-    rerun = external.ExternalNetworkEvidenceTests.rerun
+    rerun = rerun_emitter
 
     def test_four_lanes_emit_only_closed_unadmitted_effects_without_catalogue_changes(self):
         for lane in ("upstream-rootful", "upstream-rootless", "debian11-rootful", "debian11-rootless"):
@@ -279,10 +281,7 @@ class DefaultEffectEvidenceTests(unittest.TestCase):
                 proof.symlink_to(alternate)
             else:
                 os.link(proof, alternate)
-            outcome = subprocess.run(result.args, capture_output=True, text=True, timeout=5,
-                env={**os.environ, "NATIVE_FIXTURE_IMAGE": external.legacy.HEALTH_FIXTURE_IMAGE,
-                     "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0",
-                     "NATIVE_LIFECYCLE_DEFAULT_EFFECT_PROOF_PATH": str(alternate)})
+            outcome = run_emitter(result, {"NATIVE_LIFECYCLE_DEFAULT_EFFECT_PROOF_PATH": str(alternate)})
             self.assertNotEqual(outcome.returncode, 0)
             self.assertFalse(path.exists())
             self.assertEqual(outcome.stderr.strip(), "native evidence rejected")

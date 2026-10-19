@@ -1,15 +1,18 @@
-# In-memory outer lifecycle custody source component
+# Original-object outer lifecycle custody
 
-Status: **unwired source prerequisite, not native or boundary qualification**.
-Continues DockerLens #39/#31 under #3. The canonical harness, PIDs-v2
-producer/readers, mandatory native invocations and capability selection remain
-unchanged.
+Status: connected validation-source contract, not native or boundary qualification.
+Continues DockerLens #39/#31 under #3.
+[ADR 0033](decisions/0033-original-outer-custody.md) connects the original root
+and caller owners, concrete runtime/broker and private consumers. Mandatory
+native invocations, positive predicates and capability selection are unchanged;
+complete-path fit, complete gates and actual native qualification remain open.
 
-`scripts/native_outer_lifecycle.py` defines a single-use custody owner and an
-injected `RuntimeOps` protocol. There is no concrete runtime adapter, command
-execution, installed CLI, report/proof writer or publication path. Its tests
-use fake operations and temporary files only. Four independently authored lane
-representatives are not the actual pinned images' launch defaults or execution.
+`scripts/native_outer_lifecycle.py` defines the single-use custody owners and
+`RuntimeOps` protocol. A concrete validation-only adapter now implements that
+protocol behind the root broker; it is not a product executor or publication
+path. Component tests still use fake operations and temporary files. Reviewed
+image/config/account/path source facts independently derive launch expectations;
+authored representatives alone do not establish actual native execution.
 
 ## Independent inputs and lifecycle
 
@@ -22,7 +25,7 @@ actual profile admission or binary attestation. An explicit `machine.slice`
 creation expectation binds `machine.slice:libpod:<returned-ID>`; it is not
 inferred from the inspected file or an assumed host default.
 
-The normalized inspect dataclass is a future adapter contract, not an invented
+The normalized inspect dataclass is an internal adapter contract, not an invented
 Podman JSON schema. The coordinator binds the exact returned ID, name, image
 digest, owner, log driver/path, original init PID, Created state and no previous
 start/restart/restore. It holds and checks effective OCI before starting that
@@ -58,11 +61,13 @@ existing strict decoder checks that prefix; unrelated later daemon output is
 not promoted into evidence or required to stay immutable. This is not a claim
 of detecting every later duplicate or a truncate-and-regrow event between reads.
 
-Private candidate data stays immutable and in memory. The owner and its live
-descriptors must span future independent consumers and final rechecks. There
-is deliberately no serialized-success or standalone receipt API.
+Private candidate data stays immutable. Root retains its live OCI descriptors;
+the caller retains its original log descriptor. Bounded stdin contexts preserve
+original bytes and independent consumer validation, not serialized success or a
+standalone receipt. Every consumer and final recheck still needs original-object
+continuity and complete original semantic predicates.
 
-## Budgets, cleanup and remaining integration
+## Budgets, cleanup and remaining qualification
 
 One externally supplied absolute startup deadline allows at most 120 seconds;
 it is never reset per operation. Later custody and cleanup use separate
@@ -74,18 +79,19 @@ cleanup reserve are unchanged.
 
 In-process failure or injected cancellation attempts to close owned descriptors
 and attempts only exact-identity cleanup
-through the injected adapter's explicit existing cleanup deadline. A future
+through the adapter's explicit existing cleanup deadline. The concrete
 adapter may return cleanup completion only after ownership checks, removal and
 verified absence; fake return values establish none of those native facts.
 Unknown create completion and failed cleanup remain explicit caller obligations.
 The caller owns run-directory disposal; there is no global prune, permission
 widening, guessed runtime-state path or host configuration change. Descriptor
-close errors are best-effort here, not independently verified disposal. No OS
-signal/process-group adapter exists yet; unhandled termination, SIGKILL or
-machine loss can prevent cleanup. Those integration gaps cannot become a
-cleanup-dependent success claim.
+close errors are best-effort here, not independently verified disposal. The
+canonical process-group supervisor permits ordinary root/shell recovery under
+the original deadline, but unhandled termination, SIGKILL, expired authority or
+machine loss can still prevent cleanup. These limits cannot become a
+cleanup-dependent success claim. Lost ACK is not verified absence.
 
-Activation must land together: canonical create/init/start, actual profile and
+The connected change must qualify together: canonical create/init/start, actual profile and
 launch/default-mount derivation, metadata read access, original runtime-input
 custody, Rust original-controller rechecks, two independently bounded context
 handoffs, mandatory independent reader, every existing positive predicate and
@@ -98,15 +104,18 @@ Rootless systemd/user-manager/delegation fixtures, genuine four-lane/28-test
 execution, actual six-authored-fixture consumers, real application migrations,
 package checks and protected merge remain open. No release is ready/requested.
 
-No canonical local/main/dispatch/release consumer changes yet. Other Lens
-products and the website have no private custody-helper consumer; BoxFerry's
-separate consumer/application gates remain. No dependency, operational pin or
-canonical pin location changes, so existing Cargo/toolchain/Action and five
-native-image Renovate ownership/extraction/grouping remain unchanged.
+Local/main/trusted-dispatch/release consume the same canonical source. ADR 0033
+records the experimental fixed partition and authored connected measurements;
+genuine native whole-harness fit remains unqualified. A passing component,
+synthetic phase driver or emitter sizing test is not that qualification.
+Other Lens products and the website have no private custody-helper consumer;
+BoxFerry's separate consumer/application gates remain. No image/Action/toolchain
+pin location changes; the separate safe-clock dev pin uses the existing unique
+Cargo manager and lockfile integrity, documented in dependency-policy.md.
 The exact Podman/crun strings are source-reviewed compatibility predicates, not
 new installation pins or an admitted hosted runtime. They are intentionally not
 automatic release-update streams; a changed actual runtime requires new review.
 
-The separate [broker protocol source component](native-outer-broker-protocol.md)
-provides bounded pipe messages only. It does not split this coordinator's
-privilege ownership, install a root broker or activate either native consumer.
+The [broker protocol](native-outer-broker-protocol.md) now connects the split
+owners and bounded consumers. Source definitions do not establish native root
+custody, actual size/timing fit or successful cleanup.

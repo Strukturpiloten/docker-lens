@@ -1,11 +1,14 @@
 """Strict private PIDs-v2 coordinates and compact phases, never native admission.
 
-The original v2 file passes stable custody before expansion. Only the historical
-pure semantic validator is reused; historical v1 file custody is never a fallback.
-The 1 KiB reserve is for a separately reviewed, still unresolved boundary proof.
+The live CLI requires anonymous context stdin and independently reconstructs its
+source/OCI/log boundary before stable v2 custody and historical pure semantic
+expansion. Historical pure v2 fixtures remain callable without live authority;
+they cannot enter the live CLI or admit capability/compatibility evidence.
+The 1 KiB reserve carries the independently validated compact original boundary.
 """
 
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -69,9 +72,32 @@ def validate_coordinates(coordinates, observer):
                 fail()
 
 
-def validate_pids_limit_v2_proof(proof, expected_context):
+def validate_pids_limit_v2_proof(proof, expected_context, outer_context=None, budget=None):
     """Validate original v2 shape/size, then every unchanged v1 semantic predicate."""
     try:
+        if outer_context is not None:
+            from native_outer_coordinator import derive_consumer_authority
+            boundary = derive_consumer_authority(outer_context, expected_context, budget=budget)
+            if type(proof) is not dict or proof.get("boundary") != boundary:
+                fail()
+            if type(proof.get("observer")) is not dict or any(
+                    proof["observer"].get(key) != boundary[2][position]
+                    for position, key in enumerate(("pid_namespace", "mount_namespace", "cgroup_namespace"))):
+                fail()
+            if proof["observer"].get("cgroup_kind") != "v2" or type(proof.get("cases")) is not list:
+                fail()
+            for case in proof["cases"]:
+                for key in ("pids_mapping", "memory_mapping"):
+                    mapping = case.get(key) if type(case) is dict else None
+                    if (type(mapping) is not dict or mapping.get("device") != boundary[4][0]
+                            or mapping.get("mount_id") != boundary[3][0] or mapping.get("root") != "/"
+                            or mapping.get("mountpoint") != "/sys/fs/cgroup"
+                            or mapping.get("outer_membership") != "/" or mapping.get("outer_path") != "/sys/fs/cgroup"):
+                        fail()
+            if len(json.dumps(proof, separators=(",", ":"), ensure_ascii=False,
+                              allow_nan=False).encode("utf-8")) > PROOF_BYTES:
+                fail()
+            proof = {key: value for key, value in proof.items() if key != "boundary"}
         if len(json.dumps(proof, separators=(",", ":"), ensure_ascii=False,
                           allow_nan=False).encode("utf-8")) > SERIALIZED_BYTES:
             fail()
@@ -110,15 +136,22 @@ def validate_pids_limit_v2_proof(proof, expected_context):
         fail()
 
 
-def read_pids_limit_v2_proof(proof_path, capture_dir, expected_context):
+def read_pids_limit_v2_proof(proof_path, capture_dir, expected_context, outer_context=None, budget=None):
     try:
+        if budget is not None:
+            budget.debit(source_bytes=PROOF_BYTES + 1, io_calls=64)
         return read_private_proof(proof_path, capture_dir, FILENAME, expected_context,
-                                  validate_pids_limit_v2_proof, max_bytes=PROOF_BYTES)
+                                  lambda value, expected: validate_pids_limit_v2_proof(value, expected, outer_context, budget),
+                                  max_bytes=PROOF_BYTES)
     except (OSError, KeyError, IndexError, TypeError, ValueError, OverflowError, RecursionError):
         fail()
 
 
 def main(arguments):
+    from native_outer_coordinator import metered_source_reads, read_consumer_input
+    outer_context, budget = read_consumer_input(sys.stdin.buffer, "reader")
+    if str(outer_context["pids"]["deadline_epoch"]) != os.environ.get("NATIVE_PIDS_LIMIT_DEADLINE_EPOCH"):
+        fail()
     if len(arguments) != 12:
         fail()
     directory, candidate, run, lane, engine, api, mode, package, fixture, image, outer_id, uid = arguments
@@ -131,7 +164,8 @@ def main(arguments):
                          "data_volume": "dl-native-data-" + run,
                          "socket_source": str(Path(directory) / "socket"), "privileged": True,
                          "memory_bytes": 4294967296, "cpu_quota": 200000, "cpu_period": 100000, "pids_limit": 512}}
-    read_pids_limit_v2_proof(Path(directory) / FILENAME, directory, context)
+    with metered_source_reads(budget):
+        read_pids_limit_v2_proof(Path(directory) / FILENAME, directory, context, outer_context)
 
 
 if __name__ == "__main__":

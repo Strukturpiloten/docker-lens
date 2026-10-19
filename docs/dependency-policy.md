@@ -47,6 +47,19 @@ remain serde_json/socket2. Renovate's enabled Cargo manager owns this new
 or approval rule is added. The policy regression checks its unique native Cargo
 ownership. The crate's Linux-only native validation is unchanged.
 
+The dev-only `rustix` pin in `Cargo.toml` enables only `std` and `time` for a
+safe absolute `CLOCK_MONOTONIC` reading in the private PIDs harness. It does not
+enter the product dependency graph or relax `forbid(unsafe_code)`. The original
+absolute phase deadline remains authoritative; wall-clock timestamps and a fresh
+relative duration cannot renew it. `Cargo.lock` records the registry versions and
+published checksums, not hand-authored integrity values. The existing enabled
+Cargo manager uniquely owns this manifest declaration and its lockfile; the two
+regex managers match only the toolchain and native-image script, not Cargo files.
+No manager, extraction path, grouping or approval setting changes. The scaffold
+policy regression verifies this ownership, the minimal features, exact version
+and locked registry integrity. No other repository consumes this test-only pin;
+their independent native gates and product dependencies remain unchanged.
+
 GitHub Actions use full commit SHAs with exact release-tag comments on
 ubuntu-24.04. Renovate owns Cargo, GitHub Actions, and the pinned Rust toolchain.
 One native-image regex manager extracts the five distinct version-tag plus

@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from native_harness_syntax import native_calls
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -50,7 +51,7 @@ else:
 
     def test_twenty_second_registration_preserves_existing_protocol_and_private_reader(self):
         harness = (ROOT / "scripts/native-conformance.sh").read_text()
-        calls = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', harness, re.M)
+        calls = native_calls(harness)
         self.assertEqual(len(calls), 28)
         self.assertEqual(calls[26:27], [("native_pids_limit", "live_pids_limit_effects_match_engine")])
         self.assertEqual(calls[27:], [("native_nofile", "live_nofile_limits_and_effects_match_engine")])
@@ -60,7 +61,7 @@ else:
         end = harness.index('\n)\n', owner)
         self.assertIn(f"{TARGET} {TEST}", harness[owner:end])
         reader = harness.index('python3 "$script_dir/native_hostname_proof.py"')
-        emitter = harness.index('python3 "$script_dir/native-evidence.py"')
+        emitter = harness.index('canonical_phase emitter')
         self.assertLess(end, reader)
         self.assertLess(reader, harness.index('if [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]', end))
         self.assertLess(reader, emitter)

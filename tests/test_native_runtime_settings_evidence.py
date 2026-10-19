@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 import test_native_evidence as legacy
 import test_native_external_network_evidence as canonical
+from native_harness_syntax import assert_positive_emitter_rerun, authored_emitter_authority, emitter_cli
 
 LANES = ("debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless")
 SECRET = "PRIVATE_RUNTIME_SETTINGS_CANARY"
@@ -94,6 +95,7 @@ class RuntimeSettingsEvidenceTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 path = destination.parent.parent / (expected["contract"] + ".json")
                 original = json.loads(path.read_text())
+                assert_positive_emitter_rerun(self, result, destination)
                 destination.unlink()
                 for mutation in ("partial", "context", "configuration", "effect", "cleanup", "acquisition", "budget", "extra", "typed"):
                     with self.subTest(lane=lane, family=family, mutation=mutation):
@@ -132,7 +134,15 @@ class RuntimeSettingsEvidenceTests(unittest.TestCase):
             result, destination = canonical.ExternalNetworkEvidenceTests.emit(self, lane)
             self.assertEqual(result.returncode, 0, result.stderr)
             destination.unlink()
-            paths, arguments = [Path(value) for value in result.args[2:15]], result.args[15:]
+            cli = emitter_cli(result)
+            paths, arguments = [Path(value) for value in cli[:13]], cli[13:]
+            environment = {"NATIVE_FIXTURE_IMAGE": legacy.HEALTH_FIXTURE_IMAGE,
+                           "NATIVE_OUTER_CONTAINER_ID": "f" * 64,
+                           "NATIVE_BIND_RELABEL_DAEMON_UID": "1000" if lane.endswith("rootless") else "0"}
+            with authored_emitter_authority(cli) as outer_context, patch.dict(os.environ, environment):
+                emitter.emit(*paths, *arguments, outer_context=outer_context)
+            self.assertTrue(destination.exists())
+            destination.unlink()
             for family, expected in EXPECTED.items():
                 valid = {"contract": expected["contract"], "capability_admission": [], "catalogue_admission": False}
                 invalid = [None, [], False, {}, {**valid, "contract": SECRET}, {**valid, "capability_admission": ()},
@@ -145,12 +155,10 @@ class RuntimeSettingsEvidenceTests(unittest.TestCase):
                             self.assertEqual(real(*args), valid)
                             return copy.deepcopy(value)
 
-                        with patch.dict(os.environ, {"NATIVE_FIXTURE_IMAGE": legacy.HEALTH_FIXTURE_IMAGE,
-                                                     "NATIVE_OUTER_CONTAINER_ID": "f" * 64,
-                                                     "NATIVE_BIND_RELABEL_DAEMON_UID": "1000" if lane.endswith("rootless") else "0"}), \
+                        with authored_emitter_authority(cli) as outer_context, patch.dict(os.environ, environment), \
                                 patch.object(emitter, "read_" + family + "_proof", side_effect=wrong_return) as call:
                             with self.assertRaisesRegex(ValueError, "^incomplete " + family.replace("_", "-") + " source group$"):
-                                emitter.emit(*paths, *arguments)
+                                emitter.emit(*paths, *arguments, outer_context=outer_context)
                             self.assertEqual(call.call_count, 1)
                         self.assertFalse(destination.exists())
 

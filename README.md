@@ -83,9 +83,13 @@ rootless delegation and rootful PID-coordinate/boundary proof gaps remain open.
 PIDs-v2 successor: all 37 actual context/scan/controller readers retain strictly
 checked procfs/PID-namespace coordinates. Lossless phase tuples keep these
 witnesses within the unchanged 16 KiB custody cap, with a checked 1 KiB reserve.
-Historical v1 proof remains immutable and is not a current fallback. Source-only
-validation does not establish native alignment or an outer boundary; rootless
-fixture delegation and fresh native/application qualification remain required.
+Historical v1 proof remains immutable and is not a current fallback.
+[ADR 0033](docs/decisions/0033-original-outer-custody.md) connects the original
+outer OCI/log custody, broker/runtime/coordinator and private consumers in source.
+An experimental fixed partition fits four authored connected source scenarios
+within the unchanged aggregate budget. It does not qualify the complete native
+harness, native payload variability, alignment or an outer boundary; rootless
+fixture delegation and fresh complete/native/application gates remain required.
 [ADR 0028](docs/decisions/0028-nofile-private-qualification.md) appends mandatory
 private nofile invocation 28 and its strict independent proof gate, also without
 public emission. Its existing four-case/eight-fixture CLI/rendered experiment retains precise

@@ -287,28 +287,50 @@ def check_log(descriptor: int, registration: Window) -> os.stat_result:
     return actual
 
 
-def prepare(directory: Path, run: str, lane: str) -> None:
+def prepare(directory: Path, run: str, lane: str, descriptor: int | None = None,
+            *, budget=None) -> None:
+    """Register an empty log, optionally adopting the coordinator's live FD.
+
+    Adoption never opens/recreates the log by name. The coordinator retains
+    its original FD; this helper checks a temporary duplicate against the
+    fixed named child and records only the existing diagnostic identity.
+    The canonical caller supplies its original budget; registration bytes are
+    physically written under that same slice, never a diagnostic allowance.
+    """
+    def io(operation, *arguments, **keywords):
+        if budget is not None:
+            budget.debit(io_calls=1)
+        return operation(*arguments, **keywords)
+
     if re.fullmatch(r"[A-Za-z0-9]{8}", run) is None or lane not in LANES:
         raise Unavailable("unavailable")
-    if not directory.is_absolute() or directory.resolve(strict=True) != directory:
+    if not directory.is_absolute() or io(directory.resolve, strict=True) != directory:
         raise Unavailable("unavailable")
     uid = os.geteuid()
     parent = directory / "diagnostics"
     for location in (directory, parent):
-        info = os.lstat(location)
+        info = io(os.lstat, location)
         if (not stat.S_ISDIR(info.st_mode) or info.st_uid != uid
                 or stat.S_IMODE(info.st_mode) != 0o700):
             raise Unavailable("unavailable")
-    held = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    held = io(os.open, parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
-        if (fingerprint(os.fstat(held)) != fingerprint(info)
-                or fingerprint(os.lstat(parent)) != fingerprint(info)):
+        if (fingerprint(io(os.fstat, held)) != fingerprint(info)
+                or fingerprint(io(os.lstat, parent)) != fingerprint(info)):
             raise Unavailable("unavailable")
-        log = os.open(LOG_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                      0o600, dir_fd=held)
+        if descriptor is None:
+            log = io(os.open, LOG_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                     0o600, dir_fd=held)
+        else:
+            if type(descriptor) is not int or descriptor < 0:
+                raise Unavailable("unavailable")
+            log = io(os.dup, descriptor)
         try:
-            info = os.fstat(log)
-            if log_identity(info)[2:] != (uid, 0o600, 1):
+            info = io(os.fstat, log)
+            named = io(os.stat, LOG_FILE, dir_fd=held, follow_symlinks=False)
+            if (not stat.S_ISREG(info.st_mode) or info.st_size != 0
+                    or log_identity(info)[2:] != (uid, 0o600, 1)
+                    or fingerprint(info) != fingerprint(named)):
                 raise Unavailable("unavailable")
             value = {
                 "schemaVersion": 1, "status": "prepared", "runId": run, "lane": lane,
@@ -317,12 +339,28 @@ def prepare(directory: Path, run: str, lane: str) -> None:
                 "device": info.st_dev, "inode": info.st_ino, "uid": uid,
                 "mode": 0o600, "links": 1, "prefixBytes": 0, "prefixSha256": None, "registeredSize": 0,
             }
-            output = os.open(REGISTRATION_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                             0o600, dir_fd=held)
-            with os.fdopen(output, "wb") as stream:
-                stream.write(json.dumps(value, separators=(",", ":")).encode())
-                stream.flush()
-                os.fsync(stream.fileno())
+            raw = json.dumps(value, separators=(",", ":")).encode()
+            if not 0 < len(raw) <= FILE_LIMIT:
+                raise Unavailable("unavailable")
+            output = io(os.open, REGISTRATION_FILE,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                        0o600, dir_fd=held)
+            try:
+                offset = 0
+                while offset < len(raw):
+                    if budget is None:
+                        written = os.write(output, raw[offset:])
+                    else:
+                        from native_outer_coordinator import bounded_source_io
+                        written = bounded_source_io(
+                            budget, len(raw) - offset,
+                            lambda size: os.write(output, raw[offset:offset + size]))
+                    if type(written) is not int or written <= 0:
+                        raise Unavailable("unavailable")
+                    offset += written
+                io(os.fsync, output)
+            finally:
+                os.close(output)
         finally:
             os.close(log)
     finally:

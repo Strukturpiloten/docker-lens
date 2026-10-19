@@ -1,87 +1,111 @@
-# Bounded outer broker protocol source component
+# Connected outer broker protocol
 
-Status: **unwired source prerequisite, not a privileged broker or native proof**.
-Continues DockerLens #39/#31 under #3. The canonical harness, lifecycle helper,
-PIDs producer/readers, all 28 native invocations and capability catalogue are
-unchanged. No runtime adapter, sudo invocation, CLI or executable helper exists.
+Status: connected validation-source implementation; complete-path accounting,
+fresh complete gates and genuine native qualification remain pending. See
+[ADR 0033](decisions/0033-original-outer-custody.md). This is neither a product
+daemon client nor a deployment mechanism.
 
-## Intended split and trust boundary
+## Owners and independent expectations
 
-Future activation separates the caller-owned log/proof coordinator from one
-long-lived root owner of the original OCI file and ancestor descriptors. This
-module supplies only the bounded communication primitive between those roles.
-It does not authenticate peer credentials, helper installation, ownership of
-the OCI file, actual launch defaults or resource removal. The real broker must
-derive the original OCI path from its own verified exact-ID observation; this
-protocol has no arbitrary command, path, OPEN or daemon-query operation.
+The unprivileged canonical coordinator exclusively holds the root broker pipes.
+A shell relay and short-lived phase proxies carry only closed requests. Producer,
+mandatory reader and optional emitter receive bounded private stdin contexts,
+never broker descriptors, arbitrary environment maps or context sidecars.
 
-Both endpoints receive independently established immutable Binding values:
-session, exact Git candidate, run/attempt, launch digest and image digest. A
-message or handshake cannot supply trusted expectations. Numeric run/attempt
-labels do not authenticate GitHub or replace the separately bound native
-name/run-owner launch expectations. Caller-supplied pipe
-ends must have exclusive anonymous-pipe provenance; FIFO metadata alone cannot
-prove that provenance. Descriptor ownership transfers to the endpoint and
-descriptors are made non-inheritable/nonblocking. No namespace, extra mount,
-socket, mailbox or evidence sidecar is introduced.
+One root owner holds the original OCI inode and ancestors from initialization
+through final cleanup. The caller owns its original log inode from birth;
+diagnostics adopt a duplicate. Replacing a pathname or moving PID1 cannot rebase
+either owner. Reviewed image/config/account/path facts and verified native
+preflight/database observations independently derive each side's complete
+expectation. A caller echo or observed OCI document cannot define its expected
+values. Runtime metadata is the reviewed provenance boundary, not a new binary,
+recursive device or host-OS attestation.
 
-## Closed messages and state
+## Strict wire v2
 
-The wire uses a four-byte big-endian length and canonical ASCII JSON with exact
-envelope keys/types. Every message binds the independent identity, direction,
-sequence, closed verb and exact container ID. Only the first create request
-has a null ID. Its valid reply pins the returned full ID for every later verb.
-The closed order is create, initialize, start, then recheck; teardown is also
-allowed after a known create. No reconnection, retry or reinitialization exists.
+Four-byte big-endian lengths frame canonical ASCII JSON with exact keys, types,
+direction, sequence and identity. Bindings include session, exact candidate,
+execution origin, hosted run/attempt when present, immutable intent and image
+digests. Local-process identity has null CI labels and a real fresh session;
+partial/malformed hosted identity is refused before shell mutation. Labels alone
+do not authenticate GitHub. There is no v1 fallback or reconnection.
 
-Initialize returns at most65536 original OCI bytes once, losslessly in bounded
-canonical base64, with typed metadata, complete-byte digest and init PID. These
-are assertions from the peer, not proof it actually holds the original inode.
-Start pins nonzero StartedAt and the init PID. Rechecks retain that PID/time
-and original digest. They do not replace live original-object rechecks, the
-mandatory independent reader or final caller-owned log custody.
+The closed sequence is preflight, create, initialize, bind_expectation, start.
+Preflight returns the bounded native runtime/image observations. Create pins the
+full exact ID. Initialize returns database facts while root retains original
+OCI custody; only the once-only bind_expectation reply transports the original
+OCI bytes. Start and every later recheck retain original PID/start/controller
+identity rather than adopting a later observer's location.
 
-No message authorizes publication. An Empty teardown acknowledgement explicitly
-retains teardown_acknowledged_unverified; it never establishes verified native
-absence. Unknown create completion and known live-ID obligations survive faults.
-Actual exact-owned cleanup and independently observed absence remain obligations
-of the future runtime owner, including its EOF/cancellation/timeout handling.
+PIDs begin/recheck/seal verbs install the original S/D after the exact-list
+barrier, with all 37 independent reader observations and existing semantic
+predicates retained. Producer, mandatory reader and optional emitter each bind
+to independent source authority. Teardown ACK never proves absence. Shell
+cleanup separately checks the exact ID and name before other known owned
+resources may be removed.
 
-## Bounds, failure and integration holds
+## Existing budgets and physical custody
 
-A caller-owned Ledger debits frames, readiness waits, read/write calls and wire
-bytes, never allocating a new allowance per endpoint or request. Caller-supplied
-startup/custody/cleanup/watchdog deadlines are absolute and never renewed. Idle
-broker reception may use the existing cleanup reserve, but a decoded non-cleanup
-verb must still meet its own original phase deadline before dispatch.
+Disjoint once-preclaimed roles share the same outer 16 native calls/1 MiB,
+PIDs 180 calls/2 MiB, HealthRun 400 calls/4 MiB and cleanup 100 calls/2 MiB.
+Root recovery's four calls/81993 bytes and producer cleanup's 96 calls/2015159
+bytes partition that one cleanup pool; a late or sealed phase cannot allocate
+another root recovery slice. No per-process fresh full ledger or refund exists.
 
-Tests may share one conservative in-memory ledger. That object does not become
-shared memory between OS processes: real cross-process aggregate enforcement
-and accounting for runtime children remain unwired integration requirements.
-The90000-byte frame cap accommodates original OCI transfer in private memory;
-it does not enlarge the15360-byte main/16384-byte total private proof limit.
+Frame/control copies, every raw source/context read, native stream, repeated
+bounded legacy read, log prefix, diagnostic registration write and output all
+consume their owning allowance.
+Physical reads/writes are claimed before I/O; actual spend remains charged even
+when cancellation/expiry is noticed afterwards. Only unread reservation capacity
+is released. In-flight claims cannot cross phases or turn a clamped prefix into
+successful complete input. Initial consumer stdin is bounded within its intrinsic
+preclaimed role, then its spend is adopted exactly once after strict context
+binding; the coordinator supervises delivery under the original deadline.
 
-EOF, truncation, malformed/oversize input, wrong identity/sequence, exhausted
-budget, blocked-pipe deadline, cancellation or clock drift permanently poison
-and close the endpoint. Errors and default object representations do not print
-protected bytes. FD closure is best-effort, not authenticated resource cleanup.
-No actual peer supervision or installed privilege policy is established here.
+Startup remains 120 seconds, each PIDs invocation 180 seconds with the same
+46-second cleanup reserve. Actual CLOCK_MONOTONIC S/D remains authoritative;
+wall-clock labels, blocking waits and reader handoffs never renew it.
+Preflight/database frames retain 32768/16384-byte limits, raw OCI 65536 bytes
+and the containing frame 90000 bytes. The private context cap is 131072 bytes.
+These transport caps do not enlarge the 15360-byte main/16384-byte total PIDs
+proof. Every limit can refuse; bounds do not promise every authored/native
+profile will fit.
 
-Independent controls use authored envelopes, actual anonymous pipes, fake
-clocks and temporary threads only. They exercise maximum-size transfer,
-canonical encodings, malformed/replayed input, deadlines, cancellation,
-backpressure and cleanup obligations. They are not native execution or image
-compatibility evidence.
+## Faults, cleanup and remaining acceptance
 
-Activation still requires the real broker/coordinator, independently derived
-image/create expectations, authenticated original controller objects even if
-PID1 relocates, both bounded producer/reader/emitter handoffs and final checks.
-All37 coordinate witnesses, positive predicates, two mounts and existing
-120s startup/180s PIDs/46s cleanup/call/I/O/proof budgets remain mandatory.
-Rootless delegation fixtures, fresh genuine4x28 native tests, real consumers,
-all application suites, package checks and protected merge remain open. Host
-capture is deferred; no release is ready/requested.
+EOF, malformed/truncated input, wrong identity/sequence, drift, exhaustion,
+cancellation and expiry fail closed. Ordinary failure requests root EOF recovery,
+releases phase proxies and permits shell EXIT handling under the original
+deadline, then terminates the entire owned process group. Lost ACK preserves
+failure even if later independent absence allows owned-resource cleanup.
+Expired authority, SIGKILL, machine death and unknown reaping can prevent cleanup;
+no failure path is relabelled successful absence.
 
-No shared workflow, native invocation, dependency, operational pin or canonical
-pin location changes. Existing Renovate manager/extraction/grouping ownership
-is unchanged; no other Lens or BoxFerry product consumes this private helper.
+The earlier caller's hard lower bound was 214690 bytes (65875 shell + 66855
+immutable source records + 5 × 16392 request reservations), exceeding its former
+200000-byte slice before other traffic. That source-budget refusal remains an
+explicit negative regression. The existing isolated emitter fixture retains its
+tighter measured-spend assertion of at most 448576 bytes; its current candidate
+allowance is not a reason to weaken the exact byte equation.
+
+The experimental static partition and four authored connected measurements are
+recorded in ADR 0033. Both parent and independent children use the actual,
+unpatched candidate plan and the aggregate remains 1 MiB. Native responses and
+producer effects remain authored, metadata I/O is not qualified, and the
+six-phase shell driver is not the full native workload. Observed margins do
+not establish native variability or whole-harness fit. Never publish this state
+as a qualified native harness or a compatibility claim.
+
+Source/fake-process tests do not establish original native controller ownership,
+rootless delegation, real effects, actual size/timing fit or cleanup. All fresh
+exact-final-candidate four-lane/28-test gates, six actual authored-fixture
+consumers, six application migrations and package/published-dependency gates
+remain mandatory. Host capture stays deferred; no release is ready/requested.
+
+The same canonical harness serves local, main, trusted dispatch and exact-release
+validation. PR offline green is not native proof. Other Lens products and the
+website have no private broker consumer, and no Lens depends on BoxFerry.
+Existing five image tag/digest locations and Action ownership are unchanged.
+The new dev-only clock pin is uniquely Cargo-owned, with real lockfile checksums
+and policy regression; immutable qualification source records are not automatic
+software-install updates. See [dependency policy](dependency-policy.md).

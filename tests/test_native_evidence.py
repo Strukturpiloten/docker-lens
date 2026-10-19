@@ -1,11 +1,13 @@
 """Closed native evidence cannot admit unreviewed identity or leak API bodies."""
 
 import copy
+import base64
 import hashlib
 import json
 import os
 import re
 import subprocess
+import time
 import tempfile
 import unittest
 from pathlib import Path
@@ -34,6 +36,48 @@ SHA = "a" * 40
 RUN_ID = "Ab12Cd34"
 IMAGE = ("ghcr.io/strukturpiloten/docker-29-rootful:v29.8.1@sha256:"
          + "b" * 64)
+
+
+def emitter_context(directory, lane, image, candidate=SHA):
+    """Independent authored source fixture, not a proof-file-derived oracle."""
+    from test_native_outer_authority import authority_fixture
+    # Invalid CLI identities must reach the emitter's own negative predicates;
+    # they are not permitted to make the authored transport fixture malformed.
+    if lane not in ("debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless"):
+        lane = "upstream-rootful"
+    if not isinstance(candidate, str) or re.fullmatch(r"[0-9a-f]{40}", candidate) is None:
+        candidate = SHA
+    if not isinstance(image, str) or re.fullmatch(r"[^\0]+:[^@]+@sha256:[0-9a-f]{64}", image) is None:
+        image = IMAGE
+    expected = pids_limit_fixture(lane)["context"]
+    expected["candidate_sha"] = candidate
+    expected["fixture_image"] = HEALTH_FIXTURE_IMAGE
+    expected["outer"].update(image=image, socket_source=str(Path(directory) / "socket"))
+    context, _expected, account, options, prefix, _proof = authority_fixture(lane, directory, expected)
+    return context, account, options, prefix
+
+
+def run_with_context(command, **options):
+    """Actual emitter child with only source acquisition authored/injected.
+
+    The production ABI, anonymous stdin, source/stream budgets and every proof
+    predicate remain active. Missing-stdin controls invoke the actual CLI below.
+    """
+    from native_outer_coordinator import serialize_consumer_context
+    context, _account, _mount_options, _prefix = emitter_context(command[13], command[15], command[16], command[19])
+    code = '''import runpy,sys
+import native_outer_coordinator as c
+from test_native_evidence import emitter_context
+_context,account,options,prefix=emitter_context(sys.argv[13],sys.argv[15],sys.argv[16],sys.argv[19])
+original=c.derive_consumer_authority
+c.derive_consumer_authority=lambda value,expected,budget=None:original(value,expected,account_loader=lambda *_:account,socket_options=lambda _:options,log_reader=lambda _i,_l,p:p==prefix)
+sys.argv=sys.argv[1:]
+runpy.run_path(sys.argv[0],run_name="__main__")
+'''
+    environment = {**options.pop("env", os.environ), "PYTHONPATH": str(ROOT / "scripts") + ":" + str(ROOT / "tests"),
+                   "DOCKERLENS_OUTER_LANE_DEADLINE_NS": str(time.monotonic_ns() + 180_000_000_000)}
+    return subprocess.run([command[0], "-c", code, *command[1:]],
+                          input=serialize_consumer_context(context).decode("ascii"), env=environment, **options)
 SHAPES = {
     "StandaloneContainer": ["StandaloneCreate"],
     "NamedVolume": ["NamedVolumeCreate", "NamedVolumeMountReadWrite", "NamedVolumeMountReadOnly"],
@@ -168,6 +212,74 @@ def identity_proof(lane: str, mode: str, api: str, sha: str) -> dict:
 
 
 class NativeEvidenceTests(unittest.TestCase):
+    def test_production_private_stdin_and_complete_compact_source_accounting(self):
+        for lane in ("upstream-rootful", "upstream-rootless", "debian11-rootful", "debian11-rootless"):
+            with self.subTest(lane=lane):
+                self.production_compact_accounting(lane)
+
+    def production_compact_accounting(self, lane):
+        from native_outer_coordinator import serialize_consumer_context
+        from test_native_outer_authority import authority_fixture, bind_proof_boundary
+        records = json.loads((ROOT / "docs/native-image-defaults/20261019-accounts-v1.json").read_bytes())["images"]
+        selected = next(record for record in records if record["lane"] == lane and record["architecture"] == "amd64")
+        image = selected["canonical_reference"]
+        mode = lane.rsplit("-", 1)[1]
+        version = ({"Version": "20.10.5", "ApiVersion": "1.41", "MinAPIVersion": "1.12"} if lane.startswith("debian11-")
+                   else {"Version": "29.8.1", "ApiVersion": "1.56", "MinAPIVersion": "1.44"})
+        package = "20.10.5+dfsg1-1+deb11u2" if lane.startswith("debian11-") else ""
+        result, destination = self.run_emit(version, image=image, lane=lane, mode=mode, package=package)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        root = destination.parent.parent
+        proof = json.loads((root / "pids-limit-v2.json").read_bytes())
+        context, _expected, _account, _options, _prefix, _unused = authority_fixture(
+            lane, root, proof["context"], reviewed=True)
+        bind_proof_boundary(proof, context["boundary"])
+        (root / "pids-limit-v2.json").write_text(json.dumps(proof, separators=(",", ":")), encoding="utf-8")
+        # The actual Rust proof writers emit compact JSON. Keep every value;
+        # do not truncate, omit a role, or manufacture a larger allowance.
+        sources = list(root.glob("*.json"))
+        self.assertEqual(len(sources), 25)
+        for source in sources:
+            source.write_text(json.dumps(json.loads(source.read_bytes()), separators=(",", ":"), ensure_ascii=False), encoding="utf-8")
+        destination.unlink()
+        arguments = [str(root / name) for name in ("version.json", "shapes.json", "source.json", "network.json", "volume.json",
+                     "volume-label.json", "identity.json", "port-probes.json", "health-metadata.json",
+                     "network-attachments-v1.json", "bind-relabel-config-v1.json")]
+        arguments += [str(root), str(destination), lane, image, mode, package, SHA, RUN_ID]
+        environment = {**os.environ, "PYTHONPATH": str(ROOT / "scripts"), "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE,
+                       "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "1000" if mode == "rootless" else "0",
+                       "DOCKERLENS_OUTER_LANE_DEADLINE_NS": str(time.monotonic_ns() + 180_000_000_000)}
+        # Counter observation only: exact production main, loader and authority,
+        # with no mocked account/log/source decision or altered allowance.
+        code = '''import json,runpy,sys
+sys.argv=sys.argv[1:]
+state=runpy.run_path(sys.argv[0],run_name="__main__")
+budget=state["budget"]
+print(json.dumps({"source_bytes":budget.used.source_bytes,"io_calls":budget.used.io_calls,"cap":budget.reservation.allowance.source_bytes}))
+'''
+        encoded = serialize_consumer_context(context).decode("ascii")
+        measured = subprocess.run(["python3", "-c", code, str(SCRIPT), *arguments], input=encoded,
+                                  capture_output=True, text=True, env=environment, timeout=5, check=False)
+        self.assertEqual(measured.returncode, 0, measured.stderr)
+        observed = json.loads(measured.stdout)
+        self.assertEqual(observed["cap"], 470576)
+        # Historical authored-fixture cost bound, not the candidate allowance;
+        # retain the unchanged complete inputs and exact-byte equation below.
+        self.assertLessEqual(observed["source_bytes"], 448576)
+        self.assertLessEqual(observed["io_calls"], 20000)
+        record_bytes = sum((ROOT / "docs/native-image-defaults" / name).stat().st_size for name in
+                           ("20261019-accounts-v1.json", "podman493-source-binding-v1.json", "20261019-paths-v1.json"))
+        expected_bytes = (len(encoded.encode("ascii")) + sum(source.stat().st_size for source in sources)
+                          + (root / "health-metadata.json").stat().st_size + (root / "port-probes.json").stat().st_size
+                          + record_bytes + len(base64.b64decode(context["source"]["log"]["prefix"]))
+                          + destination.stat().st_size)
+        self.assertEqual(observed["source_bytes"], expected_bytes)
+        destination.unlink()
+        missing = subprocess.run(["python3", str(SCRIPT), *arguments], input="", capture_output=True, text=True,
+                                 env=environment, timeout=5, check=False)
+        self.assertEqual((missing.returncode, missing.stdout, missing.stderr), (1, "", "native evidence rejected\n"))
+        self.assertFalse(destination.exists())
+
     def test_process_source_projection_is_closed_complete_and_not_catalogue_admission(self) -> None:
         import test_native_external_network_evidence as canonical
         from test_reviewed_catalog import required_shapes
@@ -470,7 +582,7 @@ class NativeEvidenceTests(unittest.TestCase):
                            ("version.json", "shapes.json", "source.json", "network.json",
                             "volume.json", "volume-label.json", "identity.json", "port-probes.json", "health-metadata.json", "network-attachments-v1.json", "bind-relabel-config-v1.json")],
                            str(root), str(destination), "upstream-rootful", IMAGE, "rootful", "", SHA, RUN_ID]
-                rejected = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True,
+                rejected = run_with_context(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True,
                                           timeout=5, check=False)
                 self.assertNotEqual(rejected.returncode, 0)
                 self.assertFalse(destination.exists())
@@ -700,6 +812,9 @@ class NativeEvidenceTests(unittest.TestCase):
         kernel_proof["context"]["fixture_image"] = HEALTH_FIXTURE_IMAGE
         pids_proof = pids_limit_fixture(lane)
         pids_proof["context"].update(copy.deepcopy(external["context"]))
+        outer_context, _account, _mount_options, _prefix = emitter_context(root, lane, image, sha)
+        from test_native_outer_authority import bind_proof_boundary
+        bind_proof_boundary(pids_proof, outer_context["boundary"])
         nofile_proof = nofile_fixture(lane)
         nofile_proof["context"].update(copy.deepcopy(external["context"]))
         for filename, proof, override, missing in (
@@ -718,7 +833,7 @@ class NativeEvidenceTests(unittest.TestCase):
                 serialization = {"separators": (",", ":")} if filename == "pids-limit-v2.json" else {}
                 private_path.write_text(json.dumps(proof if override is None else override, **serialization), encoding="utf-8")
                 private_path.chmod(0o600)
-        result = subprocess.run(
+        result = run_with_context(
             ["python3", str(SCRIPT), str(version_path), str(shapes_path), str(source_path),
              str(network_path), str(volume_path), str(volume_label_path), str(identity_path),
              str(port_path), str(health_metadata_path), str(network_attachment_path), str(bind_relabel_path), str(root), str(destination), lane, image, mode, package, sha, RUN_ID],
@@ -940,7 +1055,7 @@ class NativeEvidenceTests(unittest.TestCase):
                                str(root / "volume-label.json"), str(root / "identity.json"),
                                str(root / "port-probes.json"), str(root / "health-metadata.json"), str(root / "network-attachments-v1.json"), str(root / "bind-relabel-config-v1.json"), str(root), str(destination),
                                "upstream-rootful", IMAGE, "rootful", "", SHA, RUN_ID]
-                    rejected = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, check=False)
+                    rejected = run_with_context(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, check=False)
                     self.assertNotEqual(rejected.returncode, 0)
                     self.assertFalse(destination.exists())
                     self.assertEqual(rejected.stderr.strip(), "native evidence rejected")
@@ -994,12 +1109,12 @@ class NativeEvidenceTests(unittest.TestCase):
                    "upstream-rootful", IMAGE, "rootful", "", SHA, RUN_ID]
         destination.unlink()
         probe_path.write_bytes(b"[" + b"x" * 4096 + b"]")
-        oversized = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, check=False)
+        oversized = run_with_context(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, check=False)
         self.assertNotEqual(oversized.returncode, 0)
         self.assertFalse(destination.exists())
         probe_path.unlink()
         probe_path.symlink_to(root / "source.json")
-        symlink = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, check=False)
+        symlink = run_with_context(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, check=False)
         self.assertNotEqual(symlink.returncode, 0)
         self.assertFalse(destination.exists())
         self.assertNotIn("private", oversized.stdout + oversized.stderr + symlink.stdout + symlink.stderr)
@@ -1124,7 +1239,7 @@ class NativeEvidenceTests(unittest.TestCase):
                     content = proof.read_text()
                     proof.write_text(content.replace('"schema_version": 1',
                                                      '"schema_version": 0, "schema_version": 1'))
-                rejected = subprocess.run(args, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, timeout=5, check=False)
+                rejected = run_with_context(args, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, timeout=5, check=False)
                 self.assertNotEqual(rejected.returncode, 0)
                 self.assertFalse(destination.exists())
                 self.assertEqual(rejected.stderr.strip(), "native evidence rejected")
@@ -1176,16 +1291,16 @@ class NativeEvidenceTests(unittest.TestCase):
                    str(probe_path), str(root / "volume-label.json"), str(root / "identity.json"),
                    str(root / "port-probes.json"), str(root / "health-metadata.json"), str(root / "network-attachments-v1.json"), str(root / "bind-relabel-config-v1.json"), str(root), str(destination),
                    "upstream-rootful", IMAGE, "rootful", "", SHA, RUN_ID]
-        valid = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, check=False)
+        valid = run_with_context(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, check=False)
         self.assertEqual(valid.returncode, 0, valid.stderr)
         destination.unlink()
         probe_path.write_bytes(b"[" + b"x" * 4096 + b"]")
-        oversized = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, check=False)
+        oversized = run_with_context(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, check=False)
         self.assertNotEqual(oversized.returncode, 0)
         self.assertFalse(destination.exists())
         probe_path.unlink()
         probe_path.symlink_to(root / "source.json")
-        symlink = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, check=False)
+        symlink = run_with_context(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, check=False)
         self.assertNotEqual(symlink.returncode, 0)
         self.assertFalse(destination.exists())
         self.assertNotIn("private", oversized.stdout + oversized.stderr + symlink.stdout + symlink.stderr)
@@ -1212,16 +1327,16 @@ class NativeEvidenceTests(unittest.TestCase):
                    str(root / "volume.json"), str(probe_path), str(root / "identity.json"),
                    str(root / "port-probes.json"), str(root / "health-metadata.json"), str(root / "network-attachments-v1.json"), str(root / "bind-relabel-config-v1.json"), str(root), str(destination),
                    "upstream-rootful", IMAGE, "rootful", "", SHA, RUN_ID]
-        valid = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, check=False)
+        valid = run_with_context(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, check=False)
         self.assertEqual(valid.returncode, 0, valid.stderr)
         destination.unlink()
         probe_path.write_bytes(b"[" + b"x" * 4096 + b"]")
-        oversized = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, check=False)
+        oversized = run_with_context(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, check=False)
         self.assertNotEqual(oversized.returncode, 0)
         self.assertFalse(destination.exists())
         probe_path.unlink()
         probe_path.symlink_to(root / "volume.json")
-        symlink = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, check=False)
+        symlink = run_with_context(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, check=False)
         self.assertNotEqual(symlink.returncode, 0)
         self.assertFalse(destination.exists())
         self.assertNotIn("private", oversized.stdout + oversized.stderr + symlink.stdout + symlink.stderr)

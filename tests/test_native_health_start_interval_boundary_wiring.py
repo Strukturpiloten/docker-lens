@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from native_harness_syntax import rerun_emitter
 from pathlib import Path
 
 import test_native_external_network_evidence as external
@@ -97,7 +98,7 @@ sys.exit(int(os.environ["STATUS"]))
 class HealthBoundaryEvidenceTests(unittest.TestCase):
     run_emit = external.ExternalNetworkEvidenceTests.run_emit
     emit = external.ExternalNetworkEvidenceTests.emit
-    rerun = external.ExternalNetworkEvidenceTests.rerun
+    rerun = rerun_emitter
 
     def test_all_lanes_emit_only_closed_unadmitted_configuration_outcomes(self):
         for lane in ("debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless"):

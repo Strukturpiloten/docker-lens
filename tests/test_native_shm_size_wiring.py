@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from native_harness_syntax import logical_owner_scopes, native_calls
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = "native_shm_size"
@@ -74,7 +75,7 @@ else:
     def test_twenty_fourth_registration_preserves_first_twenty_three_and_six_child_block_bytes(self):
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         call_prefix = '"$(dirname "$0")/run-exact-native-test.sh" '
-        calls = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source, re.M)
+        calls = native_calls(source)
         self.assertEqual(calls[:26], ORIGINAL_CALLS + [(TARGET, TEST),
             ("native_supplementary_groups", "live_supplementary_groups_match_engine"),
             ("native_kernel_settings", "live_kernel_settings_match_engine")])
@@ -85,7 +86,8 @@ else:
         new_block = scope_prefix + call_prefix + f'{TARGET} {TEST}\n)'
         self.assertEqual(source.count(old_block), 1)
         self.assertEqual(source.count(new_block), 1)
-        self.assertEqual(source.count(scope_prefix), 6)
+        self.assertEqual(source.count(scope_prefix), 5)
+        self.assertEqual(len(logical_owner_scopes(source)), 6)
         self.assertLess(source.index('COMMAND_CLEAR_PROOF\n\n'), source.index(new_block))
         reader = source.index('python3 "$script_dir/native_shm_size_proof.py"')
         self.assertLess(source.index(new_block), reader)

@@ -3,9 +3,11 @@
 import json
 import os
 import subprocess
+import sys
 import unittest
 
 import test_native_evidence as legacy
+from native_harness_syntax import assert_positive_emitter_rerun, emitter_cli, run_emitter
 
 
 class BindRelabelEvidenceTests(unittest.TestCase):
@@ -52,6 +54,7 @@ class BindRelabelEvidenceTests(unittest.TestCase):
             with self.subTest(mutation=mutation):
                 result, path = self.emit()
                 self.assertEqual(result.returncode, 0, result.stderr)
+                assert_positive_emitter_rerun(self, result, path)
                 proof_path = path.parent.parent / "bind-relabel-config-v1.json"
                 proof = json.loads(proof_path.read_text())
                 if mutation == "effect":
@@ -68,10 +71,7 @@ class BindRelabelEvidenceTests(unittest.TestCase):
                     proof["PRIVATE_BIND_CANARY"] = "PRIVATE_BIND_CANARY"
                 proof_path.write_text(json.dumps(proof))
                 path.unlink()
-                rejected = subprocess.run(result.args, capture_output=True, text=True, check=False, timeout=5,
-                                          env={**os.environ, "NATIVE_FIXTURE_IMAGE": legacy.HEALTH_FIXTURE_IMAGE,
-                                               "NATIVE_OUTER_CONTAINER_ID": "f" * 64,
-                                               "NATIVE_BIND_RELABEL_DAEMON_UID": "0"})
+                rejected = run_emitter(result)
                 self.assertNotEqual(rejected.returncode, 0)
                 self.assertFalse(path.exists())
                 self.assertEqual(rejected.stderr.strip(), "native evidence rejected")
@@ -80,14 +80,31 @@ class BindRelabelEvidenceTests(unittest.TestCase):
     def test_rootless_proof_cannot_supply_its_own_expected_uid(self):
         result, path = self.emit("upstream-rootless")
         self.assertEqual(result.returncode, 0, result.stderr)
+        assert_positive_emitter_rerun(self, result, path)
         proof_path = path.parent.parent / "bind-relabel-config-v1.json"
         proof = json.loads(proof_path.read_text())
         proof["context"]["source_boundary"]["owner_uid"] = 1001
         proof_path.write_text(json.dumps(proof))
         path.unlink()
-        rejected = subprocess.run(result.args, capture_output=True, text=True, check=False, timeout=5,
-                                  env={**os.environ, "NATIVE_FIXTURE_IMAGE": legacy.HEALTH_FIXTURE_IMAGE,
-                                       "NATIVE_OUTER_CONTAINER_ID": "f" * 64,
-                                       "NATIVE_BIND_RELABEL_DAEMON_UID": "1000"})
+        rejected = run_emitter(result)
         self.assertNotEqual(rejected.returncode, 0)
         self.assertFalse(path.exists())
+
+    def test_standalone_pids_reader_needs_no_inherited_pythonpath(self):
+        for lane in ("debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless"):
+            with self.subTest(lane=lane):
+                result, path = self.emit(lane)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                arguments = emitter_cli(result)
+                debian = lane.startswith("debian11-")
+                reader = [arguments[11], legacy.SHA, legacy.RUN_ID, lane,
+                          "20.10.5+dfsg1" if debian else "29.8.1", "1.41" if debian else "1.56",
+                          lane.rsplit("-", 1)[1], "20.10.5+dfsg1-1+deb11u2" if debian else "",
+                          legacy.HEALTH_FIXTURE_IMAGE, arguments[14], "f" * 64,
+                          "1000" if lane.endswith("-rootless") else "0"]
+                child = subprocess.run([sys.executable, str(legacy.ROOT / "tests/native_harness_syntax.py"),
+                                        "reader", *reader], capture_output=True, text=True, check=False, timeout=5,
+                                       env={key: value for key, value in os.environ.items() if key != "PYTHONPATH"})
+                self.assertEqual(child.returncode, 0, child.stderr)
+                self.assertEqual((child.stdout, child.stderr), ("", ""))
+                self.assertTrue(path.exists())
