@@ -2845,6 +2845,7 @@ fn pids_private_context_fixture() -> Value {
 #[test]
 fn pids_private_context_is_closed_bounded_and_reserves_input_once() {
     let value = pids_private_context_fixture();
+    let start = value["pids"]["start_ns"].as_u64().unwrap();
     let bytes = serde_json::to_vec(&value).unwrap();
     let context = PidsPrivateContext::read(bytes.as_slice());
     assert_eq!(context.value, value);
@@ -2875,7 +2876,8 @@ fn pids_private_context_is_closed_bounded_and_reserves_input_once() {
             std::panic::catch_unwind(|| PidsPrivateContext::parse(
                 &serde_json::to_vec(&invalid).unwrap()
             ))
-            .is_err()
+            .is_err(),
+            "unexpected private context key {pointer}=0"
         );
     }
     for (pointer, replacement) in [
@@ -2887,8 +2889,10 @@ fn pids_private_context_is_closed_bounded_and_reserves_input_once() {
         ("/binding/lane", json!("other")),
         ("/source/oci", json!([])),
         ("/pids/start_ns", json!(true)),
-        ("/pids/deadline_ns", json!(46 * SECOND + 1)),
-        ("/pids/deadline_ns", json!(180 * SECOND + 2)),
+        // Invalid spans relative to S, not absolute values whose meaning
+        // changes between a newly booted VM and a long-lived host.
+        ("/pids/deadline_ns", json!(start + 46 * SECOND)),
+        ("/pids/deadline_ns", json!(start + 180 * SECOND + 1)),
         ("/pids/deadline_epoch", json!(0)),
         ("/pids/producer_reservation/ordinary_calls", json!(125)),
         ("/pids/producer_reservation/cleanup_calls", json!(55)),
@@ -2906,12 +2910,13 @@ fn pids_private_context_is_closed_bounded_and_reserves_input_once() {
         ("/boundary/9/2", json!(2)),
     ] {
         let mut invalid = value.clone();
-        *invalid.pointer_mut(pointer).unwrap() = replacement;
+        *invalid.pointer_mut(pointer).unwrap() = replacement.clone();
         assert!(
             std::panic::catch_unwind(|| PidsPrivateContext::parse(
                 &serde_json::to_vec(&invalid).unwrap()
             ))
-            .is_err()
+            .is_err(),
+            "invalid private context replacement {pointer}={replacement}"
         );
     }
 }
@@ -3174,6 +3179,80 @@ fn pids_private_context_rejects_expired_future_or_delayed_original_monotonic_tim
                 now
             ))
             .is_err()
+        );
+    }
+}
+
+#[test]
+fn pids_private_context_deadline_boundaries_are_relative_at_low_and_high_uptime() {
+    let anchor = Instant::now();
+    for start in [SECOND, 1000 * SECOND] {
+        let mut value = pids_private_context_fixture();
+        value["pids"]["start_ns"] = json!(start);
+        for span in [46 * SECOND + 1, 60 * SECOND, 180 * SECOND] {
+            let end = start + span;
+            let ordinary_end = end - 46 * SECOND;
+            value["pids"]["deadline_ns"] = json!(end);
+            let bytes = serde_json::to_vec(&value).unwrap();
+            // A shortened window is valid, including only one nanosecond of
+            // ordinary work before the unchanged cleanup reserve begins.
+            for now in [start, ordinary_end - 1] {
+                let parsed =
+                    std::panic::catch_unwind(|| PidsPrivateContext::parse_at(&bytes, anchor, now));
+                assert!(
+                    parsed.is_ok(),
+                    "valid private deadline S={start} span={span} now={now}"
+                );
+                let context = parsed.unwrap();
+                assert_eq!(context.deadline, anchor + Duration::from_nanos(end - now));
+                assert_eq!(
+                    context.timing.remaining(now, false),
+                    Some(Duration::from_nanos(ordinary_end - now))
+                );
+            }
+            for now in [start - 1, ordinary_end, end - 1, end, end + 1] {
+                assert!(
+                    std::panic::catch_unwind(|| {
+                        PidsPrivateContext::parse_at(&bytes, anchor, now)
+                    })
+                    .is_err(),
+                    "invalid private admission S={start} span={span} now={now}"
+                );
+            }
+        }
+        for span in [0, 46 * SECOND - 1, 46 * SECOND, 180 * SECOND + 1] {
+            value["pids"]["deadline_ns"] = json!(start + span);
+            assert!(
+                std::panic::catch_unwind(|| {
+                    PidsPrivateContext::parse_at(
+                        &serde_json::to_vec(&value).unwrap(),
+                        anchor,
+                        start,
+                    )
+                })
+                .is_err(),
+                "invalid private span S={start} span={span} at exact S"
+            );
+        }
+    }
+}
+
+#[test]
+fn pids_private_context_old_absolute_negative_is_valid_on_a_newly_booted_vm() {
+    let anchor = Instant::now();
+    for (start, accepted) in [(SECOND, true), (1000 * SECOND, false)] {
+        let mut value = pids_private_context_fixture();
+        value["pids"]["start_ns"] = json!(start);
+        // This former malformed-fixture replacement is actually a valid
+        // shortened absolute deadline at low uptime, not a parser regression.
+        value["pids"]["deadline_ns"] = json!(180 * SECOND + 2);
+        assert!(
+            std::panic::catch_unwind(|| {
+                PidsPrivateContext::parse_at(&serde_json::to_vec(&value).unwrap(), anchor, start)
+            })
+            .is_ok()
+                == accepted,
+            "old absolute deadline admission at synthetic S={start}"
         );
     }
 }
