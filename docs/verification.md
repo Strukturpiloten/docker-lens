@@ -7,6 +7,16 @@ The scaffold policy tests check alignment and MSRV failure propagation through
 the shared local, PR/main, native-dispatch, and release offline gate. Earlier
 verification records below retain the Rust versions used at those checkpoints.
 
+## Unwired original-PID1 bootstrap source component
+
+The [bootstrap component contract](native-outer-bootstrap-contract.md) describes
+the pure argument builder, original-PID1 observation source and strict private
+log-frame decoder. Synthetic controls and shell syntax checks do not run the
+bootstrap, read host `/proc` or establish native/boundary qualification. The
+canonical harness and current mandatory PIDs-v2 reader are unchanged. Lifecycle
+configuration/log custody and original-object integration remain required; a
+parsed frame alone cannot satisfy them or the original proof-size/timing budgets.
+
 ## Diagnostic CI-job outer-runtime sample
 
 After its unchanged offline gate, the `check.yml` scaffold job runs
