@@ -106,3 +106,7 @@ native-image Renovate ownership/extraction/grouping remain unchanged.
 The exact Podman/crun strings are source-reviewed compatibility predicates, not
 new installation pins or an admitted hosted runtime. They are intentionally not
 automatic release-update streams; a changed actual runtime requires new review.
+
+The separate [broker protocol source component](native-outer-broker-protocol.md)
+provides bounded pipe messages only. It does not split this coordinator's
+privilege ownership, install a root broker or activate either native consumer.

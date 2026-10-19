@@ -1820,3 +1820,12 @@ evidence for a later catalog commit; each changed candidate and release still
 needs fresh complete checks and native validation. Never substitute the historical
 source SHA for the final candidate SHA or infer an API version from a release
 label. Public resolver and inert rendering tests cover the admitted records.
+
+The [outer broker protocol](native-outer-broker-protocol.md) is a separate
+unwired stdlib source component, discovered by the existing offline Python gate.
+Independent authored packets and real anonymous-pipe controls cover closed
+identity/sequence framing, once-only bounded OCI transport, cancellation,
+backpressure, replay and absolute startup/custody/cleanup deadlines. Teardown
+acknowledgement remains unverified, never authenticated native absence. No real
+privileged helper, runtime adapter, cross-process aggregate budget enforcement,
+canonical native consumer, capability admission or proof-size allowance changes.
