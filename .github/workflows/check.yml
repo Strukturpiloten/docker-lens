@@ -20,6 +20,8 @@ jobs:
           persist-credentials: false
       - name: Validate scaffold
         run: ./scripts/check-all.sh --check
+      - name: Sample this CI job's outer runtime identity (diagnostic only)
+        run: python3 scripts/native-outer-runtime-profile.py
 
   native-conformance:
     name: Native Engine ${{ matrix.lane }}

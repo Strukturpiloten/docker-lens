@@ -7,6 +7,48 @@ The scaffold policy tests check alignment and MSRV failure propagation through
 the shared local, PR/main, native-dispatch, and release offline gate. Earlier
 verification records below retain the Rust versions used at those checkpoints.
 
+## Diagnostic CI-job outer-runtime sample
+
+After its unchanged offline gate, the `check.yml` scaffold job runs
+`scripts/native-outer-runtime-profile.py`. Its closed JSON binds this job's run,
+attempt, job name, and actual checked-out Git SHA (including a PR merge checkout)
+to reported local rootful Linux Podman/OCI-runtime and cgroup metadata. This is
+only a CI-job identity sample: it proves neither native-job identity or
+co-location, source placement, controller ownership, an approved boundary, nor
+native compatibility. Future native bootstrap must reobserve its actual identity
+and configuration. No native or boundary approval is added by this diagnostic.
+
+The sole privileged query is fixed, noninteractive `sudo` followed by a root-owned
+`timeout` (10 seconds, TERM then KILL after 2 seconds) and
+`podman --remote=false info --format json`. Minimal fixed subprocess environment
+removes inherited remote selectors and credentials; returned remote/rootless and
+non-Linux metadata are refused. There is no requested container/resource mutation,
+installation, or host configuration change; `podman info` can initialize Podman's
+internal state and is not claimed to be perfectly side-effect-free. A separate
+fixed unprivileged, two-second `dpkg-query` requests only Podman, crun, and runc
+package/version/architecture records. Missing or unrecognized package metadata is
+unavailable, not a profile failure. A partial package-query exit of 1 retains only
+strictly parsed present records; other package failures retain no records.
+Reported package metadata and GitCommit do not
+authenticate custom executable ownership or provenance; ownership stays unverified.
+
+All three commands use separately capped 64-KiB stdout/stderr files, incremental
+draining, fixed paths/arguments, no retries, and a 24-second total budget. Only
+normalized allowlisted fields and closed reasons reach logs; raw JSON, stderr,
+hostnames, executable paths, and package-query output are never uploaded. Six
+0600 regular single-link files reside in a private 0700 task directory. Ordinary
+failure and handled INT/TERM cancellation remove exact known private files;
+cancellation removes raw names before a bounded child wait and exits nonzero.
+No unprivileged kill or verified root-child death is claimed: the root-owned timer
+remains authoritative, and an unreaped command is explicitly completion-unknown,
+never observed-success. SIGKILL/machine death can bypass cleanup, and filesystem
+cleanup failure is reported rather than claimed away. Unexpected programming
+errors remain nonzero with a fixed error message, not unavailable-success.
+
+Development coverage uses fake short-lived Python children only, including dual
+stream overflow, collector failure, cancellation, and cleanup failure. It performs
+no real sudo, Podman, runtime, or package query and creates no native evidence.
+
 ## Reviewed lifecycle successor source cohort
 
 [ADR 0022](decisions/0022-reviewed-lifecycle-cohort.md) selects the authenticated

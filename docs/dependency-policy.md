@@ -114,3 +114,21 @@ The canonical harness is consumed by `check.yml` main push,
 exact-main dispatch. All three inherit the same prerequisite without a
 workflow edit. The other five workspace repositories do not invoke this
 DockerLens native harness, so no cross-repository consumer changes are needed.
+
+The scaffold-only outer-runtime identity diagnostic uses installed `sudo`,
+`timeout`, Podman, Git, `dpkg-query`, and Python from the same mutable
+`ubuntu-24.04` runner. The unavailable-integrity/manual-review exception above
+also applies to these runner-provided tools: no installation, download, new pin,
+or independently authenticated binary provenance is introduced. Strictly parsed
+distro package metadata is only reported metadata, not proof of custom binary
+ownership. Only `check.yml`'s scaffold job consumes this diagnostic; native jobs,
+main's native harness, trusted-main native dispatch, release validation, and the
+other workspace products do not gain a shared native qualification step and need
+no corresponding change. Existing complete and native gates remain unchanged.
+
+Renovate ownership, extraction paths, grouping, approvals, and regression review
+are unchanged: the native-image manager still extracts exactly the same five
+tag/digest references and the GitHub Actions manager still owns the same full-SHA
+Action refs. No manifest, toolchain, image, Action pin, or Renovate configuration
+changes are required; existing scaffold policy extraction checks cover those
+five references and manager ownership.
