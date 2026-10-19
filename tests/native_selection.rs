@@ -19,7 +19,9 @@ use docker_lens::decoder::{
 };
 use docker_lens::evidence::{Capture, CaptureRoute, ProtectedValue};
 use docker_lens::observation::{Availability, Observed, Origin};
-use docker_lens::resource_support::{ReportedResourceSupport, ResourceSupportError};
+use docker_lens::resource_support::{
+    ReportedCgroupDriver, ReportedCgroupVersion, ReportedResourceSupport, ResourceSupportError,
+};
 use docker_lens::version::DaemonMode;
 use serde_json::Value;
 
@@ -157,6 +159,223 @@ fn resource_report_matches_direct(
         "typed resource-support report differs from direct oracle"
     );
     assessment
+}
+
+// This oracle reads the independent direct response, not the product decoder
+// or assessment. Native bytes remain private even when a comparison fails.
+fn cgroup_report_oracle(
+    raw: Option<&Value>,
+) -> Result<(Availability, Option<&[u8]>), &'static str> {
+    match raw {
+        None => Ok((Availability::Missing, None)),
+        Some(Value::Null) => Ok((Availability::Null, None)),
+        Some(Value::String(text)) => Ok((
+            if text.is_empty() {
+                Availability::Empty
+            } else {
+                Availability::Present
+            },
+            Some(text.as_bytes()),
+        )),
+        Some(Value::Object(object))
+            if object.len() == 1
+                && object.get("__docker_lens_redacted__") == Some(&Value::Bool(true)) =>
+        {
+            Ok((Availability::Redacted, None))
+        }
+        Some(_) => Err("invalid direct cgroup-report shape"),
+    }
+}
+
+fn cgroup_report_matches_direct<'a>(
+    observed: &Observed<ProtectedValue>,
+    raw: Option<&'a Value>,
+) -> Option<&'a [u8]> {
+    let (availability, value) = cgroup_report_oracle(raw).expect("closed direct cgroup oracle");
+    assert_eq!(observed.origin, Origin::Effective);
+    assert_eq!(observed.availability, availability);
+    assert!(
+        observed.value().map(ProtectedValue::as_bytes) == value,
+        "typed cgroup report differs from direct oracle"
+    );
+    value
+}
+
+fn cgroup_driver_matches_direct(
+    observed: &Observed<ProtectedValue>,
+    raw: Option<&Value>,
+) -> ReportedCgroupDriver {
+    match cgroup_report_matches_direct(observed, raw) {
+        None | Some(b"") => ReportedCgroupDriver::Unknown,
+        Some(b"none") => ReportedCgroupDriver::None,
+        Some(b"cgroupfs") => ReportedCgroupDriver::Cgroupfs,
+        Some(b"systemd") => ReportedCgroupDriver::Systemd,
+        Some(_) => ReportedCgroupDriver::Unrecognized,
+    }
+}
+
+fn cgroup_version_matches_direct(
+    observed: &Observed<ProtectedValue>,
+    raw: Option<&Value>,
+) -> ReportedCgroupVersion {
+    match cgroup_report_matches_direct(observed, raw) {
+        None | Some(b"") => ReportedCgroupVersion::Unknown,
+        Some(b"1") => ReportedCgroupVersion::V1,
+        Some(b"2") => ReportedCgroupVersion::V2,
+        Some(_) => ReportedCgroupVersion::Unrecognized,
+    }
+}
+
+#[test]
+fn offline_cgroup_oracle_preserves_lexical_values_and_unavailable_states() {
+    for (literal, availability, driver, version) in [
+        (
+            "null",
+            Availability::Null,
+            ReportedCgroupDriver::Unknown,
+            ReportedCgroupVersion::Unknown,
+        ),
+        (
+            r#"{"__docker_lens_redacted__":true}"#,
+            Availability::Redacted,
+            ReportedCgroupDriver::Unknown,
+            ReportedCgroupVersion::Unknown,
+        ),
+        (
+            r#""""#,
+            Availability::Empty,
+            ReportedCgroupDriver::Unknown,
+            ReportedCgroupVersion::Unknown,
+        ),
+        (
+            r#""none""#,
+            Availability::Present,
+            ReportedCgroupDriver::None,
+            ReportedCgroupVersion::Unrecognized,
+        ),
+        (
+            r#""cgroupfs""#,
+            Availability::Present,
+            ReportedCgroupDriver::Cgroupfs,
+            ReportedCgroupVersion::Unrecognized,
+        ),
+        (
+            r#""systemd""#,
+            Availability::Present,
+            ReportedCgroupDriver::Systemd,
+            ReportedCgroupVersion::Unrecognized,
+        ),
+        (
+            r#""1""#,
+            Availability::Present,
+            ReportedCgroupDriver::Unrecognized,
+            ReportedCgroupVersion::V1,
+        ),
+        (
+            r#""2""#,
+            Availability::Present,
+            ReportedCgroupDriver::Unrecognized,
+            ReportedCgroupVersion::V2,
+        ),
+        (
+            r#""Systemd""#,
+            Availability::Present,
+            ReportedCgroupDriver::Unrecognized,
+            ReportedCgroupVersion::Unrecognized,
+        ),
+        (
+            r#""systemd ""#,
+            Availability::Present,
+            ReportedCgroupDriver::Unrecognized,
+            ReportedCgroupVersion::Unrecognized,
+        ),
+        (
+            r#"" 2""#,
+            Availability::Present,
+            ReportedCgroupDriver::Unrecognized,
+            ReportedCgroupVersion::Unrecognized,
+        ),
+        (
+            r#""private-cgroup-canary""#,
+            Availability::Present,
+            ReportedCgroupDriver::Unrecognized,
+            ReportedCgroupVersion::Unrecognized,
+        ),
+    ] {
+        let raw: Value = serde_json::from_str(literal).unwrap();
+        let observed = match raw.as_str() {
+            Some(text) => Observed::present(
+                ProtectedValue::new(text.as_bytes().to_vec()),
+                availability,
+                Origin::Effective,
+            ),
+            None => Observed::unavailable(availability, Origin::Effective),
+        };
+        assert_eq!(cgroup_report_oracle(Some(&raw)).unwrap().0, availability);
+        assert_eq!(cgroup_driver_matches_direct(&observed, Some(&raw)), driver);
+        assert_eq!(
+            cgroup_version_matches_direct(&observed, Some(&raw)),
+            version
+        );
+        assert!(!format!("{observed:?}").contains("private-cgroup-canary"));
+    }
+    let absent = Observed::unavailable(Availability::Missing, Origin::Effective);
+    assert_eq!(
+        cgroup_report_oracle(None),
+        Ok((Availability::Missing, None))
+    );
+    assert_eq!(
+        cgroup_driver_matches_direct(&absent, None),
+        ReportedCgroupDriver::Unknown
+    );
+    assert_eq!(
+        cgroup_version_matches_direct(&absent, None),
+        ReportedCgroupVersion::Unknown
+    );
+}
+
+#[test]
+fn offline_cgroup_oracle_refuses_malformed_or_inconsistent_reports() {
+    for literal in [
+        "false",
+        "1",
+        "2",
+        "[]",
+        "{}",
+        r#"{"__docker_lens_redacted__":false}"#,
+        r#"{"__docker_lens_redacted__":true,"private-cgroup-canary":true}"#,
+    ] {
+        let raw: Value = serde_json::from_str(literal).unwrap();
+        assert_eq!(
+            cgroup_report_oracle(Some(&raw)).unwrap_err(),
+            "invalid direct cgroup-report shape"
+        );
+    }
+    let raw: Value = serde_json::from_str(r#""systemd""#).unwrap();
+    for (availability, origin, value) in [
+        (Availability::Present, Origin::Unknown, Some("systemd")),
+        (Availability::Redacted, Origin::Effective, Some("systemd")),
+        (Availability::Missing, Origin::Effective, Some("systemd")),
+        (Availability::Present, Origin::Effective, None),
+        (
+            Availability::Present,
+            Origin::Effective,
+            Some("private-cgroup-canary"),
+        ),
+    ] {
+        let observed = match value {
+            Some(text) => Observed::present(
+                ProtectedValue::new(text.as_bytes().to_vec()),
+                availability,
+                origin,
+            ),
+            None => Observed::unavailable(availability, origin),
+        };
+        assert!(
+            std::panic::catch_unwind(|| cgroup_driver_matches_direct(&observed, Some(&raw)))
+                .is_err()
+        );
+    }
 }
 
 #[test]
@@ -1051,6 +1270,18 @@ fn live_native_selection_and_source_observations() {
     assert_eq!(
         assessment.swap_limit,
         resource_report_matches_direct(&reports.swap_limit, oracle_info.get("SwapLimit"))
+    );
+    assert_eq!(
+        assessment.pids_limit,
+        resource_report_matches_direct(&reports.pids_limit, oracle_info.get("PidsLimit"))
+    );
+    assert_eq!(
+        assessment.cgroup_driver,
+        cgroup_driver_matches_direct(&reports.cgroup_driver, oracle_info.get("CgroupDriver"))
+    );
+    assert_eq!(
+        assessment.cgroup_version,
+        cgroup_version_matches_direct(&reports.cgroup_version, oracle_info.get("CgroupVersion"))
     );
     assert_eq!(
         reports.assess(discovery.observation_id()),

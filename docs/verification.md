@@ -880,7 +880,8 @@ remain historical evidence for their original shapes. The new assertions need
 genuine runs in all four exact lanes before a source compatibility claim.
 
 The source test's `DaemonResourceSupportOracle` assertion compares typed
-`MemoryLimit` and `SwapLimit` reports with the already saved independent direct
+`MemoryLimit`, `SwapLimit`, `PidsLimit`, `CgroupDriver` and `CgroupVersion` reports
+with the already saved independent direct
 `/info` response. It reuses the existing acquisition, checks effective origin,
 independent boolean/unavailable states, matching capture scope and rejection of
 another capture's scope, and adds no request. Reported false stays bounded
@@ -897,6 +898,15 @@ The direct oracle and acquisition are separate observations in time; matching
 capture identity correlates typed evidence, not authentication or an atomic
 snapshot. Offline helper tests check classification and value-free rejection
 only. No operational pin or Renovate extraction path changes are introduced.
+
+ADR 0032 extends that same assertion, not its marker or invocation count. The
+independent direct oracle compares protected string bytes and exact closed
+driver/version classifications without calling the product parser/assessment
+to determine expectations. Offline controls cover absent/null/redacted/empty,
+unrecognized lexical values, malformed types and inconsistent observations.
+Neither definitions nor offline success qualify the changed source assertions;
+fresh genuine four-lane evidence, independent review and all existing consumer
+gates remain mandatory. No PIDs/nofile capability or effect claim is added.
 
 The created-volume label probe is a separate exact ignored library test,
 `native_volume_label_tests::live_created_volume_labels_match_engine`. Each lane

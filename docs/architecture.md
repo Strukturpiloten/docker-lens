@@ -344,7 +344,7 @@ distribution package revision, so those stay unknown until separate evidence
 is available. Decoded version strings do not add positive capability facts.
 
 `DecodedVersion::resource_support` retains independently available effective
-`Observed<bool>` reports for `/info` `MemoryLimit` and `SwapLimit`, tied to the
+`Observed<bool>` reports for `/info` `MemoryLimit`, `SwapLimit` and `PidsLimit`, tied to the
 capture's opaque observation ID. Missing, null and explicitly redacted reports
 remain unavailable; malformed booleans fail with value-free decoder errors.
 The pure assessment requires the same observation ID, even when two captures
@@ -356,6 +356,18 @@ grants a target capability, a destination guarantee, or catalogue admission.
 The assessment does not evaluate effect evidence or veto a target. It reads no
 endpoint and introduces no acquisition request; fresh native conformance and
 downstream application acceptance remain separate release evidence.
+
+[ADR 0032](decisions/0032-observation-scoped-cgroup-reports.md) also retains
+protected `CgroupDriver` and `CgroupVersion` strings. Exact recognized values
+have closed report classifications; unexpected nonempty text remains protected
+and classifies as unrecognized, distinct from unknown/unavailable. Empty text,
+non-effective fields and redacted-but-valued caller data stay unknown. Schema
+defaults, other fields and matching Engine versions never fill missing reports.
+These independently observed fields are not an aggregate readiness verdict,
+usable delegation proof or a prerequisite carried by an offline target plan.
+Systemd/v2 and reported PIDs support cannot authorize a capability. Public
+struct-literal consumers must accommodate the added fields; the `missing`
+constructor supplies complete Missing/Effective fixture defaults only.
 
 DockerLens has no BoxFerry or other Lens product dependency. BoxFerry will
 consume a released DockerLens and route all conversions through its neutral

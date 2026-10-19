@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Preserve observation-scoped `/info` PIDs-support and protected cgroup
+  driver/version reports alongside memory/swap. Classify only exact reported
+  values; unavailable data and schema defaults never become support. Positive
+  reports remain unverified and do not admit capabilities or prove delegation.
+  Struct-literal consumers must account for the new fields; use
+  `ResourceSupportObservation::missing(observation_id)` when constructing an
+  unavailable fixture. Fresh native and downstream qualification remain open.
 - Integrate the separate ShmSize lifecycle child as mandatory native invocation
   24 with its strict private proof gate and closed raw-only singleton. Preserve
   the first 23 invocations, original six-child cleanup block, nineteen-argument
