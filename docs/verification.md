@@ -17,6 +17,18 @@ canonical harness and current mandatory PIDs-v2 reader are unchanged. Lifecycle
 configuration/log custody and original-object integration remain required; a
 parsed frame alone cannot satisfy them or the original proof-size/timing budgets.
 
+## Unwired in-memory lifecycle custody prerequisite
+
+The [lifecycle custody component](native-outer-lifecycle-contract.md) holds
+original OCI/log objects through a single-use, injected-operation lifecycle.
+Independent fake/tempfile controls cover identity, inode/byte/prefix drift,
+deadlines, resource accounting and cancellation; they do not execute a runtime
+or establish actual image defaults, profile admission, cleanup or native proof.
+There is no concrete runtime/signal adapter, CLI, proof/report writer or
+canonical consumer. Activation must include both proof consumers, original
+boundary rechecks, all 37 witnesses, actual serialization fit and final custody
+checks together. Existing complete/native/application/package gates remain.
+
 ## Diagnostic CI-job outer-runtime sample
 
 After its unchanged offline gate, the `check.yml` scaffold job runs
