@@ -35,6 +35,7 @@ Durable native boundaries and evidence/admission contracts:
 - [0031: Retained PIDs reader coordinates](0031-pids-reader-coordinate-proof.md)
 - [0032: Observation-scoped cgroup and PIDs-support reports](0032-observation-scoped-cgroup-reports.md)
 - [0033: Original outer custody and connected private PIDs qualification](0033-original-outer-custody.md)
+- [0034: Finite-rootless-PIDs destination obligation](0034-rootless-pids-destination-obligation.md)
 
 ADR 0022 supersedes ADR 0019's active-cohort selection for candidate rehearsal:
 complete StopTimeout/init/rootfs/tmpfs groups on all lanes, with

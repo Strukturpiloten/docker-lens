@@ -252,6 +252,7 @@ fn debian_target_context_preserves_exact_package_evidence_and_redacts_debug() {
         network_prerequisites: vec![],
         volume_prerequisites: vec![],
         bind_source_prerequisites: vec![],
+        destination_pids_prerequisites: vec![],
         native: Some(NativeRenderState {
             context: PlanningContext::Target(profile),
             requests: vec![],

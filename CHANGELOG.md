@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Preserve finite rootless PID limits as destination-bound inert obligations in
+  conditional complete-artifact schema 4. Pure snapshot assessment checks only
+  explicitly selected metadata; delegation, enforcement and exact build/package
+  provenance remain unverified. Existing artifact bytes and native capability
+  admission are unchanged when no such obligation exists.
+
 - Preserve observation-scoped `/info` PIDs-support and protected cgroup
   driver/version reports alongside memory/swap. Classify only exact reported
   values; unavailable data and schema defaults never become support. Positive
