@@ -14,33 +14,100 @@ compatibility claim.
 The planned native work is tracked in [DockerLens #3](https://github.com/Strukturpiloten/docker-lens/issues/3).
 Typed networks, protected runtime settings and conditional bind-source review
 are available as inert data. The candidate selects the independently reviewed
-configured stop-signal source cohort from run `38106164571`, attempt 1, under
-[ADR 0019](docs/decisions/0019-reviewed-stop-signal-cohort.md). Exact Debian
-profiles admit 30 capabilities/47 shapes; upstream profiles add only the
-complete IPv6 port group, for 31/49. The machine records preserve all six
-earlier cohorts byte-exact.
+complete lifecycle source cohort from run `39124651853`, attempt 1, under
+[ADR 0022](docs/decisions/0022-reviewed-lifecycle-cohort.md). Exact Debian
+profiles admit 34 capabilities/56 shapes; upstream profiles add the complete
+IPv6 port and HealthStartInterval groups, for 36/60. The machine records
+preserve all seven earlier cohorts byte-exact.
 
 The selection retains complete common IPv4/repeated/exposed-only/ephemeral port,
 container-label/shell-health/start-period, network-label/alias/multiple-attachment,
 and shared/private bind configured-retention groups and the complete
-external-network Internal false/true expectation group, adding only StopSignal.
+external-network Internal false/true expectation group and StopSignal. It adds
+complete StopTimeout zero/positive, init true/false, read-only-rootfs true/false
+and three tmpfs shapes on every lane, plus HealthStartInterval zero/positive
+only upstream. Init effects cover PID1 indirection, rootfs effects cover diagonal
+omitted/false/true controls, and tmpfs effects cover only explicit
+1 MiB/0700 and 2 MiB/0750 rw/ro cases. Reaping, general signal behavior,
+Cartesian flag combinations and arbitrary tmpfs values remain unproved.
 Native symbolic TERM/INT trap effects are bounded source evidence, not a promise
 of arbitrary-image or application shutdown behavior. None remains
 unconstrained; explicit booleans select inert schema 3 and never network mutation.
-Other topology and runtime
-groups remain unadmitted. Bind prerequisites retain all source review and
+Other topology and runtime groups remain unadmitted. Bind prerequisites retain
+all source review and
 unverified SELinux conditions from [ADR 0015](docs/decisions/0015-bind-relabel-intent.md);
 configured retention does not prove relabel effects. Schema-1 and request
 representations retain their existing behavior.
 
 This is candidate pre-merge rehearsal admission. Production merge, main
 admission and release remain blocked until fresh exact-final-candidate complete
-and four-lane sixteen-test native gates, fresh independently reviewed volume-only
+and four-lane twenty-eight-test native gates, fresh independently reviewed volume-only
 consumer rehearsals of all six actual authored fixtures under
 [ADR 0012](docs/decisions/0012-candidate-volume-label-admission.md), and reviewed
 BoxFerry consumers of the actual Nextcloud/Supabase binds and desired external
 expectations pass. Source evidence and old consumer receipts do not qualify this
 changed admission candidate.
+The [default/zero lifecycle source probe](docs/native-lifecycle-default-effects-contract.md)
+and the other four lifecycle-family proofs are mandatory before raw evidence is
+emitted. [ADR 0021](docs/decisions/0021-lifecycle-raw-source-projection.md) projects
+complete finite StopTimeout/init/read-only-rootfs/tmpfs source groups on all lanes
+and HealthStartInterval only on upstream. [ADR 0023](docs/decisions/0023-process-source-proof-wiring.md)
+requires hostname and command/entrypoint-clear proofs. [ADR 0024](docs/decisions/0024-health-disabled-raw-source-projection.md)
+adds only HealthDisabled/DisabledHealthcheck after the existing complete
+health-metadata proof validates. [ADR 0025](docs/decisions/0025-shm-size-source-integration.md)
+adds the mandatory twenty-fourth ShmSize source probe and strict proof gate.
+[ADR 0026](docs/decisions/0026-runtime-settings-source-integration.md) appends
+supplementary groups and diagonal kernel settings as mandatory invocations 25/26
+with separate one-child ownership and strict private gates, even without emission.
+Only four complete finite source groups are added, never selected catalogue facts.
+[ADR 0027](docs/decisions/0027-pids-limit-private-qualification.md) appends mandatory
+PIDs invocation 27 with a separate one-child owner scope and strict private proof
+validation, even without public emission. It adds no public PIDs fields or
+capability/shape mapping. [ADR 0029](docs/decisions/0029-pids-failure-localization.md)
+adds closed source-local failure diagnostics and canonical joined-path
+representation matching the strict reader, without changing controller/ownership
+predicates or qualifying failed campaigns 39165508951 and 39169948731. Closed
+follow-up diagnostics distinguish the existing member-ID/current-count comparisons
+and equal-owner/outside-prefix refusals without new observations. Procfs/controller-reader
+PID-coordinate equivalence and an authenticated exact owned controller boundary
+remain unresolved positive-proof requirements, not established runtime causes.
+Fresh native qualification remains pending.
+[ADR 0030](docs/decisions/0030-rootless-positive-pids-prerequisite.md) fails early
+for rootless lanes unless already collected cgroup metadata reports systemd/v2,
+before fixture pull or native tests. Refusal uses existing owned-resource cleanup.
+This necessary prerequisite is not a PIDs fix, negative qualification or positive
+effect proof. Rootful behavior and all 28 mandatory tests remain unchanged; actual
+rootless delegation and rootful PID-coordinate/boundary proof gaps remain open.
+
+[ADR 0031](docs/decisions/0031-pids-reader-coordinate-proof.md) defines the private
+PIDs-v2 successor: all 37 actual context/scan/controller readers retain strictly
+checked procfs/PID-namespace coordinates. Lossless phase tuples keep these
+witnesses within the unchanged 16 KiB custody cap, with a checked 1 KiB reserve.
+Historical v1 proof remains immutable and is not a current fallback.
+[ADR 0033](docs/decisions/0033-original-outer-custody.md) connects the original
+outer OCI/log custody, broker/runtime/coordinator and private consumers in source.
+An experimental fixed partition fits four authored connected source scenarios
+within the unchanged aggregate budget. It does not qualify the complete native
+harness, native payload variability, alignment or an outer boundary; rootless
+fixture delegation and fresh complete/native/application gates remain required.
+[ADR 0028](docs/decisions/0028-nofile-private-qualification.md) appends mandatory
+private nofile invocation 28 and its strict independent proof gate, also without
+public emission. Its existing four-case/eight-fixture CLI/rendered experiment retains precise
+unlimited-start refusal, finite normalization and exact-unlimited dispositions.
+There is no public nofile projection or catalogue admission; its scoped 512 KiB
+proof/64 KiB metadata limits do not enlarge other proofs' 16 KiB default.
+Host capture remains deferred.
+Current raw projection totals are 43/66 capabilities/shapes on Debian and 45/70 upstream, marked
+`raw_source_only` with `catalogue_admission: unadmitted`. Historical raw bytes
+are preserved unchanged; ADR 0022 separately selects reviewed lifecycle envelopes
+at 34/56 and 36/60. Hostname, both clear groups, HealthDisabled and ShmSize remain unselected.
+The health reader's four legacy return/probe names and original 23 native invocations
+remain unchanged. ShmSize adds only the finite 1 MiB/2 MiB tmpfs-effect and private
+IPC-isolation source group with observed omission controls, never a promised default.
+Debian HealthStartInterval remains explicitly unsupported/not-effective;
+legacy unknown-field acceptance supplies no support. The source run passed all
+21 ordered native tests in each lane. Fresh exact-final-candidate native and
+consumer qualification is still required after this admission change.
 Identity support does not promise arbitrary-image startup or host UID mapping.
 No application or full migration acceptance is claimed. External-volume
 prerequisites cannot carry labels or mutate an existing volume.
@@ -107,3 +174,6 @@ evidence for live #10 acquisition and #12 target
 request conformance is required before any compatibility claim. See
 [architecture](docs/architecture.md) and
 [verification](docs/verification.md).
+Host Engine test requests use the independent, bounded
+[harness Unix-HTTP transport](docs/native-unix-http.md); product acquisition and
+Docker CLI/namespace oracles remain separate. Fresh native qualification is required.

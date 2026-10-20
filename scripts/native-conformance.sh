@@ -1,5 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Bootstrap with shell builtins only: external children must never inherit the
+# coordinator upstream endpoints. Only the dedicated relay retains those ends.
+if [[ ${DOCKERLENS_CANONICAL_ACTIVE:-} != 1 ]]; then
+  exec /usr/bin/python3 -E -s "${BASH_SOURCE[0]%/*}/native_outer_canonical.py" launch "$0" "$@"
+fi
+[[ ${DOCKERLENS_CANONICAL_REQUEST_FD:-} =~ ^[0-9]+$ && ${DOCKERLENS_CANONICAL_REPLY_FD:-} =~ ^[0-9]+$ ]] || exit 1
+coproc CANONICAL_RELAY { exec /usr/bin/python3 -E -s "${BASH_SOURCE[0]%/*}/native_outer_canonical.py" relay "$DOCKERLENS_CANONICAL_REPLY_FD" "$DOCKERLENS_CANONICAL_REQUEST_FD"; }
+exec {DOCKERLENS_CANONICAL_REQUEST_FD}>&-
+exec {DOCKERLENS_CANONICAL_REPLY_FD}<&-
+unset DOCKERLENS_CANONICAL_REQUEST_FD DOCKERLENS_CANONICAL_REPLY_FD
+canonical_read=${CANONICAL_RELAY[0]}
+canonical_write=${CANONICAL_RELAY[1]}
+canonical_phase() {
+  /usr/bin/python3 -E -s "$script_dir/native_outer_canonical.py" "$@" <&"$canonical_read" >&"$canonical_write"
+}
 script_dir=$(cd -- "$(dirname -- "$0")" && pwd -P)
 source "$script_dir/native-version.sh"
 
@@ -80,7 +95,7 @@ sidecar_attempted=0
 volume_attempted=0
 network_attempted=0
 network_created=0
-# This authority belongs only to the three canonical lifecycle-family invocations below.
+# This authority belongs only to the explicit canonical lifecycle-family owner scopes below.
 unset NATIVE_LIFECYCLE_CLEANUP_OWNER
 cleanup_podman() {
   # The deadline must share root privileges with the Podman client; an
@@ -181,8 +196,26 @@ cleanup() {
     wait "$watchdog_pid" 2>/dev/null || true
   fi
   containers_verified=1
-  cleanup_container "$container" container "$outer_container_id" "$outer_attempted" || containers_verified=0
-  cleanup_container "$sidecar" sidecar "$sidecar_container_id" "$sidecar_attempted" || containers_verified=0
+  if (( outer_attempted == 1 )); then
+    # A lost/failed ACK keeps the lane failed. Actual ID/name absence still
+    # permits cleanup of the remaining exact owned resources.
+    canonical_phase teardown || status=1
+    # A root ACK is not absence. Independently check the exact ID AND name
+    # before touching any other run-owned resource; only root removes outer.
+    if [[ $outer_container_id =~ ^[0-9a-f]{64}$ ]]; then
+      outer_name_state=0; outer_id_state=0
+      native_presence exists "${podman_cmd[@]}" container exists "$container" || outer_name_state=$?
+      native_presence exists "${podman_cmd[@]}" container exists "$outer_container_id" || outer_id_state=$?
+      (( outer_name_state == 1 && outer_id_state == 1 )) || containers_verified=0
+    else
+      containers_verified=0
+    fi
+  fi
+  if (( containers_verified == 1 )); then
+    cleanup_container "$sidecar" sidecar "$sidecar_container_id" "$sidecar_attempted" || containers_verified=0
+  else
+    cleanup_refuse sidecar container_unverified || true
+  fi
   if (( containers_verified == 1 )); then
     cleanup_network || status=1
     cleanup_volume || status=1
@@ -512,7 +545,7 @@ watchdog &
 watchdog_pid=$!
 # Pull only the reviewed digest under the lane's time and free-space budget.
 # Prevent `run` from doing a second unbounded implicit pull.
-timeout --signal=TERM --kill-after=2s 180s "${podman_cmd[@]}" pull "$image" >/dev/null
+# Root broker owns the outer image's same-run authenticated preflight pull.
 timeout --signal=TERM --kill-after=2s 180s "${podman_cmd[@]}" pull "$FIXTURE_IMAGE" >/dev/null 2>&1 || sidecar_setup_failed image_pull
 network_attempted=1
 timeout --signal=TERM --kill-after=2s 30s "${podman_cmd[@]}" network create --driver bridge \
@@ -571,20 +604,11 @@ sidecar_creation_id=$(head -c 66 "$run_dir/sidecar-create.id")
 sidecar_container_id=$sidecar_creation_id
 sidecar_binding=$(cleanup_podman inspect --format '{{.ID}}|{{.Name}}|{{index .Config.Labels "io.dockerlens.native-run"}}' "$sidecar_container_id") || sidecar_setup_failed sidecar_identity
 [[ $sidecar_binding == "$sidecar_container_id|$sidecar|$run_id" ]] || sidecar_setup_failed sidecar_identity
-python3 "$script_dir/native-port-start-diagnostic.py" prepare "$run_dir" "$run_id" "$lane" || {
-  echo 'DOCKERLENS_NATIVE_PORT_START_LOG_DIAG: source=none category=unavailable collector=unavailable' >&2
-  exit 1
-}
-# Hold the original caller-owned file; registration checks this descriptor
-# against the exclusive no-follow creation before reading any native bytes.
-exec {port_start_log_fd}< "$run_dir/diagnostics/daemon.log"
 outer_attempted=1
-outer_container_id=$(timeout --signal=TERM --kill-after=2s 120s "${podman_cmd[@]}" run --pull=never -d --name "$container" --label "io.dockerlens.native-run=$run_id" \
-  --log-driver=k8s-file --log-opt "path=$run_dir/diagnostics/daemon.log" --log-opt max-size=1048576 \
-  --network "$outer_network" \
-  --privileged --pids-limit=512 --memory=4g --cpus=2 "${run_flags[@]}" \
-  --volume "$storage_mount" --volume "$socket_dir:/dockerlens-native" \
-  "$image" "${start[@]}" 2>/dev/null) || { outer_container_id=; sidecar_setup_failed daemon_attach; }
+canonical_phase setup "$run_dir" "$run_id" "$lane" "$image" || sidecar_setup_failed daemon_attach
+# The coordinator created/adopted the original log before root create/start.
+exec {port_start_log_fd}< "$run_dir/diagnostics/daemon.log"
+outer_container_id=$(cleanup_podman inspect --format '{{.ID}}' "$container") || sidecar_setup_failed daemon_identity
 [[ $outer_container_id =~ ^[0-9a-f]{64}$ ]] || sidecar_setup_failed daemon_identity
 outer_binding=$(cleanup_podman inspect --format '{{.ID}}|{{.Name}}|{{index .Config.Labels "io.dockerlens.native-run"}}' "$outer_container_id") || sidecar_setup_failed daemon_identity
 [[ $outer_binding == "$outer_container_id|$container|$run_id" ]] || sidecar_setup_failed daemon_identity
@@ -654,7 +678,9 @@ deadline=$((SECONDS + 360))
 while (( SECONDS < deadline )); do
   if [[ -S $socket ]]; then
     if [[ $EUID == 0 ]]; then chmod 0666 "$socket"; else sudo -n chmod 0666 "$socket"; fi
-    if curl -q --noproxy '*' -fs --max-time 5 --unix-socket "$socket" http://localhost/_ping >/dev/null; then break; fi
+    ready_status=$(python3 "$script_dir/native-unix-http.py" --socket "$socket" --method GET \
+      --path /_ping --timeout 5 --max-response-bytes 65536 --discard-body 2>/dev/null) || ready_status=unavailable
+    if [[ $ready_status == 200 ]]; then break; fi
   fi
   running=$("${podman_cmd[@]}" inspect --format '{{.State.Running}}' "$container" 2>/dev/null) || running=unknown
   if [[ $running != true ]]; then
@@ -664,7 +690,12 @@ while (( SECONDS < deadline )); do
   fi
   sleep 2
 done
-[[ -S $socket ]] && curl -q --noproxy '*' -fs --max-time 5 --unix-socket "$socket" http://localhost/_ping >/dev/null || {
+ready_status=unavailable
+if [[ -S $socket ]]; then
+  ready_status=$(python3 "$script_dir/native-unix-http.py" --socket "$socket" --method GET \
+    --path /_ping --timeout 5 --max-response-bytes 65536 --discard-body 2>/dev/null) || ready_status=unavailable
+fi
+[[ $ready_status == 200 ]] || {
   echo 'inner daemon did not become ready within six minutes' >&2
   diagnose_native_startup
   exit 1
@@ -682,8 +713,8 @@ fi
 api_get() {
   local path=$1 target=$2
   local status
-  status=$(timeout 20 curl -q --noproxy '*' -fsS --max-time 15 --unix-socket "$socket" \
-    "http://localhost$path" -o "$target" -w '%{http_code}')
+  status=$(timeout 20 python3 "$script_dir/native-unix-http.py" --socket "$socket" --method GET \
+    --path "$path" --timeout 15 --max-response-bytes 8388608 --response-body-file "$target")
   [[ $status == 200 ]] || { echo "native GET did not return HTTP 200: $path" >&2; exit 1; }
   printf '%s\n' "$status" > "${target%.json}.status"
 }
@@ -735,6 +766,11 @@ native_package_version() {
 }
 echo "DOCKERLENS_NATIVE_ENV: cgroup_driver=$inner_cgroup_driver cgroup_version=$inner_cgroup runc=$(native_package_version runc) containerd=$(native_package_version containerd) libseccomp2=$(native_package_version libseccomp2)"
 if [[ $expected_mode == rootless ]]; then
+  # Necessary for the mandatory positive PIDs proof, never proof of its effects.
+  if [[ $inner_cgroup_driver != systemd || $inner_cgroup != 2 ]]; then
+    echo 'DOCKERLENS_NATIVE_PREREQUISITE: rootless_positive_pids_requires_systemd_cgroup_v2' >&2
+    exit 1
+  fi
   [[ $docker_root == /home/docker/.local/share/docker ]] || { echo 'rootless daemon store is outside owned volume' >&2; exit 1; }
 else
   [[ $docker_root == /var/lib/docker ]] || { echo 'rootful daemon store is outside owned volume' >&2; exit 1; }
@@ -1012,6 +1048,15 @@ export NATIVE_STOP_SIGNAL_PROOF_PATH="$run_dir/stop-signal-v1.json"
 export NATIVE_LIFECYCLE_PROOF_PATH="$run_dir/lifecycle-v1.json"
 export NATIVE_RUNTIME_FILESYSTEM_PROOF_PATH="$run_dir/runtime-filesystem-v1.json"
 export NATIVE_TMPFS_EFFECT_PROOF_PATH="$run_dir/tmpfs-effect-v1.json"
+export NATIVE_HEALTH_START_INTERVAL_BOUNDARY_PROOF_PATH="$run_dir/health-start-interval-boundary-v1.json"
+export NATIVE_LIFECYCLE_DEFAULT_EFFECT_PROOF_PATH="$run_dir/lifecycle-default-effects-v1.json"
+export NATIVE_HOSTNAME_PROOF_PATH="$run_dir/hostname-v1.json"
+export NATIVE_COMMAND_CLEAR_PROOF_PATH="$run_dir/command-clear-v1.json"
+export NATIVE_SHM_SIZE_PROOF_PATH="$run_dir/shm-size-v1.json"
+export NATIVE_SUPPLEMENTARY_GROUPS_PROOF_PATH="$run_dir/supplementary-groups-v1.json"
+export NATIVE_KERNEL_SETTINGS_PROOF_PATH="$run_dir/kernel-settings-v1.json"
+export NATIVE_PIDS_LIMIT_PROOF_PATH="$run_dir/pids-limit-v2.json"
+export NATIVE_NOFILE_PROOF_PATH="$run_dir/nofile-v1.json"
 export NATIVE_PORT_START_DIAGNOSTIC_PATH="$run_dir/diagnostics/port-start-window.json"
 export NATIVE_IDENTITY_CANDIDATE_SHA
 NATIVE_IDENTITY_CANDIDATE_SHA=$(git -C "$script_dir/.." rev-parse HEAD)
@@ -1025,6 +1070,15 @@ export NATIVE_STOP_SIGNAL_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 export NATIVE_LIFECYCLE_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 export NATIVE_RUNTIME_FILESYSTEM_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 export NATIVE_TMPFS_EFFECT_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
+export NATIVE_HEALTH_START_INTERVAL_BOUNDARY_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
+export NATIVE_LIFECYCLE_DEFAULT_EFFECT_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
+export NATIVE_HOSTNAME_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
+export NATIVE_COMMAND_CLEAR_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
+export NATIVE_SHM_SIZE_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
+export NATIVE_SUPPLEMENTARY_GROUPS_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
+export NATIVE_KERNEL_SETTINGS_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
+export NATIVE_PIDS_LIMIT_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
+export NATIVE_NOFILE_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 if [[ $EUID == 0 ]]; then export NATIVE_PODMAN_USE_SUDO=0; else export NATIVE_PODMAN_USE_SUDO=1; fi
 
 port_start_failure_diagnostic() {
@@ -1092,7 +1146,97 @@ fi
 "$(dirname "$0")/run-exact-native-test.sh" native_lifecycle live_lifecycle_matches_engine
 "$(dirname "$0")/run-exact-native-test.sh" native_runtime_filesystem live_runtime_filesystem_matches_engine
 "$(dirname "$0")/run-exact-native-test.sh" native_tmpfs_effect live_tmpfs_effects_match_engine
+"$(dirname "$0")/run-exact-native-test.sh" native_health_start_interval_boundary live_health_start_interval_boundary_matches_engine
+"$(dirname "$0")/run-exact-native-test.sh" native_lifecycle_default_effect live_lifecycle_default_effects_match_engine
+"$(dirname "$0")/run-exact-native-test.sh" native_hostname live_hostname_matches_engine
 )
+
+# Always validate the private hostname proof, including local native execution
+# without public manifest emission. Context is supplied from independent harness
+# facts rather than read from the proof; this adds no raw capability projection.
+python3 "$script_dir/native_hostname_proof.py" "$run_dir" "$NATIVE_HOSTNAME_CANDIDATE_SHA" "$run_id" \
+  "$lane" "$server_version" "$api_version" "$expected_mode" "$installed_docker_package" \
+  "$NATIVE_FIXTURE_IMAGE" "$image" "$NATIVE_OUTER_CONTAINER_ID" "$NATIVE_BIND_RELABEL_DAEMON_UID"
+
+"$(dirname "$0")/run-exact-native-test.sh" native_command_clear live_command_clear_matches_engine
+# Mandatory private validation also applies when no public evidence is requested.
+python3 - "$script_dir" "$run_dir" "$NATIVE_COMMAND_CLEAR_CANDIDATE_SHA" "$run_id" \
+  "$lane" "$server_version" "$api_version" "$expected_mode" "$installed_docker_package" \
+  "$NATIVE_FIXTURE_IMAGE" "$image" "$NATIVE_OUTER_CONTAINER_ID" "$NATIVE_BIND_RELABEL_DAEMON_UID" <<'COMMAND_CLEAR_PROOF'
+import re
+import sys
+from pathlib import Path
+
+try:
+    sys.path.insert(0, sys.argv[1])
+    from native_command_clear_proof import read_command_clear_proof
+
+    (directory, candidate, run, lane, engine, api, mode, package,
+     fixture, outer_image, outer_id, uid) = sys.argv[2:]
+    if re.fullmatch(r"0|[1-9][0-9]{0,9}", uid) is None:
+        raise ValueError()
+    context = {
+        "candidate_sha": candidate, "run_id": run, "lane": lane,
+        "engine_release": engine, "rendering_api": api,
+        "acquisition_api": "1.41" if lane.startswith("debian11-") else "1.49",
+        "mode": mode, "docker_package": package, "fixture_image": fixture,
+        "daemon_uid": int(uid), "outer": {
+            "id": outer_id, "name": f"dl-native-{run}", "owner": run,
+            "image": outer_image, "data_volume": f"dl-native-data-{run}",
+            "socket_source": str(Path(directory) / "socket"), "privileged": True,
+            "memory_bytes": 4294967296, "cpu_quota": 200000,
+            "cpu_period": 100000, "pids_limit": 512,
+        },
+    }
+    read_command_clear_proof(Path(directory) / "command-clear-v1.json", Path(directory), context)
+except (OSError, ValueError, TypeError, KeyError, OverflowError, RecursionError, AttributeError, ImportError):
+    raise SystemExit("native command-clear proof rejected") from None
+COMMAND_CLEAR_PROOF
+
+(
+  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1
+"$(dirname "$0")/run-exact-native-test.sh" native_shm_size live_shm_size_effects_match_engine
+)
+# Always require the fixed private child against independent canonical facts.
+python3 "$script_dir/native_shm_size_proof.py" "$run_dir" "$NATIVE_SHM_SIZE_CANDIDATE_SHA" "$run_id" \
+  "$lane" "$server_version" "$api_version" "$expected_mode" "$installed_docker_package" \
+  "$NATIVE_FIXTURE_IMAGE" "$image" "$NATIVE_OUTER_CONTAINER_ID" "$NATIVE_BIND_RELABEL_DAEMON_UID"
+
+(
+  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1
+"$(dirname "$0")/run-exact-native-test.sh" native_supplementary_groups live_supplementary_groups_match_engine
+)
+# Require the fixed private child even without public manifest emission.
+python3 "$script_dir/native_supplementary_groups_proof.py" "$run_dir" "$NATIVE_SUPPLEMENTARY_GROUPS_CANDIDATE_SHA" "$run_id" \
+  "$lane" "$server_version" "$api_version" "$expected_mode" "$installed_docker_package" \
+  "$NATIVE_FIXTURE_IMAGE" "$image" "$NATIVE_OUTER_CONTAINER_ID" "$NATIVE_BIND_RELABEL_DAEMON_UID"
+
+(
+  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1
+"$(dirname "$0")/run-exact-native-test.sh" native_kernel_settings live_kernel_settings_match_engine
+)
+# Require the fixed private child even without public manifest emission.
+python3 "$script_dir/native_kernel_settings_proof.py" "$run_dir" "$NATIVE_KERNEL_SETTINGS_CANDIDATE_SHA" "$run_id" \
+  "$lane" "$server_version" "$api_version" "$expected_mode" "$installed_docker_package" \
+  "$NATIVE_FIXTURE_IMAGE" "$image" "$NATIVE_OUTER_CONTAINER_ID" "$NATIVE_BIND_RELABEL_DAEMON_UID"
+
+# Direct invocation: Bash coprocess descriptors cannot cross a subshell.
+export DOCKERLENS_CANONICAL_PIDS=1
+"$script_dir/run-exact-native-test.sh" native_pids_limit live_pids_limit_effects_match_engine <&"$canonical_read" >&"$canonical_write"
+unset DOCKERLENS_CANONICAL_PIDS
+# Private positive qualification only; always validate even without emission.
+canonical_phase reader "$run_dir" "$NATIVE_PIDS_LIMIT_CANDIDATE_SHA" "$run_id" \
+  "$lane" "$server_version" "$api_version" "$expected_mode" "$installed_docker_package" \
+  "$NATIVE_FIXTURE_IMAGE" "$image" "$NATIVE_OUTER_CONTAINER_ID" "$NATIVE_BIND_RELABEL_DAEMON_UID"
+
+(
+  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1
+"$(dirname "$0")/run-exact-native-test.sh" native_nofile live_nofile_limits_and_effects_match_engine
+)
+# Private qualification only; always validate even without public emission.
+python3 "$script_dir/native_nofile_proof.py" "$run_dir" "$NATIVE_NOFILE_CANDIDATE_SHA" "$run_id" \
+  "$lane" "$server_version" "$api_version" "$expected_mode" "$installed_docker_package" \
+  "$NATIVE_FIXTURE_IMAGE" "$image" "$NATIVE_OUTER_CONTAINER_ID" "$NATIVE_BIND_RELABEL_DAEMON_UID"
 
 if [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]; then
   candidate_sha=$(git -C "$script_dir/.." rev-parse HEAD)
@@ -1104,9 +1248,10 @@ if [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]; then
     echo 'native evidence requires a clean candidate checkout' >&2
     exit 1
   }
-  python3 "$script_dir/native-evidence.py" "$run_dir/version.json" "$NATIVE_SHAPES_PATH" "$NATIVE_SOURCE_PROBES_PATH" "$NATIVE_NETWORK_PROBES_PATH" "$NATIVE_VOLUME_PROBES_PATH" "$NATIVE_VOLUME_LABEL_PROBES_PATH" "$NATIVE_IDENTITY_PROBES_PATH" "$NATIVE_PORT_PROBES_PATH" "$NATIVE_HEALTH_METADATA_PROOF_PATH" "$NATIVE_NETWORK_ATTACHMENT_PROOF_PATH" "$NATIVE_BIND_RELABEL_PROOF_PATH" "$run_dir" \
+  canonical_phase emitter "$run_dir/version.json" "$NATIVE_SHAPES_PATH" "$NATIVE_SOURCE_PROBES_PATH" "$NATIVE_NETWORK_PROBES_PATH" "$NATIVE_VOLUME_PROBES_PATH" "$NATIVE_VOLUME_LABEL_PROBES_PATH" "$NATIVE_IDENTITY_PROBES_PATH" "$NATIVE_PORT_PROBES_PATH" "$NATIVE_HEALTH_METADATA_PROOF_PATH" "$NATIVE_NETWORK_ATTACHMENT_PROOF_PATH" "$NATIVE_BIND_RELABEL_PROOF_PATH" "$run_dir" \
     "$DOCKERLENS_NATIVE_EVIDENCE_DIR/$lane.json" "$lane" "$image" "$expected_mode" \
     "$installed_docker_package" "$candidate_sha" "$run_id"
 fi
 
+canonical_phase final
 native_success_summary="native conformance passed: $lane; Engine $server_version; API $api_version; mode $expected_mode; inner cgroup $inner_cgroup; outer $("${podman_cmd[@]}" --version); kernel $(uname -r); privileged $privileged; nested storage ${used_kib} KiB"

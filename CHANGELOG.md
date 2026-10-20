@@ -2,14 +2,88 @@
 
 ## Unreleased
 
+- Preserve finite rootless PID limits as destination-bound inert obligations in
+  conditional complete-artifact schema 4. Pure snapshot assessment checks only
+  explicitly selected metadata; delegation, enforcement and exact build/package
+  provenance remain unverified. Existing artifact bytes and native capability
+  admission are unchanged when no such obligation exists.
+
+- Preserve observation-scoped `/info` PIDs-support and protected cgroup
+  driver/version reports alongside memory/swap. Classify only exact reported
+  values; unavailable data and schema defaults never become support. Positive
+  reports remain unverified and do not admit capabilities or prove delegation.
+  Struct-literal consumers must account for the new fields; use
+  `ResourceSupportObservation::missing(observation_id)` when constructing an
+  unavailable fixture. Fresh native and downstream qualification remain open.
+- Integrate the separate ShmSize lifecycle child as mandatory native invocation
+  24 with its strict private proof gate and closed raw-only singleton. Preserve
+  the first 23 invocations, original six-child cleanup block, nineteen-argument
+  emitter, native producers/private readers and historical evidence. The new
+  one-child owner scope retains existing budgets and cleanup failure semantics.
+  Current combined raw totals are Debian 39 capabilities/61 shapes and upstream
+  41/65; compiled selection stays 34/56 and 36/60, with all new groups unselected.
+  Fresh 24-by-four native qualification, complete gates and actual consumers
+  remain required; prior passing campaign bytes do not qualify this emitter.
+
+- Project only the raw HealthDisabled/DisabledHealthcheck singleton after the
+  unchanged complete health-metadata-v1 proof validates inherited-failure and
+  disabled CLI/rendered controls as well as every prior context/effect/cleanup
+  check. Add a closed source-only/unadmitted public outcome, with no private
+  payloads or schema-root change. That health-only slice's raw totals were Debian 38 capabilities/
+  60 shapes and upstream 40/64; compiled selection remains 34/56 and 36/60.
+  Preserve the reader's four legacy shapes, all 23 native invocations, historical
+  evidence and pins. Fresh exact-final-candidate complete/native and actual
+  consumer gates remain required; no HealthDisabled admission is claimed.
+
+- Wire hostname and command/entrypoint-clear as mandatory canonical invocations
+  22 and 23, preserving original order, deadlines and cleanup ownership. Require
+  both complete context-bound private proofs before any new raw group/output;
+  expose only closed source-only/unadmitted outcomes. At that source slice, raw totals were
+  Debian 37 capabilities/59 shapes and upstream 39/63; compiled selection stays
+  34/56 and 36/60. Historical 21-test campaign records and private v1 protocols
+  remain unchanged. Fresh final-edit complete, 24-test four-lane native and actual
+  consumer qualification remain required; no process-group admission is claimed.
+- Select ADR 0022's authenticated lifecycle source cohort for candidate rehearsal:
+  complete StopTimeout, init, read-only-rootfs and tmpfs groups on all four exact
+  profiles, plus HealthStartInterval only upstream. Debian admits 34 capabilities/
+  56 shapes; upstream 36/60. Keep Debian unsupported/not-effective health outcomes,
+  finite PID1/diagonal-rootfs/explicit-tmpfs scopes, unchanged raw unadmitted
+  markers and every historical record. Fresh final-candidate complete/native and
+  actual consumer gates remain required; no full migration or application claim.
+
+- Project complete validated lifecycle/default, init/read-only-rootfs and tmpfs
+  proof groups into raw source capability/shape maps only, with upstream-only
+  HealthStartInterval. Distinguish `raw_source_only` from unadmitted compiled
+  catalogue status. Preserve all five mandatory private readers, Debian legacy
+  negatives, the original 21 native invocations, historical evidence and the sealed catalogue;
+  fresh exact-head qualification and consumer gates remain required.
+
 - Raise the minimum supported Rust version from 1.85.0 to 1.98.1, matching the
   pinned development toolchain. Consumers must upgrade Rust before building.
+- Replace host Engine HTTP in the native harness with DockerLens #119's
+  independent, test-only AF_UNIX transport. Preserve exact request bytes,
+  complete bounded HTTP framing and actual status, with one absolute deadline
+  and value-free failures. Caller budgets, ownership, mutation uncertainty,
+  privacy and cleanup remain authoritative; all original twenty-one native invocations
+  and independent CLI/acquisition/network probes remain required. Product APIs,
+  capability admission and historical evidence are unchanged; fresh exact-head
+  native qualification and downstream consumer gates remain mandatory.
+
+
+- Implement a separate twenty-first mandatory default/zero lifecycle source probe,
+  strict private reader and closed unadmitted emitter projection. Six actual
+  borrowed-image container slots cover omitted/zero stops and health observations;
+  Debian unknown StartInterval acceptance remains explicitly unsupported/unproven,
+  separate from modern default-equivalence. Preserve positive lifecycle evidence,
+  original deadlines/cleanup owner, catalogue and historical receipts. Source and
+  inert validation do not claim genuine four-lane qualification or admission.
+
 - Select ADR 0019's authenticated configured stop-signal source cohort for
   candidate rehearsal only: add the complete StopSignal singleton while retaining
   every prior group and historical byte, at Debian 30 capabilities/47 shapes and
   upstream 31/49. Preserve absent-field rendering, Debian IPv6 negatives,
   HealthStartInterval withholding and unverified SELinux obligations. Fresh
-  final-candidate complete/sixteen-test four-lane and all actual volume/bind/
+  final-candidate complete/twenty-four-test four-lane and all actual volume/bind/
   desired-external consumer gates still block ready/merge/main admission/release;
   no application or native-final-candidate qualification is claimed.
 

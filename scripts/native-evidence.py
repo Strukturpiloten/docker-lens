@@ -8,6 +8,31 @@ import stat
 import sys
 from pathlib import Path
 
+
+def bounded_stream_read(source, limit):
+    data = bytearray()
+    while len(data) < limit:
+        part = os.read(source.fileno(), limit - len(data))
+        if not part:
+            break
+        data.extend(part)
+    return bytes(data)
+
+
+def bounded_source_read(path, limit):
+    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    with os.fdopen(descriptor, "rb") as source:
+        before = os.fstat(source.fileno())
+        if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= limit:
+            raise ValueError("invalid bounded native evidence source")
+        raw = bounded_stream_read(source, limit + 1)
+        after = os.fstat(source.fileno())
+        if (len(raw) != before.st_size or len(raw) > limit
+                or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+                != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)):
+            raise ValueError("native evidence source changed")
+        return raw
+
 from native_identity_proof import CASES as IDENTITY_CASES, CONTRACT as IDENTITY_CONTRACT, validate_identity_v2
 from native_health_metadata_proof import CONTRACT as HEALTH_METADATA_CONTRACT, read_health_metadata_proof
 from native_stop_signal_proof import (
@@ -15,6 +40,10 @@ from native_stop_signal_proof import (
 )
 from native_lifecycle_proof import (
     CONTRACT as LIFECYCLE_CONTRACT, FILENAME as LIFECYCLE_FILENAME, read_lifecycle_proof,
+)
+from native_lifecycle_default_effect_proof import (
+    CONTRACT as LIFECYCLE_DEFAULT_EFFECT_CONTRACT, FILENAME as LIFECYCLE_DEFAULT_EFFECT_FILENAME,
+    read_lifecycle_default_effect_proof,
 )
 from native_runtime_filesystem_proof import (
     CONTRACT as RUNTIME_FILESYSTEM_CONTRACT, FILENAME as RUNTIME_FILESYSTEM_FILENAME,
@@ -24,12 +53,39 @@ from native_tmpfs_effect_proof import (
     CONTRACT as TMPFS_EFFECT_CONTRACT, FILENAME as TMPFS_EFFECT_FILENAME,
     read_proof as read_tmpfs_effect_proof, validate as validate_tmpfs_effect_proof,
 )
+from native_health_start_interval_boundary_proof import (
+    CONTRACT as HEALTH_START_INTERVAL_BOUNDARY_CONTRACT,
+    FILENAME as HEALTH_START_INTERVAL_BOUNDARY_FILENAME,
+    read_health_start_interval_boundary_proof,
+)
 from native_network_attachment_proof import CONTRACT as NETWORK_ATTACHMENT_CONTRACT, read_network_attachment_proof
 from native_bind_relabel_proof import CONTRACT as BIND_RELABEL_CONTRACT, read_bind_relabel_proof
 from native_external_network_proof import (
     CONTRACT as EXTERNAL_NETWORK_CONTRACT, FILENAME as EXTERNAL_NETWORK_FILENAME,
     read_external_network_proof,
 )
+from native_hostname_proof import (
+    CONTRACT as HOSTNAME_CONTRACT, FILENAME as HOSTNAME_FILENAME, read_hostname_proof,
+)
+from native_command_clear_proof import (
+    CONTRACT as COMMAND_CLEAR_CONTRACT, FILENAME as COMMAND_CLEAR_FILENAME, read_command_clear_proof,
+)
+from native_shm_size_proof import (
+    CONTRACT as SHM_SIZE_CONTRACT, FILENAME as SHM_SIZE_FILENAME, read_shm_size_proof,
+)
+
+from native_supplementary_groups_proof import (
+    CONTRACT as SUPPLEMENTARY_GROUPS_CONTRACT, FILENAME as SUPPLEMENTARY_GROUPS_FILENAME,
+    read_supplementary_groups_proof,
+)
+from native_kernel_settings_proof import (
+    CONTRACT as KERNEL_SETTINGS_CONTRACT, FILENAME as KERNEL_SETTINGS_FILENAME, read_kernel_settings_proof,
+)
+from native_pids_limit_v2_proof import (
+    FILENAME as PIDS_LIMIT_FILENAME, SCOPE as PIDS_LIMIT_SCOPE,
+    read_pids_limit_v2_proof as read_pids_limit_proof,
+)
+from native_nofile_proof import FILENAME as NOFILE_FILENAME, read_nofile_proof
 
 
 CAPABILITIES = (
@@ -104,6 +160,14 @@ PORT_CAPABILITY_SHAPES = {
     "PortExposeOnly": ("ExposedOnlyPort",),
     "PortEphemeral": ("EphemeralHostPort",),
 }
+LIFECYCLE_SOURCE_SHAPES = {
+    "StopTimeout": ("StopTimeoutZero", "StopTimeoutPositive"),
+    "ContainerInit": ("ContainerInitTrue", "ContainerInitFalse"),
+    "ReadOnlyRootfs": ("ReadOnlyRootfsTrue", "ReadOnlyRootfsFalse"),
+    "TmpfsMount": ("TmpfsMountReadWrite", "TmpfsMountReadOnly", "TmpfsMountOptions"),
+}
+HEALTH_INTERVAL_SOURCE_SHAPES = ("HealthStartIntervalZero", "HealthStartIntervalPositive")
+RAW_SOURCE_STATUS = {"admission": "raw_source_only", "catalogue_admission": "unadmitted"}
 
 
 def identity_object(pairs):
@@ -125,7 +189,7 @@ def read_identity_proof(path: Path, lane: str, mode: str, api: str,
                 or before.st_uid != os.geteuid() or before.st_mode & 0o077
                 or before.st_nlink != 1):
             raise ValueError("invalid private identity proof")
-        payload = source.read(16385)
+        payload = bounded_stream_read(source, 16385)
         after = os.fstat(source.fileno())
     if (len(payload) != before.st_size
             or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns,
@@ -175,7 +239,7 @@ def read_volume_probes(path: Path) -> list[str]:
         metadata = os.fstat(source.fileno())
         if not stat.S_ISREG(metadata.st_mode) or not 0 < metadata.st_size <= 4096:
             raise ValueError("invalid native volume probe file")
-        payload = source.read(4097)
+        payload = bounded_stream_read(source, 4097)
     if len(payload) != metadata.st_size:
         raise ValueError("native volume probe file changed")
     probes = json.loads(payload)
@@ -194,7 +258,7 @@ def read_volume_label_probes(path: Path) -> list[str]:
         metadata = os.fstat(source.fileno())
         if not stat.S_ISREG(metadata.st_mode) or not 0 < metadata.st_size <= 4096:
             raise ValueError("invalid native volume label probe file")
-        payload = source.read(4097)
+        payload = bounded_stream_read(source, 4097)
     if len(payload) != metadata.st_size:
         raise ValueError("native volume label probe file changed")
     probes = json.loads(payload)
@@ -220,7 +284,7 @@ def read_network_proof(path: Path) -> list[str]:
         metadata = os.fstat(source.fileno())
         if not stat.S_ISREG(metadata.st_mode) or not 0 < metadata.st_size <= 4096:
             raise ValueError("invalid native network proof file")
-        payload = source.read(4097)
+        payload = bounded_stream_read(source, 4097)
     if len(payload) != metadata.st_size:
         raise ValueError("native network proof file changed")
     proof = json.loads(payload, object_pairs_hook=unique_proof_object)
@@ -278,9 +342,9 @@ def read_port_proof(path: Path, capture_dir: Path, lane: str, engine: str,
                     or before.st_uid != os.geteuid() or stat.S_IMODE(before.st_mode) != 0o600
                     or before.st_nlink != 1):
                 raise ValueError("invalid private native port proof")
-            payload = source.read(4097)
+            payload = bounded_stream_read(source, 4097)
             source.seek(0)
-            repeated_payload = source.read(4097)
+            repeated_payload = bounded_stream_read(source, 4097)
             after = os.fstat(source.fileno())
         current_parent = os.fstat(directory_fd)
         current_ancestor = os.fstat(ancestor_fd)
@@ -382,7 +446,7 @@ def read_port_proof(path: Path, capture_dir: Path, lane: str, engine: str,
 
 
 def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path: Path, volume_path: Path, volume_label_path: Path, identity_path: Path, port_path: Path, health_metadata_path: Path, network_attachment_path: Path, bind_relabel_path: Path, capture_dir: Path, destination: Path, lane: str, image: str,
-         mode: str, package: str, candidate_sha: str, run_id: str) -> None:
+         mode: str, package: str, candidate_sha: str, run_id: str, *, outer_context=None, source_budget=None) -> None:
     if lane not in LANES or mode != lane.rsplit("-", 1)[1]:
         raise ValueError("invalid native lane or mode")
     if not re.fullmatch(r"[0-9a-f]{40}", candidate_sha):
@@ -402,7 +466,7 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
     elif package:
         raise ValueError("upstream image has no Debian Engine package")
 
-    version = json.loads(version_path.read_text(encoding="utf-8"))
+    version = json.loads(bounded_source_read(version_path, 65536))
     engine = version.get("Version")
     maximum = version.get("ApiVersion")
     minimum = version.get("MinAPIVersion")
@@ -433,7 +497,7 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
 
     if shapes_path.stat().st_size > 4096:
         raise ValueError("native shape evidence exceeds closed limit")
-    shapes = json.loads(shapes_path.read_text(encoding="utf-8"))
+    shapes = json.loads(bounded_source_read(shapes_path, 4096))
     if not isinstance(shapes, dict) or set(shapes) != set(CAPABILITIES):
         raise ValueError("native capability shape set is incomplete")
     for name, expected in REQUIRED_SHAPES.items():
@@ -445,7 +509,7 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
 
     if source_path.stat().st_size > 4096:
         raise ValueError("native source evidence exceeds closed limit")
-    source_probes = json.loads(source_path.read_text(encoding="utf-8"))
+    source_probes = json.loads(bounded_source_read(source_path, 4096))
     if (not isinstance(source_probes, list) or len(source_probes) != len(SOURCE_PROBES)
             or any(not isinstance(probe, str) for probe in source_probes)
             or set(source_probes) != set(SOURCE_PROBES)):
@@ -503,6 +567,59 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         capture_dir / RUNTIME_FILESYSTEM_FILENAME, capture_dir, external_context)
     tmpfs_effect = validate_tmpfs_effect_proof(
         read_tmpfs_effect_proof(capture_dir / TMPFS_EFFECT_FILENAME), external_context)
+    health_boundary = read_health_start_interval_boundary_proof(
+        capture_dir / HEALTH_START_INTERVAL_BOUNDARY_FILENAME, capture_dir, external_context)
+    lifecycle_default_effect_outcomes = list(read_lifecycle_default_effect_proof(
+        capture_dir / LIFECYCLE_DEFAULT_EFFECT_FILENAME, capture_dir, external_context))
+    # Both complete process families are mandatory. Fixed private direct children
+    # share only the independently constructed harness context, never self-context.
+    read_hostname_proof(capture_dir / HOSTNAME_FILENAME, capture_dir, external_context)
+    command_clear_shapes = list(read_command_clear_proof(
+        capture_dir / COMMAND_CLEAR_FILENAME, capture_dir, external_context))
+    if command_clear_shapes != ["ClearCommand", "ClearEntrypoint"]:
+        raise ValueError("incomplete command-clear source group")
+    shm_size = read_shm_size_proof(capture_dir / SHM_SIZE_FILENAME, capture_dir, external_context)
+    if (type(shm_size) is not dict
+            or set(shm_size) != {"contract", "capability_admission", "catalogue_admission"}
+            or type(shm_size["contract"]) is not str or shm_size["contract"] != "shm-size-v1"
+            or type(shm_size["capability_admission"]) is not list or shm_size["capability_admission"] != []
+            or type(shm_size["catalogue_admission"]) is not bool or shm_size["catalogue_admission"] is not False):
+        raise ValueError("incomplete shm-size source group")
+
+    supplementary_groups = read_supplementary_groups_proof(
+        capture_dir / SUPPLEMENTARY_GROUPS_FILENAME, capture_dir, external_context)
+    if (type(supplementary_groups) is not dict
+            or set(supplementary_groups) != {"contract", "capability_admission", "catalogue_admission"}
+            or type(supplementary_groups["contract"]) is not str or supplementary_groups["contract"] != "supplementary-groups-v1"
+            or type(supplementary_groups["capability_admission"]) is not list or supplementary_groups["capability_admission"] != []
+            or type(supplementary_groups["catalogue_admission"]) is not bool or supplementary_groups["catalogue_admission"] is not False):
+        raise ValueError("incomplete supplementary-groups source group")
+    kernel_settings = read_kernel_settings_proof(
+        capture_dir / KERNEL_SETTINGS_FILENAME, capture_dir, external_context)
+    if (type(kernel_settings) is not dict
+            or set(kernel_settings) != {"contract", "capability_admission", "catalogue_admission"}
+            or type(kernel_settings["contract"]) is not str or kernel_settings["contract"] != "kernel-settings-v1"
+            or type(kernel_settings["capability_admission"]) is not list or kernel_settings["capability_admission"] != []
+            or type(kernel_settings["catalogue_admission"]) is not bool or kernel_settings["catalogue_admission"] is not False):
+        raise ValueError("incomplete kernel-settings source group")
+
+    # Mandatory private qualification, not a raw capability/shape projection.
+    pids_limit = read_pids_limit_proof(capture_dir / PIDS_LIMIT_FILENAME, capture_dir, external_context, outer_context)
+    if (type(pids_limit) is not dict
+            or set(pids_limit) != {"contract", "capability_admission", "catalogue_admission", "scope"}
+            or type(pids_limit["contract"]) is not str or pids_limit["contract"] != "pids-limit-v2"
+            or type(pids_limit["capability_admission"]) is not list or pids_limit["capability_admission"] != []
+            or type(pids_limit["catalogue_admission"]) is not bool or pids_limit["catalogue_admission"] is not False
+            or type(pids_limit["scope"]) is not str or pids_limit["scope"] != PIDS_LIMIT_SCOPE):
+        raise ValueError("incomplete pids-limit private qualification")
+
+    nofile = read_nofile_proof(capture_dir / NOFILE_FILENAME, capture_dir, external_context)
+    if (type(nofile) is not dict
+            or set(nofile) != {"contract", "capability_admission", "catalogue_admission"}
+            or type(nofile["contract"]) is not str or nofile["contract"] != "nofile-v1"
+            or type(nofile["capability_admission"]) is not list or nofile["capability_admission"] != []
+            or type(nofile["catalogue_admission"]) is not bool or nofile["catalogue_admission"] is not False):
+        raise ValueError("incomplete nofile private qualification")
 
     # Only these closed mappings follow the complete, validated native proof
     # files above. They extend raw lane evidence, never the reviewed catalogue.
@@ -525,11 +642,19 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         if all(shape in observed_port_shapes for shape in required):
             proof_shapes[capability] = list(required)
     # The private reader requires every context-bound case/effect/cleanup.
-    # Never promote inherited/disabled controls or arbitrary health markers.
+    # The unchanged complete reader also requires inherited-failure and disabled
+    # CLI/rendered controls. Only their complete validation permits this raw-only
+    # disabled singleton; its four legacy return/probe names stay unchanged.
     proof_shapes.update({
         "ContainerLabels": ["ContainerCreateLabels"],
         "HealthShell": ["ShellHealthcheck"],
         "HealthStartPeriod": ["HealthStartPeriodZero", "HealthStartPeriodPositive"],
+        "HealthDisabled": ["DisabledHealthcheck"],
+        "ShmSize": ["ShmSize"],
+        "SupplementaryGroups": ["SupplementaryGroups"],
+        "SecurityOptions": ["NoNewPrivilegesEnabled", "NoNewPrivilegesDisabled"],
+        "Sysctls": ["Sysctls"],
+        "SysctlIpv4Forward": ["SysctlIpv4Forward"],
     })
     # Only the complete four-shape context/effect/cleanup protocol grants these
     # future raw groups. The historical 22 network markers grant no new group.
@@ -544,6 +669,31 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
     })
     proof_shapes["NetworkExternalInternalExpectation"] = external_network_probes
     proof_shapes["StopSignal"] = stop_signal_probes
+    # All five strict readers above are mandatory, including representation,
+    # negative controls, actual effects and final ownership/cleanup. Neither
+    # positive lifecycle effects nor zero representation alone is a whole group.
+    debian = lane.startswith("debian11-")
+    if lifecycle_outcomes != [
+        "stop_timeout_effective", "health_start_interval_" + (
+            "not_effective_on_selected_api" if debian else "effective"),
+    ] or lifecycle_default_effect_outcomes != [
+        "stop_timeout_omitted_graceful_zero_forced", "health_start_interval_" + (
+            "unsupported_legacy_field" if debian else "default_equivalent"),
+    ] or health_boundary["outcomes"] != [
+        "omission_configured_absent", "literal_zero_configured_absent",
+        "cli_zero_client_unknown_flag" if debian else "cli_zero_configured_absent",
+    ]:
+        raise ValueError("incomplete lifecycle source group")
+    proof_shapes.update({name: list(required) for name, required in LIFECYCLE_SOURCE_SHAPES.items()})
+    # Exact independently supplied lane context, never a guessed API floor or
+    # acceptance of an unknown legacy JSON member, determines this boundary.
+    if not debian:
+        proof_shapes["HealthStartInterval"] = list(HEALTH_INTERVAL_SOURCE_SHAPES)
+    proof_shapes.update({
+        "ContainerHostname": ["ContainerHostname"],
+        "CommandClear": ["ClearCommand"],
+        "EntrypointClear": ["ClearEntrypoint"],
+    })
 
     record = {
         "schema_version": 1,
@@ -571,6 +721,25 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         "port_probes": port_probes,
         "health_metadata_contract": HEALTH_METADATA_CONTRACT,
         "health_metadata_probes": health_metadata_probes,
+        "health_disabled_contract": HEALTH_METADATA_CONTRACT,
+        "health_disabled_outcomes": {
+            **RAW_SOURCE_STATUS, "outcome": "disabled_health_suppression_verified",
+        },
+        "shm_size_contract": SHM_SIZE_CONTRACT,
+        "shm_size_outcomes": {
+            **RAW_SOURCE_STATUS, "scope": "explicit_1MiB_2MiB_with_observed_omission_only",
+            "outcome": "tmpfs_effect_and_ipc_isolation_verified",
+        },
+        "supplementary_groups_contract": SUPPLEMENTARY_GROUPS_CONTRACT,
+        "supplementary_groups_outcomes": {
+            **RAW_SOURCE_STATUS, "scope": "numeric_nonroot_omitted_one_two_groups_only",
+            "outcome": "pid1_membership_and_dac_effects_verified",
+        },
+        "kernel_settings_contract": KERNEL_SETTINGS_CONTRACT,
+        "kernel_settings_outcomes": {
+            **RAW_SOURCE_STATUS, "scope": "diagonal_omitted_false0_true1_only",
+            "outcome": "pid1_exec_inheritance_and_private_namespaces_verified",
+        },
         "network_attachment_contract": NETWORK_ATTACHMENT_CONTRACT,
         "network_attachment_probes": network_attachment_probes,
         "bind_relabel_contract": BIND_RELABEL_CONTRACT,
@@ -580,34 +749,58 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         "external_network_probes": external_network_probes,
         "stop_signal_contract": STOP_SIGNAL_CONTRACT,
         "stop_signal_probes": stop_signal_probes,
-        # Source observations remain explicitly unadmitted. Neither lifecycle
-        # capability nor shape enters capability_outcome/admitted_shapes.
+        # Raw lane source projection is distinct from sealed catalogue admission.
+        # Private v1 proof protocols retain their original unadmitted markers.
         "lifecycle_contract": LIFECYCLE_CONTRACT,
-        "lifecycle_outcomes": {"admission": "unadmitted", "probes": lifecycle_outcomes},
+        "lifecycle_outcomes": {**RAW_SOURCE_STATUS, "probes": lifecycle_outcomes},
+        "lifecycle_default_effect_contract": LIFECYCLE_DEFAULT_EFFECT_CONTRACT,
+        "lifecycle_default_effect_outcomes": {
+            **RAW_SOURCE_STATUS, "probes": lifecycle_default_effect_outcomes,
+        },
         "runtime_filesystem_contract": RUNTIME_FILESYSTEM_CONTRACT,
         "runtime_filesystem_outcomes": {
-            "admission": "unadmitted", "init_effect_scope": "pid1_indirection_only",
+            **RAW_SOURCE_STATUS, "init_effect_scope": "pid1_indirection_only",
             "rootfs_effect_scope": "diagonal_omitted_false_true_only",
             "controls": ["omitted", "false", "true"],
         },
         "tmpfs_effect_contract": TMPFS_EFFECT_CONTRACT,
         "tmpfs_effect_outcomes": {
-            "admission": "unadmitted", "coverage": tmpfs_effect["coverage"],
+            **RAW_SOURCE_STATUS, "coverage": tmpfs_effect["coverage"],
+        },
+        "health_start_interval_boundary_contract": HEALTH_START_INTERVAL_BOUNDARY_CONTRACT,
+        "health_start_interval_boundary_outcomes": {
+            **RAW_SOURCE_STATUS, "scope": "created_configuration_only",
+            "probes": health_boundary["outcomes"],
+        },
+        "hostname_contract": HOSTNAME_CONTRACT,
+        "hostname_outcomes": {
+            **RAW_SOURCE_STATUS, "outcome": "omitted_and_explicit_verified",
+        },
+        "command_clear_contract": COMMAND_CLEAR_CONTRACT,
+        "command_clear_outcomes": {
+            **RAW_SOURCE_STATUS, "outcome": "all_four_process_controls_verified",
         },
     }
     if parameterized_identity:
         record["identity_contract"] = IDENTITY_CONTRACT
         record["identity_cases"] = list(IDENTITY_CASES)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(json.dumps(record, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    serialized = json.dumps(record, sort_keys=True, indent=2) + "\n"
+    if source_budget is not None:
+        source_budget.debit(source_bytes=len(serialized.encode("utf-8")), io_calls=3)
+    destination.write_text(serialized, encoding="utf-8")
 
 
 if __name__ == "__main__":
     if len(sys.argv) != 20:
         raise SystemExit("usage: native-evidence.py VERSION_JSON SHAPES_JSON SOURCE_JSON NETWORK_JSON VOLUME_JSON VOLUME_LABEL_JSON IDENTITY_JSON PORT_JSON HEALTH_METADATA_JSON NETWORK_ATTACHMENT_JSON BIND_RELABEL_JSON CAPTURE_DIR DESTINATION LANE IMAGE MODE PACKAGE SHA RUN_ID")
     try:
-        emit(Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]), Path(sys.argv[4]),
-             Path(sys.argv[5]), Path(sys.argv[6]), Path(sys.argv[7]), Path(sys.argv[8]),
-             Path(sys.argv[9]), Path(sys.argv[10]), Path(sys.argv[11]), Path(sys.argv[12]), Path(sys.argv[13]), *sys.argv[14:])
+        from native_outer_coordinator import metered_source_reads, read_consumer_input
+        outer_context, budget = read_consumer_input(sys.stdin.buffer, "emitter")
+        with metered_source_reads(budget):
+            emit(Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]), Path(sys.argv[4]),
+                 Path(sys.argv[5]), Path(sys.argv[6]), Path(sys.argv[7]), Path(sys.argv[8]),
+                 Path(sys.argv[9]), Path(sys.argv[10]), Path(sys.argv[11]), Path(sys.argv[12]), Path(sys.argv[13]), *sys.argv[14:],
+                 outer_context=outer_context, source_budget=budget)
     except (ValueError, OSError, json.JSONDecodeError, RecursionError):
         raise SystemExit("native evidence rejected") from None

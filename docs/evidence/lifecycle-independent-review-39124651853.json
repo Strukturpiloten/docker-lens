@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "kind": "independent-native-source-evidence-review",
+  "repository": "Strukturpiloten/docker-lens",
+  "candidate_sha": "a251748de3a61f9dc3d735e670ce3ea461ee0a30",
+  "run": {
+    "id": 39124651853,
+    "attempt": 1,
+    "event": "workflow_dispatch",
+    "trusted_dispatcher_sha": "96d83f6d6959dba6079e3e9bdc35db3b27635609",
+    "status": "completed",
+    "conclusion": "success"
+  },
+  "decision": "GO for separate explicit successor-cohort admission review only",
+  "material_findings": [],
+  "verification": {
+    "seven_jobs_and_every_step_successful": true,
+    "ordered_actual_tests_per_lane": 21,
+    "actual_tests_total": 84,
+    "actor_and_exact_head_admission_successes": 6,
+    "cleanup_dependent_lane_successes": 4,
+    "exact_candidate_profile_package_mode_api_and_image_bindings_verified": true,
+    "held_no_follow_bounded_stable_reads": true,
+    "archive_digests_and_sizes_match_primary_authenticated_api_metadata": true,
+    "exact_single_regular_unencrypted_member_and_crc_verified": true,
+    "strict_utf8_canonical_json_verified": true,
+    "duplicate_keys_and_nonfinite_numbers_rejected": true,
+    "all_five_family_markers_raw_source_only_and_catalogue_unadmitted": true,
+    "retained_public_fields_unchanged_except_candidate_and_intended_projection": true,
+    "compiled_catalogue_and_historical_records_unchanged": true
+  },
+  "metadata_sha256": {
+    "run": "23d7c83e0d656482666a3248e11c0e85fbe25d2848b134415f6e7fa96c24f33f",
+    "public_log": "370fea02f8f60f509112a22e96fc0ff8ec671bd85d4f1eadcd7bcd4e9c4c0054",
+    "artifacts": "eade4343d67679f685b4853603ae41b26b01047f9d0cc540d07dbf6467de1975"
+  },
+  "artifacts": [
+    {
+      "lane": "debian11-rootful",
+      "id": 12135508690,
+      "archive_sha256": "8e9b678bb7b88689c2ecf32df43ad492edd6727d5e47d7c4f9bef51c4688afd9",
+      "archive_bytes": 2545,
+      "member": "debian11-rootful.json",
+      "member_sha256": "3036c448b553c26e26d7fdffa2edf9f58f8630b684fc661603d71d1ec135a5ac",
+      "member_bytes": 10051,
+      "capabilities": 34,
+      "shapes": 56
+    },
+    {
+      "lane": "debian11-rootless",
+      "id": 12136206021,
+      "archive_sha256": "be5f107d9aa1cf3cab2b2a65d265b3e0d6ac45111f398faf3e4a72985b61f27b",
+      "archive_bytes": 2546,
+      "member": "debian11-rootless.json",
+      "member_sha256": "25cd1c07f2788a429135b2dd84b9be342939d59075fdc87e912ee29bc51fd6fe",
+      "member_bytes": 10054,
+      "capabilities": 34,
+      "shapes": 56
+    },
+    {
+      "lane": "upstream-rootful",
+      "id": 12135777782,
+      "archive_sha256": "a2812c3b6706e9ef5da75acc3ab64f84b2e3160997cf37532479e2b5c518f9d9",
+      "archive_bytes": 2492,
+      "member": "upstream-rootful.json",
+      "member_sha256": "68ee1fe84ba068e834b439b055a2fb702bbc26e89f5456689460990c8e730841",
+      "member_bytes": 10084,
+      "capabilities": 36,
+      "shapes": 60
+    },
+    {
+      "lane": "upstream-rootless",
+      "id": 12135384037,
+      "archive_sha256": "2800790a9652880e19afb3b2377bc0f8fc78390f09b55bd2c3cdbb33c0436ba4",
+      "archive_bytes": 2496,
+      "member": "upstream-rootless.json",
+      "member_sha256": "21576936e7a0f2d23da62bcd2f88f57dcea45e6837102400b806d069045aeeb4",
+      "member_bytes": 10087,
+      "capabilities": 36,
+      "shapes": 60
+    }
+  ],
+  "finite_group_recommendation": {
+    "all_four_lanes": [
+      "StopTimeout",
+      "ContainerInit",
+      "ReadOnlyRootfs",
+      "TmpfsMount"
+    ],
+    "upstream_only": [
+      "HealthStartInterval"
+    ],
+    "debian_health_start_interval": "not projected; unsupported_legacy_field"
+  },
+  "limitations": [
+    "Primary-authenticated API metadata was independently checked against local archives; this reviewer did not independently fetch live actor identities or permissions.",
+    "Actual recheck successes and strict private-reader execution were observed. Private raw timestamps, payloads and host resource inventories were not directly inspected.",
+    "Finite PID1/rootfs/tmpfs scopes remain bounded; no reaping, Cartesian combinations or arbitrary-value generalization is established.",
+    "Older run 39121741122 was used only for retained-field comparison, never to qualify this changed candidate.",
+    "No compiled catalogue selection, BoxFerry acceptance, full migration acceptance or release readiness is established.",
+    "Any successor admission change requires independent review and fresh final-candidate gates."
+  ]
+}

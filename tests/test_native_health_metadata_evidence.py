@@ -5,7 +5,8 @@ import json
 import unittest
 
 import test_native_evidence as legacy
-from test_native_health_metadata_proof import proof
+from native_harness_syntax import assert_positive_emitter_rerun, run_emitter
+from test_native_health_metadata_proof import P, context, proof
 
 
 class HealthMetadataEvidenceTests(unittest.TestCase):
@@ -40,11 +41,115 @@ class HealthMetadataEvidenceTests(unittest.TestCase):
                                             ("HealthStartPeriod", ["HealthStartPeriodZero", "HealthStartPeriodPositive"])):
                     self.assertEqual(record["admitted_shapes"][capability], shapes)
                     self.assertEqual(record["capability_outcome"][capability], "available")
-                self.assertNotIn("HealthDisabled", record["admitted_shapes"])
-                self.assertNotIn("HealthStartInterval", record["admitted_shapes"])
+                self.assertEqual(record["admitted_shapes"]["HealthDisabled"], ["DisabledHealthcheck"])
+                self.assertEqual(record["capability_outcome"]["HealthDisabled"], "available")
+                self.assertEqual("HealthStartInterval" in record["admitted_shapes"], not lane.startswith("debian11-"))
                 for private in ("StartedAt", "started_at", "regression_observed_at", "dl-health-",
                                 "inherited_failure", "disabled_gap_ns", "initial_attempts", "Ab12Cd34"):
                     self.assertNotIn(private, destination.read_text())
+
+    def test_disabled_singleton_is_closed_raw_only_on_all_four_exact_profiles(self):
+        import test_native_external_network_evidence as canonical
+        from test_reviewed_catalog import required_shapes
+
+        expected = {
+            "health_disabled_contract": "health-metadata-v1",
+            "health_disabled_outcomes": {
+                "admission": "raw_source_only", "catalogue_admission": "unadmitted",
+                "outcome": "disabled_health_suppression_verified",
+            },
+        }
+        schema = json.loads((legacy.ROOT / "docs/native-evidence.schema.json").read_text())
+        definition = schema["$defs"]["health_disabled_source_projection"]
+        self.assertEqual(definition["type"], "object")
+        self.assertFalse(definition["additionalProperties"])
+        self.assertEqual(set(definition["required"]), set(expected))
+        self.assertEqual(set(definition["properties"]), set(expected))
+        self.assertEqual(definition["properties"]["health_disabled_contract"], {"const": "health-metadata-v1"})
+        outcome = definition["properties"]["health_disabled_outcomes"]
+        self.assertEqual(outcome["type"], "object")
+        self.assertFalse(outcome["additionalProperties"])
+        self.assertEqual(set(outcome["required"]), set(expected["health_disabled_outcomes"]))
+        self.assertEqual(outcome["properties"], {
+            key: {"const": value} for key, value in expected["health_disabled_outcomes"].items()})
+        self.assertNotIn("#/$defs/health_disabled_source_projection", json.dumps(schema))
+        self.assertEqual(required_shapes()["HealthDisabled"], ("DisabledHealthcheck",))
+        catalogue = (legacy.ROOT / "src/reviewed_catalog.rs").read_text()
+        for prefix in ("REVIEWED", "UPSTREAM"):
+            capabilities = catalogue.split(f"const {prefix}_CAPABILITIES:", 1)[1].split("];", 1)[0]
+            shapes = catalogue.split(f"const {prefix}_SHAPES:", 1)[1].split("];", 1)[0]
+            self.assertNotIn("Capability::HealthDisabled,", capabilities)
+            self.assertNotIn("NativeCapabilityShape::DisabledHealthcheck,", shapes)
+        for lane in ("debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless"):
+            with self.subTest(lane=lane):
+                # Explicit unit fixtures only, not authenticated native evidence.
+                self.assertEqual(P.validate_health_metadata_proof(proof(lane), *context(lane)), [
+                    "ContainerCreateLabels", "ShellHealthcheck", "HealthStartPeriodPositive", "HealthStartPeriodZero"])
+                result, destination = canonical.ExternalNetworkEvidenceTests.emit(self, lane)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                record = json.loads(destination.read_text())
+                self.assertEqual({key: record[key] for key in expected}, expected)
+                self.assertEqual(record["admitted_shapes"]["HealthDisabled"], ["DisabledHealthcheck"])
+                self.assertEqual(record["capability_outcome"]["HealthDisabled"], "available")
+                self.assertEqual(len(record["capability_outcome"]), 43 if lane.startswith("debian11-") else 45)
+                self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 66 if lane.startswith("debian11-") else 70)
+                self.assertEqual(record["health_metadata_probes"], ["ContainerCreateLabels", "ShellHealthcheck",
+                                                                   "HealthStartPeriodPositive", "HealthStartPeriodZero"])
+
+    def test_every_disabled_and_inherited_control_is_mandatory_before_any_output(self):
+        import test_native_external_network_evidence as canonical
+
+        for lane in ("debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless"):
+            result, destination = canonical.ExternalNetworkEvidenceTests.emit(self, lane, health_metadata_missing=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(destination.exists())
+            result, destination = canonical.ExternalNetworkEvidenceTests.emit(self, lane)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            assert_positive_emitter_rerun(self, result, destination)
+            destination.unlink()
+            path = destination.parent.parent / "health-metadata.json"
+            original = json.loads(path.read_text())
+            mutations = []
+            for field, value in (("candidate_sha", "e" * 40), ("cleanup", "uncertain"),
+                                 ("PRIVATE_HEALTH_CANARY", "PRIVATE_HEALTH_CANARY")):
+                changed = copy.deepcopy(original)
+                changed[field] = value
+                mutations.append((field, changed))
+            for index in (2, 3):
+                changed = copy.deepcopy(original)
+                changed["cases"].pop(index)
+                mutations.append((f"case{index}-missing", changed))
+                changed = copy.deepcopy(original)
+                changed["cases"][index]["wire"] = "failed"
+                mutations.append((f"case{index}-wire", changed))
+                for role in (0, 1):
+                    changed = copy.deepcopy(original)
+                    changed["cases"][index]["containers"].pop(role)
+                    mutations.append((f"case{index}-role{role}-missing", changed))
+                    effects = {"initial_state": "starting", "health_config": "failed", "running": "failed",
+                               "cleanup": "uncertain", "PRIVATE_HEALTH_CANARY": "PRIVATE_HEALTH_CANARY"}
+                    if index == 2:
+                        effects.update({"health_sentinel": "absent", "initial_attempts": [], "initial_streak": 0})
+                    else:
+                        effects.update({"health_sentinel": "present", "disabled_gap_ns": 1_999_999_999,
+                                        "initial_streak": 1, "initial_attempts": original["cases"][2]["containers"][0]["initial_attempts"]})
+                    for field, value in effects.items():
+                        changed = copy.deepcopy(original)
+                        changed["cases"][index]["containers"][role][field] = value
+                        mutations.append((f"case{index}-role{role}-{field}", changed))
+            for field in ("derived_image", "seed_container"):
+                changed = copy.deepcopy(original)
+                changed[field]["cleanup"] = "uncertain"
+                mutations.append((field + "-cleanup", changed))
+            for mutation, value in mutations:
+                with self.subTest(lane=lane, mutation=mutation):
+                    path.write_text(json.dumps(value))
+                    rejected = run_emitter(result)
+                    self.assertNotEqual(rejected.returncode, 0)
+                    self.assertFalse(destination.exists())
+                    self.assertEqual(rejected.stdout, "")
+                    self.assertEqual(rejected.stderr.strip(), "native evidence rejected")
+            path.write_text(json.dumps(original))
 
     def test_partial_foreign_or_late_only_health_proof_refuses_entire_manifest(self):
         original = proof()

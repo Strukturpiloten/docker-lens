@@ -1,6 +1,7 @@
 """Fault injection for exact resource cleanup and ignored native test selection."""
 
 import json
+import ast
 import os
 import re
 import shlex
@@ -10,16 +11,48 @@ import sys
 import tempfile
 import time
 import unittest
+from native_harness_syntax import ROOT_BOUNDARY_COVERAGE, native_calls, invocations, logical_owner_scopes, fake_teardown_boundary, shell_fault_campaign
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class NativeHarnessTests(unittest.TestCase):
+    def test_shared_parser_rejects_unknown_syntax_and_keeps_six_logical_owners(self):
+        source = (ROOT / "scripts/native-conformance.sh").read_text()
+        calls = native_calls(source)
+        self.assertEqual(len(calls), 28)
+        self.assertEqual(logical_owner_scopes(source), [calls[16:22], *([call] for call in calls[23:28])])
+        direct = next(item for item in invocations(source) if item.target == "native_pids_limit")
+        self.assertIn('<&"$canonical_read" >&"$canonical_write"', direct.command)
+        with self.assertRaisesRegex(AssertionError, "unrecognized native runner syntax"):
+            native_calls(source.replace(direct.command, direct.command + " unexpected"))
+        coordinator = (ROOT / "scripts/native_outer_canonical.py").read_text()
+        with self.assertRaises(AssertionError):
+            logical_owner_scopes(source, coordinator.replace('"NATIVE_LIFECYCLE_CLEANUP_OWNER": "native_conformance_outer_v1"',
+                                                           '"NATIVE_LIFECYCLE_CLEANUP_OWNER": "wrong_owner"'))
+
+    def test_shell_campaign_root_coverage_maps_to_actual_named_production_controls(self):
+        tree = ast.parse(Path(__file__).read_text())
+        campaign = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+                        and node.name == "test_owned_resources_are_cleaned_after_early_failures")
+        fault_loop = next(node for node in ast.walk(campaign) if isinstance(node, ast.For)
+                          and isinstance(node.target, ast.Tuple)
+                          and [item.id for item in node.target.elts] == ["lane", "fault"])
+        actual_faults = {item.elts[1].value for item in fault_loop.iter.elts}
+        self.assertTrue({case for cases in ROOT_BOUNDARY_COVERAGE for case in cases} <= actual_faults)
+        for cases, identifiers in ROOT_BOUNDARY_COVERAGE.items():
+            self.assertTrue(cases)
+            for identifier in identifiers:
+                with self.subTest(cases=cases, identifier=identifier):
+                    module, classname, method = identifier.split(".")
+                    tree = ast.parse((ROOT / "tests" / (module + ".py")).read_text())
+                    cls = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == classname)
+                    self.assertTrue(any(isinstance(node, ast.FunctionDef) and node.name == method for node in cls.body))
+
     def test_port_publication_is_independent_eleventh_mandatory_check_before_manifest(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text()
-        invocations = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$',
-                                 source, re.MULTILINE)
+        invocations = native_calls(source)
         self.assertEqual(invocations, [
             ("native_capture", "live_engine_capture_decodes"),
             ("acquisition", "live_read_only_acquisition_matches_oracle"),
@@ -40,9 +73,18 @@ class NativeHarnessTests(unittest.TestCase):
             ("native_lifecycle", "live_lifecycle_matches_engine"),
             ("native_runtime_filesystem", "live_runtime_filesystem_matches_engine"),
             ("native_tmpfs_effect", "live_tmpfs_effects_match_engine"),
+            ("native_health_start_interval_boundary", "live_health_start_interval_boundary_matches_engine"),
+            ("native_lifecycle_default_effect", "live_lifecycle_default_effects_match_engine"),
+            ("native_hostname", "live_hostname_matches_engine"),
+            ("native_command_clear", "live_command_clear_matches_engine"),
+            ("native_shm_size", "live_shm_size_effects_match_engine"),
+            ("native_supplementary_groups", "live_supplementary_groups_match_engine"),
+            ("native_kernel_settings", "live_kernel_settings_match_engine"),
+            ("native_pids_limit", "live_pids_limit_effects_match_engine"),
+            ("native_nofile", "live_nofile_limits_and_effects_match_engine"),
         ])
         self.assertLess(source.index('native_port live_port_publications_match_engine'),
-                        source.index('python3 "$script_dir/native-evidence.py"'))
+                        source.index('canonical_phase emitter'))
         self.assertIn('export NATIVE_IDENTITY_PROBES_PATH="$run_dir/identity-probes.json"', source)
         self.assertIn('export NATIVE_PORT_PROBES_PATH="$run_dir/port-probes.json"', source)
         self.assertIn('export NATIVE_PORT_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA', source)
@@ -250,7 +292,7 @@ esac
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
         helpers = "cleanup_podman() {" + source.split("cleanup_podman() {", 1)[1].split(
             "\ntrap cleanup EXIT", 1
-        )[0] + "\n"
+        )[0] + "\n" + fake_teardown_boundary()
         self.assertIn('native_success_summary="native conformance passed:', source)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -298,9 +340,15 @@ else exit 50; fi
             env = os.environ.copy()
             env.update(PATH=f"{root}:{env['PATH']}", FAKE_STATE=str(root),
                        FAKE_OUTER_ID="a" * 64, FAKE_SIDECAR_ID="b" * 64)
-            for mode in ("success", "container_leftover", "network_error"):
-                with self.subTest(mode=mode), tempfile.TemporaryDirectory(
-                    prefix="dockerlens-native.", dir="/tmp",
+            custom_tmp = root / "nondefault-tmp"
+            custom_tmp.mkdir(mode=0o700)
+            # Match the production cleanup root, including a nondefault root;
+            # never weaken its refusal to remove a directory outside TMPDIR.
+            for temp_root, mode in ((base, mode) for base in (os.environ.get("TMPDIR") or "/tmp", str(custom_tmp))
+                                    for mode in ("success", "container_leftover", "network_error")):
+                env["TMPDIR"] = temp_root
+                with self.subTest(mode=mode, temp_root=temp_root), tempfile.TemporaryDirectory(
+                    prefix="dockerlens-native.", dir=temp_root,
                 ) as temporary:
                     for role in ("container", "sidecar", "network", "volume"):
                         (root / role).touch()
@@ -328,8 +376,8 @@ else exit 50; fi
                                      if mode == "success" else "")
                     self.assertEqual(
                         (root / "removals").read_text().splitlines(),
-                        ["rm --force --time 0 " + "a" * 64,
-                         "rm --force --time 0 " + "b" * 64] + ([] if mode == "container_leftover" else [
+                        ["rm --force --time 0 " + "a" * 64] + ([] if mode == "container_leftover" else [
+                         "rm --force --time 0 " + "b" * 64,
                          "network rm dl-native-net-synthetic",
                          "volume rm dl-native-data-synthetic"]),
                     )
@@ -1157,7 +1205,7 @@ fi
         selected = '"$(dirname "$0")/run-exact-native-test.sh" native_network live_network_render_matches_engine'
         internal = '"$(dirname "$0")/run-exact-native-test.sh" native_network live_internal_network_blocks_external_egress'
         target = '"$(dirname "$0")/run-exact-native-test.sh" native_target live_target_render_matches_engine'
-        manifest = 'python3 "$script_dir/native-evidence.py"'
+        manifest = 'canonical_phase emitter'
         self.assertEqual(source.count(selected), 1)
         self.assertEqual(source.count(internal), 1)
         self.assertLess(source.index(target), source.index(selected))
@@ -1299,7 +1347,7 @@ fi
     def test_source_probe_is_exact_and_precedes_manifest_emission(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
         selected = '"$(dirname "$0")/run-exact-native-test.sh" native_selection live_native_selection_and_source_observations'
-        manifest = 'python3 "$script_dir/native-evidence.py"'
+        manifest = 'canonical_phase emitter'
         self.assertEqual(source.count(selected), 1)
         self.assertLess(source.index(selected), source.index(manifest))
         self.assertIn('"$NATIVE_SOURCE_PROBES_PATH"', source)
@@ -1312,7 +1360,7 @@ fi
                       'live_network_membership_matches_engine')
         self.assertEqual(source.count(membership), 1)
         self.assertLess(source.index(baseline), source.index(membership))
-        self.assertLess(source.index(membership), source.index('python3 "$script_dir/native-evidence.py"'))
+        self.assertLess(source.index(membership), source.index('canonical_phase emitter'))
 
     def test_membership_failure_markers_remain_closed_and_private(self) -> None:
         for marker in ("source_network_membership", "membership_cleanup_unverified"):
@@ -1345,7 +1393,7 @@ fi
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
         selected = ('"$(dirname "$0")/run-exact-native-test.sh" native_volume '
                     'live_existing_volume_prerequisite_matches_engine')
-        manifest = 'python3 "$script_dir/native-evidence.py"'
+        manifest = 'canonical_phase emitter'
         self.assertEqual(source.count(selected), 1)
         self.assertLess(source.index(selected), source.index(manifest))
         self.assertIn('export NATIVE_VOLUME_PROBES_PATH="$run_dir/volume-probes.json"', source)
@@ -1355,7 +1403,7 @@ fi
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
         selected = ('"$(dirname "$0")/run-exact-native-test.sh" native_volume_label '
                     'live_created_volume_labels_match_engine')
-        manifest = 'python3 "$script_dir/native-evidence.py"'
+        manifest = 'canonical_phase emitter'
         self.assertEqual(source.count(selected), 1)
         self.assertLess(source.index(selected), source.index(manifest))
         self.assertIn('export NATIVE_VOLUME_LABEL_PROBES_PATH="$run_dir/volume-label-probes.json"', source)
@@ -1590,6 +1638,148 @@ fi
             self.assertEqual(result.stdout, "1.1.5+ds1-1+deb11u2|unavailable|unavailable")
             self.assertNotIn("protected-secret", result.stdout + result.stderr)
 
+    def test_rootless_positive_pids_prerequisite_precedes_fixture_and_all_native_tests(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text()
+        diagnostic = "DOCKERLENS_NATIVE_PREREQUISITE: rootless_positive_pids_requires_systemd_cgroup_v2"
+        self.assertEqual(source.count(diagnostic), 1)
+        self.assertLess(source.index('echo "DOCKERLENS_NATIVE_ENV:'), source.index(diagnostic))
+        self.assertLess(source.index(diagnostic), source.index('"${inner_docker[@]}" pull "$FIXTURE_IMAGE"'))
+        calls = [item.command for item in invocations(source)]
+        self.assertEqual(len(calls), 28)
+        self.assertTrue(all(source.index(diagnostic) < source.index(call) for call in calls))
+        guard = source.split('if [[ $expected_mode == rootless ]]; then\n  # Necessary', 1)[1].split(
+            '  [[ $docker_root ==', 1
+        )[0]
+        self.assertIn('[[ $inner_cgroup_driver != systemd || $inner_cgroup != 2 ]]', guard)
+        self.assertIn('exit 1', guard)
+        for forbidden in ('timeout ', 'exec ', 'info ', 'python3 ', 'return 0', 'continue'):
+            self.assertNotIn(forbidden, guard)
+
+    def test_rootless_positive_pids_prerequisite_refuses_and_cleans_exact_owned_resources(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text()
+        helpers = "cleanup_podman() {" + source.split("cleanup_podman() {", 1)[1].split(
+            "\ntrap cleanup EXIT", 1
+        )[0] + fake_teardown_boundary() + "\ntrap cleanup EXIT\n"
+        observations = "docker_root=$(timeout " + source.split("docker_root=$(timeout ", 1)[1].split(
+            "\n# Docker CLI errors", 1
+        )[0] + "\n"
+        diagnostic = "DOCKERLENS_NATIVE_PREREQUISITE: rootless_positive_pids_requires_systemd_cgroup_v2"
+        fake_podman = '''#!/usr/bin/env bash
+set -eu
+if [[ $1 == exec ]]; then
+  [[ $2 == dl-native-synthetic && $3 == dpkg-query ]] || exit 43
+  printf 'package-query\n' >> "$FAKE_STATE/queries"
+  echo 1.2.3
+  exit 0
+fi
+for name; do :; done
+case "$name" in
+  "$FAKE_OUTER_ID"|dl-native-synthetic) role=container ;;
+  "$FAKE_SIDECAR_ID"|dl-native-egress-synthetic) role=sidecar ;;
+  dl-native-net-synthetic) role=network ;;
+  dl-native-data-synthetic) role=volume ;;
+  *) exit 44 ;;
+esac
+if [[ $1 == inspect || ${2:-} == inspect ]]; then
+  case $role in
+    container) printf '%s|dl-native-synthetic|synthetic\n' "$FAKE_OUTER_ID" ;;
+    sidecar) printf '%s|dl-native-egress-synthetic|synthetic\n' "$FAKE_SIDECAR_ID" ;;
+    volume) echo 'dl-native-data-synthetic|local|/mock/volume|created|synthetic' ;;
+    network) echo synthetic ;;
+  esac
+elif [[ ${2:-} == exists ]]; then
+  [[ -e $FAKE_STATE/$role ]]
+elif [[ $1 == rm || ${2:-} == rm ]]; then
+  case $role in
+    container|sidecar) [[ $* == "rm --force --time 0 $name" ]] || exit 45 ;;
+    network) [[ $* == "network rm $name" ]] || exit 46
+      [[ ! -e $FAKE_STATE/container && ! -e $FAKE_STATE/sidecar ]] || exit 47 ;;
+    volume) [[ $* == "volume rm $name" ]] || exit 48
+      [[ ! -e $FAKE_STATE/container ]] || exit 49 ;;
+  esac
+  printf '%s\n' "$*" >> "$FAKE_STATE/removals"
+  rm "$FAKE_STATE/$role"
+else exit 50; fi
+'''
+        fake_docker = '''#!/usr/bin/env bash
+set -eu
+if [[ $1 == info && $2 == --format ]]; then
+  printf '%s\n' "$3" >> "$FAKE_STATE/queries"
+  case $3 in
+    '{{.DockerRootDir}}')
+      if [[ $FAKE_MODE == rootless ]]; then echo /home/docker/.local/share/docker
+      else echo /var/lib/docker; fi ;;
+    '{{.CgroupVersion}}') printf '%s\n' "$FAKE_CGROUP_VERSION" ;;
+    '{{.CgroupDriver}}')
+      [[ $FAKE_CGROUP_DRIVER != query_error ]] || exit 87
+      printf '%s\n' "$FAKE_CGROUP_DRIVER" ;;
+    *) exit 51 ;;
+  esac
+elif [[ $1 == pull && $2 == fixture-pinned ]]; then
+  printf 'fixture-pull\n' >> "$FAKE_STATE/continuation"
+else exit 52; fi
+'''
+        cases = (
+            ("rootless", "none", "2", False),
+            ("rootless", "protected-secret", "2", False),
+            ("rootless", "query_error", "2", False),
+            ("rootless", "systemd", "1", False),
+            ("rootless", "systemd", "unavailable", False),
+            ("rootless", "systemd", "protected-secret", False),
+            ("rootless", "systemd", "2", True),
+            ("rootful", "cgroupfs", "2", True),
+            ("rootful", "none", "2", True),
+            ("rootful", "systemd", "1", True),
+            ("rootful", "protected-secret", "unavailable", True),
+        )
+        for mode, driver, version, admitted in cases:
+            with self.subTest(mode=mode, driver=driver, version=version), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                state = root / "state"
+                state.mkdir()
+                for role in ("container", "sidecar", "network", "volume", "foreign-resource"):
+                    (state / role).write_text("untouched")
+                self._tool(root, "fake_podman", fake_podman)
+                self._tool(root, "fake_docker", fake_docker)
+                env = dict(os.environ, PATH=f"{root}:{os.environ['PATH']}", TMPDIR=str(root),
+                           FAKE_STATE=str(state), FAKE_OUTER_ID="a" * 64, FAKE_SIDECAR_ID="b" * 64,
+                           FAKE_MODE=mode, FAKE_CGROUP_DRIVER=driver, FAKE_CGROUP_VERSION=version)
+                with tempfile.TemporaryDirectory(prefix="dockerlens-native.", dir=root) as run_dir:
+                    script = (
+                        "set -euo pipefail\npodman_cmd=(fake_podman)\ninner_docker=(fake_docker)\n"
+                        f"expected_mode={mode}\nlane=upstream-{mode}\n"
+                        "watchdog_pid=\nrun_id=synthetic\npreserve_run_dir=0\nnative_success_summary=\n"
+                        "container=dl-native-synthetic\nsidecar=dl-native-egress-synthetic\n"
+                        "outer_network=dl-native-net-synthetic\nvolume=dl-native-data-synthetic\n"
+                        "outer_attempted=1; sidecar_attempted=1; network_attempted=1; network_created=1; volume_attempted=1\n"
+                        "outer_container_id=$FAKE_OUTER_ID; sidecar_container_id=$FAKE_SIDECAR_ID\n"
+                        "volume_identity='dl-native-data-synthetic|local|/mock/volume|created|synthetic'\n"
+                        "FIXTURE_IMAGE=fixture-pinned\n"
+                        f"script_dir={shlex.quote(str(ROOT / 'scripts'))}\nrun_dir={shlex.quote(run_dir)}\n"
+                        + helpers + observations
+                        + "printf 'mock-native-continuation\\n' >> \"$FAKE_STATE/continuation\"\n"
+                    )
+                    result = subprocess.run(["bash", "-c", script], env=env, capture_output=True,
+                                            text=True, timeout=10, check=False)
+                    self.assertEqual(result.returncode, 0 if admitted else 1, result.stderr)
+                    self.assertFalse(Path(run_dir).exists())
+                self.assertEqual(result.stderr.count(diagnostic), 0 if admitted else 1)
+                self.assertNotIn("protected-secret", result.stdout + result.stderr)
+                self.assertEqual((state / "foreign-resource").read_text(), "untouched")
+                self.assertEqual((state / "queries").read_text().splitlines(),
+                                 ["{{.DockerRootDir}}", "{{.CgroupVersion}}", "{{.CgroupDriver}}"]
+                                 + ["package-query"] * 3)
+                self.assertEqual((state / "removals").read_text().splitlines(),
+                                 ["rm --force --time 0 " + "a" * 64, "rm --force --time 0 " + "b" * 64,
+                                  "network rm dl-native-net-synthetic", "volume rm dl-native-data-synthetic"])
+                self.assertTrue(all(not (state / role).exists() for role in ("container", "sidecar", "network", "volume")))
+                if admitted:
+                    self.assertEqual((state / "continuation").read_text().splitlines(),
+                                     ["fixture-pull", "mock-native-continuation"])
+                else:
+                    self.assertFalse((state / "continuation").exists())
+                    self.assertIn("native lane upstream-rootless failed", result.stderr)
+
     def test_probe_error_categories_never_echo_private_details(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         classifier = "classify_probe_error() {" + source.split(
@@ -1731,6 +1921,9 @@ esac
                         self.assertFalse((state / "error_inspected-bridge").exists())
 
     def test_owned_resources_are_cleaned_after_early_failures(self) -> None:
+        # Shell fault coverage with an explicit synthetic root boundary. Actual
+        # broker/OCI/EOF contracts are independently mapped below.
+        source = (ROOT / "scripts/native-conformance.sh").read_text()
         fake_podman = """#!/usr/bin/env bash
 set -eu
 state=$FAKE_NATIVE_STATE
@@ -1909,6 +2102,11 @@ logs)
    touch "$state/state_error_inspected"
    echo 'bind: address already in use private-canary'
  fi
+ elif [[ $* == *'{{.ID}}'* ]]; then
+   for name; do :; done
+   read -r expected < "$state/expected-container"
+   [[ $name == "$expected" ]] || exit 66
+   echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
  elif [[ $* == *HostConfig.Privileged* ]]; then echo true
     elif [[ $* == *'.Mounts'* ]]; then
       read -r log_path < "$state/daemon-log-path"
@@ -2002,7 +2200,9 @@ esac
                 env = os.environ.copy()
                 env.update(PATH=f"{bin_dir}:{env['PATH']}",
                            FAKE_NATIVE_STATE=str(state), FAKE_NATIVE_FAULT=fault, TMPDIR=str(root))
-                command = ["bash", str(ROOT / "scripts/native-conformance.sh"), lane]
+                campaign = root / "shell-fault-campaign.sh"
+                campaign.write_text(shell_fault_campaign(source))
+                command = ["bash", str(campaign), lane]
                 if fault == "cancel_after_sidecar":
                     process = subprocess.Popen(
                         command, env=env, stdout=subprocess.PIPE,
@@ -2041,6 +2241,7 @@ esac
                     "run", "run_partial", "container_query_error", "container_remains", "container_inspect_partial"))
                 self.assertEqual((state / "sidecar").exists(), fault in (
                     "sidecar_start", "sidecar_start_classifier_failure", "cancel_after_sidecar",
+                    "run", "run_partial", "container_query_error", "container_remains", "container_inspect_partial",
                     "sidecar_identity_bad", "sidecar_query_error", "sidecar_remains", "sidecar_inspect_partial", "sidecar_inspect_hang"))
                 self.assertEqual((state / "network").exists(), container_unverified or fault in (
                     "network_create", "network_query_error", "network_remains", "network_inspect_partial"))
@@ -2167,14 +2368,16 @@ esac
                     if fault == "unexpected_mount":
                         self.assertIn("unexpected image or data-root volumes", result.stderr)
 
-    def test_native_curl_readiness_sites_keep_exact_argv_counts_and_final_fallback(self) -> None:
+    def test_native_unix_http_readiness_checks_actual_status_and_request_counts(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text()
-        self.assertEqual(len(re.findall(r"\bcurl\b", source)), 4)  # Preflight and three sites.
+        self.assertEqual(len(re.findall(r"\bcurl\b", source)), 1)  # Separate network probe prerequisite.
         readiness = "deadline=$((SECONDS + 360))" + source.split(
             "deadline=$((SECONDS + 360))", 1
         )[1].split("\nif [[ $lane == debian11-rootless ]]; then", 1)[0]
         cases = (
             ("ready", [0, 0], False, True, 2, 0, 0),
+            ("http-404-retry", [0, 0, 0], False, True, 3, 1, 0),
+            ("http-404-not-ready", [0, 0], True, True, 2, 1, 1),
             ("poll-retry", [7, 0, 0], False, True, 3, 1, 0),
             ("final-failure", [0, 7], False, True, 2, 0, 1),
             ("deadline-fallback", [7, 7], True, True, 2, 1, 1),
@@ -2186,11 +2389,14 @@ esac
                 socket_path = directory / "docker.sock"
                 # Exercise the real -S guard without creating a transport or listener.
                 os.mknod(socket_path, stat.S_IFSOCK | 0o600)
-                calls, env = self._native_curl_client(directory, exits, "000")
+                http_status = (["404", "200", "200"] if case == "http-404-retry" else
+                               "404" if case == "http-404-not-ready" else "200")
+                calls, env = self._native_unix_client(directory, exits, http_status)
                 sleeps = directory / "sleep-calls"
                 preface = f"""set -euo pipefail
 SECONDS=0
 socket=$1
+script_dir=$PWD
 container=synthetic-owned-daemon
 podman_cmd=(podman)
 chmod() {{ :; }}
@@ -2200,13 +2406,13 @@ sleep() {{ printf '%s\\n' "$*" >> {shlex.quote(str(sleeps))}; {'SECONDS=360' if 
 diagnose_native_startup() {{ printf '%s\\n' startup-diagnostic >&2; }}
 """
                 result = subprocess.run(
-                    ["bash", "-c", preface + readiness, "curl-readiness-test", str(socket_path)],
+                    ["bash", "-c", preface + readiness, "unix-http-readiness-test", str(socket_path)],
                     cwd=directory, env=env, capture_output=True, text=True, timeout=10, check=False,
                 )
                 self.assertEqual(result.returncode, status, result.stderr)
                 self.assertTrue(calls.exists())
-                expected = ["-q", "--noproxy", "*", "-fs", "--max-time", "5", "--unix-socket",
-                            str(socket_path), "http://localhost/_ping"]
+                expected = ["--socket", str(socket_path), "--method", "GET", "--path", "/_ping",
+                            "--timeout", "5", "--max-response-bytes", "65536", "--discard-body"]
                 observed = [json.loads(line) for line in calls.read_text().splitlines()]
                 self.assertEqual(observed, [{"argv": expected, "canary": "synthetic-client-boundary"}]
                                  * expected_count)
@@ -2215,28 +2421,28 @@ diagnose_native_startup() {{ printf '%s\\n' startup-diagnostic >&2; }}
                 self.assertEqual(result.stdout, "")
                 self.assertNotIn("synthetic-client-boundary", result.stderr)
 
-    def test_native_curl_api_get_keeps_exact_argv_count_limits_and_failure_status(self) -> None:
+    def test_native_unix_http_api_get_preserves_limits_and_failure_status(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         api_get = "api_get() {" + source.split("api_get() {", 1)[1].split("\njson_key() {", 1)[0]
-        self.assertIn("status=$(timeout 20 curl -q --noproxy '*' -fsS --max-time 15", api_get)
+        self.assertIn('status=$(timeout 20 python3 "$script_dir/native-unix-http.py"', api_get)
         for http_status, native_exit, expected_exit in (("200", 0, 0), ("404", 0, 1),
-                                                       ("000", 7, 7), ("404", 22, 22)):
+                                                       ("unused", 4, 4), ("unused", 3, 3)):
             with self.subTest(http_status=http_status, native_exit=native_exit), \
                     tempfile.TemporaryDirectory() as temporary:
                 directory = Path(temporary)
                 socket_path = directory / "docker.sock"
                 target = directory / "container.json"
-                calls, env = self._native_curl_client(directory, [native_exit], http_status)
+                calls, env = self._native_unix_client(directory, [native_exit], http_status)
                 request = "/v1.41/containers/synthetic/json"
-                script = 'set -euo pipefail\nsocket=$1\n' + api_get + '\napi_get "$2" "$3"'
+                script = 'set -euo pipefail\nsocket=$1\nscript_dir=$PWD\n' + api_get + '\napi_get "$2" "$3"'
                 result = subprocess.run(
-                    ["bash", "-c", script, "curl-api-test", str(socket_path), request, str(target)],
+                    ["bash", "-c", script, "unix-http-api-test", str(socket_path), request, str(target)],
                     cwd=directory, env=env, capture_output=True, text=True, timeout=10, check=False,
                 )
                 self.assertEqual(result.returncode, expected_exit, result.stderr)
                 self.assertTrue(calls.exists())
-                expected = ["-q", "--noproxy", "*", "-fsS", "--max-time", "15", "--unix-socket",
-                            str(socket_path), "http://localhost" + request, "-o", str(target), "-w", "%{http_code}"]
+                expected = ["--socket", str(socket_path), "--method", "GET", "--path", request,
+                            "--timeout", "15", "--max-response-bytes", "8388608", "--response-body-file", str(target)]
                 self.assertEqual([json.loads(line) for line in calls.read_text().splitlines()],
                                  [{"argv": expected, "canary": "synthetic-client-boundary"}])
                 status_path = target.with_suffix(".status")
@@ -2247,13 +2453,11 @@ diagnose_native_startup() {{ printf '%s\\n' startup-diagnostic >&2; }}
                 self.assertEqual(result.stdout, "")
                 self.assertNotIn("synthetic-client-boundary", result.stderr)
 
-    def _native_curl_client(self, directory: Path, exits: list[int], http_status: str) -> tuple[Path, dict[str, str]]:
-        calls = directory / "curl-argv.jsonl"
+    def _native_unix_client(self, directory: Path, exits: list[int], http_status: str | list[str]) -> tuple[Path, dict[str, str]]:
+        calls = directory / "unix-http-argv.jsonl"
         bin_dir = directory / "bin"
         bin_dir.mkdir()
-        # A real glob match makes an unquoted --noproxy wildcard fail the argv check.
-        (directory / "wildcard-expansion-canary").touch()
-        self._tool(bin_dir, "curl", f"""#!{sys.executable}
+        self._tool(directory, "native-unix-http.py", f"""#!{sys.executable}
 import json
 import os
 import sys
@@ -2262,12 +2466,16 @@ from pathlib import Path
 calls = Path({str(calls)!r})
 previous = calls.read_text().splitlines() if calls.exists() else []
 with calls.open('a') as output:
-    output.write(json.dumps({{'argv': sys.argv[1:], 'canary': os.environ.get('DOCKERLENS_CURL_CANARY')}}) + '\\n')
+    output.write(json.dumps({{'argv': sys.argv[1:], 'canary': os.environ.get('DOCKERLENS_HTTP_CANARY')}}) + '\\n')
 exits = {exits!r}
-sys.stdout.write({http_status!r})
-sys.exit(exits[min(len(previous), len(exits) - 1)])
+exit_code = exits[min(len(previous), len(exits) - 1)]
+if exit_code == 0:
+    statuses = {http_status!r}
+    status = statuses[min(len(previous), len(statuses) - 1)] if isinstance(statuses, list) else statuses
+    sys.stdout.write(status + "\\n")
+sys.exit(exit_code)
 """)
-        return calls, {"PATH": f"{bin_dir}:/usr/bin:/bin", "DOCKERLENS_CURL_CANARY": "synthetic-client-boundary"}
+        return calls, {"PATH": f"{bin_dir}:/usr/bin:/bin", "DOCKERLENS_HTTP_CANARY": "synthetic-client-boundary"}
 
     def test_published_image_and_fixture_contracts_are_static(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text()
@@ -2277,7 +2485,7 @@ sys.exit(exits[min(len(previous), len(exits) - 1)])
         self.assertIn('--user 0:0 --workdir /tmp --hostname dockerlens-native', source)
         self.assertIn('--label io.dockerlens.fixture=synthetic', source)
         self.assertNotIn('/run/dockerlens', source)
-        self.assertIn('curl -q --noproxy \'*\' -fs --max-time 5 --unix-socket "$socket" http://localhost/_ping', source)
+        self.assertIn('--path /_ping --timeout 5 --max-response-bytes 65536 --discard-body', source)
         self.assertNotIn('apt-get', source)
         self.assertFalse((ROOT / "scripts/native-apt-install.sh").exists())
         self.assertFalse((ROOT / "scripts/native-debian-snapshot.sh").exists())
@@ -2670,8 +2878,8 @@ fi
     def test_port_diagnostic_families_are_closed_and_target_scoped(self) -> None:
         valid = [
             "DOCKERLENS_NATIVE_API_DIAG: transport=timeout",
-            "DOCKERLENS_NATIVE_PORT_API_DIAG: action=start phase=probe exit=curl_timeout",
-            "DOCKERLENS_NATIVE_PORT_API_DIAG: action=inspect_name phase=cleanup exit=outer_timeout",
+            "DOCKERLENS_NATIVE_PORT_API_DIAG: version=2 client=unix_http_v1 action=start phase=probe exit=deadline",
+            "DOCKERLENS_NATIVE_PORT_API_DIAG: version=2 client=unix_http_v1 action=inspect_name phase=cleanup exit=outer_timeout",
             "DOCKERLENS_NATIVE_PORT_START_DIAG: outcome=observed version=responsive object=timeout identity=unknown state=unknown primary=unknown secondary=unknown allocation_relation=unknown mutation=uncertain",
             "DOCKERLENS_NATIVE_API_DIAG: operation=start status=server",
             "DOCKERLENS_NATIVE_HTTP_DIAG: exit=other category=connection_refused",
@@ -2723,7 +2931,7 @@ fi
                 result = self._port_wrapper("\n".join([
                     "DOCKERLENS_NATIVE_CHECK: port_repeated_dynamic_ipv4_oracle_oracle_start",
                     "DOCKERLENS_NATIVE_API_DIAG: transport=timeout",
-                    "DOCKERLENS_NATIVE_PORT_API_DIAG: action=start phase=probe exit=curl_timeout",
+                    "DOCKERLENS_NATIVE_PORT_API_DIAG: version=2 client=unix_http_v1 action=start phase=probe exit=deadline",
                     "DOCKERLENS_NATIVE_PORT_DIAGNOSTIC_SCOPE: begin",
                     f"thread '{selected}' panicked at src/native_port_tests.rs:505:9:",
                     "private-native-ID protected-secret 32000",
@@ -2731,7 +2939,7 @@ fi
                     f"DOCKERLENS_NATIVE_PORT_START_DIAG: {observation}",
                     f"thread '{selected}' panicked at src/native_port_tests.rs:415:9:",
                     "DOCKERLENS_NATIVE_CHECK: port_cleanup",
-                    "DOCKERLENS_NATIVE_PORT_API_DIAG: action=delete phase=cleanup exit=outer_timeout",
+                    "DOCKERLENS_NATIVE_PORT_API_DIAG: version=2 client=unix_http_v1 action=delete phase=cleanup exit=outer_timeout",
                     "DOCKERLENS_NATIVE_CHECK: port_cleanup_unverified",
                     "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 130 filtered out;",
                 ]))
@@ -2739,7 +2947,7 @@ fi
                 self.assertIn("line=415 column=9", result.stderr)
                 self.assertNotIn("line=505", result.stderr)
                 self.assertIn(f"DOCKERLENS_NATIVE_PORT_START_DIAG: {observation}", result.stderr)
-                self.assertIn("action=start phase=probe exit=curl_timeout", result.stderr)
+                self.assertIn("action=start phase=probe exit=deadline", result.stderr)
                 self.assertIn("action=delete phase=cleanup exit=outer_timeout", result.stderr)
                 for secret in ("private-native-ID", "protected-secret", "32000"):
                     self.assertNotIn(secret, result.stdout + result.stderr)

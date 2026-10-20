@@ -147,6 +147,504 @@
     }
   },
   "$defs": {
+    "supplementary_groups_source_projection": {
+      "description": "Disconnected finite raw-only source subset; never reviewed-record or compiled-catalogue admission.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "supplementary_groups_contract",
+        "supplementary_groups_outcomes"
+      ],
+      "properties": {
+        "supplementary_groups_contract": {
+          "const": "supplementary-groups-v1"
+        },
+        "supplementary_groups_outcomes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "admission",
+            "catalogue_admission",
+            "scope",
+            "outcome"
+          ],
+          "properties": {
+            "admission": {
+              "const": "raw_source_only"
+            },
+            "catalogue_admission": {
+              "const": "unadmitted"
+            },
+            "scope": {
+              "const": "numeric_nonroot_omitted_one_two_groups_only"
+            },
+            "outcome": {
+              "const": "pid1_membership_and_dac_effects_verified"
+            }
+          }
+        }
+      }
+    },
+    "kernel_settings_source_projection": {
+      "description": "Disconnected finite raw-only source subset; never reviewed-record or compiled-catalogue admission.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kernel_settings_contract",
+        "kernel_settings_outcomes"
+      ],
+      "properties": {
+        "kernel_settings_contract": {
+          "const": "kernel-settings-v1"
+        },
+        "kernel_settings_outcomes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "admission",
+            "catalogue_admission",
+            "scope",
+            "outcome"
+          ],
+          "properties": {
+            "admission": {
+              "const": "raw_source_only"
+            },
+            "catalogue_admission": {
+              "const": "unadmitted"
+            },
+            "scope": {
+              "const": "diagonal_omitted_false0_true1_only"
+            },
+            "outcome": {
+              "const": "pid1_exec_inheritance_and_private_namespaces_verified"
+            }
+          }
+        }
+      }
+    },
+    "shm_size_source_projection": {
+      "description": "Disconnected raw-only finite ShmSize subset; not reviewed-record or compiled-catalogue admission.",
+      "type": "object", "additionalProperties": false,
+      "required": ["shm_size_contract", "shm_size_outcomes"],
+      "properties": {
+        "shm_size_contract": { "const": "shm-size-v1" },
+        "shm_size_outcomes": {
+          "type": "object", "additionalProperties": false,
+          "required": ["admission", "catalogue_admission", "scope", "outcome"],
+          "properties": {
+            "admission": { "const": "raw_source_only" },
+            "catalogue_admission": { "const": "unadmitted" },
+            "scope": { "const": "explicit_1MiB_2MiB_with_observed_omission_only" },
+            "outcome": { "const": "tmpfs_effect_and_ipc_isolation_verified" }
+          }
+        }
+      }
+    },
+    "health_disabled_source_projection": {
+      "description": "Disconnected raw-only disabled-health subset after complete health-metadata-v1 validation; never reviewed-record or compiled-catalogue admission.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["health_disabled_contract", "health_disabled_outcomes"],
+      "properties": {
+        "health_disabled_contract": { "const": "health-metadata-v1" },
+        "health_disabled_outcomes": {
+          "type": "object", "additionalProperties": false,
+          "required": ["admission", "catalogue_admission", "outcome"],
+          "properties": {
+            "admission": { "const": "raw_source_only" },
+            "catalogue_admission": { "const": "unadmitted" },
+            "outcome": { "const": "disabled_health_suppression_verified" }
+          }
+        }
+      }
+    },
+    "hostname_source_projection": {
+      "description": "Disconnected current raw source subset; not reviewed-record or compiled-catalogue admission.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hostname_contract", "hostname_outcomes"],
+      "properties": {
+        "hostname_contract": { "const": "hostname-v1" },
+        "hostname_outcomes": {
+          "type": "object", "additionalProperties": false,
+          "required": ["admission", "catalogue_admission", "outcome"],
+          "properties": {
+            "admission": { "const": "raw_source_only" },
+            "catalogue_admission": { "const": "unadmitted" },
+            "outcome": { "const": "omitted_and_explicit_verified" }
+          }
+        }
+      }
+    },
+    "command_clear_source_projection": {
+      "description": "Disconnected current raw source subset; complete four-case process controls only, never private argv or catalogue admission.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command_clear_contract", "command_clear_outcomes"],
+      "properties": {
+        "command_clear_contract": { "const": "command-clear-v1" },
+        "command_clear_outcomes": {
+          "type": "object", "additionalProperties": false,
+          "required": ["admission", "catalogue_admission", "outcome"],
+          "properties": {
+            "admission": { "const": "raw_source_only" },
+            "catalogue_admission": { "const": "unadmitted" },
+            "outcome": { "const": "all_four_process_controls_verified" }
+          }
+        }
+      }
+    },
+    "lifecycle_source_projection": {
+      "description": "Current raw lane-manifest subset only. Private v1 protocols and the historical reviewed-record root remain unchanged; raw_source_only never authorizes the compiled catalogue. All five complete private readers are mandatory before projection.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "lane",
+        "lifecycle_contract",
+        "lifecycle_outcomes",
+        "lifecycle_default_effect_contract",
+        "lifecycle_default_effect_outcomes",
+        "runtime_filesystem_contract",
+        "runtime_filesystem_outcomes",
+        "tmpfs_effect_contract",
+        "tmpfs_effect_outcomes",
+        "health_start_interval_boundary_contract",
+        "health_start_interval_boundary_outcomes"
+      ],
+      "properties": {
+        "lane": {
+          "enum": [
+            "debian11-rootful",
+            "debian11-rootless",
+            "upstream-rootful",
+            "upstream-rootless"
+          ]
+        },
+        "lifecycle_contract": {
+          "const": "lifecycle-v1"
+        },
+        "lifecycle_outcomes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "admission",
+            "catalogue_admission",
+            "probes"
+          ],
+          "properties": {
+            "admission": {
+              "const": "raw_source_only"
+            },
+            "catalogue_admission": {
+              "const": "unadmitted"
+            },
+            "probes": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "prefixItems": [
+                {
+                  "const": "stop_timeout_effective"
+                },
+                {
+                  "enum": [
+                    "health_start_interval_not_effective_on_selected_api",
+                    "health_start_interval_effective"
+                  ]
+                }
+              ],
+              "items": false
+            }
+          }
+        },
+        "lifecycle_default_effect_contract": {
+          "const": "lifecycle-default-effects-v1"
+        },
+        "lifecycle_default_effect_outcomes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "admission",
+            "catalogue_admission",
+            "probes"
+          ],
+          "properties": {
+            "admission": {
+              "const": "raw_source_only"
+            },
+            "catalogue_admission": {
+              "const": "unadmitted"
+            },
+            "probes": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "prefixItems": [
+                {
+                  "const": "stop_timeout_omitted_graceful_zero_forced"
+                },
+                {
+                  "enum": [
+                    "health_start_interval_unsupported_legacy_field",
+                    "health_start_interval_default_equivalent"
+                  ]
+                }
+              ],
+              "items": false
+            }
+          }
+        },
+        "runtime_filesystem_contract": {
+          "const": "runtime-filesystem-v1"
+        },
+        "runtime_filesystem_outcomes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "admission",
+            "catalogue_admission",
+            "init_effect_scope",
+            "rootfs_effect_scope",
+            "controls"
+          ],
+          "properties": {
+            "admission": {
+              "const": "raw_source_only"
+            },
+            "catalogue_admission": {
+              "const": "unadmitted"
+            },
+            "init_effect_scope": {
+              "const": "pid1_indirection_only"
+            },
+            "rootfs_effect_scope": {
+              "const": "diagonal_omitted_false_true_only"
+            },
+            "controls": {
+              "type": "array",
+              "minItems": 3,
+              "maxItems": 3,
+              "prefixItems": [
+                {
+                  "const": "omitted"
+                },
+                {
+                  "const": "false"
+                },
+                {
+                  "const": "true"
+                }
+              ],
+              "items": false
+            }
+          }
+        },
+        "tmpfs_effect_contract": {
+          "const": "tmpfs-effect-v1"
+        },
+        "tmpfs_effect_outcomes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "admission",
+            "catalogue_admission",
+            "coverage"
+          ],
+          "properties": {
+            "admission": {
+              "const": "raw_source_only"
+            },
+            "catalogue_admission": {
+              "const": "unadmitted"
+            },
+            "coverage": {
+              "const": "explicit_1MiB_0700_and_2MiB_0750_rw_ro_only"
+            }
+          }
+        },
+        "health_start_interval_boundary_contract": {
+          "const": "health-start-interval-boundary-v1"
+        },
+        "health_start_interval_boundary_outcomes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "admission",
+            "catalogue_admission",
+            "scope",
+            "probes"
+          ],
+          "properties": {
+            "admission": {
+              "const": "raw_source_only"
+            },
+            "catalogue_admission": {
+              "const": "unadmitted"
+            },
+            "scope": {
+              "const": "created_configuration_only"
+            },
+            "probes": {
+              "type": "array",
+              "minItems": 3,
+              "maxItems": 3,
+              "prefixItems": [
+                {
+                  "const": "omission_configured_absent"
+                },
+                {
+                  "const": "literal_zero_configured_absent"
+                },
+                {
+                  "enum": [
+                    "cli_zero_client_unknown_flag",
+                    "cli_zero_configured_absent"
+                  ]
+                }
+              ],
+              "items": false
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "lane": {
+                "enum": [
+                  "debian11-rootful",
+                  "debian11-rootless"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "lifecycle_outcomes": {
+                "properties": {
+                  "probes": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "prefixItems": [
+                      {
+                        "const": "stop_timeout_effective"
+                      },
+                      {
+                        "const": "health_start_interval_not_effective_on_selected_api"
+                      }
+                    ],
+                    "items": false
+                  }
+                }
+              },
+              "lifecycle_default_effect_outcomes": {
+                "properties": {
+                  "probes": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "prefixItems": [
+                      {
+                        "const": "stop_timeout_omitted_graceful_zero_forced"
+                      },
+                      {
+                        "const": "health_start_interval_unsupported_legacy_field"
+                      }
+                    ],
+                    "items": false
+                  }
+                }
+              },
+              "health_start_interval_boundary_outcomes": {
+                "properties": {
+                  "probes": {
+                    "type": "array",
+                    "minItems": 3,
+                    "maxItems": 3,
+                    "prefixItems": [
+                      {
+                        "const": "omission_configured_absent"
+                      },
+                      {
+                        "const": "literal_zero_configured_absent"
+                      },
+                      {
+                        "const": "cli_zero_client_unknown_flag"
+                      }
+                    ],
+                    "items": false
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "lifecycle_outcomes": {
+                "properties": {
+                  "probes": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "prefixItems": [
+                      {
+                        "const": "stop_timeout_effective"
+                      },
+                      {
+                        "const": "health_start_interval_effective"
+                      }
+                    ],
+                    "items": false
+                  }
+                }
+              },
+              "lifecycle_default_effect_outcomes": {
+                "properties": {
+                  "probes": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "prefixItems": [
+                      {
+                        "const": "stop_timeout_omitted_graceful_zero_forced"
+                      },
+                      {
+                        "const": "health_start_interval_default_equivalent"
+                      }
+                    ],
+                    "items": false
+                  }
+                }
+              },
+              "health_start_interval_boundary_outcomes": {
+                "properties": {
+                  "probes": {
+                    "type": "array",
+                    "minItems": 3,
+                    "maxItems": 3,
+                    "prefixItems": [
+                      {
+                        "const": "omission_configured_absent"
+                      },
+                      {
+                        "const": "literal_zero_configured_absent"
+                      },
+                      {
+                        "const": "cli_zero_configured_absent"
+                      }
+                    ],
+                    "items": false
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
     "external_network_probes": {
       "description": "Ordered public projection after complete private external-network proof; never sealed admission.",
       "type": "array",

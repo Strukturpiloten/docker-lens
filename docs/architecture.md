@@ -1,5 +1,90 @@
 # Architecture
 
+The native harness emitter and compiled product catalogue have separate authority.
+[ADR 0021](decisions/0021-lifecycle-raw-source-projection.md) extends complete raw
+source groups only after all five lifecycle-family private proofs validate.
+Raw records use `admission: raw_source_only` and `catalogue_admission: unadmitted`;
+they do not select a product cohort. [ADR 0022](decisions/0022-reviewed-lifecycle-cohort.md)
+separately selects authenticated reviewed envelopes at Debian 34/56 and upstream
+36/60 capabilities/shapes. All historical raw bytes and cohorts remain unchanged.
+[ADR 0023](decisions/0023-process-source-proof-wiring.md) adds mandatory hostname
+and command/entrypoint-clear source probes as canonical invocations 22 and 23.
+Both strict private readers must pass before any new group or public output.
+These three process groups remain absent from compiled selection.
+[ADR 0024](decisions/0024-health-disabled-raw-source-projection.md) adds only the
+HealthDisabled/DisabledHealthcheck raw singleton after the unchanged complete
+health-metadata-v1 reader validates all four cases, including both inherited
+failing-health and disabled CLI/rendered controls. Its four legacy return/probe
+names remain unchanged. [ADR 0025](decisions/0025-shm-size-source-integration.md)
+adds only raw ShmSize after complete strict validation of the finite source proof.
+Current raw projection totals are Debian 43/66 and upstream 45/70; HealthDisabled,
+ShmSize and the three process groups remain outside compiled selection.
+The stable nineteen-argument emitter binds fixed direct-child proofs to existing
+independent harness context. Closed disconnected schema definitions expose only
+source-only/unadmitted status and fixed outcomes, never hostname/argv/IDs/times.
+Private v1 protocols, historical evidence, product APIs and renderers are unchanged.
+The additional disconnected `$defs.health_disabled_source_projection` contains
+only the fixed contract, source-only/unadmitted markers and
+`disabled_health_suppression_verified`, never health logs, sentinel payloads or
+timestamps. Its health producer and strict-reader behavior remain unchanged.
+The twenty-fourth ShmSize child runs in a new one-child cleanup-owner subshell;
+the original six-child block and first 23 invocations retain their bytes/order.
+The mandatory twelve-argument CLI reader runs even without public emission.
+The emitter requires an exact typed closed source-only return against independent
+context before mapping ShmSize; its public outcome exposes no actual defaults,
+IPC namespaces, IDs, argv or timestamps. Historical root acceptance stays intact.
+
+[ADR 0026](decisions/0026-runtime-settings-source-integration.md) appends
+supplementary groups and kernel settings as invocations 25/26, each with its own
+one-child cleanup-owner scope and mandatory independent twelve-argument reader.
+The first 24 calls and existing owner blocks remain byte-exact. The nineteen-argument
+emitter requires both fixed private children before four complete raw groups:
+SupplementaryGroups, SecurityOptions, Sysctls and SysctlIpv4Forward. Only finite
+closed outcomes are public; selected catalogue and historical records are unchanged.
+Host capture remains deferred; ADR 0026 did not integrate a nofile source group.
+
+[ADR 0027](decisions/0027-pids-limit-private-qualification.md) appends mandatory
+PIDs invocation 27 in a separate one-child cleanup-owner scope, preserving all
+first 26 calls/order and earlier owner blocks. Its twelve-argument reader runs
+before optional emission; the unchanged nineteen-argument emitter independently
+requires the fixed private child and exact typed four-key return. This is private
+qualification only: no public PIDs fields, capability/shape mapping or schema
+addition, and raw totals remain Debian 43/66 and upstream 45/70. Selected totals
+remain 34/56 and 36/60. [ADR 0029](decisions/0029-pids-failure-localization.md)
+adds closed PIDs operation stages and refusal classification, plus canonical
+serialization of validated joined paths when a relative suffix is empty. It does not
+change controller/ownership predicates, interpret the failed source campaign as compatibility evidence,
+or expose private command output. Existing private protocol, reader, custody limits and shared
+180-second deadline/46-second cleanup reserve remain unchanged. Source wiring
+and synthetic controls are not passing native evidence; that PIDs-only slice
+did not integrate nofile, and host capture remains deferred.
+
+[ADR 0028](decisions/0028-nofile-private-qualification.md) appends mandatory nofile
+invocation 28, preserving the first 27 calls/order and five earlier owner blocks.
+Its separate one-child cleanup-owner scope receives the original once-created
+180-second deadline. The existing twelve-argument reader always runs before
+optional emission; the unchanged nineteen-argument emitter independently requires
+the fixed child and exact typed three-key return, not the PIDs scope-bearing return.
+No public nofile fields, capability/shape mapping or schema admission is added.
+Raw 43/66 and 45/70 and selected 34/56 and 36/60 totals remain unchanged. Existing
+512 KiB nofile proof and 64 KiB metadata limits remain scoped; default 16 KiB
+custody elsewhere, all native behavior and the 46-second reserve stay unchanged.
+Source wiring is not passing native qualification; host capture remains deferred.
+
+[ADR 0031](decisions/0031-pids-reader-coordinate-proof.md) defines the current
+private PIDs-v2 successor with retained coordinates for all 37 observer reads
+and lossless fixed phase tuples. The strict successor checks original-byte
+custody and coordinates before reusing the unchanged pure semantic predicates.
+Both current consumers require v2; historical v1 is not a fallback. This changes
+no public admission, native invocation or shared budget.
+[ADR 0033](decisions/0033-original-outer-custody.md) connects original-root OCI/log
+custody and the ten-slot private boundary using the existing reserve. Its concrete
+broker/runtime/coordinator and bounded stdin consumers remain unqualified source.
+A fixed same-envelope partition fits four authored connected scenarios; native
+whole-harness fit, fresh complete/native gates and actual downstream consumers
+are still required. No native alignment, outer ownership, rootless delegation
+or new compatibility claim follows from source/fake tests.
+
 ## Data flow
 
 1. An explicitly supplied endpoint and selector create a bounded read request
@@ -44,12 +129,13 @@
    advertised maximum API, negotiated acquisition API, tested rendering API,
    and daemon mode. Catalog discovery returns its SHA-256 evidence key. The
    candidate catalog selects four exact records from independently reviewed
-   run `38106164571`, attempt 1, source
-   `ef8b40c2d392c3983a3ebdc54730812352fe6b39`, under ADR 0019.
-   Only StopSignal is added beyond ADR 0018's retained complete groups.
-   Debian admits exactly 30 capabilities/47 shapes; upstream adds only the
-   complete IPv6 port group for 31/49. All six historical cohorts remain
-   immutable. ADR 0012's six actual authored fixture volume-only consumer gate
+   run `39124651853`, attempt 1, source
+   `a251748de3a61f9dc3d735e670ce3ea461ee0a30`, under ADR 0022.
+   Complete StopTimeout, ContainerInit, ReadOnlyRootfs and TmpfsMount groups
+   extend ADR 0019's retained groups on all lanes; HealthStartInterval is
+   upstream-only. Debian admits exactly 34 capabilities/56 shapes; upstream
+   adds the complete IPv6 port and health-interval groups for 36/60. All seven
+   historical cohorts remain immutable. ADR 0012's six actual authored fixture volume-only consumer gate
    and fresh reviewed actual Nextcloud/Supabase bind and desired external
    expectation consumers remain required.
    Each changed candidate and release needs fresh complete and four-lane
@@ -88,8 +174,10 @@ The four exact profiles retain reviewed external-network and internal-bridge
 groups and now admit network labels, primary/secondary aliases and ordered
 multiple attachments under ADR 0016. Network IPv6, IPAM, options and static
 addresses still await separate exact-lane admission. Container labels, shell
-health and zero/positive start period are admitted; disabled health, start
-interval and other runtime groups stay unadmitted.
+health and zero/positive start period are admitted. Complete StopTimeout,
+ContainerInit, ReadOnlyRootfs and TmpfsMount groups are separately reviewed
+under ADR 0022; only upstream admits HealthStartInterval zero/positive.
+Disabled health and other unreviewed runtime groups stay unadmitted.
 `StartInterval` is gated by
 an exact capability claim; no generic Engine API introduction version is
 assumed from Compose metadata. Port rendering groups host bindings under one
@@ -145,7 +233,7 @@ and historical evidence remain unchanged. ADR 0018 selects authenticated source
 run `37788762974` at Debian 29/46 and upstream 30/48 for candidate rehearsal;
 ADR 0019 retains those groups and adds only the StopSignal singleton.
 Definitions or offline controls grant no native compatibility. Fresh
-authenticated exact-final-candidate sixteen-test four-lane execution,
+authenticated exact-final-candidate twenty-eight-test four-lane execution,
 independent review and the separate ADR 0012/0016/0018/0019 consumer gates remain
 required before ready/merge. No source run qualifies a changed candidate.
 
@@ -165,6 +253,17 @@ four-lane native proof, independently reviewed six-authored-fixture volume-only
 consumer rehearsal, reviewed actual Nextcloud/Supabase schema-2 bind consumers
 and complete gates pass. Neither branch applies requests,
 moves data, or claims application acceptance.
+
+The [default/zero lifecycle source-effect contract](native-lifecycle-default-effects-contract.md)
+defines a separate mandatory twenty-first test-only invocation and private proof.
+It starts six actual borrowed-image containers, keeps legacy CLI parser refusal
+separate, and observes stop and health effects under the existing scoped owner
+and original deadline. Debian unknown-member acceptance/legacy scheduling is
+explicitly unsupported/unproven, not modern zero/default equivalence. The emitter
+projects closed raw source dispositions and complete groups under ADR 0021.
+Raw catalogue markers stay unadmitted. ADR 0022 separately selects authenticated
+reviewed envelopes without changing those markers or historical records;
+fresh exact-final-candidate qualification remains required.
 
 ## Decoder evidence boundary
 
@@ -251,7 +350,7 @@ distribution package revision, so those stay unknown until separate evidence
 is available. Decoded version strings do not add positive capability facts.
 
 `DecodedVersion::resource_support` retains independently available effective
-`Observed<bool>` reports for `/info` `MemoryLimit` and `SwapLimit`, tied to the
+`Observed<bool>` reports for `/info` `MemoryLimit`, `SwapLimit` and `PidsLimit`, tied to the
 capture's opaque observation ID. Missing, null and explicitly redacted reports
 remain unavailable; malformed booleans fail with value-free decoder errors.
 The pure assessment requires the same observation ID, even when two captures
@@ -264,6 +363,18 @@ The assessment does not evaluate effect evidence or veto a target. It reads no
 endpoint and introduces no acquisition request; fresh native conformance and
 downstream application acceptance remain separate release evidence.
 
+[ADR 0032](decisions/0032-observation-scoped-cgroup-reports.md) also retains
+protected `CgroupDriver` and `CgroupVersion` strings. Exact recognized values
+have closed report classifications; unexpected nonempty text remains protected
+and classifies as unrecognized, distinct from unknown/unavailable. Empty text,
+non-effective fields and redacted-but-valued caller data stay unknown. Schema
+defaults, other fields and matching Engine versions never fill missing reports.
+These independently observed fields are not an aggregate readiness verdict,
+usable delegation proof or a prerequisite carried by an offline target plan.
+Systemd/v2 and reported PIDs support cannot authorize a capability. Public
+struct-literal consumers must accommodate the added fields; the `missing`
+constructor supplies complete Missing/Effective fixture defaults only.
+
 DockerLens has no BoxFerry or other Lens product dependency. BoxFerry will
 consume a released DockerLens and route all conversions through its neutral
 model. Debian 11 and upstream Engine 29 coverage in both daemon modes uses
@@ -273,3 +384,10 @@ only a private Unix test socket. Debian package provenance is checked inside
 the image. Genuine native runs and independent review are required before any
 compatibility catalog record is positive; discovering a version number is
 not compatibility evidence.
+
+Host Engine HTTP in the native test harness uses the independent test-only
+[Unix-HTTP transport](native-unix-http.md), under ADR 0020. This helper is not
+the product acquisition implementation or a semantic oracle. Caller route,
+ownership, mutation, absolute-budget and cleanup assertions remain in the native
+tests; Docker CLI, real Rust acquisition and namespace TCP/UDP probes remain
+independent. Historical source records and capability admission are unchanged.

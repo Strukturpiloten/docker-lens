@@ -1,11 +1,13 @@
 """Closed native evidence cannot admit unreviewed identity or leak API bodies."""
 
 import copy
+import base64
 import hashlib
 import json
 import os
 import re
 import subprocess
+import time
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,8 +18,17 @@ from test_native_bind_relabel_proof import fixture as bind_relabel_fixture
 from test_native_external_network_proof import fixture as external_network_fixture
 from test_native_stop_signal_proof import fixture as stop_signal_fixture
 from test_native_lifecycle_proof import fixture as lifecycle_fixture
+from test_native_lifecycle_default_effect_proof import fixture as lifecycle_default_effect_fixture
 from test_native_runtime_filesystem_proof import fixture as runtime_filesystem_fixture
 from test_native_tmpfs_effect_proof import fixture as tmpfs_effect_fixture
+from test_native_health_start_interval_boundary_proof import fixture as health_boundary_fixture
+from test_native_hostname_proof import fixture as hostname_fixture
+from test_native_command_clear_proof import fixture as command_clear_fixture
+from test_native_shm_size_proof import fixture as shm_size_fixture
+from test_native_supplementary_groups_proof import fixture as supplementary_groups_fixture
+from test_native_kernel_settings_proof import fixture as kernel_settings_fixture
+from test_native_pids_limit_v2_proof import fixture as pids_limit_fixture
+from test_native_nofile_proof import fixture as nofile_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/native-evidence.py"
@@ -25,6 +36,48 @@ SHA = "a" * 40
 RUN_ID = "Ab12Cd34"
 IMAGE = ("ghcr.io/strukturpiloten/docker-29-rootful:v29.8.1@sha256:"
          + "b" * 64)
+
+
+def emitter_context(directory, lane, image, candidate=SHA):
+    """Independent authored source fixture, not a proof-file-derived oracle."""
+    from test_native_outer_authority import authority_fixture
+    # Invalid CLI identities must reach the emitter's own negative predicates;
+    # they are not permitted to make the authored transport fixture malformed.
+    if lane not in ("debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless"):
+        lane = "upstream-rootful"
+    if not isinstance(candidate, str) or re.fullmatch(r"[0-9a-f]{40}", candidate) is None:
+        candidate = SHA
+    if not isinstance(image, str) or re.fullmatch(r"[^\0]+:[^@]+@sha256:[0-9a-f]{64}", image) is None:
+        image = IMAGE
+    expected = pids_limit_fixture(lane)["context"]
+    expected["candidate_sha"] = candidate
+    expected["fixture_image"] = HEALTH_FIXTURE_IMAGE
+    expected["outer"].update(image=image, socket_source=str(Path(directory) / "socket"))
+    context, _expected, account, options, prefix, _proof = authority_fixture(lane, directory, expected)
+    return context, account, options, prefix
+
+
+def run_with_context(command, **options):
+    """Actual emitter child with only source acquisition authored/injected.
+
+    The production ABI, anonymous stdin, source/stream budgets and every proof
+    predicate remain active. Missing-stdin controls invoke the actual CLI below.
+    """
+    from native_outer_coordinator import serialize_consumer_context
+    context, _account, _mount_options, _prefix = emitter_context(command[13], command[15], command[16], command[19])
+    code = '''import runpy,sys
+import native_outer_coordinator as c
+from test_native_evidence import emitter_context
+_context,account,options,prefix=emitter_context(sys.argv[13],sys.argv[15],sys.argv[16],sys.argv[19])
+original=c.derive_consumer_authority
+c.derive_consumer_authority=lambda value,expected,budget=None:original(value,expected,account_loader=lambda *_:account,socket_options=lambda _:options,log_reader=lambda _i,_l,p:p==prefix)
+sys.argv=sys.argv[1:]
+runpy.run_path(sys.argv[0],run_name="__main__")
+'''
+    environment = {**options.pop("env", os.environ), "PYTHONPATH": str(ROOT / "scripts") + ":" + str(ROOT / "tests"),
+                   "DOCKERLENS_OUTER_LANE_DEADLINE_NS": str(time.monotonic_ns() + 180_000_000_000)}
+    return subprocess.run([command[0], "-c", code, *command[1:]],
+                          input=serialize_consumer_context(context).decode("ascii"), env=environment, **options)
 SHAPES = {
     "StandaloneContainer": ["StandaloneCreate"],
     "NamedVolume": ["NamedVolumeCreate", "NamedVolumeMountReadWrite", "NamedVolumeMountReadOnly"],
@@ -64,7 +117,25 @@ EXPECTED_PORT_CAPABILITY_SHAPES = {
     "PortExposeOnly": ["ExposedOnlyPort"],
     "PortEphemeral": ["EphemeralHostPort"],
 }
-EXPECTED_FUTURE_RAW_SHAPES = {**EXPECTED_RAW_SHAPES, **EXPECTED_PORT_CAPABILITY_SHAPES}
+EXPECTED_LIFECYCLE_SOURCE_SHAPES = {
+    "StopTimeout": ["StopTimeoutZero", "StopTimeoutPositive"],
+    "ContainerInit": ["ContainerInitTrue", "ContainerInitFalse"],
+    "ReadOnlyRootfs": ["ReadOnlyRootfsTrue", "ReadOnlyRootfsFalse"],
+    "TmpfsMount": ["TmpfsMountReadWrite", "TmpfsMountReadOnly", "TmpfsMountOptions"],
+    "HealthStartInterval": ["HealthStartIntervalZero", "HealthStartIntervalPositive"],
+}
+EXPECTED_FUTURE_RAW_SHAPES = {
+    **EXPECTED_RAW_SHAPES, **EXPECTED_PORT_CAPABILITY_SHAPES, **EXPECTED_LIFECYCLE_SOURCE_SHAPES,
+    "ContainerHostname": ["ContainerHostname"],
+    "CommandClear": ["ClearCommand"],
+    "EntrypointClear": ["ClearEntrypoint"],
+    "HealthDisabled": ["DisabledHealthcheck"],
+    "ShmSize": ["ShmSize"],
+    "SupplementaryGroups": ["SupplementaryGroups"],
+    "SecurityOptions": ["NoNewPrivilegesEnabled", "NoNewPrivilegesDisabled"],
+    "Sysctls": ["Sysctls"],
+    "SysctlIpv4Forward": ["SysctlIpv4Forward"],
+}
 SOURCE_PROBES = [
     "DiscoveryMetadata", "ExactContainerId", "ExactContainerName",
     "LiteralNamePrefix", "ExactLabel", "ExplicitAllContainers",
@@ -141,6 +212,247 @@ def identity_proof(lane: str, mode: str, api: str, sha: str) -> dict:
 
 
 class NativeEvidenceTests(unittest.TestCase):
+    def test_production_private_stdin_and_complete_compact_source_accounting(self):
+        for lane in ("upstream-rootful", "upstream-rootless", "debian11-rootful", "debian11-rootless"):
+            with self.subTest(lane=lane):
+                self.production_compact_accounting(lane)
+
+    def production_compact_accounting(self, lane):
+        from native_outer_coordinator import serialize_consumer_context
+        from test_native_outer_authority import authority_fixture, bind_proof_boundary
+        records = json.loads((ROOT / "docs/native-image-defaults/20261019-accounts-v1.json").read_bytes())["images"]
+        selected = next(record for record in records if record["lane"] == lane and record["architecture"] == "amd64")
+        image = selected["canonical_reference"]
+        mode = lane.rsplit("-", 1)[1]
+        version = ({"Version": "20.10.5", "ApiVersion": "1.41", "MinAPIVersion": "1.12"} if lane.startswith("debian11-")
+                   else {"Version": "29.8.1", "ApiVersion": "1.56", "MinAPIVersion": "1.44"})
+        package = "20.10.5+dfsg1-1+deb11u2" if lane.startswith("debian11-") else ""
+        result, destination = self.run_emit(version, image=image, lane=lane, mode=mode, package=package)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        root = destination.parent.parent
+        proof = json.loads((root / "pids-limit-v2.json").read_bytes())
+        context, _expected, _account, _options, _prefix, _unused = authority_fixture(
+            lane, root, proof["context"], reviewed=True)
+        bind_proof_boundary(proof, context["boundary"])
+        (root / "pids-limit-v2.json").write_text(json.dumps(proof, separators=(",", ":")), encoding="utf-8")
+        # The actual Rust proof writers emit compact JSON. Keep every value;
+        # do not truncate, omit a role, or manufacture a larger allowance.
+        sources = list(root.glob("*.json"))
+        self.assertEqual(len(sources), 25)
+        for source in sources:
+            source.write_text(json.dumps(json.loads(source.read_bytes()), separators=(",", ":"), ensure_ascii=False), encoding="utf-8")
+        destination.unlink()
+        arguments = [str(root / name) for name in ("version.json", "shapes.json", "source.json", "network.json", "volume.json",
+                     "volume-label.json", "identity.json", "port-probes.json", "health-metadata.json",
+                     "network-attachments-v1.json", "bind-relabel-config-v1.json")]
+        arguments += [str(root), str(destination), lane, image, mode, package, SHA, RUN_ID]
+        environment = {**os.environ, "PYTHONPATH": str(ROOT / "scripts"), "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE,
+                       "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "1000" if mode == "rootless" else "0",
+                       "DOCKERLENS_OUTER_LANE_DEADLINE_NS": str(time.monotonic_ns() + 180_000_000_000)}
+        # Counter observation only: exact production main, loader and authority,
+        # with no mocked account/log/source decision or altered allowance.
+        code = '''import json,runpy,sys
+sys.argv=sys.argv[1:]
+state=runpy.run_path(sys.argv[0],run_name="__main__")
+budget=state["budget"]
+print(json.dumps({"source_bytes":budget.used.source_bytes,"io_calls":budget.used.io_calls,"cap":budget.reservation.allowance.source_bytes}))
+'''
+        encoded = serialize_consumer_context(context).decode("ascii")
+        measured = subprocess.run(["python3", "-c", code, str(SCRIPT), *arguments], input=encoded,
+                                  capture_output=True, text=True, env=environment, timeout=5, check=False)
+        self.assertEqual(measured.returncode, 0, measured.stderr)
+        observed = json.loads(measured.stdout)
+        self.assertEqual(observed["cap"], 470576)
+        # Historical authored-fixture cost bound, not the candidate allowance;
+        # retain the unchanged complete inputs and exact-byte equation below.
+        self.assertLessEqual(observed["source_bytes"], 448576)
+        self.assertLessEqual(observed["io_calls"], 20000)
+        record_bytes = sum((ROOT / "docs/native-image-defaults" / name).stat().st_size for name in
+                           ("20261019-accounts-v1.json", "podman493-source-binding-v1.json", "20261019-paths-v1.json"))
+        expected_bytes = (len(encoded.encode("ascii")) + sum(source.stat().st_size for source in sources)
+                          + (root / "health-metadata.json").stat().st_size + (root / "port-probes.json").stat().st_size
+                          + record_bytes + len(base64.b64decode(context["source"]["log"]["prefix"]))
+                          + destination.stat().st_size)
+        self.assertEqual(observed["source_bytes"], expected_bytes)
+        destination.unlink()
+        missing = subprocess.run(["python3", str(SCRIPT), *arguments], input="", capture_output=True, text=True,
+                                 env=environment, timeout=5, check=False)
+        self.assertEqual((missing.returncode, missing.stdout, missing.stderr), (1, "", "native evidence rejected\n"))
+        self.assertFalse(destination.exists())
+
+    def test_process_source_projection_is_closed_complete_and_not_catalogue_admission(self) -> None:
+        import test_native_external_network_evidence as canonical
+        from test_reviewed_catalog import required_shapes
+
+        schema = json.loads((ROOT / "docs/native-evidence.schema.json").read_text())
+        expectations = {
+            "hostname": {"hostname_contract": "hostname-v1", "hostname_outcomes": {
+                "admission": "raw_source_only", "catalogue_admission": "unadmitted",
+                "outcome": "omitted_and_explicit_verified"}},
+            "command_clear": {"command_clear_contract": "command-clear-v1", "command_clear_outcomes": {
+                "admission": "raw_source_only", "catalogue_admission": "unadmitted",
+                "outcome": "all_four_process_controls_verified"}},
+        }
+        groups = {"ContainerHostname": ["ContainerHostname"], "CommandClear": ["ClearCommand"],
+                  "EntrypointClear": ["ClearEntrypoint"]}
+        required = required_shapes()
+        catalogue = (ROOT / "src/reviewed_catalog.rs").read_text()
+        for capability, shapes in groups.items():
+            self.assertEqual(tuple(shapes), required[capability])
+            for prefix in ("REVIEWED", "UPSTREAM"):
+                selected = catalogue.split(f"const {prefix}_CAPABILITIES:", 1)[1].split("];", 1)[0]
+                self.assertNotIn(f"Capability::{capability},", selected)
+                selected_shapes = catalogue.split(f"const {prefix}_SHAPES:", 1)[1].split("];", 1)[0]
+                self.assertNotIn(f"NativeCapabilityShape::{shapes[0]},", selected_shapes)
+        for lane in ("debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless"):
+            with self.subTest(lane=lane):
+                result, path = canonical.ExternalNetworkEvidenceTests.emit(self, lane)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                record = json.loads(path.read_text())
+                for family, expected in expectations.items():
+                    definition = schema["$defs"][f"{family}_source_projection"]
+                    self.assertFalse(definition["additionalProperties"])
+                    self.assertEqual(set(definition["required"]), set(expected))
+                    self.assertEqual(set(definition["properties"]), set(expected))
+                    self.assertEqual(definition["properties"][f"{family}_contract"],
+                                     {"const": expected[f"{family}_contract"]})
+                    self.assertNotIn(f"#/$defs/{family}_source_projection", json.dumps(schema))
+                    self.assertEqual({key: record[key] for key in expected}, expected)
+                    outcome = definition["properties"][f"{family}_outcomes"]
+                    self.assertFalse(outcome["additionalProperties"])
+                    self.assertEqual(set(outcome["required"]), set(expected[f"{family}_outcomes"]))
+                    self.assertEqual(outcome["properties"], {
+                        key: {"const": value} for key, value in expected[f"{family}_outcomes"].items()})
+                for capability, shapes in groups.items():
+                    self.assertEqual(record["admitted_shapes"][capability], shapes)
+                self.assertEqual(record["admitted_shapes"]["HealthDisabled"], ["DisabledHealthcheck"])
+                raw = path.read_text()
+                for private in ("dl-hostname-", "dl-command-", "/dl-image-entrypoint", "/dl-command-process",
+                                "process_argv", "process_hostname", "borrowed_image", "derived_image",
+                                "started_at", "restart_count", RUN_ID, "PRIVATE_PROJECTION_CANARY"):
+                    self.assertNotIn(private, raw)
+
+    def test_complete_lifecycle_raw_groups_and_catalogue_boundary_on_all_lanes(self) -> None:
+        # Reuse input construction only. Expectations come from the independent
+        # finite contract matrix and the existing required_for API contract.
+        import test_native_external_network_evidence as canonical
+        from test_reviewed_catalog import required_shapes
+
+        required = required_shapes()
+        schema = json.loads((ROOT / "docs/native-evidence.schema.json").read_text())
+        projection = schema["$defs"]["lifecycle_source_projection"]
+        self.assertFalse(projection["additionalProperties"])
+        self.assertEqual(set(projection["required"]), set(projection["properties"]))
+        for lane in ("debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless"):
+            with self.subTest(lane=lane):
+                result, path = canonical.ExternalNetworkEvidenceTests.emit(self, lane)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                record = json.loads(path.read_text())
+                debian = lane.startswith("debian11-")
+                expected = {**EXPECTED_FUTURE_RAW_SHAPES, "ContainerUser": ["ContainerUser"],
+                            "ContainerWorkdir": ["ContainerWorkdir"]}
+                if debian:
+                    del expected["HealthStartInterval"]
+                    del expected["PortHostIpv6"]
+                self.assertEqual(record["admitted_shapes"], expected)
+                self.assertEqual(record["capability_outcome"], {name: "available" for name in expected})
+                self.assertEqual(len(record["capability_outcome"]), 43 if debian else 45)
+                self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 66 if debian else 70)
+                for name, shapes in EXPECTED_LIFECYCLE_SOURCE_SHAPES.items():
+                    self.assertEqual(tuple(shapes), required[name])
+                    if debian and name == "HealthStartInterval":
+                        self.assertNotIn(name, record["capability_outcome"])
+                        self.assertNotIn(name, record["admitted_shapes"])
+                    else:
+                        self.assertEqual(record["capability_outcome"][name], "available")
+                        self.assertEqual(record["admitted_shapes"][name], shapes)
+                for name, definition in projection["properties"].items():
+                    if name.endswith("_outcomes"):
+                        value = record[name]
+                        self.assertFalse(definition["additionalProperties"])
+                        self.assertEqual(set(value), set(definition["required"]))
+                        for status in ("admission", "catalogue_admission"):
+                            self.assertEqual(value[status], definition["properties"][status]["const"])
+                    elif name.endswith("_contract"):
+                        self.assertEqual(record[name], definition["const"])
+                # The raw subset schema also closes the legacy/modern outcome
+                # combinations, rather than merely listing both vocabularies.
+                lane_schema = projection["allOf"][0]["then" if debian else "else"]
+                for name, definition in lane_schema["properties"].items():
+                    rule = definition["properties"]["probes"]
+                    self.assertFalse(rule["items"])
+                    self.assertEqual(record[name]["probes"], [item["const"] for item in rule["prefixItems"]])
+        # ADR 0022 separately selects authenticated reviewed envelopes. Raw
+        # projection and its unchanged unadmitted markers grant no admission.
+        catalogue = (ROOT / "src/reviewed_catalog.rs").read_text()
+        for prefix, capability_count, shape_count in (("REVIEWED", 34, 56), ("UPSTREAM", 36, 60)):
+            capabilities = catalogue.split(f"const {prefix}_CAPABILITIES:", 1)[1].split("];", 1)[0]
+            shapes = catalogue.split(f"const {prefix}_SHAPES:", 1)[1].split("];", 1)[0]
+            self.assertEqual(len(re.findall(r"Capability::(\w+)", capabilities)), capability_count)
+            self.assertEqual(len(re.findall(r"NativeCapabilityShape::(\w+)", shapes)), shape_count)
+            for name in EXPECTED_LIFECYCLE_SOURCE_SHAPES:
+                if prefix == "REVIEWED" and name == "HealthStartInterval":
+                    self.assertNotIn(f"Capability::{name},", capabilities)
+                else:
+                    self.assertIn(f"Capability::{name},", capabilities)
+
+    def test_every_lifecycle_family_remains_mandatory_complete_bound_and_clean(self) -> None:
+        import test_native_external_network_evidence as canonical
+
+        families = (
+            ("lifecycle", "lifecycle-v1.json", "stop_timeout"),
+            ("lifecycle_default_effect", "lifecycle-default-effects-v1.json", "stop_timeout"),
+            ("runtime_filesystem", "runtime-filesystem-v1.json", "cases"),
+            ("tmpfs_effect", "tmpfs-effect-v1.json", "cases"),
+            ("health_boundary", "health-start-interval-boundary-v1.json", "cases"),
+            ("hostname", "hostname-v1.json", "cases"),
+            ("command_clear", "command-clear-v1.json", "cases"),
+        )
+        for lane in ("debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless"):
+            for option, filename, group in families:
+                with self.subTest(lane=lane, family=option, mutation="missing"):
+                    result, path = canonical.ExternalNetworkEvidenceTests.emit(self, lane, **{option + "_missing": True})
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse(path.exists())
+                    self.assertEqual(result.stderr.strip(), "native evidence rejected")
+            result, path = canonical.ExternalNetworkEvidenceTests.emit(self, lane)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            path.unlink()
+            for option, filename, group in families:
+                proof_path = path.parent.parent / filename
+                original = json.loads(proof_path.read_text())
+                for mutation in ("partial", "context", "effect", "cleanup", "unexpected", "protected_extra"):
+                    with self.subTest(lane=lane, family=option, mutation=mutation):
+                        proof = copy.deepcopy(original)
+                        if mutation == "partial":
+                            proof[group].pop()
+                        elif mutation == "context":
+                            proof["context"]["candidate_sha"] = "e" * 40
+                        elif mutation == "effect":
+                            if option == "lifecycle":
+                                proof["stop_timeout"][0]["containers"][0]["exit_code"] = 0
+                            elif option == "lifecycle_default_effect":
+                                proof["stop_timeout"][0]["exit_code"] = 0
+                            elif option == "runtime_filesystem":
+                                proof["cases"][0]["containers"][0]["worker_pid"] = 0
+                            elif option == "tmpfs_effect":
+                                proof["cases"][0]["containers"][0]["effect"]["filesystem"] = "ext4"
+                            elif option == "hostname":
+                                proof["cases"][1]["containers"][1]["process_hostname"] = "PRIVATE_PROJECTION_CANARY"
+                            elif option == "command_clear":
+                                proof["cases"][2]["containers"][1]["process_argv"] = ["PRIVATE_PROJECTION_CANARY"]
+                            else:
+                                proof["cases"][0]["records"][0]["state"]["Pid"] = 1
+                        elif mutation == "cleanup":
+                            proof["cleanup"]["uncertain"] = True
+                        elif mutation == "protected_extra":
+                            proof["context"]["PRIVATE_PROJECTION_CANARY"] = "PRIVATE_PROJECTION_CANARY"
+                        else:
+                            proof["PRIVATE_PROJECTION_CANARY"] = "PRIVATE_PROJECTION_CANARY"
+                        proof_path.write_text(json.dumps(proof))
+                        canonical.ExternalNetworkEvidenceTests.rerun(self, result, path)
+                proof_path.write_text(json.dumps(original))
+
     def test_identity_schema_is_additive_not_reviewed_admission(self) -> None:
         schema = json.loads((ROOT / "docs/native-evidence.schema.json").read_text())
         defs = schema["$defs"]
@@ -160,13 +472,19 @@ class NativeEvidenceTests(unittest.TestCase):
                                      "port_shape", "port_probe_entry", "port_probes",
                                      "native_port_probe_proof", "bind_relabel_capability_vocabulary",
                                      "bind_relabel_shape_vocabulary", "external_network_probes",
-                                     "external_network_projection"})
+                                     "external_network_projection", "lifecycle_source_projection",
+                                     "hostname_source_projection", "command_clear_source_projection",
+                                     "health_disabled_source_projection", "shm_size_source_projection",
+                                     "supplementary_groups_source_projection", "kernel_settings_source_projection"})
         unchanged = copy.deepcopy(schema)
         for name in ("identity_probes", "identity_container_proof", "native_identity_proof",
                      "identity_container_v2", "identity_case_v2", "native_identity_proof_v2",
                      "port_shape", "port_probe_entry", "port_probes", "native_port_probe_proof",
                      "bind_relabel_capability_vocabulary", "bind_relabel_shape_vocabulary",
-                     "external_network_probes", "external_network_projection"):
+                     "external_network_probes", "external_network_projection", "lifecycle_source_projection",
+                     "hostname_source_projection", "command_clear_source_projection",
+                     "health_disabled_source_projection", "shm_size_source_projection",
+                     "supplementary_groups_source_projection", "kernel_settings_source_projection"):
             del unchanged["$defs"][name]
         # Preserve the exact historical #74 root projection: later vocabulary
         # additions do not rewrite historical envelope bytes or admission.
@@ -264,7 +582,7 @@ class NativeEvidenceTests(unittest.TestCase):
                            ("version.json", "shapes.json", "source.json", "network.json",
                             "volume.json", "volume-label.json", "identity.json", "port-probes.json", "health-metadata.json", "network-attachments-v1.json", "bind-relabel-config-v1.json")],
                            str(root), str(destination), "upstream-rootful", IMAGE, "rootful", "", SHA, RUN_ID]
-                rejected = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True,
+                rejected = run_with_context(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True,
                                           timeout=5, check=False)
                 self.assertNotEqual(rejected.returncode, 0)
                 self.assertFalse(destination.exists())
@@ -342,6 +660,24 @@ class NativeEvidenceTests(unittest.TestCase):
                  runtime_filesystem_missing: bool = False,
                  tmpfs_effect: object = None,
                  tmpfs_effect_missing: bool = False,
+                 health_boundary: object = None,
+                 health_boundary_missing: bool = False,
+        lifecycle_default_effect: object = None,
+        lifecycle_default_effect_missing: bool = False,
+                 hostname: object = None,
+                 hostname_missing: bool = False,
+                 command_clear: object = None,
+                 command_clear_missing: bool = False,
+                 shm_size: object = None,
+                 shm_size_missing: bool = False,
+                 supplementary_groups: object = None,
+                 supplementary_groups_missing: bool = False,
+                 kernel_settings: object = None,
+                 kernel_settings_missing: bool = False,
+                 pids_limit: object = None,
+                 pids_limit_missing: bool = False,
+                 nofile: object = None,
+                 nofile_missing: bool = False,
                  port_proof_override: object = None) -> tuple[subprocess.CompletedProcess[str], Path]:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -362,6 +698,8 @@ class NativeEvidenceTests(unittest.TestCase):
         lifecycle_path = root / "lifecycle-v1.json"
         runtime_filesystem_path = root / "runtime-filesystem-v1.json"
         tmpfs_effect_path = root / "tmpfs-effect-v1.json"
+        health_boundary_path = root / "health-start-interval-boundary-v1.json"
+        lifecycle_default_effect_path = root / "lifecycle-default-effects-v1.json"
         destination = root / "out" / f"{lane}.json"
         version_path.write_text(json.dumps(version), encoding="utf-8")
         shapes_path.write_text(json.dumps(SHAPES if shapes is None else shapes), encoding="utf-8")
@@ -440,7 +778,62 @@ class NativeEvidenceTests(unittest.TestCase):
         if not tmpfs_effect_missing:
             tmpfs_effect_path.write_text(json.dumps(tmpfs if tmpfs_effect is None else tmpfs_effect), encoding="utf-8")
             tmpfs_effect_path.chmod(0o600)
-        result = subprocess.run(
+        boundary = health_boundary_fixture(lane)
+        boundary["context"].update(external["context"])
+        for case in boundary["cases"]:
+            for record in case["records"]:
+                record["image"] = HEALTH_FIXTURE_IMAGE
+        if not health_boundary_missing:
+            health_boundary_path.write_text(json.dumps(boundary if health_boundary is None else health_boundary), encoding="utf-8")
+            health_boundary_path.chmod(0o600)
+        defaults = lifecycle_default_effect_fixture(lane)
+        defaults["context"].update(external["context"])
+        for record in defaults["stop_timeout"] + defaults["health_start_interval"]["containers"]:
+            record["image"] = HEALTH_FIXTURE_IMAGE
+        if not lifecycle_default_effect_missing:
+            lifecycle_default_effect_path.write_text(json.dumps(defaults if lifecycle_default_effect is None else lifecycle_default_effect), encoding="utf-8")
+            lifecycle_default_effect_path.chmod(0o600)
+        # Explicit unit fixtures only; these are not authenticated native evidence.
+        hostname_proof = hostname_fixture(lane)
+        hostname_proof["context"].update(copy.deepcopy(external["context"]))
+        for case in hostname_proof["cases"]:
+            for container in case["containers"]:
+                container["image"] = HEALTH_FIXTURE_IMAGE
+        command_proof = command_clear_fixture(lane)
+        command_proof["context"].update(copy.deepcopy(external["context"]))
+        command_proof["seed"]["image"] = HEALTH_FIXTURE_IMAGE
+        shm_proof = shm_size_fixture(lane)
+        shm_proof["context"].update(copy.deepcopy(external["context"]))
+        supplementary_proof = supplementary_groups_fixture(lane)
+        supplementary_proof["context"].update(copy.deepcopy(external["context"]))
+        supplementary_proof["context"]["fixture_image"] = HEALTH_FIXTURE_IMAGE
+        kernel_proof = kernel_settings_fixture(lane)
+        kernel_proof["context"].update(copy.deepcopy(external["context"]))
+        kernel_proof["context"]["fixture_image"] = HEALTH_FIXTURE_IMAGE
+        pids_proof = pids_limit_fixture(lane)
+        pids_proof["context"].update(copy.deepcopy(external["context"]))
+        outer_context, _account, _mount_options, _prefix = emitter_context(root, lane, image, sha)
+        from test_native_outer_authority import bind_proof_boundary
+        bind_proof_boundary(pids_proof, outer_context["boundary"])
+        nofile_proof = nofile_fixture(lane)
+        nofile_proof["context"].update(copy.deepcopy(external["context"]))
+        for filename, proof, override, missing in (
+            ("hostname-v1.json", hostname_proof, hostname, hostname_missing),
+            ("command-clear-v1.json", command_proof, command_clear, command_clear_missing),
+            ("shm-size-v1.json", shm_proof, shm_size, shm_size_missing),
+            ("supplementary-groups-v1.json", supplementary_proof, supplementary_groups, supplementary_groups_missing),
+            ("kernel-settings-v1.json", kernel_proof, kernel_settings, kernel_settings_missing),
+            ("pids-limit-v2.json", pids_proof, pids_limit, pids_limit_missing),
+            ("nofile-v1.json", nofile_proof, nofile, nofile_missing),
+        ):
+            if not missing:
+                private_path = root / filename
+                # Match the existing PIDs producer's compact 16KiB custody;
+                # preserve every field, never truncate an oversized proof.
+                serialization = {"separators": (",", ":")} if filename == "pids-limit-v2.json" else {}
+                private_path.write_text(json.dumps(proof if override is None else override, **serialization), encoding="utf-8")
+                private_path.chmod(0o600)
+        result = run_with_context(
             ["python3", str(SCRIPT), str(version_path), str(shapes_path), str(source_path),
              str(network_path), str(volume_path), str(volume_label_path), str(identity_path),
              str(port_path), str(health_metadata_path), str(network_attachment_path), str(bind_relabel_path), str(root), str(destination), lane, image, mode, package, sha, RUN_ID],
@@ -464,7 +857,7 @@ class NativeEvidenceTests(unittest.TestCase):
         self.assertEqual(evidence["acquisition_api"], "1.49")
         self.assertEqual(evidence["rendering_api"], "1.56")
         self.assertEqual(evidence["runtime_components"], {"containerd": "2.3.5", "runc": "1.5.1"})
-        self.assertEqual(len(evidence["capability_outcome"]), 29)
+        self.assertEqual(len(evidence["capability_outcome"]), 43)
         self.assertEqual(set(evidence["capability_outcome"].values()), {"available"})
         self.assertEqual(evidence["admitted_shapes"], EXPECTED_FUTURE_RAW_SHAPES)
         self.assertEqual(evidence["source_probes"], SOURCE_PROBES)
@@ -602,10 +995,12 @@ class NativeEvidenceTests(unittest.TestCase):
                     self.assertEqual(record["expected_mode"], mode)
                     self.assertEqual(record["engine_version"], release)
                     self.assertEqual(record["rendering_api"], api)
+                    expected = {capability: required for capability, required in EXPECTED_FUTURE_RAW_SHAPES.items()
+                                if family != "debian11" or capability != "HealthStartInterval"}
                     self.assertEqual(record["capability_outcome"], {
-                        capability: "available" for capability in EXPECTED_FUTURE_RAW_SHAPES
+                        capability: "available" for capability in expected
                     })
-                    self.assertEqual(record["admitted_shapes"], EXPECTED_FUTURE_RAW_SHAPES)
+                    self.assertEqual(record["admitted_shapes"], expected)
                     self.assertEqual(record["source_probes"], SOURCE_PROBES)
                     self.assertEqual(record["identity_probes"], IDENTITY_PROBES)
 
@@ -660,7 +1055,7 @@ class NativeEvidenceTests(unittest.TestCase):
                                str(root / "volume-label.json"), str(root / "identity.json"),
                                str(root / "port-probes.json"), str(root / "health-metadata.json"), str(root / "network-attachments-v1.json"), str(root / "bind-relabel-config-v1.json"), str(root), str(destination),
                                "upstream-rootful", IMAGE, "rootful", "", SHA, RUN_ID]
-                    rejected = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, check=False)
+                    rejected = run_with_context(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, check=False)
                     self.assertNotEqual(rejected.returncode, 0)
                     self.assertFalse(destination.exists())
                     self.assertEqual(rejected.stderr.strip(), "native evidence rejected")
@@ -714,12 +1109,12 @@ class NativeEvidenceTests(unittest.TestCase):
                    "upstream-rootful", IMAGE, "rootful", "", SHA, RUN_ID]
         destination.unlink()
         probe_path.write_bytes(b"[" + b"x" * 4096 + b"]")
-        oversized = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, check=False)
+        oversized = run_with_context(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, check=False)
         self.assertNotEqual(oversized.returncode, 0)
         self.assertFalse(destination.exists())
         probe_path.unlink()
         probe_path.symlink_to(root / "source.json")
-        symlink = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, check=False)
+        symlink = run_with_context(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, check=False)
         self.assertNotEqual(symlink.returncode, 0)
         self.assertFalse(destination.exists())
         self.assertNotIn("private", oversized.stdout + oversized.stderr + symlink.stdout + symlink.stderr)
@@ -844,7 +1239,7 @@ class NativeEvidenceTests(unittest.TestCase):
                     content = proof.read_text()
                     proof.write_text(content.replace('"schema_version": 1',
                                                      '"schema_version": 0, "schema_version": 1'))
-                rejected = subprocess.run(args, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, timeout=5, check=False)
+                rejected = run_with_context(args, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, timeout=5, check=False)
                 self.assertNotEqual(rejected.returncode, 0)
                 self.assertFalse(destination.exists())
                 self.assertEqual(rejected.stderr.strip(), "native evidence rejected")
@@ -896,16 +1291,16 @@ class NativeEvidenceTests(unittest.TestCase):
                    str(probe_path), str(root / "volume-label.json"), str(root / "identity.json"),
                    str(root / "port-probes.json"), str(root / "health-metadata.json"), str(root / "network-attachments-v1.json"), str(root / "bind-relabel-config-v1.json"), str(root), str(destination),
                    "upstream-rootful", IMAGE, "rootful", "", SHA, RUN_ID]
-        valid = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, check=False)
+        valid = run_with_context(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, check=False)
         self.assertEqual(valid.returncode, 0, valid.stderr)
         destination.unlink()
         probe_path.write_bytes(b"[" + b"x" * 4096 + b"]")
-        oversized = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, check=False)
+        oversized = run_with_context(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, check=False)
         self.assertNotEqual(oversized.returncode, 0)
         self.assertFalse(destination.exists())
         probe_path.unlink()
         probe_path.symlink_to(root / "source.json")
-        symlink = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, check=False)
+        symlink = run_with_context(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, check=False)
         self.assertNotEqual(symlink.returncode, 0)
         self.assertFalse(destination.exists())
         self.assertNotIn("private", oversized.stdout + oversized.stderr + symlink.stdout + symlink.stderr)
@@ -932,16 +1327,16 @@ class NativeEvidenceTests(unittest.TestCase):
                    str(root / "volume.json"), str(probe_path), str(root / "identity.json"),
                    str(root / "port-probes.json"), str(root / "health-metadata.json"), str(root / "network-attachments-v1.json"), str(root / "bind-relabel-config-v1.json"), str(root), str(destination),
                    "upstream-rootful", IMAGE, "rootful", "", SHA, RUN_ID]
-        valid = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, check=False)
+        valid = run_with_context(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, check=False)
         self.assertEqual(valid.returncode, 0, valid.stderr)
         destination.unlink()
         probe_path.write_bytes(b"[" + b"x" * 4096 + b"]")
-        oversized = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, check=False)
+        oversized = run_with_context(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, check=False)
         self.assertNotEqual(oversized.returncode, 0)
         self.assertFalse(destination.exists())
         probe_path.unlink()
         probe_path.symlink_to(root / "volume.json")
-        symlink = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, check=False)
+        symlink = run_with_context(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, check=False)
         self.assertNotEqual(symlink.returncode, 0)
         self.assertFalse(destination.exists())
         self.assertNotIn("private", oversized.stdout + oversized.stderr + symlink.stdout + symlink.stderr)

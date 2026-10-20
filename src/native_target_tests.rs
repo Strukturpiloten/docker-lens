@@ -92,18 +92,29 @@ fn direct_body(name: &str) -> Value {
 fn api(method: &str, path: &str, body: Option<&Value>) -> (u16, Vec<u8>) {
     assert!(path.starts_with("/v") || path == "/version");
     let socket = required("NATIVE_ENGINE_SOCKET");
-    let mut command = Command::new("curl");
-    command.args(["-fsS", "--max-time", "15", "--unix-socket", &socket]);
-    command.args(["-X", method, "-H", "Content-Type: application/json"]);
+    let mut command = Command::new("python3");
+    command.args([
+        concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/native-unix-http.py"),
+        "--timeout",
+        "15",
+        "--socket",
+        &socket,
+        "--max-response-bytes",
+        "8388608",
+        "--max-request-bytes",
+        "8388608",
+        "--json-content-type",
+    ]);
+    command.args(["--method", method]);
     if body.is_some() {
-        command.args(["--data-binary", "@-"]);
+        command.args(["--body-stdin"]);
         command.stdin(Stdio::piped());
-    } else if method == "POST" {
-        command.args(["--data-binary", ""]);
     }
-    command.args(["-w", "\n%{http_code}", &format!("http://localhost{path}")]);
+    command.args(["--path", path]);
     command.stdout(Stdio::piped()).stderr(Stdio::null());
-    let mut child = command.spawn().expect("test-only curl available");
+    let mut child = command
+        .spawn()
+        .expect("test-only Unix-HTTP helper available");
     if let Some(body) = body {
         child
             .stdin
@@ -126,6 +137,7 @@ fn api(method: &str, path: &str, body: Option<&Value>) -> (u16, Vec<u8>) {
         .unwrap()
         .parse()
         .expect("numeric HTTP status");
+    assert!(status < 400, "target API requires successful HTTP status");
     (status, output.stdout[..split].to_vec())
 }
 

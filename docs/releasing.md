@@ -1,32 +1,105 @@
-# First crates.io release
+# Manual crates.io release handoff
 
-The maintainer performs the initial publication locally. DockerLens currently has
-validation workflows, not a publisher, release-plz configuration, or automated
-GitHub release creation. An agent must stop before publication and hand over the
-verified commit, version, native validation run and remaining limitations.
+The maintainer has reported that `docker-lens` `0.1.0` is already published.
+Do not attempt to publish that version again. DockerLens has validation workflows,
+not a publisher, release-plz configuration, or automated GitHub release creation.
+The maintainer chooses the next version and publishes manually only after the
+complete milestone below is qualified and a release is explicitly requested.
+
+## Current milestone status
+
+The next coherent release milestone is
+[#31](https://github.com/Strukturpiloten/docker-lens/issues/31), under
+[#3](https://github.com/Strukturpiloten/docker-lens/issues/3): the complete,
+independently verified standalone Docker migration contract. Published `0.1.0`
+and historical evidence retain only their existing bounded scope. No next version
+is selected, and no upload, tag, GitHub release or release pull request is
+requested or authorized by this preparation.
+
+The current source rehearsal prerequisite is BoxFerry
+[#343](https://github.com/Strukturpiloten/boxferry/issues/343)/
+[#366](https://github.com/Strukturpiloten/boxferry/issues/366), including real
+adapter/CLI and full application candidate rehearsal against the exact DockerLens
+source candidate. Required consumer work remains pending. BoxFerry
+[#455](https://github.com/Strukturpiloten/boxferry/issues/455)'s ZIP dependency/MSRV
+choice is closed. That resolved dependency decision does not qualify the current
+source candidate or replace complete and application gates. Standalone DockerLens
+requires MSRV `1.98.1`, matching the current pinned development compiler.
+
+[ADR 0022](decisions/0022-reviewed-lifecycle-cohort.md) selects the independently
+reviewed lifecycle cohort at Debian 34 capabilities/56 shapes and upstream 36/60.
+Raw family markers remain `raw_source_only`/`catalogue_admission: unadmitted`;
+they describe raw authority, not the separate compiled selection. Under
+[ADR 0023](decisions/0023-process-source-proof-wiring.md), hostname and command/
+entrypoint-clear proofs remain mandatory. Those three process groups remain unselected.
+[ADR 0024](decisions/0024-health-disabled-raw-source-projection.md) adds only raw
+HealthDisabled/DisabledHealthcheck after the existing complete health-metadata-v1
+validation. [ADR 0025](decisions/0025-shm-size-source-integration.md) adds the
+twenty-fourth ShmSize source invocation and strict proof gate, bringing current
+raw source slice to Debian 39/61 and upstream 41/65.
+[ADR 0026](decisions/0026-runtime-settings-source-integration.md) appends mandatory
+supplementary/kernel invocations 25/26 and their strict readers; current raw totals
+are Debian 43/66 and upstream 45/70. Its four finite groups remain unselected.
+[ADR 0027](decisions/0027-pids-limit-private-qualification.md) appends mandatory
+private PIDs invocation 27 and strict proof checks, including without public
+emission. It adds no public PIDs fields or capability/shape mapping; raw and
+selected totals remain unchanged, and fresh native qualification remains pending.
+[ADR 0028](decisions/0028-nofile-private-qualification.md) appends private nofile
+invocation 28 and its always-required strict proof checks, with no public nofile
+fields, capability/shape mapping or catalogue admission. Native qualification
+still requires fresh exact-candidate four-lane evidence; preparation tests do not
+establish it.
+Host capture remains deferred; no nofile admission is included. HealthDisabled and
+ShmSize remain outside compiled selection. The original 23 native invocations,
+six-child ownership block, strict private protocols and historical evidence stay unchanged.
+Complete milestone coverage, fresh exact-final-candidate native proof,
+independent review and actual downstream acceptance remain required; this is not
+a release-readiness claim.
 
 ## Readiness
 
-Do not publish the scaffold. The first release requires DockerLens issues
-[#13](https://github.com/Strukturpiloten/docker-lens/issues/13),
-[#22](https://github.com/Strukturpiloten/docker-lens/issues/22) and
-[#23](https://github.com/Strukturpiloten/docker-lens/issues/23) to be implemented,
-reviewed and merged. Image publication, passing offline checks and successful
-native runs on older PR heads do not satisfy this requirement.
+Prepare one release handoff only after all required #31/#3 native work is
+implemented, independently reviewed and merged. Keep the feature ledger binding
+every required source/target shape to its typed API, independent expected
+semantics, native test, exact profile, BoxFerry consumer route and release blocker.
+Do not relabel missing implementation as unsupported to close a required gap.
+Image publication, passing offline checks and native runs on older heads do not
+satisfy this requirement.
 
 For the final current-main candidate require:
 
 - The complete offline gate and package verification below.
 - Fresh successful exact-candidate `Release validation`, including all four
-  independent native lanes and its fail-closed final aggregate. A failed,
-  skipped or cancelled lane blocks publication.
+  independent native lanes, each executing the canonical twenty-eight exact test
+  invocations, and its fail-closed final aggregate. A failed, skipped or cancelled
+  lane blocks publication. If required work extends the canonical suite, every
+  added invocation is mandatory too.
 - Reviewed positive public target profiles with immutable native evidence, and
-  external-consumer checks of the typed observation and target APIs.
+  complete downstream candidate rehearsal against that exact source SHA,
+  including real BoxFerry adapter/CLI and application routes. Public constructor
+  or mock tests alone are insufficient. Retain all six actual authored-fixture
+  volume-only rehearsals and actual Nextcloud/Supabase bind and desired-external
+  expectation consumers required by the accepted ADRs. Rehearsal must expose no
+  unresolved required native gap; partial shape acceptance is not the milestone.
+- Reviewed exact package/Engine/API/mode identities, privacy-safe evidence,
+  failure/version boundaries, resource budgets and cleanup limitations. Record
+  cold/warm duration and resource measurements before expanding release tiers;
+  cached results do not replace fresh candidate evidence.
 - A package version intentionally selected by the maintainer, with an available
-  crate name/version on crates.io. The initial manifest proposes `0.1.0`; neither
-  that proposal nor a failed registry lookup proves name availability.
+  next version on crates.io. The existing `0.1.0` manifest is not a selection for
+  the next release; a failed registry lookup does not prove availability.
+
+Source rehearsal uses isolated local overrides only, never published manifests
+or `main`. Record both candidate SHAs and bind the complete rehearsal to the final
+exact source. Any subsequent source change invalidates that qualification and
+requires fresh rehearsal. Remove overrides before final published-registry
+verification. Preserve historical exact-SHA/run/attempt/artifact/shape records;
+neither an old source cohort nor a successful generic lane admits untested shapes.
 
 ## Validate the candidate
+
+The maintainer must select and record the next version before final candidate
+validation; do not validate `0.1.0` for another upload.
 
 Run from a clean Linux host checkout with the repository's development tools.
 Native suites use isolated Podman-launched fixtures, not host Docker. The hosted
@@ -57,19 +130,31 @@ Cargo may additionally generate its standard metadata files.
 
 Select the newly dispatched run, confirm its SHA, and wait for its successful
 completion. Do not substitute an older run at a different revision or an offline
-PR gate. If `main` moves, a source edit is needed, or a required check fails,
-repeat validation for the new complete candidate before publishing.
+PR gate. If `main` moves, any source edit is needed (including the version change),
+or a required check fails, repeat the complete/package and four-lane validation
+for the new exact-current-main candidate. Source changes also require fresh
+complete downstream rehearsal. Older runs, including passing transport-source
+runs, do not qualify a future head.
 
-## Maintainer-only upload
+## One maintainer handoff and upload
+
+Only after all readiness gates pass, assemble one handoff containing the selected
+next version, exact current-main SHA, complete/package results, fresh Release
+validation run/attempt and all four lane artifacts, independently reviewed shape
+admission and exact-source downstream rehearsal results. State remaining genuine
+platform/version limitations and cleanup/SIGKILL limitations. Unresolved required
+work blocks the handoff. This guide does not itself authorize an upload, tag,
+GitHub release or release pull request; those need a separate explicit request.
 
 Create or sign in to the intended crates.io account, verify its email address,
 and create a token permitted to publish the new crate. Enter it interactively;
 never paste it into an issue, a command argument, shell history or a GitHub secret.
 Cargo stores it through the configured local credential provider.
 
-The following assumes `candidate_sha` still holds the validated commit from the
-previous section and the exact-candidate hosted release gate passed. Authentication
-does not grant permission to publish a different candidate.
+For a separately authorized maintainer publication, the following assumes
+`candidate_sha` still holds the validated commit from the previous section, the
+selected next version is in that commit, and all readiness gates passed.
+Authentication does not grant permission to publish a different candidate.
 
 ```sh
 cargo login
@@ -92,13 +177,18 @@ are not created automatically by this procedure. Later trusted-publishing setup
 is a separate reviewed task, not a reason to put this bootstrap token in GitHub.
 
 Tell the BoxFerry integration task the published version and validated commit.
-BoxFerry #343 must consume that registry version and rerun package and integration
-checks; a temporary path dependency is not published-dependency verification.
+BoxFerry #343/#366 must then consume that registry version without local overrides
+and rerun its complete/package, adapter/CLI and application checks. Source
+rehearsal is a pre-release prerequisite; a temporary path dependency cannot
+replace this downstream published-registry verification.
 
 ## Maintenance ownership
 
-The package allowlist and publication documentation add no dependency version or
-operational pin. Renovate's existing Cargo manager continues to own declarations
-and `Cargo.lock`; no extraction path is moved and no extra manager is needed.
-Other workspace packages retain their existing protected release workflows. This
-one-time bootstrap does not change their shared verification responsibilities.
+This documentation-only preparation changes no package allowlist, dependency,
+tool, operational pin, workflow or Renovate definition. The existing Cargo
+manager owns declarations and `Cargo.lock`; the native-image manager still owns
+the five tag/digest declarations in `scripts/native-conformance.sh`, and existing
+toolchain/Action ownership, extraction paths, grouping and approvals remain.
+Local/main/reviewed-dispatch/release native consumers share that canonical harness.
+No extra manager is needed. Other workspace packages retain their existing
+protected release workflows and independent verification responsibilities.

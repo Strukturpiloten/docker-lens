@@ -125,6 +125,6 @@ class BindRelabelWiringTests(unittest.TestCase):
         harness = (ROOT / "scripts/native-conformance.sh").read_text()
         command = '"$(dirname "$0")/run-exact-native-test.sh" native_bind_relabel live_bind_relabel_configuration_matches_engine'
         self.assertEqual(harness.count(command), 1)
-        self.assertLess(harness.index(command), harness.index('python3 "$script_dir/native-evidence.py"'))
+        self.assertLess(harness.index(command), harness.index('canonical_phase emitter'))
         self.assertLess(harness.index('"$script_dir/native-daemon-uid.py"'), harness.index(command))
         self.assertIn('export NATIVE_BIND_RELABEL_PROOF_PATH="$run_dir/bind-relabel-config-v1.json"', harness)

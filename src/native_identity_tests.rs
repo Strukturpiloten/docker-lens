@@ -521,25 +521,24 @@ impl IdentityRun {
         let input = body.map(|body| serde_json::to_vec(body).unwrap());
         let mut command = self.timer(cleanup, false);
         command.args([
-            "curl",
-            "-sS",
-            "--max-time",
+            "python3",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/native-unix-http.py"),
+            "--timeout",
             "8",
-            "--max-filesize",
+            "--max-response-bytes",
             "65536",
-            "--unix-socket",
+            "--socket",
             &self.socket,
-            "-X",
+            "--method",
             method,
-            "-H",
-            "Content-Type: application/json",
+            "--max-request-bytes",
+            "8388608",
+            "--json-content-type",
         ]);
         if input.is_some() {
-            command.args(["--data-binary", "@-"]);
-        } else if method == "POST" {
-            command.args(["--data-binary", ""]);
+            command.args(["--body-stdin"]);
         }
-        command.args(["-w", "\n%{http_code}", &format!("http://localhost{path}")]);
+        command.args(["--path", path]);
         let output = self.capture(&mut command, input.as_deref(), 65550);
         let split = output
             .iter()

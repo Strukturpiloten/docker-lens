@@ -2,11 +2,35 @@
 
 use super::*;
 
+#[path = "native_lifecycle_default_effect_tests.rs"]
+mod default_effect;
+
 #[path = "native_runtime_filesystem_tests.rs"]
 mod runtime_filesystem;
 
 #[path = "native_tmpfs_effect_tests.rs"]
 mod tmpfs_effect;
+
+#[path = "native_health_start_interval_boundary_tests.rs"]
+mod health_start_interval_boundary;
+
+#[path = "native_hostname_tests.rs"]
+mod hostname;
+
+#[path = "native_kernel_settings_tests.rs"]
+mod kernel_settings;
+
+#[path = "native_nofile_tests.rs"]
+mod nofile;
+
+#[path = "native_pids_limit_tests.rs"]
+mod pids_limit;
+
+#[path = "native_shm_size_tests.rs"]
+mod shm_size;
+
+#[path = "native_supplementary_groups_tests.rs"]
+mod supplementary_groups;
 
 const CONTRACT: &str = "lifecycle-v1";
 const FILENAME: &str = "lifecycle-v1.json";

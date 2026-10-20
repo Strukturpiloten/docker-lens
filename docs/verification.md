@@ -7,13 +7,338 @@ The scaffold policy tests check alignment and MSRV failure propagation through
 the shared local, PR/main, native-dispatch, and release offline gate. Earlier
 verification records below retain the Rust versions used at those checkpoints.
 
-## Mandatory unadmitted runtime-cohort source observations
+## Connected outer-custody source; acceptance remains pending
 
-The canonical harness requires nineteen exact ignored invocations, retaining the
+[ADR 0033](decisions/0033-original-outer-custody.md) connects the
+[bootstrap](native-outer-bootstrap-contract.md),
+[lifecycle custody](native-outer-lifecycle-contract.md), concrete runtime,
+root broker and canonical coordinator. Wire v2 binds independently derived
+intent/expectations, original OCI/log custody, all 37 PIDs observations and both
+mandatory private consumers. The exact 28 invocations and six logical cleanup
+owners remain; the PIDs owner is coordinated directly rather than through a
+shell subshell so private IPC descriptors are not lost.
+
+This is unqualified source, not a passing integrated/native harness. The former
+200000-byte caller slice refused actual source prepayment; that negative remains
+tested. ADR 0033 records the experimental static 288000/290000/470576-byte
+partition within the same 1 MiB envelope. Four authored connected scenarios
+exercise the unpatched parent/child plan, real independent source loaders and
+readers/emitter, but use a synthetic six-phase shell, authored native/producer
+effects and mocked metadata custody. They do not qualify genuine metadata I/O,
+native variability or the complete 28-test workload. Isolated emitter sizing,
+Rust monotonic/stream controls and fake-process launcher checks likewise
+establish only their bounded offline behavior.
+Physical read claims, bootstrap spend adoption and control-transport accounting
+must retain the existing shared limits and original deadlines throughout.
+
+Fresh final-source complete checks, independent review, actual serialization and
+whole-actor fit, four genuine native lanes, six authored-fixture consumers, six
+application migrations and package/published-dependency gates remain mandatory.
+No fixture sizing, parsed bootstrap frame, source-only review or prior campaign
+supplies native ownership, rootless delegation, effects or cleanup evidence.
+Host capture is deferred; no release/publication follows from this source work.
+
+## Diagnostic CI-job outer-runtime sample
+
+After its unchanged offline gate, the `check.yml` scaffold job runs
+`scripts/native-outer-runtime-profile.py`. Its closed JSON binds this job's run,
+attempt, job name, and actual checked-out Git SHA (including a PR merge checkout)
+to reported local rootful Linux Podman/OCI-runtime and cgroup metadata. This is
+only a CI-job identity sample: it proves neither native-job identity or
+co-location, source placement, controller ownership, an approved boundary, nor
+native compatibility. Future native bootstrap must reobserve its actual identity
+and configuration. No native or boundary approval is added by this diagnostic.
+
+The sole privileged query is fixed, noninteractive `sudo` followed by a root-owned
+`timeout` (10 seconds, TERM then KILL after 2 seconds) and
+`podman --remote=false info --format json`. Minimal fixed subprocess environment
+removes inherited remote selectors and credentials; returned remote/rootless and
+non-Linux metadata are refused. There is no requested container/resource mutation,
+installation, or host configuration change; `podman info` can initialize Podman's
+internal state and is not claimed to be perfectly side-effect-free. A separate
+fixed unprivileged, two-second `dpkg-query` requests only Podman, crun, and runc
+package/version/architecture records. Missing or unrecognized package metadata is
+unavailable, not a profile failure. A partial package-query exit of 1 retains only
+strictly parsed present records; other package failures retain no records.
+Reported package metadata and GitCommit do not
+authenticate custom executable ownership or provenance; ownership stays unverified.
+
+All three commands use separately capped 64-KiB stdout/stderr files, incremental
+draining, fixed paths/arguments, no retries, and a 24-second total budget. Only
+normalized allowlisted fields and closed reasons reach logs; raw JSON, stderr,
+hostnames, executable paths, and package-query output are never uploaded. Six
+0600 regular single-link files reside in a private 0700 task directory. Ordinary
+failure and handled INT/TERM cancellation remove exact known private files;
+cancellation removes raw names before a bounded child wait and exits nonzero.
+No unprivileged kill or verified root-child death is claimed: the root-owned timer
+remains authoritative, and an unreaped command is explicitly completion-unknown,
+never observed-success. SIGKILL/machine death can bypass cleanup, and filesystem
+cleanup failure is reported rather than claimed away. Unexpected programming
+errors remain nonzero with a fixed error message, not unavailable-success.
+
+Development coverage uses fake short-lived Python children only, including dual
+stream overflow, collector failure, cancellation, and cleanup failure. It performs
+no real sudo, Podman, runtime, or package query and creates no native evidence.
+
+## Reviewed lifecycle successor source cohort
+
+[ADR 0022](decisions/0022-reviewed-lifecycle-cohort.md) selects the authenticated
+source from run `39124651853`, attempt 1, candidate
+`a251748de3a61f9dc3d735e670ce3ea461ee0a30`, dispatched by trusted main
+`96d83f6d6959dba6079e3e9bdc35db3b27635609` for PR #123. All seven jobs and
+every step passed; 21 actual tests ran once in order on each of four lanes
+(84 total), with six actor/exact-head admissions and four cleanup-dependent
+lane successes. The primary authenticated live API metadata and ZIP digests;
+the independent reviewer verified stable bounded/no-follow archive reads,
+single regular unencrypted members and CRC, strict canonical UTF-8 JSON,
+complete source outcomes and byte-exact extracted members.
+
+[Sanitized provenance](evidence/lifecycle-cohort-39124651853.json) binds every
+artifact ID, API archive digest, exact raw member hash and reviewed envelope
+hash to the unchanged
+[independent source receipt](evidence/lifecycle-independent-review-39124651853.json).
+That receipt establishes input/source review only; the admission diff still
+requires independent review. Trusted source assertions and closed success logs
+establish the bounded effect/ownership/cleanup checks; private raw timestamps,
+payloads and independent host inventories were not directly inspected. The
+independent reviewer did not separately fetch live actor identities/permissions.
+
+The compiled successor admits all complete StopTimeout, ContainerInit,
+ReadOnlyRootfs and TmpfsMount groups on all four exact profiles, and
+HealthStartInterval only upstream: Debian 34 capabilities/56 shapes and
+upstream 36/60. Debian retains unsupported legacy-field/not-effective health
+outcomes. Raw markers remain `raw_source_only`/`unadmitted`; only the reviewed
+envelopes and explicit compiled selection admit capabilities. Every historical
+cohort remains byte-exact. No reaping, general signal behavior, Cartesian flag
+combination, arbitrary tmpfs value or SELinux effect is established.
+
+The changed admission candidate still needs final-edit complete gates, fresh
+authenticated exact-final-candidate four-lane/28-test execution and independent
+review, all six actual authored-fixture volume-only rehearsals, and actual
+Nextcloud/Supabase bind and desired-external consumer review. This source run
+does not qualify those later bytes or close #39/#31/#3, establish BoxFerry
+application/full migration acceptance, or authorize release/publication/deployment.
+
+## Complete raw source groups before catalogue selection
+
+[ADR 0021](decisions/0021-lifecycle-raw-source-projection.md) maps all validated
+StopTimeout zero/positive, init true/false, read-only rootfs true/false and three
+tmpfs shapes into raw `capability_outcome`/`admitted_shapes`. HealthStartInterval
+zero/positive additionally requires the exact upstream positive, default-equivalent
+and representation outcomes. Debian retains its unsupported legacy-field and
+not-effective outcomes, with no positive health-interval group or inferred floor.
+All five strict private readers remain mandatory before any output; missing,
+partial, wrong-context, failed-effect or uncertain-cleanup proofs reject the record.
+
+The five public family outcomes use `admission: raw_source_only` together with
+`catalogue_admission: unadmitted`. Their closed current raw subset is
+`$defs.lifecycle_source_projection` in `native-evidence.schema.json`; the historical
+reviewed-record root, private v1 proof protocols and all evidence bytes are unchanged.
+The historical lifecycle projection contains Debian 34 capabilities/56 shapes
+and upstream 36/60. ADR 0022 separately selects reviewed envelopes at those counts;
+raw projection alone cannot change the compiled catalogue.
+Run `39121741122`, attempt 1, source `cead64a28f7c409c2de23ee298fad9b080e106fc`
+provided independently reviewed 84-test source evidence for the mapping. That
+older run cannot qualify the changed emitter. Run `39124651853` supplies its
+fresh source proof above; final admission-diff review, complete final-edit gates,
+fresh final-candidate native proof and actual consumer rehearsals remain required.
+
+## Mandatory runtime-cohort proof requirements
+
+[ADR 0023](decisions/0023-process-source-proof-wiring.md) adds the twenty-second
+`native_health_metadata_tests::lifecycle::hostname::live_hostname_matches_engine`
+and twenty-third
+`native_health_metadata_tests::command_clear::live_command_clear_matches_engine`.
+The hostname reader completes before command-clear runs; its separate reader then
+runs unconditionally before the optional public emitter. Both fixed direct-child
+proofs bind to independent harness facts. All original ordinals, budgets,
+privilege and cleanup ownership remain; command-clear owns separate cleanup and
+its fixed `cleanup_unverified` marker fails even beside a successful summary.
+Current raw counts are Debian 43/66 and upstream 45/70, while compiled selection
+remains 34/56 and 36/60. ContainerHostname, CommandClear and EntrypointClear are
+the three raw singleton groups of ADR 0023's slice, which excluded HealthDisabled. Closed public
+outcomes expose source-only/unadmitted markers, never actual hostnames, argv,
+IDs, timestamps or private payloads. Disconnected `$defs.hostname_source_projection`
+and `$defs.command_clear_source_projection` leave historical root acceptance intact.
+
+[ADR 0024](decisions/0024-health-disabled-raw-source-projection.md) additionally
+maps only HealthDisabled to DisabledHealthcheck after the unchanged complete
+health-metadata-v1 private reader succeeds. That reader validates both inherited
+failing-health and disabled CLI/rendered controls together with every other case,
+context, effect and cleanup check, and still returns only its four legacy shapes.
+The fixed `health_disabled_contract` and closed `health_disabled_outcomes` contain
+only `health-metadata-v1`, raw-source/unadmitted markers and
+`disabled_health_suppression_verified`. The disconnected
+`$defs.health_disabled_source_projection` does not change historical root
+acceptance. HealthDisabled remains unselected, as do the three process groups;
+the original 23 ordered native invocations and prior strict readers remain unchanged.
+Offline fixtures are not native evidence. PR #124's passing exact-source campaign
+`39130478489` for `e7995ecfa9cadaae0bc7bc1685e5e1f320c907ff` cannot qualify this changed emitter.
+
+[ADR 0025](decisions/0025-shm-size-source-integration.md) appends the mandatory
+twenty-fourth `native_health_metadata_tests::lifecycle::shm_size::live_shm_size_effects_match_engine`.
+It runs in a separate one-child subshell with the existing authenticated outer
+cleanup owner; the original six-child block remains byte-identical. Its strict
+twelve-argument CLI reader always runs after the test, even without public emission.
+The emitter preserves its nineteen arguments and validates the fixed direct child
+against existing independent context before any group/output. It requires exactly
+typed contract `shm-size-v1`, empty capability admission and false catalogue admission.
+Only ShmSize/ShmSize is added, with closed source-only/unadmitted status, scope
+`explicit_1MiB_2MiB_with_observed_omission_only` and outcome
+`tmpfs_effect_and_ipc_isolation_verified`. The disconnected schema definition
+changes no historical root acceptance. No actual default, namespace, ID, argv or
+time leaves the private proof. Fresh exact-final-candidate 28-by-four execution
+(112 invocations), review and all actual consumer gates remain required.
+
+[ADR 0026](decisions/0026-runtime-settings-source-integration.md) appends
+SupplementaryGroups and diagonal kernel settings as invocations 25/26, selecting
+the existing private lifecycle supplementary_groups and kernel_settings children.
+Separate one-child owner scopes preserve the first 24 calls and earlier blocks.
+Mandatory independent strict readers run even without emission; finite
+source-only/unadmitted outcomes add four capabilities/five shapes only. Explicit
+false NNP observing inherited one fails the entire kernel proof. Host capture
+remains deferred, no nofile group is added, and real four-lane qualification
+remains pending. See the frozen [supplementary](native-supplementary-groups-contract.md)
+and [kernel](native-kernel-settings-contract.md) preparation contracts; this ADR
+extends only their integration status, never their private protocols.
+
+[ADR 0027](decisions/0027-pids-limit-private-qualification.md) appends mandatory
+private PIDs invocation 27, selecting
+`native_health_metadata_tests::lifecycle::pids_limit::live_pids_limit_effects_match_engine`.
+Its separate one-child outer-cleanup owner scope preserves all first 26 calls/order
+and earlier owner blocks. The once-created 180-second wrapper deadline also binds
+PIDs; its existing 46-second cleanup reserve and 16 KiB custody maximum do not grow.
+The independent twelve-argument CLI reader always runs, even without emission.
+As introduced by ADR 0027, the nineteen-argument emitter required the fixed
+`pids-limit-v1.json` child against independent external context and exactly typed
+`contract`, `capability_admission`, `catalogue_admission`, `scope` return keys:
+`pids-limit-v1`, `[]`, `false`, and the existing reader's scope. Every proof or
+return-contract failure rejects the entire public output. There is no public PIDs
+projection, capability/shape mapping or schema addition. Raw counts remain
+43/66 and 45/70; selection remains 34/56 and 36/60.
+[ADR 0031](decisions/0031-pids-reader-coordinate-proof.md) supersedes only that
+active child/reader with private schema 2 and `pids-limit-v2.json`. Both canonical
+consumers require the v2 reader and exact four-key v2 return, without a legacy
+file/schema fallback. Original bytes pass unchanged 16 KiB custody before
+expansion. All 37 reader-coordinate witnesses and exact phase tuples are checked
+before every original pure semantic predicate. Actual compact serialization
+must also fit 15 KiB. [ADR 0033](decisions/0033-original-outer-custody.md) uses
+the remaining 1 KiB for the closed ten-slot original-boundary record, without
+padding or increasing the complete 16 KiB ceiling. Historical v1
+reader/tests/records stay unchanged.
+No request, invocation, public projection, accounting or budget is relaxed.
+Source/synthetic evidence is not actual native coordinate/ownership evidence;
+all fresh native, consumer and application gates remain mandatory.
+[ADR 0030](decisions/0030-rootless-positive-pids-prerequisite.md) adds an early
+rootless-only prerequisite for that unchanged positive contract: the already
+collected, sanitized cgroup driver/version must be systemd/v2. After ENV reporting
+but before fixture pull or all 28 native invocations, other/unavailable values
+emit DOCKERLENS_NATIVE_PREREQUISITE: rootless_positive_pids_requires_systemd_cgroup_v2
+and exit nonzero through the existing owned-resource EXIT cleanup. No query,
+fallback, skip, negative qualification or rootful behavior change is added.
+Systemd/v2 is necessary, not sufficient: all positive effects, controller,
+ownership, proof and cleanup checks remain mandatory. The rootless delegation
+fixture and rootful procfs/PID-coordinate/controller-boundary evidence gaps remain
+open. Mock-only continuation is not native evidence; four-profile positive
+qualification still requires genuine passing proofs.
+
+Reviewed failed run 39173069422, attempt 1, tested
+19f1ce4c15c81dd1003e79065be4c5bddb0c17e9: 104 prior passes then four PIDs-27
+failures, no nofile-28 execution, artifacts or cleanup-dependent lane successes.
+Its independently authenticated existing ENV lines report none/v2 rootless and
+cgroupfs/v2 rootful, not a proven runtime cause. ADR 0030 records the immutable
+original-review and supplement hashes plus pinned official Docker documentation.
+Existing pins, all 28 invocation lines/six owner blocks, twelve/nineteen-argument
+interfaces, private readers/protocols and budgets remain unchanged. Local,
+main-push, trusted dispatch and release consumers use the same canonical harness;
+the unchanged five pins retain their Renovate extraction/grouping/review ownership.
+
+[ADR 0029](decisions/0029-pids-failure-localization.md) adds actual closed
+source-local stages and resolver/controller-refusal classifications. Only the last valid
+pre-first-panic stage and its single phase-compatible classification are exposed
+beside existing shared cleanup/handoff diagnostics and original panic location.
+At most two PIDs lines are projected. Existing equality outcomes distinguish
+member-ID mismatch, current-task-count mismatch or both, and equal-owner versus
+outside-prefix resolver refusal (or mixed rooted refusals). No raw IDs/counts or
+paths are public. Malformed CURRENT receives no classification; the original
+assertion/short-circuit behavior, resolver predicates and all requests stay unchanged.
+These identify source stopping points, never native values, proof or a root cause.
+That PIDs-only slice did not integrate nofile, and host capture remains deferred.
+Source-only wiring and mocked controls are not fresh exact-candidate four-lane
+proof (112 invocations).
+
+[ADR 0028](decisions/0028-nofile-private-qualification.md) appends mandatory
+private nofile invocation 28:
+`native_health_metadata_tests::lifecycle::nofile::live_nofile_limits_and_effects_match_engine`.
+The first 27 calls/order and five prior owner blocks remain byte-exact; a new
+one-child scope exports only the existing lifecycle outer-cleanup owner token.
+Its existing twelve-argument CLI reader always runs, including without public
+emission. The unchanged nineteen-argument emitter independently requires the
+fixed `nofile-v1.json` child and exactly typed three-key return:
+`contract: nofile-v1`, `capability_admission: []`, `catalogue_admission: false`.
+Scope is validated inside the existing proof reader, not added to its return.
+No public nofile fields, capability/shape mappings, schema or catalogue admission
+are added. Raw 43/66 and 45/70 and selected 34/56 and 36/60 counts are unchanged.
+All eight CLI/rendered fixtures retain their precise unlimited-start refusal,
+finite normalization and exact-unlimited dispositions; unknown failures do not
+become unsupported grants. Existing nofile-only 512 KiB proof/64 KiB metadata
+limits, 72 cleanup captures, original 180-second deadline/46-second cleanup reserve
+and default 16 KiB custody elsewhere remain unchanged. Only the actual existing
+nofile context/effects/capture/cleanup/proof stages, shared context/cleanup/handoff
+diagnostics and first-panic numeric allowlisted locations may leave the private
+boundary. Source/mocked definitions prove no native effects or actual inspect
+size/timing fit. Fresh exact-candidate 28-by-four qualification (112 invocations),
+complete final-edit gates, independent review and actual consumers remain required.
+
+Independently reviewed failed run 39165508951, attempt 1, tested exact candidate
+be19402cccb94e20659acb04b1c267efe4390250. Each lane passed the first 26 invocations
+then failed PIDs 27: 104 prior passes plus four failed attempts. Rootful lanes
+first stopped at that source's shared command-success assertion (542:9); rootless
+lanes at exact-one resolver assertion (360:5). The last health_metadata_context
+marker was not a demonstrated failure phase. Zero artifacts and zero
+cleanup-dependent lane successes were produced; no private proofs/raw output
+were available. No particular runtime incompatibility or semantic fix follows
+from that run. An independent pure Rust fixture separately exposed empty-relative-path
+trailing separators rejected by the strict reader. Canonical component serialization
+repairs only that proven representation seam; it does not establish the native
+failure's cause. The changed source still needs fresh exact-candidate qualification.
+
+Independently reviewed failed run 39169948731, attempt 1, tested exact candidate
+e2f0f479b5058fb9a5cd237adc95c998da6e6349. Again all four lanes passed 26 then
+failed PIDs 27: 104 prior passes and four failures, original Cargo exits 101.
+Nofile 28 was not reached; no artifacts or cleanup-dependent lane successes were
+produced. Rootful lanes reached finite16/oracle baseline_controller and assertion
+824:5, whose two comparisons were indistinguishable. Rootless lanes reached
+finite16/oracle leaf_pids_resolve and assertion 484:5, with outside_owned_descendant
+not distinguishing equal-owner from outside-prefix refusal. This follow-up adds
+only closed discrimination using existing observations, not a retrospective cause
+or qualification. Missing cleanup markers do not prove completed cleanup.
+
+Source review separately leaves two positive-proof gaps: the scan's procfs PID
+coordinates are not independently bound to the controller reader's current PID
+namespace/context, and observer-derived controller paths/inodes are not independently
+authenticated as the exact owned outer boundary with measured 512-PID/4-GiB limits.
+Existing scan namespace checks, configured outer limits and numerical controller
+ceiling checks do not supply those bindings. ADR 0029 records a separate evidence
+design requiring reviewed acquisition, proof-reader, custody and budget changes
+before collecting new facts. No namespace-view switch, owner/ancestor rebasing,
+extra command or proof-protocol extension is implemented here.
+
+The canonical harness requires twenty-eight exact ignored invocations, retaining the
 original first seventeen in order and adding the separate eighteenth
 `native_health_metadata_tests::lifecycle::runtime_filesystem::live_runtime_filesystem_matches_engine`
 and nineteenth
 `native_health_metadata_tests::lifecycle::tmpfs_effect::live_tmpfs_effects_match_engine`.
+The separate twentieth
+`native_health_metadata_tests::lifecycle::health_start_interval_boundary::live_health_start_interval_boundary_matches_engine`
+is defined by the [omitted/zero representation contract](native-health-start-interval-boundary-contract.md).
+It adds no capability, starts no container and does not claim health-scheduler effects.
+The separate twenty-first
+`native_health_metadata_tests::lifecycle::default_effect::live_lifecycle_default_effects_match_engine`
+is defined in the [default/zero source-effect contract](native-lifecycle-default-effects-contract.md).
+It actually starts six containers, but its source/inert validation is not genuine
+native qualification. Legacy unknown-member acceptance is explicitly unsupported,
+never health-zero/default semantic proof; modern equivalence is a separate outcome.
 They are test-only lifecycle children, not product executors. Each receives its
 explicit candidate SHA and fixed private proof path, with its own original
 once-created 180-second invocation deadline. No retry or counter/deadline reset
@@ -58,20 +383,21 @@ off to the bound outer container/storage owner; there is no unsafe Drop retry.
 Final borrowed-image and outer snapshots are ordinary proof work, not cleanup
 reads or renewed budgets. Genuine lanes must retain room for those reads.
 
-All three fixed owner-private proofs are mandatory before any manifest can be
+All five lifecycle-family fixed owner-private proofs are mandatory before any manifest can be
 written. The emitter keeps its nineteen-positional-argument protocol, derives
 fixed filenames from the existing private capture directory and supplies context
 independently from trusted canonical harness facts and observed daemon UID; a
 proof never supplies its own oracle. New raw-only fields are closed
 `runtime_filesystem_contract`/`runtime_filesystem_outcomes` and
-`tmpfs_effect_contract`/`tmpfs_effect_outcomes`, explicitly `admission: unadmitted`.
+`tmpfs_effect_contract`/`tmpfs_effect_outcomes`, marked `admission: raw_source_only`
+and `catalogue_admission: unadmitted` after the complete readers pass.
 Only literal omitted/false/true labels, PID1/diagonal scope and the fixed tmpfs
 coverage string are projected, never IDs, native bytes, timestamps or payloads.
-Capabilities, admitted shapes, historical evidence and sealed catalogues remain
-unchanged. Missing/failed/ambiguous proof is refusal, not unsupported-native
+The raw groups above do not change historical evidence or sealed catalogues.
+Missing/failed/ambiguous proof is refusal, not unsupported-native
 evidence. Definitions and synthetic controls are not four-lane qualification.
 
-## Mandatory unadmitted lifecycle source observations
+## Mandatory lifecycle proof requirements
 
 DockerLens #114 wires `lifecycle-v1` as the seventeenth mandatory exact ignored
 test. Its six unique owned BusyBox containers borrow the existing pinned image;
@@ -88,18 +414,24 @@ Readback requires a Config.Healthcheck object: only an absent StartInterval fiel
 or integer zero counts as zero; explicit null and malformed values are rejected.
 Refusal, partial evidence, clock disagreement or jitter ambiguity fails closed.
 
-This is partial shape coverage: StopTimeout explicit zero and omitted values,
-and HealthStartInterval explicit zero are **not proven**. The omitted health
+This existing positive probe is partial shape coverage: StopTimeout explicit zero
+and omitted values, and HealthStartInterval explicit zero are not covered by it.
+The separate twenty-first source probe defines those observations without native
+qualification or capability admission; Debian zero semantics remain unproven.
+The omitted health
 control is comparative evidence, not independent shape admission. The emitter
-adds only `lifecycle_contract` and closed `lifecycle_outcomes`, explicitly marked
-`admission: unadmitted`; capability/shape maps and historical records are
-unchanged. An effective or `not_effective_on_selected_api` observation is not
+retains `lifecycle_contract` and closed `lifecycle_outcomes`, now marked
+`admission: raw_source_only` and `catalogue_admission: unadmitted`. Complete raw
+groups require all complementary proofs; historical records are unchanged.
+An effective or `not_effective_on_selected_api` observation is not
 generic version support and cannot close the larger required-contract issue.
 
 The wrapper retains its nineteen-argument emitter protocol and original
 180-second invocation deadline, exposes only fixed lifecycle diagnostics, and
-preserves the first observation failure. Only the three lifecycle-family invocations
-receive the canonical outer-cleanup owner token. An uncertain inner cleanup requests
+preserves the first observation failure. The original six-child lifecycle block
+and separate one-child ShmSize, supplementary-group, kernel-setting, PIDs and nofile blocks
+receive the canonical outer-cleanup owner token.
+An uncertain inner cleanup requests
 outer teardown and fails; its marker never proves completed teardown. The EXIT
 owner now binds outer/sidecar creation IDs, rechecks ID/name/run ownership, removes
 only those IDs with immediate stop, and verifies both ID/name absence. Data-volume
@@ -113,7 +445,7 @@ finite binding/readback requests are not a renewed inner cleanup budget.
 
 This integration has source-only Python/mocked-transport and syntax coverage;
 native qualification is pending. Full final-edit gates, fresh authenticated
-exact-head nineteen-test four-lane evidence, independent review, and required
+exact-head twenty-eight-test four-lane evidence, independent review, and required
 BoxFerry consumer rehearsals remain mandatory. No runtime cleanup completion,
 capability admission, full migration acceptance or release is claimed.
 
@@ -172,7 +504,7 @@ sanitized receipt establishes trusted-harness assertions/closed success logs,
 not direct private-proof inspection, independent host inventory or separately
 retained effect values. Every historical record remains byte-exact. This is
 candidate rehearsal only: fresh final-edit complete gates, authenticated
-exact-final-candidate nineteen-test four-lane proof and independent review,
+exact-final-candidate twenty-eight-test four-lane proof and independent review,
 all six actual authored-fixture volume-only rehearsals and actual
 Nextcloud/Supabase bind/desired-external consumers remain required before
 ready/merge/main admission or release. Old source/consumer receipts grant no
@@ -308,7 +640,7 @@ source markers. Complete future raw groups are NetworkLabels, NetworkAliases
 (both primary/secondary), and NetworkMultipleAttachment. The old 22 network
 markers cannot replace the new effect/ownership/cleanup proof. No IPv6, IPAM,
 static address, options, NAT or additional internal/external group is promoted.
-With current parameterized identity, health and port proof, future raw counts
+At that source checkpoint, with parameterized identity, health and port proof, prospective raw counts
 are Debian 26 capabilities/40 shapes and upstream 27/42; counts alone are not
 evidence. These were intermediate producer counts. ADR 0016 now selects only
 complete groups from the coherent source cohort; historical bytes and later
@@ -346,14 +678,17 @@ aggregate budgets; work exhaustion never resets the ledger. Derived images,
 the seed and every owned container need exact identity/ownership and two final
 absence rounds before exclusive private proof publication.
 
-The emitter reads that complete owner-private bound proof and projects only
+At the original health/metadata source checkpoint, the emitter read the complete
+owner-private bound proof and projected only
 `health-metadata-v1` plus the four closed source-shape names. Only the complete
-`ContainerLabels`, `HealthShell` and `HealthStartPeriod` groups are emitted;
-inherited/disabled controls grant no additional groups. Historical manifests
-stay immutable. ADR 0016 now selects these complete groups with the coherent
+`ContainerLabels`, `HealthShell` and `HealthStartPeriod` groups were emitted;
+inherited/disabled controls granted no additional groups at that checkpoint. ADR 0024
+now additionally derives the raw-only HealthDisabled singleton from the same
+unchanged complete validation; the private four-shape return stays unchanged.
+Historical manifests stay immutable. ADR 0016 selected these complete groups with the coherent
 application cohort; final-candidate/consumer gates remain mandatory.
-With parameterized identity and the currently prescribed Debian IPv6
-boundaries, future raw manifests contain Debian 23 groups/36 shapes and
+With that checkpoint's parameterized identity and prescribed Debian IPv6
+boundaries, prospective raw manifests contained Debian 23 groups/36 shapes and
 upstream 24/38. Counts are expectations, not substitutes for authentic proof.
 
 Local execution, main Check, reviewed-PR native dispatch and Release validation
@@ -620,7 +955,8 @@ remain historical evidence for their original shapes. The new assertions need
 genuine runs in all four exact lanes before a source compatibility claim.
 
 The source test's `DaemonResourceSupportOracle` assertion compares typed
-`MemoryLimit` and `SwapLimit` reports with the already saved independent direct
+`MemoryLimit`, `SwapLimit`, `PidsLimit`, `CgroupDriver` and `CgroupVersion` reports
+with the already saved independent direct
 `/info` response. It reuses the existing acquisition, checks effective origin,
 independent boolean/unavailable states, matching capture scope and rejection of
 another capture's scope, and adds no request. Reported false stays bounded
@@ -637,6 +973,15 @@ The direct oracle and acquisition are separate observations in time; matching
 capture identity correlates typed evidence, not authentication or an atomic
 snapshot. Offline helper tests check classification and value-free rejection
 only. No operational pin or Renovate extraction path changes are introduced.
+
+ADR 0032 extends that same assertion, not its marker or invocation count. The
+independent direct oracle compares protected string bytes and exact closed
+driver/version classifications without calling the product parser/assessment
+to determine expectations. Offline controls cover absent/null/redacted/empty,
+unrecognized lexical values, malformed types and inconsistent observations.
+Neither definitions nor offline success qualify the changed source assertions;
+fresh genuine four-lane evidence, independent review and all existing consumer
+gates remain mandatory. No PIDs/nofile capability or effect claim is added.
 
 The created-volume label probe is a separate exact ignored library test,
 `native_volume_label_tests::live_created_volume_labels_match_engine`. Each lane
@@ -720,23 +1065,29 @@ fixture is writable inside this task-private directory so the rootless mapped
 UID can exercise the rendered read-write bind mount. The separate read-only
 bind assertion therefore tests mount behavior independently of host ownership.
 
-All three harness curl sites (readiness polling, the final readiness check and
-the direct API GET helper) use first-option `-q` and literal `--noproxy '*'`.
-This disables default curl configuration and proxy routing for the existing
-explicit Unix-socket requests, without changing executable selection, inherited
-environment, URLs, request counts, limits, startup cadence, privileges or cleanup.
-Offline fake-client regressions check complete argv and nonzero invocation counts
-for each site, including the final readiness fallback and native/status failures.
-They neither diagnose historical failures nor establish native or release evidence.
+Host Engine Unix-HTTP now uses the independent test-only
+[Unix-HTTP transport v1](native-unix-http.md), under ADR 0020. It replaces both
+readiness calls, direct captures and every Rust native helper using the same
+explicit AF_UNIX endpoint. Readiness and direct captures explicitly require
+actual HTTP 200; a transport error cannot become HTTP 000 or an absence result.
+Existing request/byte limits, caller timers, scoped ownership, uncertain
+mutations and cleanup assertions remain authoritative. The twenty-eight exact
+native invocations, Docker CLI and genuine Rust acquisition remain independent;
+TCP/UDP/network-namespace curl probes retain their own unchanged transport.
+The earlier first-option curl-only argv/executable freeze is superseded only for
+host Engine Unix-HTTP. Python/curl AppArmor mediation differs; the historical
+curl-denied capture remains failed, with no host-policy repair or claim of
+equivalent confinement. Authored fake-server and consumer regressions are
+offline transport controls, not native or release evidence.
 
 The canonical harness continues to serve local execution, `check.yml` main push,
 `native-validation.yml` reviewed dispatch and `release-validation.yml` exact-main
 dispatch. Renovate's original native-image manager still uniquely extracts the
 same five image/fixture tag-and-digest pairs; its paths, grouping and approvals
-need no edit. BoxFerry's frozen producer receipt and script-digest catalogue binding
-remain unchanged: adopting a revised harness source separately requires an explicit
-consumer contract or a new independently verified producer build and receipt, not a
-hash-only refresh.
+need no edit. Historical BoxFerry producer receipts remain unchanged. Adoption
+under BoxFerry #366 requires the reviewed helper revision/digest alongside native
+script identity and a new independently verified producer build and receipt;
+a hash-only refresh cannot qualify changed code.
 
 Every image declares a Docker data-root VOLUME. The harness disables
 automatic image volumes and mounts exactly one task-labeled named volume at
@@ -1063,7 +1414,8 @@ helper retains immutable outer identity and its held namespace FD. Before
 identity publication or namespace entry, that exact FD's kernel device/inode
 must differ from the helper's host/self network namespace. A name, label or
 bridge intent is not a substitute; unavailable/equal identities fail closed.
-The approved first-option `curl -q` keeps default client configuration disabled.
+The separate network-namespace probes retain first-option `curl -q` to keep
+default client configuration disabled; host Engine Unix-HTTP follows ADR 0020.
 
 The initial `NATIVE_PORT_PROBES_PATH` contract is a fresh, exclusive,
 owner-private regular file directly under validated `NATIVE_CAPTURE_DIR`.
@@ -1145,8 +1497,8 @@ repeated genuine absence checks, assertion outcomes and admission stay unchanged
 raw test, controller and runtime output remains private.
 
 Failed API diagnostics separately retain the first closed action/phase/exit for
-probe and cleanup, distinguishing curl's request timeout from the outer command
-timeout and signals without printing a route, ID or response. Only a transport
+probe and cleanup, identifying `version=2 client=unix_http_v1` and distinguishing the helper's
+closed categories from the outer command timeout and signals without printing a route, ID or response. Only a transport
 failure starting the exact registered repeated-ephemeral IPv4 CLI oracle enables
 an optional version GET and that same immutable ID's inspect GET. This uses a
 test-only guarded seam into the existing acquisition transport, not subprocess
@@ -1196,7 +1548,7 @@ allocation/reservation collision, but that explanation remains a hypothesis.
 No oracle source is copied or translated into the implementation.
 
 Only non-cleanup POST START requests for the exact registered canonical IDs and
-names of `multi-dynamic-oracle` and `multi-dynamic-rendered` get curl/outer
+names of `multi-dynamic-oracle` and `multi-dynamic-rendered` get HTTP-helper/outer
 ceilings of 24/26 seconds, and only after the independently verified
 `debian11-rootless` context records matching rootless capture facts, API 1.41
 and exact Engine 20.10.5 release text. The context's already accepted
@@ -1207,7 +1559,7 @@ limits are clipped to the remaining original 180-second deadline, preserving
 forty seconds for cleanup, the existing one-second KILL grace, and a further
 one-second setup/reporting margin. Full 24/26 limits require 68 whole seconds
 remaining; at 45 seconds the clipped limits are 1/3, and less time submits no
-request. Curl remains two seconds below its outer timer. Limits are recomputed
+request. The HTTP helper remains two seconds below its outer timer. Limits are recomputed
 after optional private record publication before request I/O.
 
 All eight shape outcomes, traffic and exact assertions, command/byte caps,
@@ -1228,7 +1580,7 @@ child of the separate mode-0700 `$run_dir/diagnostics` directory, outside the
 direct native proof inputs. The closed record binds run, lane, exact candidate,
 immutable outer ID and name, created ID and name, API, phase, and the original
 180-second cutoff. It starts immediately before capture and is finalized only
-on that original curl/command timeout, recording the actual POST failure end.
+on that original HTTP-helper/outer-command timeout, recording the actual POST failure end.
 Failure to publish or finalize leaves the optional observation unavailable;
 it cannot affect the original request, assertions, eight port shapes, existing
 four-second two-GET follow-up, forty-second inner cleanup reserve, or proof.
@@ -1403,7 +1755,7 @@ health or start-interval groups. Identity is not arbitrary-image startup or
 host UID mapping; bind configuration is not relabel effect evidence.
 
 This is pre-merge candidate rehearsal admission. Production merge/main/release
-still require complete final-edit gates, fresh nineteen-test four-lane proof
+still require complete final-edit gates, fresh twenty-eight-test four-lane proof
 on the final candidate, fresh all six actual authored fixture volume-only consumer
 rehearsals required by ADR 0012, and fresh reviewed BoxFerry consumption of
 the actual authored Nextcloud/Supabase binds and desired external expectations.
@@ -1479,3 +1831,20 @@ evidence for a later catalog commit; each changed candidate and release still
 needs fresh complete checks and native validation. Never substitute the historical
 source SHA for the final candidate SHA or infer an API version from a release
 label. Public resolver and inert rendering tests cover the admitted records.
+
+The [outer broker protocol](native-outer-broker-protocol.md) now has connected
+validation source under [ADR 0033](decisions/0033-original-outer-custody.md):
+concrete runtime/broker, caller-owned-log coordinator, phase relay and private
+Rust producer/independent reader/emitter contexts. Independent authored packets
+and real anonymous-pipe controls cover closed identity/sequence framing,
+once-only bounded OCI transport, cancellation, backpressure, replay and original
+absolute deadlines. Disjoint preclaimed slices and physical I/O claims cover
+actual spend without refunds or new role pools; source wiring does not establish
+complete native-path fit. The former caller-slice failure remains tested; the
+experimental fixed candidate passes four authored connected scenarios without
+growing the total allowance or removing byte-continuity checks. That synthetic
+phase driver and its metadata/native mocks do not qualify genuine payloads or
+the full native harness. Teardown acknowledgement is never authenticated native
+absence. Fresh complete, four-lane native, downstream
+consumer/application and package gates remain required; this source changes no
+capability admission or aggregate/proof-size allowance.

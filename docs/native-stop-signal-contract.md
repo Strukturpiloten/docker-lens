@@ -107,13 +107,24 @@ exit/stopped-state facts and absence. The executable strict schema is
 `scripts/native_stop_signal_proof.py`. This is trusted-harness completion, not
 cryptographic attestation against a privileged writer.
 
-The nineteen-argument emitter remains unchanged. After sixteen required tests,
-the fixed new private file permits only `stop_signal_contract`,
+The nineteen-argument emitter protocol stays unchanged. At the original ADR 0019
+checkpoint, after sixteen required tests, the fixed new private file permitted only `stop_signal_contract`,
 `stop_signal_probes` and the complete raw StopSignal singleton. With identity-v2
 and prescribed Debian IPv6 boundaries, raw counts are Debian **30/47**
 capabilities/shapes and upstream **31/49**. ADR 0019 admits those exact sealed
 counts, retaining all prior fields/groups and adding only StopSignal. Counts
-and offline controls alone are expectations, never native proof.
+and offline controls alone are expectations, never native proof. ADR 0022 later
+selects the reviewed lifecycle cohort at 34/56 and 36/60. ADR 0023 requires 23
+canonical invocations; that process slice's raw counts were 37/59 and 39/63
+without selecting its three new groups. [ADR 0024](decisions/0024-health-disabled-raw-source-projection.md)
+separately derives only raw HealthDisabled after complete unchanged health-proof
+validation. [ADR 0025](decisions/0025-shm-size-source-integration.md) adds only
+raw ShmSize with mandatory invocation 24. [ADR 0026](decisions/0026-runtime-settings-source-integration.md) appends the
+mandatory supplementary/kernel source gates as invocations 25/26; their four
+finite raw groups remain unselected and host capture stays deferred. Current combined raw totals are Debian
+43/66 and upstream 45/70 while compiled selection stays 34/56 and 36/60.
+HealthDisabled, ShmSize and the three process groups remain unselected;
+the checkpoint counts above remain historical.
 
 Local/main/reviewed-dispatch/release share `scripts/native-conformance.sh`; no
 consumer workflow or nineteen-argument caller changes. Other Lens products and

@@ -38,8 +38,8 @@ class StopSignalEvidenceTests(unittest.TestCase):
             shapes = source.split(f"const {prefix}_SHAPES:", 1)[1].split("];", 1)[0]
             self.assertIn("Capability::StopSignal,", capabilities)
             self.assertIn("NativeCapabilityShape::StopSignal,", shapes)
-            self.assertNotIn("Capability::HealthStartInterval,", capabilities)
-            self.assertNotIn("Capability::StopTimeout,", capabilities)
+            self.assertEqual("Capability::HealthStartInterval," in capabilities, prefix == "UPSTREAM")
+            self.assertIn("Capability::StopTimeout,", capabilities)
         records = reviewed.bind_cohorts(reviewed.hashed_json("reviewed"),
                                        reviewed.hashed_json("native"), reviewed.COHORTS)
         for lane, (_, record) in records[reviewed.STOP_SIGNAL_CANDIDATE, reviewed.STOP_SIGNAL_RUN].items():

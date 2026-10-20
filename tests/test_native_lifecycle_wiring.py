@@ -7,6 +7,7 @@ import shlex
 import subprocess
 import tempfile
 import unittest
+from native_harness_syntax import native_calls, fake_teardown_boundary
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -70,21 +71,29 @@ class LifecycleWiringTests(unittest.TestCase):
 
     def test_owner_token_is_scoped_to_canonical_invocation_and_no_new_emitter_argument(self):
         source = (ROOT / "scripts/native-conformance.sh").read_text()
-        invocations = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source, re.M)
-        self.assertEqual(len(invocations), 19)
-        self.assertEqual(invocations[-3:], [
+        invocations = native_calls(source)
+        self.assertEqual(len(invocations), 28)
+        self.assertEqual(invocations[26], ("native_pids_limit", "live_pids_limit_effects_match_engine"))
+        self.assertEqual(invocations[27:], [("native_nofile", "live_nofile_limits_and_effects_match_engine")])
+        self.assertEqual(invocations[16:22], [
             ("native_lifecycle", "live_lifecycle_matches_engine"),
             ("native_runtime_filesystem", "live_runtime_filesystem_matches_engine"),
             ("native_tmpfs_effect", "live_tmpfs_effects_match_engine"),
+            ("native_health_start_interval_boundary", "live_health_start_interval_boundary_matches_engine"),
+            ("native_lifecycle_default_effect", "live_lifecycle_default_effects_match_engine"),
+            ("native_hostname", "live_hostname_matches_engine"),
         ])
         self.assertIn('unset NATIVE_LIFECYCLE_CLEANUP_OWNER', source)
         self.assertIn('(\n  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1\n'
                       '"$(dirname "$0")/run-exact-native-test.sh" native_lifecycle live_lifecycle_matches_engine\n'
                       '"$(dirname "$0")/run-exact-native-test.sh" native_runtime_filesystem live_runtime_filesystem_matches_engine\n'
-                      '"$(dirname "$0")/run-exact-native-test.sh" native_tmpfs_effect live_tmpfs_effects_match_engine\n)', source)
+                      '"$(dirname "$0")/run-exact-native-test.sh" native_tmpfs_effect live_tmpfs_effects_match_engine\n'
+                      '"$(dirname "$0")/run-exact-native-test.sh" native_health_start_interval_boundary live_health_start_interval_boundary_matches_engine\n'
+                      '"$(dirname "$0")/run-exact-native-test.sh" native_lifecycle_default_effect live_lifecycle_default_effects_match_engine\n'
+                      '"$(dirname "$0")/run-exact-native-test.sh" native_hostname live_hostname_matches_engine\n)', source)
         self.assertIn('export NATIVE_LIFECYCLE_PROOF_PATH="$run_dir/lifecycle-v1.json"', source)
         self.assertIn('export NATIVE_LIFECYCLE_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA', source)
-        self.assertNotIn('"$NATIVE_LIFECYCLE_PROOF_PATH"', source.split('python3 "$script_dir/native-evidence.py"', 1)[1])
+        self.assertNotIn('"$NATIVE_LIFECYCLE_PROOF_PATH"', source.split('canonical_phase emitter', 1)[1])
         rust = (ROOT / "src/native_lifecycle_tests.rs").read_text()
         self.assertLess(rust.index('let cleanup_owner = BoundOuterCleanupOwner::bind(&run)'),
                         rust.index('let result = std::panic::catch_unwind', rust.index('fn live_lifecycle_matches_engine')))
@@ -95,7 +104,7 @@ class LifecycleWiringTests(unittest.TestCase):
 class LifecycleOuterCleanupTests(unittest.TestCase):
     def cleanup(self, fault="none", role="container", initial_status=0):
         source = (ROOT / "scripts/native-conformance.sh").read_text()
-        helpers = source[source.index("cleanup_podman() {"):source.index("trap cleanup EXIT")]
+        helpers = source[source.index("cleanup_podman() {"):source.index("trap cleanup EXIT")] + fake_teardown_boundary()
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
@@ -157,7 +166,7 @@ volume_identity={shlex.quote(volume_identity)}
         result = subprocess.run(["bash", "-c", setup + helpers + f'\ntrap cleanup EXIT\nexit {initial_status}\n'],
             env={**os.environ, "STATE": str(state), "CALLS": str(calls), "FAULT": fault, "ROLE": role,
                  "TMPDIR": str(root)}, capture_output=True, text=True, timeout=8)
-        commands = [json.loads(line) for line in calls.read_text().splitlines()]
+        commands = [json.loads(line) for line in calls.read_text().splitlines()] if calls.exists() else []
         return result, commands, json.loads(state.read_text()), run_dir.exists()
 
     def test_exact_ids_are_deleted_and_both_identity_forms_prove_absence(self):
@@ -169,7 +178,8 @@ volume_identity={shlex.quote(volume_identity)}
         for role, identifier in (("container", "a" * 64), ("sidecar", "b" * 64)):
             self.assertIn(["rm", "--force", "--time", "0", identifier], commands)
             self.assertIn(["container", "exists", identifier], commands)
-            self.assertEqual(commands.count(["container", "exists", objects[role]["name"]]), 2)
+            self.assertEqual(commands.count(["container", "exists", objects[role]["name"]]),
+                             3 if role == "container" else 2)
         result, _, _, _ = self.cleanup(initial_status=37)
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("passed", result.stdout)

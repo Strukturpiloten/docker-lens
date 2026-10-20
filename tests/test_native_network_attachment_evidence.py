@@ -1,11 +1,10 @@
 """Independent whole-manifest boundary for attachment/alias/label proof."""
 
 import json
-import os
-import subprocess
 import unittest
 
 import test_native_evidence as legacy
+from native_harness_syntax import assert_positive_emitter_rerun, run_emitter
 
 
 class NetworkAttachmentEvidenceTests(unittest.TestCase):
@@ -53,6 +52,7 @@ class NetworkAttachmentEvidenceTests(unittest.TestCase):
             with self.subTest(mutation=mutation):
                 result, path = self.emit()
                 self.assertEqual(result.returncode, 0, result.stderr)
+                assert_positive_emitter_rerun(self, result, path)
                 proof_path = path.parent.parent / "network-attachments-v1.json"
                 proof = json.loads(proof_path.read_text())
                 if mutation == "effect":
@@ -67,9 +67,7 @@ class NetworkAttachmentEvidenceTests(unittest.TestCase):
                     proof["PRIVATE_ATTACHMENT_CANARY"] = "PRIVATE_ATTACHMENT_CANARY"
                 proof_path.write_text(json.dumps(proof))
                 path.unlink()
-                rejected = subprocess.run(result.args, capture_output=True, text=True, check=False, timeout=5,
-                                          env={**os.environ, "NATIVE_FIXTURE_IMAGE": legacy.HEALTH_FIXTURE_IMAGE,
-                                               "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"})
+                rejected = run_emitter(result)
                 self.assertNotEqual(rejected.returncode, 0)
                 self.assertFalse(path.exists())
                 self.assertIn("native evidence rejected", rejected.stderr)

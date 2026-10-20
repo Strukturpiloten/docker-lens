@@ -14,9 +14,9 @@ use crate::version::{
     TargetProfileIdentity,
 };
 
-const SOURCE_CANDIDATE: &str = "ef8b40c2d392c3983a3ebdc54730812352fe6b39";
+const SOURCE_CANDIDATE: &str = "a251748de3a61f9dc3d735e670ce3ea461ee0a30";
 const SOURCE_RUN: &str =
-    "https://github.com/Strukturpiloten/docker-lens/actions/runs/38106164571/attempts/1";
+    "https://github.com/Strukturpiloten/docker-lens/actions/runs/39124651853/attempts/1";
 
 // This is the exact admission set for the currently compiled cohort. A later
 // reviewed cohort must explicitly replace the set for each lane; extending the
@@ -52,6 +52,10 @@ const REVIEWED_CAPABILITIES: &[Capability] = &[
     Capability::BindRelabelShared,
     Capability::BindRelabelPrivate,
     Capability::StopSignal,
+    Capability::StopTimeout,
+    Capability::ContainerInit,
+    Capability::ReadOnlyRootfs,
+    Capability::TmpfsMount,
 ];
 const REVIEWED_SHAPES: &[NativeCapabilityShape] = &[
     NativeCapabilityShape::StandaloneCreate,
@@ -101,6 +105,15 @@ const REVIEWED_SHAPES: &[NativeCapabilityShape] = &[
     NativeCapabilityShape::BindMountPrivateRelabelReadWrite,
     NativeCapabilityShape::BindMountPrivateRelabelReadOnly,
     NativeCapabilityShape::StopSignal,
+    NativeCapabilityShape::StopTimeoutZero,
+    NativeCapabilityShape::StopTimeoutPositive,
+    NativeCapabilityShape::ContainerInitTrue,
+    NativeCapabilityShape::ContainerInitFalse,
+    NativeCapabilityShape::ReadOnlyRootfsTrue,
+    NativeCapabilityShape::ReadOnlyRootfsFalse,
+    NativeCapabilityShape::TmpfsMountReadWrite,
+    NativeCapabilityShape::TmpfsMountReadOnly,
+    NativeCapabilityShape::TmpfsMountOptions,
 ];
 const UPSTREAM_CAPABILITIES: &[Capability] = &[
     Capability::StandaloneContainer,
@@ -134,6 +147,11 @@ const UPSTREAM_CAPABILITIES: &[Capability] = &[
     Capability::BindRelabelPrivate,
     Capability::PortHostIpv6,
     Capability::StopSignal,
+    Capability::StopTimeout,
+    Capability::ContainerInit,
+    Capability::ReadOnlyRootfs,
+    Capability::TmpfsMount,
+    Capability::HealthStartInterval,
 ];
 const UPSTREAM_SHAPES: &[NativeCapabilityShape] = &[
     NativeCapabilityShape::StandaloneCreate,
@@ -185,6 +203,17 @@ const UPSTREAM_SHAPES: &[NativeCapabilityShape] = &[
     NativeCapabilityShape::FixedIpv6HostPort,
     NativeCapabilityShape::EphemeralIpv6HostPort,
     NativeCapabilityShape::StopSignal,
+    NativeCapabilityShape::StopTimeoutZero,
+    NativeCapabilityShape::StopTimeoutPositive,
+    NativeCapabilityShape::ContainerInitTrue,
+    NativeCapabilityShape::ContainerInitFalse,
+    NativeCapabilityShape::ReadOnlyRootfsTrue,
+    NativeCapabilityShape::ReadOnlyRootfsFalse,
+    NativeCapabilityShape::TmpfsMountReadWrite,
+    NativeCapabilityShape::TmpfsMountReadOnly,
+    NativeCapabilityShape::TmpfsMountOptions,
+    NativeCapabilityShape::HealthStartIntervalZero,
+    NativeCapabilityShape::HealthStartIntervalPositive,
 ];
 
 fn expected_admission(
@@ -203,30 +232,30 @@ fn expected_admission(
 const RECORDS: [(NativeEvidenceLane, &str, &str); 4] = [
     (
         NativeEvidenceLane::Debian11Rootful,
-        "ae366c50cb7213cf62f75b0cee002ec1f81c7ec56b0518053575c0c2f2c74033",
+        "e62a1ff2181534cf78c0676c17af468c3932b76cd61e6201e6b22f89a118617c",
         include_str!(
-            "../docs/evidence/reviewed/sha256/ae366c50cb7213cf62f75b0cee002ec1f81c7ec56b0518053575c0c2f2c74033.json"
+            "../docs/evidence/reviewed/sha256/e62a1ff2181534cf78c0676c17af468c3932b76cd61e6201e6b22f89a118617c.json"
         ),
     ),
     (
         NativeEvidenceLane::Debian11Rootless,
-        "3f207baae9a2fd58f1a02b4f2c0cc282f10ab36b70e1497ed36e7a5c58a954fd",
+        "6ca015a0edb9ced8ffc06d43a6b5c4d2456cd99cac20d0d80442673ba7ff0c92",
         include_str!(
-            "../docs/evidence/reviewed/sha256/3f207baae9a2fd58f1a02b4f2c0cc282f10ab36b70e1497ed36e7a5c58a954fd.json"
+            "../docs/evidence/reviewed/sha256/6ca015a0edb9ced8ffc06d43a6b5c4d2456cd99cac20d0d80442673ba7ff0c92.json"
         ),
     ),
     (
         NativeEvidenceLane::UpstreamRootful,
-        "1a128e59871f6a22c69618c5c01d5909bf928d3de4f1eb03957af6cd12c6464b",
+        "ff6eb1bbc6ca6c07f16ebf6e7de4d61ae056c5cfa8af16e11df7ee97edd249c1",
         include_str!(
-            "../docs/evidence/reviewed/sha256/1a128e59871f6a22c69618c5c01d5909bf928d3de4f1eb03957af6cd12c6464b.json"
+            "../docs/evidence/reviewed/sha256/ff6eb1bbc6ca6c07f16ebf6e7de4d61ae056c5cfa8af16e11df7ee97edd249c1.json"
         ),
     ),
     (
         NativeEvidenceLane::UpstreamRootless,
-        "90d64a85ec81af3a1b69520555c6c160b70c8631b14519fec28e1b1fb742c95b",
+        "de7d25c9d24d32ca929d8c2fe33291daf3d2f663a0162996f1ac616423a72914",
         include_str!(
-            "../docs/evidence/reviewed/sha256/90d64a85ec81af3a1b69520555c6c160b70c8631b14519fec28e1b1fb742c95b.json"
+            "../docs/evidence/reviewed/sha256/de7d25c9d24d32ca929d8c2fe33291daf3d2f663a0162996f1ac616423a72914.json"
         ),
     ),
 ];
@@ -735,6 +764,102 @@ mod tests {
                 .find(|entry| entry["name"] == "StopSignal")
                 .unwrap()["state"] = "unavailable".into();
         });
+    }
+
+    #[test]
+    fn lifecycle_admission_requires_complete_finite_groups_on_each_exact_lane() {
+        for (lane, digest, source) in RECORDS {
+            let original: Value = serde_json::from_str(source).unwrap();
+            let upstream = matches!(
+                lane,
+                crate::version::NativeEvidenceLane::UpstreamRootful
+                    | crate::version::NativeEvidenceLane::UpstreamRootless
+            );
+            let admitted = record(lane, digest, source);
+            assert_eq!(admitted.capabilities.len(), if upstream { 36 } else { 34 });
+            assert_eq!(
+                admitted.admitted_shapes.len(),
+                if upstream { 60 } else { 56 }
+            );
+            for name in [
+                "StopTimeout",
+                "ContainerInit",
+                "ReadOnlyRootfs",
+                "TmpfsMount",
+            ]
+            .into_iter()
+            .chain(upstream.then_some("HealthStartInterval"))
+            {
+                let group = original["capabilities"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|entry| entry["name"] == name)
+                    .unwrap();
+                let shapes = group["admitted_shapes"].as_array().unwrap();
+                for omitted in 0..shapes.len() {
+                    let mut value = original.clone();
+                    let entry = value["capabilities"]
+                        .as_array_mut()
+                        .unwrap()
+                        .iter_mut()
+                        .find(|entry| entry["name"] == name)
+                        .unwrap();
+                    entry["admitted_shapes"]
+                        .as_array_mut()
+                        .unwrap()
+                        .remove(omitted);
+                    let changed = serde_json::to_string(&value).unwrap();
+                    assert!(std::panic::catch_unwind(|| record(lane, digest, &changed)).is_err());
+                }
+                for fault in [
+                    "missing",
+                    "duplicate",
+                    "wrong_group",
+                    "unavailable",
+                    "unknown",
+                ] {
+                    let mut value = original.clone();
+                    let entries = value["capabilities"].as_array_mut().unwrap();
+                    if fault == "missing" {
+                        entries.retain(|entry| entry["name"] != name);
+                    } else {
+                        let entry = entries
+                            .iter_mut()
+                            .find(|entry| entry["name"] == name)
+                            .unwrap();
+                        match fault {
+                            "duplicate" => {
+                                let shapes = entry["admitted_shapes"].as_array_mut().unwrap();
+                                shapes[1] = shapes[0].clone();
+                            }
+                            "wrong_group" => {
+                                entry["admitted_shapes"] = serde_json::json!(["StopSignal"])
+                            }
+                            _ => entry["state"] = fault.into(),
+                        }
+                    }
+                    let changed = serde_json::to_string(&value).unwrap();
+                    assert!(std::panic::catch_unwind(|| record(lane, digest, &changed)).is_err());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn debian_never_borrows_upstream_health_start_interval_admission() {
+        for (lane, digest, source) in &RECORDS[..2] {
+            let mut value: Value = serde_json::from_str(source).unwrap();
+            value["capabilities"]
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!({
+                    "name":"HealthStartInterval", "state":"available",
+                    "admitted_shapes":["HealthStartIntervalZero","HealthStartIntervalPositive"],
+                }));
+            let changed = serde_json::to_string(&value).unwrap();
+            assert!(std::panic::catch_unwind(|| record(*lane, digest, &changed)).is_err());
+        }
     }
 
     #[test]

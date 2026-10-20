@@ -3,8 +3,8 @@
 import copy
 import json
 import os
-import subprocess
 import unittest
+from native_harness_syntax import rerun_emitter
 
 import test_native_evidence as legacy
 from test_native_identity_contract import proof_v2
@@ -43,15 +43,18 @@ class ExternalNetworkEvidenceTests(unittest.TestCase):
                              package="20.10.5+dfsg1-1+deb11u2" if debian else "", **options)
 
     def rerun(self, result, destination):
-        lane = destination.stem
-        output = subprocess.run(result.args, capture_output=True, text=True, check=False, timeout=5,
-                                env={**os.environ, "NATIVE_FIXTURE_IMAGE": legacy.HEALTH_FIXTURE_IMAGE,
-                                     "NATIVE_OUTER_CONTAINER_ID": "f" * 64,
-                                     "NATIVE_BIND_RELABEL_DAEMON_UID": "1000" if lane.endswith("-rootless") else "0"})
-        self.assertNotEqual(output.returncode, 0)
-        self.assertFalse(destination.exists())
-        self.assertEqual(output.stderr.strip(), "native evidence rejected")
+        output = rerun_emitter(self, result, destination)
         self.assertNotIn(SECRET, output.stdout + output.stderr)
+
+    def test_rerun_transport_accepts_complete_positive_before_negative_mutations(self):
+        result, destination = self.emit()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        destination.unlink()
+        # An unchanged positive must reach publication, making this negative
+        # helper's assertion fail. Missing stdin cannot masquerade as coverage.
+        with self.assertRaises(AssertionError):
+            self.rerun(result, destination)
+        self.assertTrue(destination.exists())
 
     def test_all_four_canonical_lanes_emit_only_complete_group_and_closed_projection(self):
         for lane in ("debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless"):
@@ -64,9 +67,9 @@ class ExternalNetworkEvidenceTests(unittest.TestCase):
                 self.assertEqual(record["capability_outcome"]["NetworkExternalInternalExpectation"], "available")
                 self.assertEqual(record["admitted_shapes"]["NetworkExternalInternalExpectation"], SHAPES)
                 self.assertEqual(record["admitted_shapes"]["NetworkInternal"], ["InternalBridgeNetworkCreate"])
-                self.assertEqual(len(record["capability_outcome"]), 30 if lane.startswith("debian11-") else 31)
+                self.assertEqual(len(record["capability_outcome"]), 43 if lane.startswith("debian11-") else 45)
                 self.assertEqual(sum(map(len, record["admitted_shapes"].values())),
-                                 47 if lane.startswith("debian11-") else 49)
+                                 66 if lane.startswith("debian11-") else 70)
                 for key, expected in (
                     ("source_probes", legacy.SOURCE_PROBES), ("network_probes", legacy.NETWORK_PROBES),
                     ("volume_probes", legacy.VOLUME_PROBES), ("volume_label_probes", legacy.VOLUME_LABEL_PROBES),

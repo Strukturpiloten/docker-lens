@@ -509,9 +509,21 @@ impl std::fmt::Debug for ContainerToken {
     }
 }
 
+/// An authored container leaf-memory setting, distinct from observed memory evidence.
+///
+/// Target intent validation accepts finite bytes only in `6_291_456..=i64::MAX`
+/// (6 MiB through the Engine signed-byte bound), without rounding or unit conversion.
+/// This offline policy does not establish native acceptance or enforcement; planning
+/// still requires the separate memory-limit capability.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MemoryLimit {
+    /// Emit literal zero: no authored leaf cap, not infinite available memory.
+    ///
+    /// Daemon, controller and ancestor limits still constrain the container. This
+    /// differs from `ContainerSettings::memory_limit` being `None`, which omits
+    /// the native field and leaves its effective meaning to the daemon.
     Unlimited,
+    /// Exact finite bytes, checked when constructing the target intent.
     Bytes(NonZeroU64),
 }
 

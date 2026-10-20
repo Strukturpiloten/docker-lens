@@ -329,7 +329,7 @@ class NativePortStartDiagnosticTests(unittest.TestCase):
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         block = 'port_invocation_us=${EPOCHREALTIME/./}' + source.split(
             'port_invocation_us=${EPOCHREALTIME/./}', 1)[1].split(
-                '\nif [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR', 1)[0]
+                '\n"$(dirname "$0")/run-exact-native-test.sh" native_health_metadata', 1)[0]
         block = block.replace('"$(dirname "$0")/run-exact-native-test.sh"', "exact_wrapper")
         calls = self.root / "calls"
         for status in (0, 37):
@@ -445,7 +445,14 @@ class NativePortStartDiagnosticTests(unittest.TestCase):
         helper = HELPER.read_text()
         wrapper = (ROOT / "scripts/run-exact-native-test.sh").read_text()
         emitter = (ROOT / "scripts/native-evidence.py").read_text()
-        self.assertIn('--log-driver=k8s-file --log-opt "path=$run_dir/diagnostics/daemon.log" --log-opt max-size=1048576', harness)
+        runtime = (ROOT / "scripts/native_outer_runtime.py").read_text()
+        coordinator = (ROOT / "scripts/native_outer_canonical.py").read_text()
+        self.assertIn('"--log-driver=k8s-file", "--log-opt=path=" + log_path, "--log-opt=max-size=1048576"', runtime)
+        self.assertIn('CallerLogCustody(', coordinator)
+        registration = coordinator.index('diagnostic_prepare(directory, owner, lane, duplicate, budget=self.scope)')
+        self.assertLess(coordinator.index('CallerLogCustody('), registration)
+        self.assertLess(registration, coordinator.index('self.exchange("create")'))
+        self.assertIn('module.prepare(Path(directory), owner, lane, descriptor=descriptor, budget=budget)', coordinator)
         self.assertIn("inspect --format '{{json .}}'", harness)
         self.assertNotIn("{{json .Id}}", harness)
         self.assertNotIn("subprocess", helper)
@@ -453,13 +460,64 @@ class NativePortStartDiagnosticTests(unittest.TestCase):
         self.assertNotIn("sudo", observer)
         self.assertNotIn("podman", observer)
         self.assertIn("--kill-after=0.25s 3.5s", observer)
-        self.assertIn("Some(28 | 124)", source)
+        self.assertIn("Some(3 | 124)", source)
+        self.assertNotIn("Some(28 | 124)", source)
+        self.assertIn("version=2 client=unix_http_v1", source)
         self.assertIn("Some(Duration::from_secs(4))", source)
         self.assertIn("remaining > if cleanup { 1 } else { 40 }", source)
         self.assertIn("const EXPECTED_SHAPES: [&str; 8]", source)
         self.assertIn("run_deadline_epoch=$(( $(date +%s) + 180 ))", wrapper)
         for private in (DIAG.REGISTRATION_FILE, DIAG.LOG_FILE, DIAG.WINDOW_FILE):
             self.assertNotIn(private, emitter)
+
+
+class CoordinatorLogAdoptionTests(unittest.TestCase):
+    def test_adopt_original_empty_log_without_taking_its_lifetime(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            root.chmod(0o700)
+            diagnostics = root / "diagnostics"
+            diagnostics.mkdir(mode=0o700)
+            log = diagnostics / DIAG.LOG_FILE
+            descriptor = os.open(log, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            try:
+                original = os.fstat(descriptor)
+                DIAG.prepare(root, RUN, "upstream-rootful", descriptor)
+                registration = json.loads((diagnostics / DIAG.REGISTRATION_FILE).read_bytes())
+                self.assertEqual((registration["device"], registration["inode"]), (original.st_dev, original.st_ino))
+                self.assertEqual(os.fstat(descriptor).st_ino, original.st_ino)
+                os.write(descriptor, b"original coordinator still owns this log\n")
+            finally:
+                os.close(descriptor)
+
+    def test_nonempty_replaced_or_unsafe_log_cannot_be_adopted(self):
+        for change in ("nonempty", "replacement", "symlink", "mode", "links"):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                root.chmod(0o700)
+                diagnostics = root / "diagnostics"
+                diagnostics.mkdir(mode=0o700)
+                log = diagnostics / DIAG.LOG_FILE
+                descriptor = os.open(log, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                try:
+                    if change == "nonempty":
+                        os.write(descriptor, b"not an empty original")
+                    elif change in ("replacement", "symlink"):
+                        log.rename(diagnostics / "original")
+                        if change == "replacement":
+                            log.touch(mode=0o600)
+                        else:
+                            log.symlink_to(diagnostics / "original")
+                    elif change == "mode":
+                        log.chmod(0o640)
+                    else:
+                        os.link(log, diagnostics / "other-link")
+                    with self.assertRaises(DIAG.Unavailable):
+                        DIAG.prepare(root, RUN, "upstream-rootful", descriptor)
+                    self.assertFalse((diagnostics / DIAG.REGISTRATION_FILE).exists())
+                    os.fstat(descriptor)
+                finally:
+                    os.close(descriptor)
 
 
 if __name__ == "__main__":

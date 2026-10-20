@@ -44,8 +44,16 @@ class PortCapabilityEvidenceTests(unittest.TestCase):
                              identity=identity, port_probes=probes,
                              port_proof_override=proof_override)
 
-    def expected_groups(self, identity_version, ipv6=True):
-        groups = {**legacy.EXPECTED_RAW_SHAPES, **PORT_GROUPS}
+    def expected_groups(self, identity_version, ipv6=True, health_interval=True):
+        groups = {**legacy.EXPECTED_RAW_SHAPES, **PORT_GROUPS, **legacy.EXPECTED_LIFECYCLE_SOURCE_SHAPES,
+                  "ContainerHostname": ["ContainerHostname"], "CommandClear": ["ClearCommand"],
+                  "EntrypointClear": ["ClearEntrypoint"], "HealthDisabled": ["DisabledHealthcheck"],
+                  "ShmSize": ["ShmSize"],
+                  "SupplementaryGroups": ["SupplementaryGroups"],
+                  "SecurityOptions": ["NoNewPrivilegesEnabled", "NoNewPrivilegesDisabled"],
+                  "Sysctls": ["Sysctls"], "SysctlIpv4Forward": ["SysctlIpv4Forward"]}
+        if not health_interval:
+            del groups["HealthStartInterval"]
         if not ipv6:
             del groups["PortHostIpv6"]
         if identity_version == 2:
@@ -55,12 +63,13 @@ class PortCapabilityEvidenceTests(unittest.TestCase):
 
     def assert_groups(self, destination, identity_version, ipv6=True):
         record = json.loads(destination.read_text(encoding="utf-8"))
-        expected = self.expected_groups(identity_version, ipv6)
+        health_interval = not record["lane"].startswith("debian11-")
+        expected = self.expected_groups(identity_version, ipv6, health_interval)
         self.assertEqual(record["admitted_shapes"], expected)
         self.assertEqual(record["capability_outcome"], {name: "available" for name in expected})
-        self.assertEqual(len(expected), (31 if identity_version == 2 else 29) - (not ipv6))
+        self.assertEqual(len(expected), (44 if identity_version == 2 else 42) - (not ipv6) + health_interval)
         self.assertEqual(sum(map(len, expected.values())),
-                         (49 if identity_version == 2 else 47) - (0 if ipv6 else 2))
+                         (68 if identity_version == 2 else 66) - (0 if ipv6 else 2) + 2 * health_interval)
         self.assertEqual("identity_contract" in record, identity_version == 2)
         self.assertEqual("identity_cases" in record, identity_version == 2)
         for private in (legacy.RUN_ID, "dl-identity-", "configured_user", "cleanup"):
@@ -178,10 +187,10 @@ class PortCapabilityEvidenceTests(unittest.TestCase):
         shapes = catalogue.split("const REVIEWED_SHAPES:", 1)[1].split("];", 1)[0]
         common_names = re.findall(r"Capability::(\w+)", capabilities)
         common_shapes = re.findall(r"NativeCapabilityShape::(\w+)", shapes)
-        # The reviewed StopSignal singleton extends the catalogue, not the
-        # independently authored port groups or Debian IPv6 boundary.
-        self.assertEqual(len(common_names), 30)
-        self.assertEqual(len(common_shapes), 47)
+        # Lifecycle admission retains the independently authored port groups
+        # and Debian IPv6 boundary.
+        self.assertEqual(len(common_names), 34)
+        self.assertEqual(len(common_shapes), 56)
         self.assertEqual(common_names.count("StopSignal"), 1)
         self.assertEqual(common_shapes.count("StopSignal"), 1)
         self.assertEqual(set(PORT_GROUPS) - set(common_names), {"PortHostIpv6"})
@@ -194,12 +203,13 @@ class PortCapabilityEvidenceTests(unittest.TestCase):
         upstream_shapes = catalogue.split("const UPSTREAM_SHAPES:", 1)[1].split("];", 1)[0]
         upstream_names = re.findall(r"Capability::(\w+)", upstream)
         upstream_shape_names = re.findall(r"NativeCapabilityShape::(\w+)", upstream_shapes)
-        self.assertEqual(len(upstream_names), 31)
-        self.assertEqual(len(upstream_shape_names), 49)
+        self.assertEqual(len(upstream_names), 36)
+        self.assertEqual(len(upstream_shape_names), 60)
         self.assertEqual(upstream_names.count("StopSignal"), 1)
         self.assertEqual(upstream_shape_names.count("StopSignal"), 1)
-        self.assertEqual(set(upstream_names), set(common_names) | {"PortHostIpv6"})
-        self.assertEqual(set(upstream_shape_names), set(common_shapes) | set(PORT_GROUPS["PortHostIpv6"]))
+        self.assertEqual(set(upstream_names), set(common_names) | {"PortHostIpv6", "HealthStartInterval"})
+        self.assertEqual(set(upstream_shape_names), set(common_shapes) | set(PORT_GROUPS["PortHostIpv6"])
+                         | {"HealthStartIntervalZero", "HealthStartIntervalPositive"})
 
 
 if __name__ == "__main__":

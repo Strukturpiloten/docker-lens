@@ -301,28 +301,27 @@ impl NativeApi {
             "-k",
             "5s",
             "20",
-            "curl",
-            "-sS",
-            "--max-time",
+            "python3",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/native-unix-http.py"),
+            "--timeout",
             "15",
-            "--max-filesize",
+            "--max-response-bytes",
             "65536",
-            "--unix-socket",
+            "--socket",
             &self.socket,
-            "-X",
+            "--method",
             method,
-            "-H",
-            "Content-Type: application/json",
+            "--max-request-bytes",
+            "8388608",
+            "--json-content-type",
         ]);
         if body.is_some() {
-            command.args(["--data-binary", "@-"]);
+            command.args(["--body-stdin"]);
             command.stdin(Stdio::piped());
-        } else if method == "POST" {
-            command.args(["--data-binary", ""]);
         }
-        command.args(["-w", "\n%{http_code}", &format!("http://localhost{path}")]);
+        command.args(["--path", path]);
         command.stdout(Stdio::piped()).stderr(Stdio::null());
-        let mut child = command.spawn().expect("bounded volume API curl");
+        let mut child = command.spawn().expect("bounded volume API transport");
         if let Some(body) = body {
             write_request_body(&mut child, &body).expect("closed volume API body write");
         }

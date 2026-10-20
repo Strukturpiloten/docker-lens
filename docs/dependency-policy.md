@@ -1,6 +1,6 @@
 # Dependency and pin policy
 
-The decoder pins serde_json 1.0.151 for pure Engine JSON parsing and BoxFerry's
+The decoder pins serde_json 1.0.154 for pure Engine JSON parsing and BoxFerry's
 reviewed consumer floor. The bounded Unix-socket connector pins socket2 0.6.5
 for connect_timeout. Cargo.lock
 records their dependency graphs and registry checksums. Renovate owns Cargo
@@ -16,6 +16,17 @@ The flag applies only to this invocation; distribution verification and exact
 compiler selection remain required. The
 serde_json pin remains owned by Renovate's existing Cargo manager; no regex
 manager, manager path, grouping rule, or additional dependency is needed.
+
+The next runtime-source milestone aligns this exact pin with BoxFerry's reviewed
+upstream dependency update (BoxFerry PR #113). Its locked 1.0.154 cannot unify
+with DockerLens's earlier exact 1.0.151 requirement; the failed downstream
+source rehearsal is not passing evidence. The registry checksum is the same
+published checksum already recorded by that upstream lockfile, not an invented
+integrity value. Complete parser/decoder, source-consumer and native gates must
+be rerun for the changed candidate. Historical source records retain the
+dependencies used at execution. Renovate's enabled native Cargo manager still
+owns exactly this manifest pin and lockfile; neither location, manager, grouping
+nor approval policy changes, so no Renovate configuration edit is needed.
 
 The Rust 1.98.1 minimum alignment changes no extraction path or dependency
 resolution. The existing toolchain regex extracts exactly one 1.98.1 channel;
@@ -35,6 +46,19 @@ remain serde_json/socket2. Renovate's enabled Cargo manager owns this new
 `Cargo.toml` dev pin and the existing lockfile; no custom manager/path/grouping
 or approval rule is added. The policy regression checks its unique native Cargo
 ownership. The crate's Linux-only native validation is unchanged.
+
+The dev-only `rustix` pin in `Cargo.toml` enables only `std` and `time` for a
+safe absolute `CLOCK_MONOTONIC` reading in the private PIDs harness. It does not
+enter the product dependency graph or relax `forbid(unsafe_code)`. The original
+absolute phase deadline remains authoritative; wall-clock timestamps and a fresh
+relative duration cannot renew it. `Cargo.lock` records the registry versions and
+published checksums, not hand-authored integrity values. The existing enabled
+Cargo manager uniquely owns this manifest declaration and its lockfile; the two
+regex managers match only the toolchain and native-image script, not Cargo files.
+No manager, extraction path, grouping or approval setting changes. The scaffold
+policy regression verifies this ownership, the minimal features, exact version
+and locked registry integrity. No other repository consumes this test-only pin;
+their independent native gates and product dependencies remain unchanged.
 
 GitHub Actions use full commit SHAs with exact release-tag comments on
 ubuntu-24.04. Renovate owns Cargo, GitHub Actions, and the pinned Rust toolchain.
@@ -103,3 +127,21 @@ The canonical harness is consumed by `check.yml` main push,
 exact-main dispatch. All three inherit the same prerequisite without a
 workflow edit. The other five workspace repositories do not invoke this
 DockerLens native harness, so no cross-repository consumer changes are needed.
+
+The scaffold-only outer-runtime identity diagnostic uses installed `sudo`,
+`timeout`, Podman, Git, `dpkg-query`, and Python from the same mutable
+`ubuntu-24.04` runner. The unavailable-integrity/manual-review exception above
+also applies to these runner-provided tools: no installation, download, new pin,
+or independently authenticated binary provenance is introduced. Strictly parsed
+distro package metadata is only reported metadata, not proof of custom binary
+ownership. Only `check.yml`'s scaffold job consumes this diagnostic; native jobs,
+main's native harness, trusted-main native dispatch, release validation, and the
+other workspace products do not gain a shared native qualification step and need
+no corresponding change. Existing complete and native gates remain unchanged.
+
+Renovate ownership, extraction paths, grouping, approvals, and regression review
+are unchanged: the native-image manager still extracts exactly the same five
+tag/digest references and the GitHub Actions manager still owns the same full-SHA
+Action refs. No manifest, toolchain, image, Action pin, or Renovate configuration
+changes are required; existing scaffold policy extraction checks cover those
+five references and manager ownership.

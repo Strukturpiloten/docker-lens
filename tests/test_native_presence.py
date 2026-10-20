@@ -11,6 +11,7 @@ import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from native_harness_syntax import fake_teardown_boundary
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -122,6 +123,13 @@ class PresenceCleanupTests(unittest.TestCase):
     def run_shell(self, role: str, phase: str, fault: str, *, elevated: bool = False):
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         helpers = source[source.index("cleanup_podman() {"):source.index("trap cleanup EXIT")]
+        # This shell campaign owns present/absent/unknown handling, not a root
+        # broker. The adapter calls actual cleanup_container and its independent
+        # exact-ID/name readbacks; an ACK alone never establishes absence.
+        # Real FixedPodmanRuntime.cleanup ownership/recovery/refusal predicates
+        # are independently exercised by test_native_outer_runtime_cleanup's
+        # six FixedRuntimeCleanupTests (also mapped in ROOT_BOUNDARY_COVERAGE).
+        helpers += fake_teardown_boundary()
         preflight = source[source.index("for resource in container sidecar network volume; do"):
                            source.index('"${podman_cmd[@]}" volume create')]
         with tempfile.TemporaryDirectory() as temporary:
@@ -215,6 +223,17 @@ volume_identity='r_volume|local|/mock/volume|created|owner'
         self.assertFalse(retained)
         self.assertTrue(all(removed))
         self.assertEqual(result.stdout, "passed\n")
+
+    def test_uncertain_outer_readback_retains_every_dependent_resource(self) -> None:
+        for fault in ("stderr1", "warning0", "stdout1", "error"):
+            with self.subTest(fault=fault):
+                result, retained, evidence, _, removed = self.run_shell("container", "readback", fault)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertTrue(retained)
+                self.assertTrue(evidence)
+                self.assertEqual(removed, [True, False, False, False])
+                self.assertNotIn("passed", result.stdout)
+                self.assertNotIn("private configuration", result.stderr)
 
     def test_empty_exit_one_passes_generated_name_preflight(self) -> None:
         result, retained, evidence, _, removed = self.run_shell("container", "preflight", "none")

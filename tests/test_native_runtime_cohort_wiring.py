@@ -1,4 +1,4 @@
-"""Closed nineteen-test wiring and emitter controls; no real native calls."""
+"""Closed twenty-two-test wiring and emitter controls; no real native calls."""
 
 import copy
 import json
@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from native_harness_syntax import logical_owner_scopes, native_calls, rerun_emitter
 from pathlib import Path
 
 import test_native_external_network_evidence as external
@@ -41,6 +42,13 @@ EXPECTED_CALLS = [
     ("native_lifecycle", "live_lifecycle_matches_engine"),
     ("native_runtime_filesystem", "live_runtime_filesystem_matches_engine"),
     ("native_tmpfs_effect", "live_tmpfs_effects_match_engine"),
+    ("native_health_start_interval_boundary", "live_health_start_interval_boundary_matches_engine"),
+    ("native_lifecycle_default_effect", "live_lifecycle_default_effects_match_engine"),
+    ("native_hostname", "live_hostname_matches_engine"),
+    ("native_command_clear", "live_command_clear_matches_engine"),
+    ("native_shm_size", "live_shm_size_effects_match_engine"),
+    ("native_supplementary_groups", "live_supplementary_groups_match_engine"),
+    ("native_kernel_settings", "live_kernel_settings_match_engine"),
 ]
 
 
@@ -77,23 +85,28 @@ sys.exit(int(os.environ["STATUS"]))
             ended = time.time()
             return result, [json.loads(line) for line in calls.read_text().splitlines()], started, ended
 
-    def test_original_seventeen_plus_two_are_exact_and_owner_scope_is_only_three(self):
+    def test_twenty_two_invocations_are_exact_and_owner_scope_is_six(self):
         source = (ROOT / "scripts/native-conformance.sh").read_text()
-        calls = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source, re.M)
-        self.assertEqual(calls, EXPECTED_CALLS)
+        calls = native_calls(source)
+        self.assertEqual(calls[:26], EXPECTED_CALLS)
+        self.assertEqual(calls[26:27], [("native_pids_limit", "live_pids_limit_effects_match_engine")])
+        self.assertEqual(calls[27:], [("native_nofile", "live_nofile_limits_and_effects_match_engine")])
         owner = source.index('(\n  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1\n')
         end = source.index('\n)\n', owner)
-        scoped = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source[owner:end], re.M)
-        self.assertEqual(scoped, EXPECTED_CALLS[-3:])
-        self.assertEqual(source.count('export NATIVE_LIFECYCLE_CLEANUP_OWNER='), 1)
+        scoped = native_calls(source[owner:end])
+        self.assertEqual(scoped, EXPECTED_CALLS[16:22])
+        self.assertEqual(source.count('export NATIVE_LIFECYCLE_CLEANUP_OWNER='), 5)
+        self.assertEqual(len(logical_owner_scopes(source)), 6)
         self.assertLess(source.index('unset NATIVE_LIFECYCLE_CLEANUP_OWNER'), source.index('run-exact-native-test.sh" native_capture'))
-        emission = source.index('python3 "$script_dir/native-evidence.py"')
+        emission = source.index('canonical_phase emitter')
         self.assertLess(end, emission)
         protocol = source[emission:source.index('\nfi', emission)].replace('\\\n', ' ')
         self.assertEqual(len(shlex.split(protocol)) - 2, 19)
         for prefix, filename in (("LIFECYCLE", "lifecycle-v1.json"),
                                  ("RUNTIME_FILESYSTEM", "runtime-filesystem-v1.json"),
-                                 ("TMPFS_EFFECT", "tmpfs-effect-v1.json")):
+                                 ("TMPFS_EFFECT", "tmpfs-effect-v1.json"),
+                                 ("HEALTH_START_INTERVAL_BOUNDARY", "health-start-interval-boundary-v1.json"),
+                                 ("LIFECYCLE_DEFAULT_EFFECT", "lifecycle-default-effects-v1.json")):
             self.assertIn(f'export NATIVE_{prefix}_PROOF_PATH="$run_dir/{filename}"', source)
             self.assertIn(f'export NATIVE_{prefix}_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA', source)
             self.assertNotIn(f'"$NATIVE_{prefix}_PROOF_PATH"', protocol)
@@ -203,7 +216,7 @@ sys.exit(int(os.environ["STATUS"]))
 class RuntimeCohortEvidenceTests(unittest.TestCase):
     run_emit = external.ExternalNetworkEvidenceTests.run_emit
     emit = external.ExternalNetworkEvidenceTests.emit
-    rerun = external.ExternalNetworkEvidenceTests.rerun
+    rerun = rerun_emitter
 
     def test_four_lanes_emit_only_closed_unadmitted_fields_and_existing_counts(self):
         for lane in ("debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless"):
@@ -213,18 +226,19 @@ class RuntimeCohortEvidenceTests(unittest.TestCase):
             record = json.loads(raw)
             self.assertEqual(record["runtime_filesystem_contract"], "runtime-filesystem-v1")
             self.assertEqual(record["runtime_filesystem_outcomes"], {
-                "admission": "unadmitted", "init_effect_scope": "pid1_indirection_only",
+                "admission": "raw_source_only", "catalogue_admission": "unadmitted", "init_effect_scope": "pid1_indirection_only",
                 "rootfs_effect_scope": "diagonal_omitted_false_true_only", "controls": ["omitted", "false", "true"],
             })
             self.assertEqual(record["tmpfs_effect_contract"], "tmpfs-effect-v1")
             self.assertEqual(record["tmpfs_effect_outcomes"], {
-                "admission": "unadmitted", "coverage": "explicit_1MiB_0700_and_2MiB_0750_rw_ro_only",
+                "admission": "raw_source_only", "catalogue_admission": "unadmitted", "coverage": "explicit_1MiB_0700_and_2MiB_0750_rw_ro_only",
             })
-            self.assertEqual(len(record["capability_outcome"]), 30 if lane.startswith("debian11-") else 31)
-            self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 47 if lane.startswith("debian11-") else 49)
-            for forbidden in ("ContainerInit", "ReadOnlyRootfs", "TmpfsMount", "StopTimeout", "HealthStartInterval"):
-                self.assertNotIn(forbidden, record["capability_outcome"])
-                self.assertNotIn(forbidden, record["admitted_shapes"])
+            self.assertEqual(len(record["capability_outcome"]), 43 if lane.startswith("debian11-") else 45)
+            self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 66 if lane.startswith("debian11-") else 70)
+            for capability in ("ContainerInit", "ReadOnlyRootfs", "TmpfsMount", "StopTimeout", "HealthStartInterval"):
+                positive = capability != "HealthStartInterval" or not lane.startswith("debian11-")
+                self.assertEqual(capability in record["capability_outcome"], positive)
+                self.assertEqual(capability in record["admitted_shapes"], positive)
             for private in ("worker_pid", "daemon_uid", "capacity_bytes", "dl-runtime-", "dl-tmpfs-", "a" * 64, "f" * 64):
                 self.assertNotIn(private, raw)
 

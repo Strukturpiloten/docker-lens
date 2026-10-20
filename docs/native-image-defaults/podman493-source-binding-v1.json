@@ -1,0 +1,549 @@
+{
+  "schema_version": 1,
+  "purpose": "historical_podman493_source_binding",
+  "source_receipt_sha256": "sha256:cd25532699b9155c9097cd4f17b48d2eba8f465545ae003a927c2892be121f1e",
+  "tag": "v4.9.3",
+  "annotated_tag_object": "bd1b4a96544e6199f369feef8cb19c2e8f803b1f",
+  "commit": "8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f",
+  "tree": "917a3fb31ddef8f6835bbc939d0654e805b64acd",
+  "license": "Apache-2.0",
+  "redistribution": "source_hashes_and_authored_rule_facts_only",
+  "runtime_or_compatibility_qualification": false,
+  "source_files": [
+    {
+      "bytes": 11359,
+      "git_blob": "9b259bdfcf9022e7f4999a318ab7261300644e11",
+      "path": "LICENSE",
+      "sha256": "62fb8a3a9621dc2388174caaabe9c2317b694bb9a1d46c98bcf5655b68f51be3",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/LICENSE"
+    },
+    {
+      "bytes": 33229,
+      "git_blob": "105ea13c5679c7668961991d83e45e87fb260fd2",
+      "path": "cmd/podman/common/create.go",
+      "sha256": "8fb414b45a9d5ec101c775ca29c17023ebcec6b3d344aaca34353e4454b54f4a",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/cmd/podman/common/create.go"
+    },
+    {
+      "bytes": 33878,
+      "git_blob": "c15c560314bcd17ce3f1eb8902d33bbfeef271a9",
+      "path": "pkg/specgenutil/specgen.go",
+      "sha256": "1d5413da653c4f945e2f988a155f34e92a78b896ee69a72e2573a2a6dc1f7f1c",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/pkg/specgenutil/specgen.go"
+    },
+    {
+      "bytes": 15942,
+      "git_blob": "002dd433fb87ce84b39ef957bbe8f31ae2ad7eff",
+      "path": "pkg/specgen/generate/container.go",
+      "sha256": "f880487578c4c069e35bc7d8a72294fcc30868eb99ba42aefa65e97ea9dbab5c",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/pkg/specgen/generate/container.go"
+    },
+    {
+      "bytes": 23237,
+      "git_blob": "940fefae0860ee1d794db7381199e3a8670bea3f",
+      "path": "pkg/specgen/generate/container_create.go",
+      "sha256": "06a43de5edf6377adeebec763382eedec6b4e4d02e6b313422563bb50ef50c99",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/pkg/specgen/generate/container_create.go"
+    },
+    {
+      "bytes": 10228,
+      "git_blob": "7ea22e9f71657eb2d4ca6f5a04e54e89d6ad8b21",
+      "path": "pkg/specgen/generate/oci_linux.go",
+      "sha256": "f0a209f2c212c145419b90e723f9aa568cf2d360b43975004ea0c25f5927e9fa",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/pkg/specgen/generate/oci_linux.go"
+    },
+    {
+      "bytes": 5134,
+      "git_blob": "07375529334b98af7bc4756e8bfcb54b0c3ba796",
+      "path": "pkg/specgen/generate/config_linux.go",
+      "sha256": "2c9eed97056e510b2e9a3d80001601227e40b46201f97186dcf48d6ebf4cde36",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/pkg/specgen/generate/config_linux.go"
+    },
+    {
+      "bytes": 9341,
+      "git_blob": "e266fa509d469a2d092fd55cc1df5ca659437f77",
+      "path": "pkg/specgen/generate/security_linux.go",
+      "sha256": "e998e357ec6bc947e34a266ff85155904dc1bca57383fa2af64bd3c0379bd7ee",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/pkg/specgen/generate/security_linux.go"
+    },
+    {
+      "bytes": 2968,
+      "git_blob": "8e87834f85d6b9eb50cba73173e0a21929ccdd64",
+      "path": "pkg/env/env.go",
+      "sha256": "18014147507fe785947e6fe067fcf4e6f8752c58cb2864ed61add67a8ad7bc70",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/pkg/env/env.go"
+    },
+    {
+      "bytes": 37606,
+      "git_blob": "679110df2fe1a48f7192c04b5c46f23d005fa248",
+      "path": "pkg/util/utils.go",
+      "sha256": "8c3c55e968f0b2d560aaf4b011d16aabe749fa2db394359b2005b69a552ab2c6",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/pkg/util/utils.go"
+    },
+    {
+      "bytes": 20747,
+      "git_blob": "d823c7749de12978cc84cc1a44d810d7b2e677ad",
+      "path": "libpod/container_inspect.go",
+      "sha256": "344c0970742bb4285cfe8052b9173b05ef262d516d42759ce53211b8d3e39e24",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/libpod/container_inspect.go"
+    },
+    {
+      "bytes": 10228,
+      "git_blob": "402634284e00f002a989a9b9e9767cf76b9c741a",
+      "path": "libpod/container_inspect_linux.go",
+      "sha256": "278a3e4736bcbc12043fe4cdf68a7569fae1b3677fb64f854a2178aa8f5b9c42",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/libpod/container_inspect_linux.go"
+    },
+    {
+      "bytes": 36477,
+      "git_blob": "879dd139595eaf8343944830fd41477f06b62fa5",
+      "path": "libpod/define/container_inspect.go",
+      "sha256": "a9ebee4a83b24d7a1d69a081c8c86ee69e175d3236c9890f84882c77b24a9f67",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/libpod/define/container_inspect.go"
+    },
+    {
+      "bytes": 93033,
+      "git_blob": "cd19089e2ec0da9ec3ec0d14afcc2cdb479826ed",
+      "path": "libpod/container_internal_common.go",
+      "sha256": "4dff4be450c37bcf68ede860bd18cd328882ff4cb82091a4a42528a405830330",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/libpod/container_internal_common.go"
+    },
+    {
+      "bytes": 24486,
+      "git_blob": "7f6508d38058a7bea7941e046a5dd1877cdb8747",
+      "path": "libpod/container_internal_linux.go",
+      "sha256": "5e4e2e97d80881cd425dcc4a7c31980b0ce9e4fd4f2d1c07bd6c210d518744fb",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/libpod/container_internal_linux.go"
+    },
+    {
+      "bytes": 81772,
+      "git_blob": "48c5c970caa24b6d052bed095476dc97a83d7a48",
+      "path": "libpod/container_internal.go",
+      "sha256": "1cb63a82bc0f6b39a5abf4130656605f9604b95d87b61314370d7f75e7390de0",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/libpod/container_internal.go"
+    },
+    {
+      "bytes": 46434,
+      "git_blob": "9b13de5af5abb2b124972a488316cb15702112dd",
+      "path": "libpod/runtime_ctr.go",
+      "sha256": "8916d514ad29d71899ffd2162eacf1bbb05b15239c1767f24d89d207d3d105d0",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/libpod/runtime_ctr.go"
+    },
+    {
+      "bytes": 24369,
+      "git_blob": "aefce67219b1316371f1b2ab43a4eede638dd4f1",
+      "path": "libpod/container_config.go",
+      "sha256": "e39262e2de8480c78a2240584e4338d93ab795b2a35bd016ba9ca4053efddd17",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/libpod/container_config.go"
+    },
+    {
+      "bytes": 5000,
+      "git_blob": "dae937c7da8d2e81a8e8229dddd9ef15051904e8",
+      "path": "pkg/lookup/lookup.go",
+      "sha256": "24e71db32f18682f822456cccaf76ed3de0ecc65d37e3415fe045e030695da65",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/pkg/lookup/lookup.go"
+    },
+    {
+      "bytes": 14910,
+      "git_blob": "984466d1ab5950e10b014b6a55685db16244a093",
+      "path": "vendor/github.com/opencontainers/runc/libcontainer/user/user.go",
+      "sha256": "7cb8b36daf0e9e3d060bf9ce7d3b261f20707ef71a02a292bf6c1c0773cf633e",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/vendor/github.com/opencontainers/runc/libcontainer/user/user.go"
+    },
+    {
+      "bytes": 10758,
+      "git_blob": "27448585ad49c79581d0b3dcb76da380fb6df4b7",
+      "path": "vendor/github.com/opencontainers/runc/LICENSE",
+      "sha256": "552a739c3b25792263f731542238b92f6f8d07e9a488eae27e6c4690038a8243",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/vendor/github.com/opencontainers/runc/LICENSE"
+    },
+    {
+      "bytes": 59118,
+      "git_blob": "3e8f9ca647cf43fc27033c9f5943971542635b3a",
+      "path": "vendor/github.com/opencontainers/runtime-tools/generate/generate.go",
+      "sha256": "0b653fec1718acacbb033474bf37daeea83cd937ca1a1636ac08d7fee9fb7816",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/vendor/github.com/opencontainers/runtime-tools/generate/generate.go"
+    },
+    {
+      "bytes": 10767,
+      "git_blob": "bdc403653e0a053959f28d1d83f72aab72ff20ac",
+      "path": "vendor/github.com/opencontainers/runtime-tools/LICENSE",
+      "sha256": "a964a27c435167bdd78827ff83e4bd4473eca53d583a39598d2f445894a9225d",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/vendor/github.com/opencontainers/runtime-tools/LICENSE"
+    },
+    {
+      "bytes": 6155,
+      "git_blob": "564aad4b9a3065e07c30b6831e63f0b72653aba6",
+      "path": "libpod/define/info.go",
+      "sha256": "970ac1dc16c7be08af7eef85128f8b2c7ac9bf9897876d92df1b7424552d7da7",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/libpod/define/info.go"
+    },
+    {
+      "bytes": 8667,
+      "git_blob": "8f00dbdeb8995ec598424548d7c0d71e444d2f2f",
+      "path": "libpod/info.go",
+      "sha256": "0d833b18df63b46729a08a51c22ce64bfe6680683d192a1a61a648f1d7675c8d",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/libpod/info.go"
+    },
+    {
+      "bytes": 4427,
+      "git_blob": "e01510857d82c83de85290992e184933d8d37c1e",
+      "path": "libpod/info_linux.go",
+      "sha256": "e476ff79e47d22596a8c3829c95ebb47893a02545d4261667312b0aac1a0ead8",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/libpod/info_linux.go"
+    },
+    {
+      "bytes": 2080,
+      "git_blob": "12deada21e97c63747af844184b2131acb3f7cbd",
+      "path": "cmd/podman/common/create_opts.go",
+      "sha256": "76544f24460e6c679d0fc11547a0d6e4ffdb52fc4301b1f14d86e0686e47d35f",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/cmd/podman/common/create_opts.go"
+    },
+    {
+      "bytes": 15094,
+      "git_blob": "4a7c776364892bc32a685e451ec4a3563a8b038b",
+      "path": "pkg/specgen/generate/storage.go",
+      "sha256": "a9d7b158513f1c63b6c33c0e7eede291a2181c9a71db1bfeb7e376261fd19d7e",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/pkg/specgen/generate/storage.go"
+    },
+    {
+      "bytes": 221,
+      "git_blob": "86f6d51bb70e3728d20596b21d101985702ae4df",
+      "path": "pkg/specgen/generate/storage_linux.go",
+      "sha256": "75520f55823a839df1de2d364a2fdd1c12c22533f09a8a5a1b4f6f75a6ebf0ad",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/pkg/specgen/generate/storage_linux.go"
+    },
+    {
+      "bytes": 6854,
+      "git_blob": "a65dcfbba93bbcba97beccd7a6c11dfe9351a11d",
+      "path": "pkg/util/mountOpts.go",
+      "sha256": "e2d8f03c953d845f20d24f4e526e68d84a918dcbf565bb1b071cd97cf19236d2",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/pkg/util/mountOpts.go"
+    },
+    {
+      "bytes": 564,
+      "git_blob": "bc7c675f325ab12244f040eb0e2d1d1b2f2620d5",
+      "path": "pkg/util/mountOpts_linux.go",
+      "sha256": "518bc026b642eadee1232a6b151d2eac89cd16472b8e53ff2e287c25a40e4d0f",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/pkg/util/mountOpts_linux.go"
+    },
+    {
+      "bytes": 32919,
+      "git_blob": "4d106d42f8744bf30cdb2df023ef9e2378e3501f",
+      "path": "vendor/github.com/containers/common/libimage/image.go",
+      "sha256": "8ec1df05cbe4e9b3a3150cd0a1c55a9588a557ddd3c284519f0723d36730f1c6",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/vendor/github.com/containers/common/libimage/image.go"
+    },
+    {
+      "bytes": 35650,
+      "git_blob": "d71eab08bb40f9ee349e935180f85d5519d561ec",
+      "path": "vendor/github.com/containers/storage/images.go",
+      "sha256": "d2cbe865927ea49231935a7b4b440a8b8984da7c200d0747753c781b88993dca",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/vendor/github.com/containers/storage/images.go"
+    },
+    {
+      "bytes": 7488,
+      "git_blob": "3cb080481b5f283b252e7edab93ea710e1461ae8",
+      "path": "pkg/util/utils_linux.go",
+      "sha256": "e203480eb0b4bb295139a773e4cd6d822dd3b69bd3c2668d862b61a276da3611",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/pkg/util/utils_linux.go"
+    },
+    {
+      "bytes": 26274,
+      "git_blob": "bec9bd071e31bbc385a0bff14702621985e1189c",
+      "path": "cmd/podman/root.go",
+      "sha256": "dc4a00472be057404d7e61a561af1f11a08b91e0bc98fdbb41462f7023799115",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/cmd/podman/root.go"
+    },
+    {
+      "bytes": 2814,
+      "git_blob": "9d63d8a755894f8288c591a4f546a91055342b46",
+      "path": "cmd/podman/system/info.go",
+      "sha256": "9c45b51cdc57fec320dd1b1184702a6bf53607e782a30fb857855c1ee7919c1f",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/cmd/podman/system/info.go"
+    },
+    {
+      "bytes": 1272,
+      "git_blob": "2c17e6e92a998bab7a4f4047f421a00d1cd59fe0",
+      "path": "libpod/define/version.go",
+      "sha256": "8a471d6d8fb89fb9e54fcc61782e0817ac6aecfc0baf4bc38eef4e8b3d9a91cb",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/libpod/define/version.go"
+    },
+    {
+      "bytes": 4406,
+      "git_blob": "4894af818023bf132665556333e84426f80d7cc8",
+      "path": "vendor/github.com/spf13/pflag/string_array.go",
+      "sha256": "50e75bd875c0950a97e8f1d8af6d8f3f1281eff2d84cb742fe0ab513b1628450",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/vendor/github.com/spf13/pflag/string_array.go"
+    },
+    {
+      "bytes": 13754,
+      "git_blob": "6ba2154a7790f1fda99102b82adb9da0e0528030",
+      "path": "vendor/github.com/containers/common/pkg/subscriptions/subscriptions.go",
+      "sha256": "1e86bc0628a0ad084a0137f4b610c071e243c95e0a1910d3d80f403ffa80f855",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/vendor/github.com/containers/common/pkg/subscriptions/subscriptions.go"
+    },
+    {
+      "bytes": 6506,
+      "git_blob": "1003b6483e2b25ccefd90c6c66f6d12462e65fba",
+      "path": "vendor/github.com/containers/common/libimage/inspect.go",
+      "sha256": "072a3e38c5f6fd4b2d7d299a7d38ca0f58048f32d933461814227e124ab99a6e",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/vendor/github.com/containers/common/libimage/inspect.go"
+    },
+    {
+      "bytes": 39328,
+      "git_blob": "07e1d5e1f9e7a70fdd2e5e0a5c4dc081c1cf0b38",
+      "path": "vendor/github.com/containers/image/v5/storage/storage_dest.go",
+      "sha256": "c674b0c097b8008360af0b0c5bff1576e19c36b0373bc781d217f896c929bb39",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/vendor/github.com/containers/image/v5/storage/storage_dest.go"
+    },
+    {
+      "bytes": 9701,
+      "git_blob": "858fcbfc8f7819e9a55a6677adb49e9463c5eeef",
+      "path": "pkg/specgen/generate/validate.go",
+      "response_sha256": "513b13d4daf172f729f2049c8bfe47d255578756184762f1d6f8a107aee13d63",
+      "sha256": "6802bbcf48de51c7df00fa7a028d5495a90b6504b136ca5e1d1384acae1e91bc",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/pkg/specgen/generate/validate.go"
+    },
+    {
+      "bytes": 507,
+      "git_blob": "ffa9e5786f0b0ca402ec5497a7199a09018d420e",
+      "path": "pkg/specgen/resources_linux.go",
+      "response_sha256": "34f49c6552e6cf00f0e91a4d1ebb8992d010fe6da332e4311d38c4ac5795587c",
+      "sha256": "3b5d996bca69e165294de7b9925833b16088df27b514fad7ef5ec50273494594",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/pkg/specgen/resources_linux.go"
+    },
+    {
+      "bytes": 2368,
+      "git_blob": "fcbd10ada5d531ece4f5195f9a64687099b4b372",
+      "path": "vendor/github.com/containers/common/libimage/oci.go",
+      "sha256": "94358341ff0b3200b1eec321120324dace1e73e50570c3a7da4dec37a49e3d17",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/vendor/github.com/containers/common/libimage/oci.go"
+    },
+    {
+      "bytes": 7872,
+      "git_blob": "9f5841fe1424c4ac0f58d23a005a9666ea62e2af",
+      "path": "vendor/github.com/containers/common/libimage/image_config.go",
+      "sha256": "6393016c45dc6dda5ca38df243aa7df397203aaa30671c1cda221b5ed977a597",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/vendor/github.com/containers/common/libimage/image_config.go"
+    },
+    {
+      "bytes": 4548,
+      "git_blob": "36b0aeb8f1fcbd4839c0dafe767fcd3899f23e53",
+      "path": "vendor/github.com/opencontainers/image-spec/specs-go/v1/config.go",
+      "sha256": "b88c5220009106090d760c4589704a950b45e6c0f676427be9537b2abaf2a763",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/vendor/github.com/opencontainers/image-spec/specs-go/v1/config.go"
+    },
+    {
+      "bytes": 17086,
+      "git_blob": "c3234c377be3b9c285cbaefb8ec5544229810bb1",
+      "path": "vendor/github.com/containers/image/v5/internal/image/docker_schema2.go",
+      "sha256": "15b9564aaf31d3e2212e9644a1c2714bcb9f95951632aa44ea1bc8a79cc43409",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/vendor/github.com/containers/image/v5/internal/image/docker_schema2.go"
+    },
+    {
+      "bytes": 15503,
+      "git_blob": "df0e8e41716de82bce1b34f371a3786ca1b58309",
+      "path": "vendor/github.com/containers/image/v5/internal/image/oci.go",
+      "sha256": "f5abb1e81e5b79eaa281a3e3a196e5b4e12d9fc38f6fa51789e569fba8c54d04",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/vendor/github.com/containers/image/v5/internal/image/oci.go"
+    },
+    {
+      "bytes": 23922,
+      "git_blob": "bc8e8498167234aabdbce4a919417b518ad1b3bd",
+      "path": "vendor/github.com/containers/common/libimage/pull.go",
+      "sha256": "e32a6000ca62124a31e86b7ba5b1e682b241a33c293f58090fba7a0b12d462d8",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/vendor/github.com/containers/common/libimage/pull.go"
+    },
+    {
+      "bytes": 18320,
+      "git_blob": "d6acc732501c4b48069db170e2d9ecda34bfc0da",
+      "path": "vendor/github.com/containers/common/libimage/copier.go",
+      "sha256": "b3b805a64b28da7d6f548536a9cc861df58503cc050fb65e6b13af63bc38a3c0",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/vendor/github.com/containers/common/libimage/copier.go"
+    },
+    {
+      "bytes": 11357,
+      "git_blob": "8dada3edaf50dbc082c9a125058f25def75e625a",
+      "path": "vendor/github.com/containers/common/LICENSE",
+      "sha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/vendor/github.com/containers/common/LICENSE"
+    },
+    {
+      "bytes": 10728,
+      "git_blob": "953563530606c1d8f2c689f58dd5a77ea8e5942e",
+      "path": "vendor/github.com/containers/image/v5/LICENSE",
+      "sha256": "716a8b80635c394681e652823e1e42e411ad2d254e1f202403422d74f4b0b106",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/vendor/github.com/containers/image/v5/LICENSE"
+    },
+    {
+      "bytes": 10767,
+      "git_blob": "9fdc20fdb6a80fb84ecc3153533d5295c2d9142b",
+      "path": "vendor/github.com/opencontainers/image-spec/LICENSE",
+      "sha256": "b0a3f39513927db306adabea11d14c23f079d4febcea241d123a68d1a0d45418",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/vendor/github.com/opencontainers/image-spec/LICENSE"
+    },
+    {
+      "bytes": 14001,
+      "git_blob": "6d97ea7d656a1a6edca77be656524cdc825cba3c",
+      "path": "cmd/podman/containers/create.go",
+      "sha256": "8030f2d13d1b3aeb38c0ff734cea7f05a2efabeb4a35448c486075abdfbbdb77",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/cmd/podman/containers/create.go"
+    },
+    {
+      "bytes": 6956,
+      "git_blob": "4604565e2d0b7511b9c17d2cf76370d5a545b3ae",
+      "path": "cmd/podman/images/pull.go",
+      "sha256": "a199b5a47509fdc7418f741e144e537e92e46b581e68d68577cc9208094fa667",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/cmd/podman/images/pull.go"
+    },
+    {
+      "bytes": 59211,
+      "git_blob": "4bd96f46c5e9a9b036836c65c078e33a507b1c33",
+      "path": "libpod/options.go",
+      "sha256": "fa3f8f318c75515cd8a96d73894ad391ddf7596f66decda95b647764657c663d",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/libpod/options.go"
+    },
+    {
+      "bytes": 30633,
+      "git_blob": "6c06d68afe40517a304a6d65b6643333f698a122",
+      "path": "pkg/domain/infra/abi/images.go",
+      "sha256": "41ce6975b11b1afea62a2aac052a8cdc078796f53ab1544574e3547a25875efa",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/pkg/domain/infra/abi/images.go"
+    },
+    {
+      "bytes": 6867,
+      "git_blob": "b8b2ece8bd932eb61e27c13ff54d94948eccdb72",
+      "path": "pkg/specgen/volumes.go",
+      "sha256": "9df591ef33e7fc0e18fbd0d7c3e0e37d8caf062f24a8012681ad023562ea9de3",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/pkg/specgen/volumes.go"
+    },
+    {
+      "bytes": 20811,
+      "git_blob": "b9a85f18b46b4b21c511055c5c002dd6ec667d0b",
+      "path": "pkg/specgenutil/volumes.go",
+      "sha256": "d793017c38c6e19848429c016451ce4ca03af97a9dc352ab4696fdf15b7087a0",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/pkg/specgenutil/volumes.go"
+    },
+    {
+      "bytes": 1020,
+      "git_blob": "0883b2a99a19daeacb391b9541350fdfdf8505e2",
+      "path": "pkg/specgenutilexternal/mount.go",
+      "sha256": "bf7a5b9ec0f6693becb41c19747e0ac41eb29f61e37b359151290403c124aaba",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/pkg/specgenutilexternal/mount.go"
+    },
+    {
+      "bytes": 1572,
+      "git_blob": "2272cee757cdc2df32841f6c3260ab25de2c15e3",
+      "path": "vendor/github.com/containers/common/libimage/platform/platform.go",
+      "sha256": "425ba87756b8ad7628d487335b110c2a32c154a52b4bb9cda2c837529e82ab2c",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/vendor/github.com/containers/common/libimage/platform/platform.go"
+    },
+    {
+      "bytes": 46730,
+      "git_blob": "75b917f013eae5252aabe34f3b4dce6a4140ee74",
+      "path": "vendor/github.com/containers/common/pkg/config/config.go",
+      "sha256": "055232d34ee24862e531eca0af26e83020365d2cee3c262b4561e8b810545c8f",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/vendor/github.com/containers/common/pkg/config/config.go"
+    },
+    {
+      "bytes": 21251,
+      "git_blob": "ea2ede1cb44e4d27d64d91fc34edecac2e4970ff",
+      "path": "vendor/github.com/containers/common/pkg/config/default.go",
+      "sha256": "525983348bb65f5b185f89900dbcfc5a1a483cac5c26a6cdebc10bf0f768e1fe",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/vendor/github.com/containers/common/pkg/config/default.go"
+    },
+    {
+      "bytes": 2397,
+      "git_blob": "f21671f6b1d30172628899bb46a12fa85ae3bdff",
+      "path": "vendor/github.com/containers/common/pkg/config/modules.go",
+      "sha256": "7719370a133406ed64ee196e9fd324192de8abdb85ebe47f953b30feb1c59c8b",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/vendor/github.com/containers/common/pkg/config/modules.go"
+    },
+    {
+      "bytes": 6888,
+      "git_blob": "64ddf4716616393a90d556d1f984bbe5aa89e77a",
+      "path": "vendor/github.com/containers/common/pkg/config/new.go",
+      "sha256": "a6974e5bcc96774085ca1d90631a3f2f03fb348fdfc9791c6101493f6cd3705d",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/vendor/github.com/containers/common/pkg/config/new.go"
+    },
+    {
+      "bytes": 2835,
+      "git_blob": "be6030fdb81b03b99fafcd27b7855cfbfb5b0235",
+      "path": "vendor/github.com/containers/common/pkg/config/pull_policy.go",
+      "sha256": "120c96812e1aab7403f89290d5ec2d269e8151ae567e7bd4c1600dde65cc4be6",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/vendor/github.com/containers/common/pkg/config/pull_policy.go"
+    },
+    {
+      "bytes": 5687,
+      "git_blob": "7629f5842159d2d777eb7ce714d5bfdd96875a05",
+      "path": "vendor/github.com/containers/common/pkg/parse/parse.go",
+      "sha256": "709a7999ad05428c31a7b22b0d8d933793e22f03b83d6c6b12bb9e8da7e58a16",
+      "url": "https://github.com/podman-container-tools/podman/blob/8d2b55ddde1bc81f43d018dfc1ac027c06b26a7f/vendor/github.com/containers/common/pkg/parse/parse.go"
+    }
+  ],
+  "semantic_projection": {
+    "contract": "podman493_typed_oci_config_v1",
+    "fields": [
+      "User",
+      "ExposedPorts",
+      "Env",
+      "Entrypoint",
+      "Cmd",
+      "Volumes",
+      "WorkingDir",
+      "Labels",
+      "StopSignal",
+      "ArgsEscaped"
+    ],
+    "healthcheck": "separate_absent_for_all_eight_reviewed_images",
+    "zero_semantics": "source_proven_omitempty_missing_null_empty_collapse",
+    "variant": "audited_source_selected_not_directly_exposed_by_inspect"
+  },
+  "additional_source_receipts": [
+    {
+      "name": "source-receipt-passwd-platform.json",
+      "sha256": "sha256:310a206dacd35ad2f99630a81787007fab9f9c5de4736c6947ecb786790c4599"
+    },
+    {
+      "name": "source-receipt-platform-rules.json",
+      "sha256": "sha256:1199a1919e0ce35aabb0b27a5f3761fc2aa8c569587c9659506aa0277b7c98e0"
+    },
+    {
+      "name": "source-receipt-create-registration.json",
+      "sha256": "sha256:400ffe703824a0fd57c176f16e078c8b21e5fcda1c303555ab98ec7b8ed3eb87"
+    },
+    {
+      "name": "source-receipt-volume-config.json",
+      "sha256": "sha256:9e4fabbd99443e25db12ce63bf6913dc06350d030dc2c179dbdc93a21ef85bd3"
+    },
+    {
+      "name": "source-receipt-volume-config-rules.json",
+      "sha256": "sha256:61fe98af015ec33336d4585e51c6b940fbb26d1b36926e66a68e6cee9379df78"
+    },
+    {
+      "name": "source-receipt-volume-config-final.json",
+      "sha256": "sha256:c7f822e2e8ed185b455dabc292b37fe82564ab4301a76f2c119357b12a93338a"
+    },
+    {
+      "name": "source-receipt-extra.json",
+      "sha256": "sha256:8964acd838d579fc7951d9df3ab47faee6e2efb905051111cc055322af60bf71"
+    },
+    {
+      "name": "source-receipt-final.json",
+      "sha256": "sha256:818a0bc984d41c83613be6a751f896d65dc429e17d116bbe920e3e51a977595d"
+    },
+    {
+      "name": "source-receipt-rules.json",
+      "sha256": "sha256:836a86c31b478225a4d8313aa87ca43eb5a151a35bcfaacafec3bbea1a477d9f"
+    },
+    {
+      "name": "source-receipt-image-projection.json",
+      "sha256": "sha256:d3cf3130cc05519fd6451b3512bea93eca6286c234e3f2ba51408bab89c18b44"
+    },
+    {
+      "name": "source-receipt-binding-final.json",
+      "sha256": "sha256:2976af453948959f910a1f8993e180698ee64433fa6b1fbdb7baa890a275a3ad"
+    }
+  ]
+}

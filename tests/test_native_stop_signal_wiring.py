@@ -4,6 +4,7 @@ import re
 import subprocess
 import tempfile
 import unittest
+from native_harness_syntax import native_calls
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -59,12 +60,14 @@ class StopSignalWiringTests(unittest.TestCase):
 
     def test_canonical_harness_adds_one_proof_without_changing_emitter_protocol(self):
         harness = (ROOT / "scripts/native-conformance.sh").read_text()
-        invocations = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', harness, re.M)
-        self.assertEqual(len(invocations), 19)
+        invocations = native_calls(harness)
+        self.assertEqual(len(invocations), 28)
+        self.assertEqual(invocations[26], ("native_pids_limit", "live_pids_limit_effects_match_engine"))
+        self.assertEqual(invocations[27:], [("native_nofile", "live_nofile_limits_and_effects_match_engine")])
         self.assertEqual(invocations[15], ("native_stop_signal", "live_stop_signal_matches_engine"))
         self.assertIn('export NATIVE_STOP_SIGNAL_PROOF_PATH="$run_dir/stop-signal-v1.json"', harness)
         self.assertIn("export NATIVE_STOP_SIGNAL_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA", harness)
-        self.assertNotIn('"$NATIVE_STOP_SIGNAL_PROOF_PATH"', harness.split('python3 "$script_dir/native-evidence.py"', 1)[1])
+        self.assertNotIn('"$NATIVE_STOP_SIGNAL_PROOF_PATH"', harness.split('canonical_phase emitter', 1)[1])
         source = (ROOT / "src/native_stop_signal_tests.rs").read_text()
         self.assertNotIn('"--signal"', source)
         self.assertIn("!run.image_attempted && run.derived_id.is_none()", source)
@@ -211,8 +214,9 @@ class StopSignalWiringTests(unittest.TestCase):
         self.assertIn("9 * 1024", source)
         self.assertRegex(source, r'if result\.is_ok\(\) \{\s+eprintln!\("DOCKERLENS_NATIVE_STOP_SIGNAL_LIFECYCLE: observations_complete"\);\s+\}')
         shared = (ROOT / "src/native_health_metadata_tests.rs").read_text()
-        self.assertIn("stream(stdout, if cleanup { 8192 } else { 65550 })", shared)
-        self.assertIn("stream(stderr, if cleanup { 2048 } else { 8192 })", shared)
+        self.assertRegex(shared, r"collect\(\s*Box::new\(stdout\) as Box<dyn Read \+ Send>,\s*if cleanup \{ 8192 \} else \{ 65550 \}")
+        self.assertRegex(shared, r"collect\(\s*Box::new\(stderr\) as Box<dyn Read \+ Send>,\s*if cleanup \{ 2048 \} else \{ 8192 \}")
+        self.assertIn("Some(budget) => reserved_stream(source, cap, &budget, cleanup, &failed)", shared)
         self.assertIn("const CLEANUP_CALLS: usize = 100;", shared)
         self.assertIn("const CLEANUP_BYTES: usize = 2 * 1024 * 1024;", shared)
 

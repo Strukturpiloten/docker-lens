@@ -105,6 +105,27 @@ class ScaffoldPolicyTests(unittest.TestCase):
             self.assertIn("if-no-files-found: error", workflow)
             self.assertIn("DOCKERLENS_NATIVE_CANDIDATE_SHA:", workflow)
 
+    def test_native_monotonic_clock_has_unique_cargo_ownership_and_integrity(self) -> None:
+        manifest = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
+        pin = manifest["dev-dependencies"]["rustix"]
+        self.assertNotIn("rustix", manifest["dependencies"])
+        self.assertRegex(pin["version"], r"^=\d+\.\d+\.\d+$")
+        self.assertFalse(pin["default-features"])
+        self.assertEqual(pin["features"], ["std", "time"])
+        lock = tomllib.loads((ROOT / "Cargo.lock").read_text(encoding="utf-8"))
+        packages = [package for package in lock["package"] if package["name"] == "rustix"]
+        self.assertEqual(len(packages), 1)
+        self.assertEqual(packages[0]["version"], pin["version"][1:])
+        self.assertEqual(packages[0]["source"], "registry+https://github.com/rust-lang/crates.io-index")
+        self.assertRegex(packages[0]["checksum"], r"^[a-f0-9]{64}$")
+        renovate = json.loads((ROOT / "renovate.json").read_text(encoding="utf-8"))
+        self.assertEqual(renovate["enabledManagers"].count("cargo"), 1)
+        self.assertNotIn("rustix", renovate.get("ignoreDeps", []))
+        self.assertEqual(
+            [manager["managerFilePatterns"] for manager in renovate["customManagers"]],
+            [["/^rust-toolchain\\.toml$/"], ["/^scripts\\/native-conformance\\.sh$/"]],
+        )
+
     def test_scripts_have_distinct_scope(self) -> None:
         fast = (ROOT / "scripts/format-lint.sh").read_text()
         complete = (ROOT / "scripts/check-all.sh").read_text()
@@ -117,13 +138,20 @@ class ScaffoldPolicyTests(unittest.TestCase):
         self.assertIn('timeout --signal=TERM --kill-after=2s 8s "${podman_cmd[@]}" "$@"', native)
         self.assertIn('"${podman_cmd[@]:0:2}" timeout --signal=TERM --kill-after=2s 8s "${podman_cmd[@]:2}" "$@"', native)
         for owned_cleanup in (
-            'cleanup_container "$container" container "$outer_container_id" "$outer_attempted"',
             'cleanup_container "$sidecar" sidecar "$sidecar_container_id" "$sidecar_attempted"',
             'cleanup_remove "$role" rm --force --time 0 "$id"',
             'cleanup_remove network network rm "$outer_network"',
             'cleanup_remove volume volume rm "$volume"',
         ):
             self.assertIn(owned_cleanup, native)
+        self.assertIn('canonical_phase teardown || status=1', native)
+        self.assertIn('container exists "$container"', native)
+        self.assertIn('container exists "$outer_container_id"', native)
+        self.assertLess(native.index('outer_name_state == 1 && outer_id_state == 1'),
+                        native.index('cleanup_container "$sidecar"'))
+        runtime = (ROOT / "scripts/native_outer_runtime.py").read_text()
+        self.assertIn('("rm", "--force", "--time=0", identity.container_id)', runtime)
+        self.assertNotIn('("rm", "--force", "--time=0", identity.name)', runtime)
         self.assertNotIn('cleanup_remove "$role" rm --force --time 0 "$name"', native)
         self.assertIn("run-exact-native-test.sh\" acquisition live_read_only_acquisition_matches_oracle", native)
         self.assertIn("run-exact-native-test.sh\" native_target live_target_render_matches_engine", native)
