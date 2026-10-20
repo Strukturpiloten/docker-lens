@@ -1,10 +1,14 @@
 # Supplementary groups: finite nonroot DAC source proof
 
-`supplementary-groups-v1` is a prepared, unregistered source-only lifecycle child
-for DockerLens #39/#31. The primary owns later parent/harness/runner integration.
-No product API, canonical invocation, public raw projection, reviewed catalogue,
-dependency, image or operational pin changes here. This source and synthetic
-controls are not genuine native qualification. Host capture remains deferred.
+`supplementary-groups-v1` is an integrated source-only lifecycle child for
+DockerLens #39/#31. [ADR 0026](decisions/0026-runtime-settings-source-integration.md)
+registers it as mandatory canonical invocation 25, followed by its strict private
+reader even without public manifest emission. Only complete validation permits
+the closed `raw_source_only` / `catalogue_admission: unadmitted` projection;
+SupplementaryGroups remains outside compiled catalogue selection. This wiring
+adds no product API, dependency, image or operational pin. This source and
+synthetic controls are not genuine native qualification. Host capture remains
+deferred.
 
 ## Independent controls and actual worker
 
@@ -93,7 +97,7 @@ seconds and total execution within 180 seconds. Final image/outer snapshots
 remain ordinary work, not renewed cleanup reads. These static counts are not
 evidence that real lanes complete within time or resource budgets.
 
-## Private protocol and integration handoff
+## Private protocol and integrated source wiring
 
 Only verified effects, actual acquisition, complete once-only cleanup and final
 unchanged borrowed-image/outer snapshots can publish the fixed owner-private
@@ -108,11 +112,16 @@ All context facts come independently from the trusted harness: capture directory
 candidate SHA, run token, lane, Engine release, rendering API, daemon mode,
 Debian package (empty upstream), fixture image, outer image, outer ID and daemon
 UID. Those are the reader's twelve CLI arguments. Success prints no payload.
-Parent registration, candidate/proof-path binding, the existing once-created
-deadline, a dedicated bound lifecycle outer-owner scope and mandatory validation
-even without manifest emission are main-owned integration work. Existing shared
-cleanup handles uncertainty once and requests authenticated outer teardown;
-handoff is not completed teardown. No unsafe Drop retry or derived-image owner.
+Parent registration, candidate/proof-path binding and the dedicated bound
+lifecycle outer-owner scope are integrated under ADR 0026. The strict reader
+follows invocation 25 before kernel-settings invocation 26 and before optional
+public emission, using the existing once-created deadline. The nineteen-argument
+emitter independently requires the same complete private proof and closed return
+before projecting the fixed numeric-nonroot scope and DAC outcome; it exposes no
+private group values, IDs or receipts and grants no reviewed catalogue admission.
+Existing shared cleanup handles uncertainty once and requests authenticated outer
+teardown; handoff is not completed teardown. No unsafe Drop retry or derived-image
+owner is introduced.
 
 Current official Docker CLI documentation was queried through Context7
 `/docker/cli` on 2026-10-18 for numeric supplementary `--group-add` and explicit
@@ -124,6 +133,9 @@ is Apache-2.0; no oracle source/documentation implementation was copied or
 mechanically translated, and no binaries/private proof payloads are redistributed.
 Existing pins/provenance remain authoritative; no Renovate extraction change.
 
-Fresh full offline and exact-candidate four-lane native gates plus independent
-review remain required. This preparation admits nothing and establishes no
-BoxFerry application, full migration, release, publication or deployment acceptance.
+Fresh final-edit full offline gates, independent final-diff review and genuine
+exact-final-candidate 28-invocation four-lane native qualification with independent
+evidence review remain required. Historical campaigns and failures stay immutable;
+they do not qualify later changed candidate bytes. Source integration grants no
+reviewed catalogue admission or native compatibility and establishes no BoxFerry
+application, full migration, release, publication or deployment acceptance.

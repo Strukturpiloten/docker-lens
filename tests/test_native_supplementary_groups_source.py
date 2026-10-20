@@ -105,6 +105,21 @@ class SupplementaryGroupsSourceTests(unittest.TestCase):
         self.assertIn('"rootless_observed"', capture)
         self.assertIn('"unknown_with_independent_rootful_context"', capture)
 
+    def test_contract_distinguishes_integrated_source_from_native_qualification(self):
+        contract = (ROOT / 'docs/native-supplementary-groups-contract.md').read_text()
+        normalized = ' '.join(contract.split())
+        self.assertIn('(decisions/0026-runtime-settings-source-integration.md)', contract)
+        for marker in ('supplementary-groups-v1', 'raw_source_only', 'catalogue_admission: unadmitted'):
+            self.assertIn(marker, normalized)
+        for requirement in (r'\bmandatory\b[^.]*\binvocation 25\b',
+                            r'\bstrict\b[^.]*\breader\b[^.]*\bwithout\b[^.]*\bemission\b',
+                            r'\bsynthetic\b[^.]*\bnot\b[^.]*\bnative qualification\b',
+                            r'\bexact-final-candidate\b[^.]*\b28-invocation\b[^.]*\bfour-lane\b',
+                            r'\bno\b[^.]*\breviewed catalogue admission\b',
+                            r'\bno\b[^.]*\bnative compatibility\b'):
+            self.assertRegex(normalized, requirement)
+        self.assertNotRegex(normalized, r'\bprepared, unregistered\b')
+
     def test_exact_six_slot_once_cleanup_and_original_budgets_guard_private_publication(self):
         source = self.source()
         for needle in ('run.ids = vec![None; 6]', 'run.attempted = vec![false; 6]',
