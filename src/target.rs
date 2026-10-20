@@ -37,11 +37,13 @@ pub use network::{
     NetworkCreate, NetworkDriver, NetworkIntent, NetworkIpam, NetworkIpamDriver, NetworkIpamPool,
     NetworkLabel, NetworkRole, NetworkSource, NetworkSubnet,
 };
-pub use prerequisite::NetworkPrerequisiteError;
+pub use prerequisite::{
+    DestinationPidsAssessment, DestinationPidsPrerequisiteError, NetworkPrerequisiteError,
+};
 pub use render::{
     BindRelabelCondition, BindSourceCondition, BindSourcePrerequisite, CompleteArtifactError,
-    DockerApiRenderer, NetworkPrerequisite, RenderError, RenderedArtifact, Renderer,
-    VolumePrerequisite,
+    DestinationPidsPrerequisite, DockerApiRenderer, NetworkPrerequisite, RenderError,
+    RenderedArtifact, Renderer, VolumePrerequisite,
 };
 pub use volume::VolumeLabel;
 

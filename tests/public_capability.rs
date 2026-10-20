@@ -6,7 +6,7 @@ use docker_lens::target::{
     Argument, BindRelabel, ContainerIntent, ContainerLabel, ContainerSettings, ContainerUser,
     DockerApiRenderer, DockerPlanner, HealthTest, Healthcheck, HostBinding, ImageCommand,
     ImageReference, IntentError, Mount, NetworkAlias, NetworkAttachmentIntent, NetworkCreate,
-    NetworkDriver, NetworkIntent, NetworkLabel, NetworkRole, NetworkSource, Planner,
+    NetworkDriver, NetworkIntent, NetworkLabel, NetworkRole, NetworkSource, PidsLimit, Planner,
     PlanningContext, PlanningError, PortHostIp, PortHostPort, PortPublication, Protocol, Renderer,
     TargetField, TargetIdentity, TargetIntent, TargetResource, TmpfsOptions, UserNamespaceMode,
     VolumeLabel, WorkingDirectory,
@@ -341,6 +341,40 @@ fn application_container() -> ContainerIntent {
 
 fn container_target(container: ContainerIntent) -> TargetIntent {
     TargetIntent::new(vec![TargetResource::Container(Box::new(container))]).unwrap()
+}
+
+#[test]
+fn destination_obligations_do_not_admit_finite_or_unlimited_pids_on_any_sealed_profile() {
+    let catalog = TargetCapabilityCatalog::reviewed();
+    for profile in catalog.profiles() {
+        let capabilities = catalog.resolve(profile).unwrap();
+        for limit in [
+            PidsLimit::Count(NonZeroU64::new(16).unwrap()),
+            PidsLimit::Unlimited,
+        ] {
+            let mut container = application_container();
+            container.settings.pids_limit = Some(limit);
+            assert_eq!(
+                DockerPlanner
+                    .plan(&container_target(container), &capabilities)
+                    .unwrap_err(),
+                PlanningError::MissingCapability {
+                    resource: ResourceRef::new(3),
+                    field: TargetField::PidsLimit,
+                    capability: Capability::PidsLimit
+                }
+            );
+        }
+        let intent = container_target(application_container());
+        let graph = DockerPlanner.plan(&intent, &capabilities).unwrap();
+        let artifact = DockerApiRenderer.render(&graph).unwrap();
+        assert!(artifact.destination_pids_prerequisites().is_empty());
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&artifact.complete_bytes().unwrap())
+                .unwrap()["schema_version"],
+            1
+        );
+    }
 }
 
 fn complete_application(profile: &TargetProfile, intent: &TargetIntent) -> serde_json::Value {

@@ -2,13 +2,13 @@
 
 `RenderedArtifact::bytes()` remains the low-level, newline-delimited native
 POST request stream. It is **request-only** and may omit external-resource
-and destination bind-source requirements. Consumers persisting or reviewing a migration plan must use
+and destination bind-source or rootless-PIDs requirements. Consumers persisting or reviewing a migration plan must use
 `RenderedArtifact::complete_bytes()` and must reject its closed error for
 caller-created opaque artifacts. This API exposes protected authored values
 explicitly; storage, display, and access control belong to the consumer.
 
 The complete artifact is one UTF-8 JSON object followed by a newline. Artifacts
-without bind-source prerequisites or explicit external-network internal
+without finite rootless-PIDs or bind-source prerequisites or explicit external-network internal
 expectations retain version 1 and their existing bytes:
 
 ```json
@@ -79,7 +79,8 @@ ADR 0016 admits shared/private configured retention on all four exact candidate
 profiles. This does not establish source suitability or SELinux effects; actual
 Nextcloud/Supabase consumer reviews and final-candidate native gates remain required.
 An artifact containing a relabelled bind emits `schema_version: 2` unless an
-explicit external-network internal expectation requires version 3 below.
+explicit external-network internal expectation requires version 3 below, or
+a finite rootless-PIDs obligation requires version 4.
 The context, ordered request objects, and existing network/volume prerequisites
 keep their version 1 representation. Each relabelled bind adds this closed
 prerequisite kind in container planning order and original mount-index order:
@@ -145,7 +146,8 @@ authored consumer obligations, not destination observations or evidence of
 existence, ownership, isolation, or reachability. The typed
 `NetworkPrerequisite::expected_internal` preserves all three states.
 
-Only an artifact with at least one explicit expectation uses schema 3. Its
+An artifact with an explicit expectation uses schema 3 unless a finite
+rootless-PIDs obligation requires schema 4. Its
 network prerequisite adds a boolean `expected_internal` after `expected_driver`:
 
 ```json
@@ -163,7 +165,8 @@ be treated as false. All existing context, ordered requests, and network,
 volume, and bind-source prerequisite representations remain unchanged. Schema
 3 takes precedence when expectations and bind-source obligations coexist,
 retaining every schema-2 source/SELinux obligation. Request-only bytes do not
-change. Without expectations, existing schema-1 and schema-2 bytes are preserved.
+change. Without expectations or finite rootless-PIDs obligations, existing
+schema-1 and schema-2 bytes are preserved.
 Consumers must reject unsupported versions or constraints, not ignore the new
 field or infer satisfied preflight from rendering.
 
@@ -205,3 +208,73 @@ reachability proof. Caller-assembled snapshots remain caller assertions. The
 method performs no I/O, creates no capability claim and changes no catalogue
 admission. ADR 0018 separately selects genuine reviewed source evidence; fresh
 final-candidate native and actual consumer qualification remains required.
+
+## Conditional version 4 finite-rootless-PIDs obligations
+
+An authored finite `PidsLimit::Count` in a rootless planning context adds one
+closed destination obligation. Absent and explicit unlimited limits add none;
+unlimited remains an explicit native request, not omission or infinite runtime
+capacity. Rootful requests acquire no rootless-specific systemd/v2 requirement.
+All existing capability gates remain mandatory: current sealed profiles still
+reject finite and unlimited PIDs settings. This format does not admit them.
+
+```json
+{
+  "kind": "rootless_pids",
+  "reference": "3",
+  "identity": "app",
+  "pids_limit": "16",
+  "required_cgroup_driver": "systemd",
+  "required_cgroup_version": "2",
+  "required_pids_report": true,
+  "delegation": "unverified",
+  "enforcement": "unverified"
+}
+```
+
+`identity` binds the obligation to the exact authored container-create target,
+not a native ID or observed name. `reference` remains the caller-local unsigned
+decimal string, not a request index. `pids_limit` is the exact authored count
+in 1..9223372036854775807, serialized as a decimal string to avoid JSON numeric
+precision loss. Consumers must verify the owning request and matching count;
+missing or ambiguous associations must be rejected. Identity and count are
+protected authored values, disclosed only by explicit reads and redacted in
+Debug. The containing document's existing `context` binds every row to its
+planning context and, for offline targets, selected profile/evidence key. It
+does not identify or authenticate a destination capture.
+
+Schema 4 takes precedence over schemas 1–3 whenever this obligation is present.
+Rows follow container planning order, immediately before that container's
+bind-source rows; all existing network, volume and bind obligations remain.
+Their representations, ordered request objects and request-only bytes do not
+change. Without finite rootless-PIDs obligations, exact schema-1/2/3 bytes and
+selection remain unchanged. Consumers must reject unsupported versions, kinds
+or constraints, not silently discard the new obligation. The typed accessor
+is `RenderedArtifact::destination_pids_prerequisites()`; opaque caller-created
+artifacts still cannot produce a complete document.
+
+`DestinationPidsPrerequisite::assess` takes a supplied destination snapshot and
+an explicitly caller-selected `ObservationId`. Inventory, daemon and resource
+reports must share it. An observed planning context must also match that exact
+explicit destination ID; same-version evidence from another observation refuses.
+Offline profiles have no observation binding, and no context ID substitutes for
+the explicit destination argument. A source capture is never implicitly selected
+as destination evidence. The method checks the observable projection of the planning context:
+exact release, advertised API and rootless mode; offline targets also require
+the actual reads to use their chosen acquisition API. Actual request versions
+are nonempty and bounded to 4096, and rendering/read versions must fit the
+reported maximum and any reported minimum. Missing minimum remains unknown,
+not an invented version. Exact effective present true/systemd/2 reports are
+required; unavailable, valueless, wrong-origin or contrary metadata refuses.
+
+The sole positive result is
+`MetadataCompatibleDelegationAndEnforcementUnverified`. It never means ready,
+satisfied delegation, PIDs enforcement, authenticated peer identity, exact
+build/package provenance, atomicity or current/future runtime state. Existing
+reports cannot establish exact build or Debian package provenance, which is
+never inferred from matching release. The context's catalogue capability
+evidence remains separate authority. Caller-assembled snapshots remain
+assertions; explicit destination selection is not authentication. Assessment
+never changes the serialized unverified states or admits a capability. It
+performs no acquisition, execution, runtime mutation or file writing. See
+[ADR 0034](decisions/0034-rootless-pids-destination-obligation.md).
