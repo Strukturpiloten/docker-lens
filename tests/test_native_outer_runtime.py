@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import socket
 import stat
 import struct
 import subprocess
@@ -145,7 +146,9 @@ class ObservationTests(unittest.TestCase):
 
     def test_positive_local_peer_requires_root_real_dockerd_executable_and_stable_start(self):
         process_stat = b"123 (dockerd) S " + b"0 " * 18 + b"12345\n"
-        unix = b"Num       RefCount Protocol Flags    Type St Inode Path\n000: 00000002 00000000 00010000 0001 01 456 /run/docker.sock\n"
+        unix = (b"Num       RefCount Protocol Flags    Type St Inode Path\n"
+                b"0000000000000000: 00000002 00000000 00010000 0001 01 456 /run/docker.sock\n"
+                b"0000000000000000: 00000003 00000000 00000000 0001 03 789 /run/docker.sock\n")
         service = "MainPID=123\nActiveState=active\nSubState=running"
         paths = {"/proc/123/stat": process_stat, "/proc/123/comm": b"dockerd\n", "/proc/123/status": b"Uid:\t0\t0\t0\t0\n",
                  "/proc/123/net/unix": unix, "/proc/1/comm": b"systemd\n"}
@@ -186,7 +189,7 @@ class ObservationTests(unittest.TestCase):
                 if str(path) == "/proc/1/exe":
                     return "/usr/lib/systemd/systemd"
                 if str(path) == "/proc/123/fd/3":
-                    return "socket:[999]" if fault == "listener" else "socket:[456]"
+                    return "socket:[789]" if fault == "listener" else "socket:[456]"
                 return "/usr/bin/podman" if fault == "executable" else "/usr/bin/dockerd"
             def metadata(path):
                 if str(path).endswith("/exe"):
@@ -224,12 +227,101 @@ class ObservationTests(unittest.TestCase):
             with self.subTest(raw=raw), self.assertRaises(OBS.Refused):
                 OBS.service_pid(raw)
         header = b"Num RefCount Protocol Flags Type St Inode Path\n"
-        row = b"000: 00000002 00000000 00010000 0001 01 456 /run/docker.sock\n"
+        row = b"0000000000000000: 00000002 00000000 00010000 0001 01 456 /run/docker.sock\n"
         self.assertEqual(OBS.listener_inode(header + row), "456")
         self.assertEqual(OBS.listener_inode(header + row.replace(b"/run/", b"/var/run/")), "456")
         for raw in (header, header + row + row, header + row.replace(b"00010000", b"00000000"), header + row.replace(b"/run/", b"/other/")):
             with self.subTest(raw=raw), self.assertRaises(OBS.Refused):
                 OBS.listener_inode(raw)
+
+    def test_listener_selection_allows_only_well_formed_distinct_connected_streams(self):
+        header = b"Num RefCount Protocol Flags Type St Inode Path\n"
+        listener = b"0000000000000000: 00000002 00000000 00010000 0001 01 456 /run/docker.sock\n"
+        connected = b"0000000000000000: 00000003 00000000 00000000 0001 03 789 /run/docker.sock\n"
+        alias = connected.replace(b"789", b"790").replace(b"/run/", b"/var/run/")
+        for rows in (listener + connected, connected + listener, connected + alias + listener,
+                     listener.replace(b"/run/", b"/var/run/") + connected,
+                     listener.replace(b"0000000000000000:", b"00000000:") + connected,
+                     b"unrelated malformed inventory /other.sock\n" + listener + connected):
+            with self.subTest(rows=rows):
+                self.assertEqual(OBS.listener_inode(header + rows), "456")
+        invalid = {
+            "connected-only": connected + alias,
+            "multiple-listeners": listener + listener.replace(b"456", b"457"),
+            "aliased-listener": listener + listener.replace(b"456", b"457").replace(b"/run/", b"/var/run/"),
+            "duplicate-connected": listener + connected + connected,
+            "duplicate-aliased-connected": listener + connected + connected.replace(b"/run/", b"/var/run/"),
+            "listener-inode-connected": listener + connected.replace(b"789", b"456"),
+            "short-row": listener + b"00000000: /run/docker.sock\n",
+            "extra-field": listener + connected.rstrip() + b" extra\n",
+        }
+        fields = connected.split()
+        for index, values in {
+            0: (b"000:", b"0000000g:", b"00000000000000000:", b"00000000"),
+            1: (b"0", b"0000000g", b"000000000"),
+            2: (b"00000001",),
+            3: (b"00010000", b"00000001"),
+            4: (b"0002",),
+            5: (b"01", b"02", b"04"),
+            6: (b"0", b"-1", b"abc", b"1" * 21),
+        }.items():
+            for value in values:
+                changed = fields.copy()
+                changed[index] = value
+                invalid[f"connected-field-{index}-{value!r}"] = listener + b" ".join(changed) + b"\n"
+        for index, value in ((2, b"00000001"), (4, b"0002"), (5, b"03")):
+            changed = listener.split()
+            changed[index] = value
+            invalid[f"listener-field-{index}"] = b" ".join(changed) + b"\n"
+        for case, rows in invalid.items():
+            with self.subTest(case=case), self.assertRaises(OBS.Refused):
+                OBS.listener_inode(header + rows)
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux procfs socket observation")
+    def test_owned_unix_listener_and_accepted_stream_share_path_but_not_authority(self):
+        # A short private path avoids AF_UNIX's pathname limit even under a long gate TMPDIR.
+        with tempfile.TemporaryDirectory(prefix="dl-unix-", dir="/tmp") as temporary, \
+             socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener, \
+             socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            path = str(Path(temporary) / "owned.sock")
+            listener.settimeout(1)
+            client.settimeout(1)
+            listener.bind(path)
+            listener.listen(1)
+            client.connect(path)
+            accepted, _ = listener.accept()
+            with accepted:
+                accepted.settimeout(1)
+                rows = []
+                # Never retain or print unrelated inventory; bound both rows and line length.
+                with Path("/proc/self/net/unix").open("rb") as table:
+                    header = table.readline(4097)
+                    self.assertLessEqual(len(header), 4096)
+                    for _ in range(4096):
+                        raw = table.readline(4097)
+                        if not raw:
+                            break
+                        self.assertLessEqual(len(raw), 4096)
+                        fields = raw.split()
+                        if len(fields) == 8 and fields[7] == os.fsencode(path):
+                            rows.append(fields)
+                    else:
+                        self.fail("bounded synthetic socket inventory exceeded")
+                self.assertEqual(len(rows), 2)
+                self.assertEqual({tuple(fields[2:6]) for fields in rows}, {
+                    (b"00000000", b"00010000", b"0001", b"01"),
+                    (b"00000000", b"00000000", b"0001", b"03"),
+                })
+                canonical = header + b"".join(b" ".join(fields[:7] + [b"/run/docker.sock"]) + b"\n" for fields in rows)
+                selected = OBS.listener_inode(canonical)
+                listener_link = os.readlink(f"/proc/self/fd/{listener.fileno()}")
+                accepted_link = os.readlink(f"/proc/self/fd/{accepted.fileno()}")
+                self.assertTrue(listener_link == f"socket:[{selected}]")
+                self.assertTrue(accepted_link != listener_link)
+                connected_only = header + b"".join(b" ".join(fields[:7] + [b"/run/docker.sock"]) + b"\n"
+                    for fields in rows if fields[3] == b"00000000")
+                with self.assertRaises(OBS.Refused):
+                    OBS.listener_inode(connected_only)
 
     def test_identity_normalization_requires_exact_id_name_owner_and_handles_docker_slash(self):
         value = {"Id": "a" * 64, "Name": "/owned", "Config": {"Labels": {"io.dockerlens.native-run": "run"}}}

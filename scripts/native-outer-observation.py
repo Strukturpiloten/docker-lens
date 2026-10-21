@@ -117,16 +117,30 @@ def service_pid(raw):
 
 
 def listener_inode(raw):
+    """One listener grants authority; same-path accepted streams never do."""
     need(type(raw) is bytes and 0 < len(raw) <= LIMIT)
     lines = raw.decode("ascii").splitlines()
     need(len(lines) <= 4096 and lines[0].split() == ["Num", "RefCount", "Protocol", "Flags", "Type", "St", "Inode", "Path"])
     matches = []
+    seen = set()
+    paths = {"/run/docker.sock", "/var/run/docker.sock"}
     for line in lines[1:]:
         fields = line.split()
-        if len(fields) == 8 and fields[7] in {"/run/docker.sock", "/var/run/docker.sock"}:
-            need(fields[3] == "00010000" and fields[4] == "0001" and fields[5] == "01"
-                 and re.fullmatch(r"[1-9][0-9]{0,19}", fields[6]) is not None)
+        if not fields or not (fields[-1] in paths or len(fields) > 7 and fields[7] in paths):
+            continue
+        # A malformed selected-path row is not unrelated inventory to ignore.
+        need(len(fields) == 8 and fields[7] in paths)
+        need(re.fullmatch(r"(?:[0-9A-Fa-f]{8}|[0-9A-Fa-f]{16}):", fields[0]) is not None
+             and re.fullmatch(r"[0-9A-Fa-f]{8}", fields[1]) is not None
+             and fields[2] == "00000000" and fields[4] == "0001"
+             and re.fullmatch(r"[1-9][0-9]{0,19}", fields[6]) is not None
+             and fields[6] not in seen)
+        seen.add(fields[6])
+        if fields[3] == "00010000":
+            need(fields[5] == "01")
             matches.append(fields[6])
+        else:
+            need(fields[3] == "00000000" and fields[5] == "03")
     need(len(matches) == 1)
     return matches[0]
 
