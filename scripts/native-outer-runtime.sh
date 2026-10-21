@@ -95,6 +95,23 @@ native_outer_bridge_command() {
       --engine "$native_outer_engine" --directory "$native_outer_directory" "$@"
 }
 
+native_outer_preflight_failure() {
+  # Values below are closed labels, never raw status/native values or metadata.
+  local group=$1 status=$2 category
+  case $group in
+    service-query|peer-observation|info-command|info-observation|version-query|version-format|runner-image|receipt-publication|store-path) ;;
+    *) group=unclassified ;;
+  esac
+  case $status in
+    2) category=refused ;;
+    124) category=timeout ;;
+    137) category=killed ;;
+    130|143) category=cancelled ;;
+    *) category=command ;;
+  esac
+  printf 'DOCKERLENS_NATIVE_OUTER_PREFLIGHT: group=%s category=%s\n' "$group" "$category" >&2
+}
+
 native_outer_preflight() {
   if [[ $native_outer_engine == podman ]]; then
     [[ $(native_outer_command 8 info --format '{{.Host.Security.Rootless}}') == false ]] || return 2
@@ -104,21 +121,38 @@ native_outer_preflight() {
     # checks alone, remote contexts and absence of name=rootless do not suffice.
     local service
     service=$("${native_outer_privilege[@]}" timeout --signal=TERM --kill-after=2s 8s \
-      systemctl show docker.service --property=MainPID --property=ActiveState --property=SubState 2>/dev/null) || return 2
-    native_outer_peer_identity=$(native_outer_helper docker-peer /var/run/docker.sock "$service") || return 2
+      systemctl show docker.service --property=MainPID --property=ActiveState --property=SubState 2>/dev/null) || {
+      native_outer_preflight_failure service-query "$?"; return 2;
+    }
+    native_outer_peer_identity=$(native_outer_helper docker-peer /var/run/docker.sock "$service") || {
+      native_outer_preflight_failure peer-observation "$?"; return 2;
+    }
     native_outer_store_root=$(set -o pipefail
-      native_outer_command 8 info --format '{{json .}}' 2>/dev/null |
-        native_outer_helper docker-info) || return 2
+      (native_outer_command 8 info --format '{{json .}}' 2>/dev/null || {
+        result=$?; native_outer_preflight_failure info-command "$result"; exit "$result";
+      }) | native_outer_helper docker-info) || {
+      native_outer_preflight_failure info-observation "$?"; return 2;
+    }
     local versions
-    versions=$(native_outer_command 8 version --format '{{.Client.Version}}|{{.Server.Version}}' 2>/dev/null) || return 2
-    [[ $versions =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9_.-]+)?\|[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9_.-]+)?$ ]] || return 2
-    [[ ${ImageOS:-} == ubuntu24 && ${ImageVersion:-} =~ ^[0-9]{8}\.[0-9]+\.[0-9]+$ ]] || return 2
+    versions=$(native_outer_command 8 version --format '{{.Client.Version}}|{{.Server.Version}}' 2>/dev/null) || {
+      native_outer_preflight_failure version-query "$?"; return 2;
+    }
+    [[ $versions =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9_.-]+)?\|[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9_.-]+)?$ ]] || {
+      native_outer_preflight_failure version-format 2; return 2;
+    }
+    [[ ${ImageOS:-} == ubuntu24 && ${ImageVersion:-} =~ ^[0-9]{8}\.[0-9]+\.[0-9]+$ ]] || {
+      native_outer_preflight_failure runner-image 2; return 2;
+    }
     printf '%s' "$native_outer_peer_identity" | native_outer_helper runtime-receipt \
-      "$native_outer_directory/outer-runtime.json" "${versions%%|*}" "${versions#*|}" "$ImageVersion" "$native_outer_store_root" || return 2
+      "$native_outer_directory/outer-runtime.json" "${versions%%|*}" "${versions#*|}" "$ImageVersion" "$native_outer_store_root" || {
+      native_outer_preflight_failure receipt-publication "$?"; return 2;
+    }
     printf 'DOCKERLENS_NATIVE_OUTER: engine=docker client=%s server=%s rootful=true\n' "${versions%%|*}" "${versions#*|}" >&2
   fi
   [[ $native_outer_store_root == /* && $native_outer_store_root != / &&
-     $native_outer_store_root != *$'\n'* && $native_outer_store_root != *$'\r'* ]] || return 2
+     $native_outer_store_root != *$'\n'* && $native_outer_store_root != *$'\r'* ]] || {
+    native_outer_preflight_failure store-path 2; return 2;
+  }
 }
 
 native_outer_presence() {

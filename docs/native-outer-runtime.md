@@ -44,7 +44,35 @@ summaries leave the private directory. Official Docker references:
 [contexts](https://docs.docker.com/engine/manage-resources/contexts/) and
 [dockerd](https://docs.docker.com/reference/cli/dockerd/).
 
-## Canonical source seam
+## Closed preflight diagnostics
+
+Preflight failures emit only fixed diagnostic labels on stderr. Python's
+`outer runtime observation unavailable` marker appends a closed mode (`peer`,
+`info`, `receipt`), group and category (`refused` or `io`). The group distinguishes
+socket type/ownership, connect/peer credentials, service state, systemd peer,
+process identity/UID/executable/root/stability, aliases, listener/FD ownership,
+info validation and receipt publication; its allowlist is `GROUPS` in
+`native-outer-observation.py`. Non-preflight helper failures retain the original
+generic marker. No raw exceptions, paths, UIDs, PIDs, socket identities,
+environment values or protected data are diagnostic text.
+
+The fixed `DOCKERLENS_NATIVE_OUTER_PREFLIGHT` marker separately classifies the
+service query, peer observation, info command versus validation, versions,
+runner-image check, receipt and store path. Categories distinguish refusal,
+command failure, timeout, kill and cancellation without printing native status
+details. These labels do not change predicates, helper arguments/stdout, failure
+status, original privilege/capture/deadline owners, cleanup or admission. They add
+no probes, retries, endpoint fallback or renewable budgets. Existing caller-or-root
+private-configuration custody does not trust ambient `SUDO_UID` or equate the
+held directory owner with the observer's effective UID.
+
+Diagnostic observations are not native qualification. A prior generic failure
+cannot establish which guard rejected its host, and a new passing preflight
+cannot replace complete exact-candidate validation or the four native lanes.
+Changed helper bytes require fresh reviewed source binding and producer evidence;
+never refresh only a digest to qualify an old receipt.
+
+## Canonical source seam and helper closure
 
 Source `scripts/native-outer-runtime.sh` only from the exact reviewed checkout
 after verifying its complete helper closure. Sourcing performs no probes or

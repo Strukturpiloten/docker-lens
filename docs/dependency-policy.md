@@ -94,6 +94,12 @@ uses the reviewed test-only source seam separately; other Lens products and the
 website do not consume this harness. The containers product retains its distinct
 private-store Python adapter rather than weakening that contract to share lifecycle.
 
+The stable `Required CI` display context belongs to the existing Check workflow's
+`check-gate` aggregate; its job ID, dependencies and fail-closed event logic remain
+unchanged. This display-name correction adds or moves no pin/extraction location.
+The existing GitHub Actions manager and five native-image regex extractions remain
+verified by scaffold policy tests; no Renovate configuration change is needed.
+
 The native workflows upload only a closed, sanitized per-lane JSON record
 after all native checks pass. actions/upload-artifact is pinned to a full
 commit SHA with exact v4.6.2 release-tag comment, extracted by Renovate's

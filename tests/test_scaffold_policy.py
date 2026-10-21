@@ -232,25 +232,41 @@ class ScaffoldPolicyTests(unittest.TestCase):
 
     def test_pr_gate_is_offline_only_and_main_requires_native(self) -> None:
         check = (ROOT / ".github/workflows/check.yml").read_text()
-        gate = check.split("  check-gate:\n", 1)[1].split("        run: |\n", 1)[1]
+        self.assertEqual(check.count("  check-gate:\n"), 1)
+        aggregate = check.split("  check-gate:\n", 1)[1]
+        header = aggregate.split("    steps:\n", 1)[0]
+        self.assertEqual(re.findall(r"^    name: (.+)$", header, re.MULTILINE), ["Required CI"])
+        self.assertEqual(check.count("    name: Required CI\n"), 1)
+        self.assertIn("    if: always()\n    needs: [scaffold, native-conformance]\n", header)
+        self.assertNotIn("continue-on-error:", aggregate)
+        gate = aggregate.split("        run: |\n", 1)[1]
         script = textwrap.dedent(gate)
         for scenario, event, ref, native, should_pass in (
             ("fork code", "pull_request", "refs/pull/1/merge", "skipped", True),
             ("same-repo code", "pull_request", "refs/pull/2/merge", "skipped", True),
             ("fork prose", "pull_request", "refs/pull/3/merge", "skipped", True),
             ("PR claimed native", "pull_request", "refs/pull/4/merge", "success", False),
+            ("PR failed native", "pull_request", "refs/pull/4/merge", "failure", False),
+            ("PR cancelled native", "pull_request", "refs/pull/4/merge", "cancelled", False),
             ("main native", "push", "refs/heads/main", "success", True),
             ("main skipped", "push", "refs/heads/main", "skipped", False),
+            ("main failed native", "push", "refs/heads/main", "failure", False),
+            ("main cancelled native", "push", "refs/heads/main", "cancelled", False),
             ("unknown push", "push", "refs/heads/other", "skipped", False),
+            ("non-main native success", "push", "refs/heads/other", "success", False),
+            ("unexpected dispatch", "workflow_dispatch", "refs/heads/main", "success", False),
+            ("untrusted PR event", "pull_request_target", "refs/heads/main", "success", False),
         ):
-            with self.subTest(scenario=scenario):
-                env = dict(os.environ, EVENT_NAME=event, EVENT_REF=ref,
-                           SCAFFOLD_RESULT="success", NATIVE_RESULT=native)
-                result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", script], env=env,
-                                        capture_output=True, text=True, check=False)
-                self.assertEqual(result.returncode == 0, should_pass)
-                if event == "pull_request" and should_pass:
-                    self.assertIn("offline-only", result.stdout)
+            for scaffold in ("success", "failure", "cancelled", "skipped"):
+                with self.subTest(scenario=scenario, scaffold=scaffold):
+                    env = dict(os.environ, EVENT_NAME=event, EVENT_REF=ref,
+                               SCAFFOLD_RESULT=scaffold, NATIVE_RESULT=native)
+                    result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", script], env=env,
+                                            capture_output=True, text=True, check=False)
+                    admitted = should_pass and scaffold == "success"
+                    self.assertEqual(result.returncode == 0, admitted)
+                    if event == "pull_request" and admitted:
+                        self.assertIn("offline-only", result.stdout)
 
     def test_manual_native_dispatch_is_trusted_exact_head_and_validation_only(self) -> None:
         workflow = (ROOT / ".github/workflows/native-validation.yml").read_text()

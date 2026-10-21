@@ -152,17 +152,32 @@ class ObservationTests(unittest.TestCase):
         socket_info = mock.Mock(st_mode=stat.S_IFSOCK | 0o660, st_uid=0, st_dev=1, st_ino=2)
         executable = mock.Mock(st_mode=stat.S_IFREG | 0o755, st_uid=0, st_dev=3, st_ino=4)
         root = mock.Mock(st_dev=5, st_ino=6)
-        for fault in (None, "inherited", "uid", "proxy", "executable", "socket-symlink", "start-changed", "service", "root", "listener", "alias"):
+        groups = {"uid": "peer-credentials", "proxy": "process-identity", "executable": "process-executable",
+                  "socket-symlink": "socket-metadata", "start-changed": "process-stability", "service": "peer-credentials",
+                  "service-inactive": "service-state", "root": "process-root", "listener": "listener-owner",
+                  "alias": "socket-aliases", "process-uid": "process-uid", "systemd": "systemd-peer",
+                  "listener-table": "socket-listener", "connect-io": "peer-connect", "process-io": "process-identity"}
+        for fault in (None, "inherited", *groups):
             peer = mock.MagicMock()
             peer.__enter__.return_value = peer
-            peer.getsockopt.return_value = struct.pack("3i", 1 if fault == "inherited" else 123, 1000 if fault == "uid" else 0, 0)
+            peer.getsockopt.return_value = struct.pack("3i", 1 if fault in {"inherited", "systemd"} else 123, 1000 if fault == "uid" else 0, 0)
+            if fault == "connect-io":
+                peer.connect.side_effect = PermissionError("protected-canary /private/socket 987654")
             observed = dict(paths)
             if fault == "proxy":
                 observed["/proc/123/comm"] = b"podman\n"
+            if fault == "process-uid":
+                observed["/proc/123/status"] = b"Uid:\t1000\t1000\t1000\t1000\n"
+            if fault == "systemd":
+                observed["/proc/1/comm"] = b"not-systemd\n"
+            if fault == "listener-table":
+                observed["/proc/123/net/unix"] = unix.replace(b"00010000", b"00000000")
             count = 0
             def read(path):
                 nonlocal count
                 if str(path) == "/proc/123/stat":
+                    if fault == "process-io":
+                        raise PermissionError("protected-canary /private/process 987654")
                     count += 1
                     if fault == "start-changed" and count == 2:
                         return process_stat.replace(b"12345", b"12346")
@@ -188,8 +203,14 @@ class ObservationTests(unittest.TestCase):
                  mock.patch.object(OBS.os, "stat", side_effect=metadata), \
                  mock.patch.object(OBS.Path, "read_bytes", read):
                 if fault not in {None, "inherited"}:
-                    with self.subTest(fault=fault), self.assertRaises(OBS.Refused):
-                        OBS.docker_peer("/var/run/docker.sock", service.replace("123", "124") if fault == "service" else service)
+                    actual_service = service.replace("123", "124") if fault == "service" else service
+                    if fault == "service-inactive":
+                        actual_service = actual_service.replace("ActiveState=active", "ActiveState=inactive")
+                    with self.subTest(fault=fault), self.assertRaises(OBS.Refused) as failure:
+                        OBS.docker_peer("/var/run/docker.sock", actual_service)
+                    self.assertEqual(failure.exception.group, groups[fault])
+                    self.assertEqual(failure.exception.category, "io" if fault.endswith("-io") else "refused")
+                    self.assertEqual(str(failure.exception), "outer runtime observation unavailable")
                 else:
                     record = OBS.docker_peer("/var/run/docker.sock", service)
                     self.assertEqual((record["daemon_pid"], record["daemon_starttime"], record["uid"]), (123, 12345, 0))

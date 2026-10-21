@@ -25,6 +25,27 @@ class Refused(ValueError):
     """Finite, value-free harness refusal."""
 
 
+GROUPS = frozenset({
+    "arguments", "input-json", "operation", "socket-metadata", "peer-connect",
+    "peer-credentials", "service-state", "systemd-peer", "process-identity",
+    "process-uid", "process-executable", "process-root", "socket-aliases",
+    "socket-listener", "listener-owner", "process-stability", "peer-close", "socket-stability",
+    "info-storage", "info-security", "info-version", "receipt-input",
+    "receipt-versions", "receipt-destination", "receipt-publication",
+})
+OBSERVATION_ERRORS = (Refused, OSError, ValueError, TypeError, KeyError, OverflowError, RecursionError)
+
+
+class GroupRefused(Refused):
+    """Only fixed group/category labels survive native failures."""
+
+    def __init__(self, group, category):
+        need(group in GROUPS and category in {"refused", "io"})
+        self.group = group
+        self.category = category
+        super().__init__("outer runtime observation unavailable")
+
+
 def need(value):
     if not value:
         raise Refused("outer runtime observation unavailable")
@@ -61,17 +82,23 @@ def document(raw):
 
 def docker_info(value):
     """Rootful peer identity is checked separately; absent rootless is not proof."""
-    need(value.get("OSType") == "linux" and type(value.get("DockerRootDir")) is str
-         and re.fullmatch(r"/[A-Za-z0-9_./-]+", value["DockerRootDir"]) is not None
-         and ".." not in Path(value["DockerRootDir"]).parts and value["DockerRootDir"] != "/")
-    options = value.get("SecurityOptions")
-    need(type(options) is list and all(type(item) is str for item in options)
-         and not any(item == "name=rootless" or item.startswith("name=rootless,")
-                     or item == "name=userns" or item.startswith("name=userns,") for item in options))
-    need(type(value.get("OperatingSystem")) is str and "desktop" not in value["OperatingSystem"].lower()
-         and type(value.get("ServerVersion")) is str
-         and re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9_.-]+)?", value["ServerVersion"]) is not None)
-    return value["DockerRootDir"]
+    group = "info-storage"
+    try:
+        need(value.get("OSType") == "linux" and type(value.get("DockerRootDir")) is str
+             and re.fullmatch(r"/[A-Za-z0-9_./-]+", value["DockerRootDir"]) is not None
+             and ".." not in Path(value["DockerRootDir"]).parts and value["DockerRootDir"] != "/")
+        group = "info-security"
+        options = value.get("SecurityOptions")
+        need(type(options) is list and all(type(item) is str for item in options)
+             and not any(item == "name=rootless" or item.startswith("name=rootless,")
+                         or item == "name=userns" or item.startswith("name=userns,") for item in options))
+        group = "info-version"
+        need(type(value.get("OperatingSystem")) is str and "desktop" not in value["OperatingSystem"].lower()
+             and type(value.get("ServerVersion")) is str
+             and re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9_.-]+)?", value["ServerVersion"]) is not None)
+        return value["DockerRootDir"]
+    except OBSERVATION_ERRORS as error:
+        raise GroupRefused(group, "io" if isinstance(error, OSError) else "refused") from None
 
 
 def service_pid(raw):
@@ -106,87 +133,113 @@ def listener_inode(raw):
 
 def docker_peer(path, service):
     """Positive root daemon/local-root check, not merely an info boolean absence."""
-    need(path == "/var/run/docker.sock")
-    metadata = os.lstat(path)
-    need(stat.S_ISSOCK(metadata.st_mode) and metadata.st_uid == 0)
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as peer:
-        peer.settimeout(1.0)
-        peer.connect(path)
-        peer_pid, uid, gid = struct.unpack("3i", peer.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
-        pid = service_pid(service)
-        need(peer_pid in {1, pid} and uid == 0 and gid == 0)
-        if peer_pid == 1:
-            need(Path("/proc/1/comm").read_bytes() == b"systemd\n"
-                 and os.readlink("/proc/1/exe") in {"/usr/lib/systemd/systemd", "/lib/systemd/systemd"})
-        process = Path(f"/proc/{pid}")
-        before = (process / "stat").read_bytes()
-        need(len(before) <= 4096 and (process / "comm").read_bytes() == b"dockerd\n")
-        status = (process / "status").read_bytes()
-        need(len(status) <= 16384)
-        uids = [line.split()[1:] for line in status.splitlines() if line.startswith(b"Uid:")]
-        need(uids == [[b"0", b"0", b"0", b"0"]])
-        executable = os.readlink(process / "exe")
-        need(executable in {"/usr/bin/dockerd", "/usr/sbin/dockerd", "/usr/local/bin/dockerd"})
-        executable_info = os.stat(process / "exe")
-        need(stat.S_ISREG(executable_info.st_mode) and executable_info.st_uid == 0
-             and executable_info.st_mode & 0o022 == 0 and executable_info.st_mode & stat.S_IXUSR)
-        root, ours = os.stat(process / "root"), os.stat("/")
-        need((root.st_dev, root.st_ino) == (ours.st_dev, ours.st_ino))
-        canonical = os.stat("/run/docker.sock")
-        daemon_socket = os.stat(process / "root/run/docker.sock")
-        need(stat.S_ISSOCK(canonical.st_mode) and stat.S_ISSOCK(daemon_socket.st_mode)
-             and (canonical.st_dev, canonical.st_ino) == (metadata.st_dev, metadata.st_ino)
-             and (daemon_socket.st_dev, daemon_socket.st_ino) == (metadata.st_dev, metadata.st_ino))
-        inode = listener_inode((process / "net/unix").read_bytes())
-        descriptors = os.listdir(process / "fd")
-        need(len(descriptors) <= 4096 and all(re.fullmatch(r"0|[1-9][0-9]{0,9}", fd) for fd in descriptors))
-        owned = 0
-        for descriptor in descriptors:
-            try:
-                target = os.readlink(process / "fd" / descriptor)
-            except FileNotFoundError:
-                continue  # A concurrently closed unrelated fd grants nothing.
-            if target == f"socket:[{inode}]":
-                owned += 1
-        need(owned > 0)
-        after = (process / "stat").read_bytes()
-        # The mutable counters can change; bind PID and immutable start time.
-        def identity(raw):
-            prefix, separator, suffix = raw.rpartition(b") ")
-            fields = suffix.split()
-            need(separator and len(fields) >= 20 and prefix.startswith(str(pid).encode() + b" (")
-                 and fields[19].isdigit())
-            return fields[19]
-        need(identity(before) == identity(after))
-    current = os.lstat(path)
-    need((metadata.st_dev, metadata.st_ino, metadata.st_uid) == (current.st_dev, current.st_ino, current.st_uid))
-    return {"schema_version": 1, "kind": "local-root-dockerd-observation", "socket": path,
-            "socket_device": metadata.st_dev, "socket_inode": metadata.st_ino,
-            "peer_pid": peer_pid, "listener_inode": int(inode),
-            "daemon_pid": pid, "daemon_starttime": int(identity(before)), "uid": uid, "gid": gid,
-            "executable": executable, "executable_device": executable_info.st_dev,
-            "executable_inode": executable_info.st_ino}
+    group = "socket-metadata"
+    try:
+        need(path == "/var/run/docker.sock")
+        metadata = os.lstat(path)
+        need(stat.S_ISSOCK(metadata.st_mode) and metadata.st_uid == 0)
+        group = "peer-connect"
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as peer:
+            peer.settimeout(1.0)
+            peer.connect(path)
+            group = "peer-credentials"
+            peer_pid, uid, gid = struct.unpack("3i", peer.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+            group = "service-state"
+            pid = service_pid(service)
+            group = "peer-credentials"
+            need(peer_pid in {1, pid} and uid == 0 and gid == 0)
+            if peer_pid == 1:
+                group = "systemd-peer"
+                need(Path("/proc/1/comm").read_bytes() == b"systemd\n"
+                     and os.readlink("/proc/1/exe") in {"/usr/lib/systemd/systemd", "/lib/systemd/systemd"})
+            group = "process-identity"
+            process = Path(f"/proc/{pid}")
+            before = (process / "stat").read_bytes()
+            need(len(before) <= 4096 and (process / "comm").read_bytes() == b"dockerd\n")
+            group = "process-uid"
+            status = (process / "status").read_bytes()
+            need(len(status) <= 16384)
+            uids = [line.split()[1:] for line in status.splitlines() if line.startswith(b"Uid:")]
+            need(uids == [[b"0", b"0", b"0", b"0"]])
+            group = "process-executable"
+            executable = os.readlink(process / "exe")
+            need(executable in {"/usr/bin/dockerd", "/usr/sbin/dockerd", "/usr/local/bin/dockerd"})
+            executable_info = os.stat(process / "exe")
+            need(stat.S_ISREG(executable_info.st_mode) and executable_info.st_uid == 0
+                 and executable_info.st_mode & 0o022 == 0 and executable_info.st_mode & stat.S_IXUSR)
+            group = "process-root"
+            root, ours = os.stat(process / "root"), os.stat("/")
+            need((root.st_dev, root.st_ino) == (ours.st_dev, ours.st_ino))
+            group = "socket-aliases"
+            canonical = os.stat("/run/docker.sock")
+            daemon_socket = os.stat(process / "root/run/docker.sock")
+            need(stat.S_ISSOCK(canonical.st_mode) and stat.S_ISSOCK(daemon_socket.st_mode)
+                 and (canonical.st_dev, canonical.st_ino) == (metadata.st_dev, metadata.st_ino)
+                 and (daemon_socket.st_dev, daemon_socket.st_ino) == (metadata.st_dev, metadata.st_ino))
+            group = "socket-listener"
+            inode = listener_inode((process / "net/unix").read_bytes())
+            group = "listener-owner"
+            descriptors = os.listdir(process / "fd")
+            need(len(descriptors) <= 4096 and all(re.fullmatch(r"0|[1-9][0-9]{0,9}", fd) for fd in descriptors))
+            owned = 0
+            for descriptor in descriptors:
+                try:
+                    target = os.readlink(process / "fd" / descriptor)
+                except FileNotFoundError:
+                    continue  # A concurrently closed unrelated fd grants nothing.
+                if target == f"socket:[{inode}]":
+                    owned += 1
+            need(owned > 0)
+            group = "process-stability"
+            after = (process / "stat").read_bytes()
+            # The mutable counters can change; bind PID and immutable start time.
+            def identity(raw):
+                prefix, separator, suffix = raw.rpartition(b") ")
+                fields = suffix.split()
+                need(separator and len(fields) >= 20 and prefix.startswith(str(pid).encode() + b" (")
+                     and fields[19].isdigit())
+                return fields[19]
+            need(identity(before) == identity(after))
+            group = "peer-close"
+        group = "socket-stability"
+        current = os.lstat(path)
+        need((metadata.st_dev, metadata.st_ino, metadata.st_uid) == (current.st_dev, current.st_ino, current.st_uid))
+        return {"schema_version": 1, "kind": "local-root-dockerd-observation", "socket": path,
+                "socket_device": metadata.st_dev, "socket_inode": metadata.st_ino,
+                "peer_pid": peer_pid, "listener_inode": int(inode),
+                "daemon_pid": pid, "daemon_starttime": int(identity(before)), "uid": uid, "gid": gid,
+                "executable": executable, "executable_device": executable_info.st_dev,
+                "executable_inode": executable_info.st_ino}
+    except OBSERVATION_ERRORS as error:
+        raise GroupRefused(group, "io" if isinstance(error, OSError) else "refused") from None
 
 
 def runtime_receipt(peer, path, client, server, image_version, storage_root):
-    # A fresh private observation for auditing, NEVER accepted as runtime/capture
-    # authority. No caller may replay this file to skip a live preflight.
-    need(set(peer) == {"schema_version", "kind", "socket", "socket_device", "socket_inode", "peer_pid", "listener_inode", "daemon_pid",
-                       "daemon_starttime", "uid", "gid", "executable", "executable_device", "executable_inode"}
-         and peer["kind"] == "local-root-dockerd-observation" and peer["uid"] == peer["gid"] == 0)
-    need(all(re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9_.-]+)?", version) for version in (client, server))
-         and re.fullmatch(r"[0-9]{8}\.[0-9]+\.[0-9]+", image_version) is not None)
-    destination = Path(path)
-    need(destination.name == "outer-runtime.json" and destination.parent.is_dir() and not destination.parent.is_symlink())
-    record = {"schema_version": 1, "kind": "test-only-outer-docker-prerequisite", "native_qualified": False,
-              "runner": "ubuntu-24.04", "runner_image_version": image_version, "client_version": client,
-              "server_version": server, "storage_root": storage_root, "peer": peer}
-    raw = (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n").encode()
-    descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(descriptor, "wb") as output:
-        output.write(raw)
-        output.flush()
-        os.fsync(output.fileno())
+    group = "receipt-input"
+    try:
+        # A fresh private observation for auditing, NEVER accepted as runtime/capture
+        # authority. No caller may replay this file to skip a live preflight.
+        need(set(peer) == {"schema_version", "kind", "socket", "socket_device", "socket_inode", "peer_pid", "listener_inode", "daemon_pid",
+                           "daemon_starttime", "uid", "gid", "executable", "executable_device", "executable_inode"}
+             and peer["kind"] == "local-root-dockerd-observation" and peer["uid"] == peer["gid"] == 0)
+        group = "receipt-versions"
+        need(all(re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9_.-]+)?", version) for version in (client, server))
+             and re.fullmatch(r"[0-9]{8}\.[0-9]+\.[0-9]+", image_version) is not None)
+        group = "receipt-destination"
+        destination = Path(path)
+        need(destination.name == "outer-runtime.json" and destination.parent.is_dir() and not destination.parent.is_symlink())
+        record = {"schema_version": 1, "kind": "test-only-outer-docker-prerequisite", "native_qualified": False,
+                  "runner": "ubuntu-24.04", "runner_image_version": image_version, "client_version": client,
+                  "server_version": server, "storage_root": storage_root, "peer": peer}
+        raw = (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n").encode()
+        group = "receipt-publication"
+        descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(raw)
+            output.flush()
+            os.fsync(output.fileno())
+    except OBSERVATION_ERRORS as error:
+        raise GroupRefused(group, "io" if isinstance(error, OSError) else "refused") from None
 
 
 def binding(value, kind, identity, name, owner_key, run):
@@ -383,9 +436,12 @@ def check_data(path, root, volume, mode):
 
 
 def main(argv):
+    mode = "other"
+    group = "arguments"
     try:
         need(bool(argv))
         command, *args = argv
+        mode = {"docker-peer": "peer", "docker-info": "info", "runtime-receipt": "receipt"}.get(command, "other")
         if command == "docker-peer" and len(args) == 2:
             print(json.dumps(docker_peer(*args), sort_keys=True, separators=(",", ":")))
         elif command == "prepare-data" and len(args) == 4:
@@ -397,7 +453,9 @@ def main(argv):
         elif command == "created-cid" and len(args) == 1:
             print(created_cid(*args))
         else:
+            group = "input-json"
             value = document(sys.stdin.buffer.read(LIMIT + 1))
+            group = "operation"
             if command == "docker-info" and not args:
                 print(docker_info(value))
             elif command == "binding" and len(args) == 5:
@@ -427,8 +485,16 @@ def main(argv):
             else:
                 raise Refused()
         return 0
-    except (Refused, OSError, ValueError, TypeError, KeyError, OverflowError, RecursionError):
-        print("outer runtime observation unavailable", file=sys.stderr)
+    except OBSERVATION_ERRORS as error:
+        if mode != "other":
+            if (isinstance(error, GroupRefused) and error.group in GROUPS
+                    and error.category in {"refused", "io"}):
+                group, category = error.group, error.category
+            else:
+                category = "io" if isinstance(error, OSError) else "refused"
+            print(f"outer runtime observation unavailable: mode={mode} group={group} category={category}", file=sys.stderr)
+        else:
+            print("outer runtime observation unavailable", file=sys.stderr)
         return 2
 
 

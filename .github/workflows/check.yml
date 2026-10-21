@@ -52,7 +52,7 @@ jobs:
           retention-days: 30
 
   check-gate:
-    name: Complete gate (PR offline, main native)
+    name: Required CI
     if: always()
     needs: [scaffold, native-conformance]
     runs-on: ubuntu-24.04

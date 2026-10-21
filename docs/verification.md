@@ -833,7 +833,10 @@ current `main`. Its aggregate gate fails on any failed, skipped, or cancelled
 job. There is no publication or deployment job. The four native lanes run on
 main push and exact-candidate release validation, not on any PR. PRs run the
 complete offline gate and their aggregate explicitly reports offline-only
-evidence. Before marking the #13 harness PR ready, use the trusted-main
+evidence. The existing `check-gate` aggregate emits the stable `Required CI`
+check context on PR and main events. Its `always()` aggregate still requires
+offline success plus the expected PR-native skip or main-native success; failed,
+cancelled or unexpected skipped results refuse. Before marking the #13 harness PR ready, use the trusted-main
 validation-only dispatcher below to run all four native lanes against its
 exact reviewed draft head; passing PR CI alone is not native compatibility
 evidence. The main-push and release native gates remain mandatory after merge.
