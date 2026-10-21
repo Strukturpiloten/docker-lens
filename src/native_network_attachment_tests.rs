@@ -373,7 +373,17 @@ impl Run {
         }
     }
     fn podman(&mut self, cleanup: bool, args: &[String]) -> std::process::Output {
-        let mut command = vec!["podman".into(), "--remote=false".into()];
+        if args.first().is_some_and(|arg| arg == "inspect") {
+            let extra = crate::native_outer_test_command::snapshot_extra_calls();
+            if cleanup {
+                self.cleanup_calls += extra;
+                self.cleanup_bytes += extra * 65536;
+            } else {
+                self.work_calls += extra;
+                self.work_bytes += extra * 65536;
+            }
+        }
+        let mut command = crate::native_outer_test_command::prefix();
         command.extend_from_slice(args);
         self.capture(cleanup, self.elevated, 3, &command, None, 64 * 1024)
     }

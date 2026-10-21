@@ -2,6 +2,30 @@
 set -euo pipefail
 script_dir=$(cd -- "$(dirname -- "$0")" && pwd -P)
 source "$script_dir/native-version.sh"
+source "$script_dir/native-outer-runtime.sh"
+select_outer_engine() {
+  local requested=${DOCKERLENS_OUTER_ENGINE-podman} head dirty
+  # The already installed trusted-main PR dispatcher predates the explicit env
+  # setting. Its exact admitted native job may qualify this new candidate before
+  # a workflow rollout. This is one closed policy choice, not runtime fallback.
+  if [[ -z ${DOCKERLENS_OUTER_ENGINE+x} && ${GITHUB_JOB:-} == native-conformance &&
+        ${GITHUB_REPOSITORY:-} == Strukturpiloten/docker-lens &&
+        ${GITHUB_EVENT_NAME:-} == workflow_dispatch && ${GITHUB_REF:-} == refs/heads/main &&
+        ${GITHUB_WORKFLOW_REF:-} == Strukturpiloten/docker-lens/.github/workflows/native-validation.yml@refs/heads/main ]]; then
+    native_outer_policy docker || return 2
+    [[ ${DOCKERLENS_NATIVE_CANDIDATE_SHA:-} =~ ^[0-9a-f]{40}$ ]] || return 2
+    head=$(timeout --signal=TERM --kill-after=2s 8s git -C "$script_dir/.." rev-parse HEAD) || return 2
+    dirty=$(timeout --signal=TERM --kill-after=2s 8s git -C "$script_dir/.." status --porcelain --untracked-files=all) || return 2
+    [[ $head == "$DOCKERLENS_NATIVE_CANDIDATE_SHA" && -z $dirty ]] || return 2
+    requested=docker
+    echo 'DOCKERLENS_NATIVE_OUTER: selection=legacy-reviewed-main-dispatcher engine=docker' >&2
+  fi
+  native_outer_policy "$requested"
+}
+select_outer_engine || {
+  echo 'native outer engine selection refused' >&2
+  exit 1
+}
 
 # Published containers#260 manifest digests verified on 2026-09-28 (amd64 and arm64).
 # renovate: datasource=docker depName=ghcr.io/strukturpiloten/docker-29-rootful
@@ -32,19 +56,21 @@ case "$lane" in
   *) usage ;;
 esac
 
-for tool in podman curl python3 timeout df du mktemp; do
+for tool in "$native_outer_engine" curl python3 timeout df du mktemp; do
   command -v "$tool" >/dev/null || { echo "missing native test tool: $tool" >&2; exit 1; }
 done
-if [[ $EUID == 0 ]]; then
-  podman_cmd=(podman)
-else
-  command -v sudo >/dev/null || { echo 'rootful outer Podman requires passwordless sudo' >&2; exit 1; }
-  podman_cmd=(sudo -n podman)
+if [[ $native_outer_engine == podman ]]; then
+  if [[ $EUID == 0 ]]; then
+    podman_cmd=(podman)
+  else
+    command -v sudo >/dev/null || { echo 'rootful outer Podman requires passwordless sudo' >&2; exit 1; }
+    podman_cmd=(sudo -n podman)
+  fi
+  "${podman_cmd[@]}" info --format '{{.Host.Security.Rootless}}' | grep -qx false || {
+    echo 'native test requires rootful outer Podman; inner rootless mode is separate' >&2
+    exit 1
+  }
 fi
-"${podman_cmd[@]}" info --format '{{.Host.Security.Rootless}}' | grep -qx false || {
-  echo 'native test requires rootful outer Podman; inner rootless mode is separate' >&2
-  exit 1
-}
 
 # The helper reads host bridge prerequisites before creating run-owned resources.
 # Only a positively identified hosted main native job may attempt one bounded
@@ -69,6 +95,13 @@ printf 'native-tcp-canary\n' > "$socket_dir/native-bind/index.html"
 chmod 0644 "$socket_dir/native-bind/canary" "$socket_dir/native-bind/index.html"
 chmod 0700 "$run_dir"
 mkdir -m 0700 "$run_dir/diagnostics"
+native_outer_select "$native_outer_engine" "$run_dir" || { echo 'native outer engine setup refused' >&2; exit 1; }
+# Retain the historical internal variable for the unchanged inner/proof wiring;
+# the canonical selector binds its actual backend and explicit endpoint.
+podman_cmd=("${native_outer_cmd[@]}")
+if [[ $native_outer_engine == docker ]]; then
+  native_outer_preflight || { echo 'native outer Docker preflight refused' >&2; exit 1; }
+fi
 watchdog_pid=
 native_success_summary=
 preserve_run_dir=0
@@ -80,9 +113,14 @@ sidecar_attempted=0
 volume_attempted=0
 network_attempted=0
 network_created=0
+outer_network_id=
 # This authority belongs only to the three canonical lifecycle-family invocations below.
 unset NATIVE_LIFECYCLE_CLEANUP_OWNER
 cleanup_podman() {
+  if [[ ${native_outer_engine:-podman} == docker ]]; then
+    native_outer_command 8 "$@" 2>/dev/null
+    return
+  fi
   # The deadline must share root privileges with the Podman client; an
   # unprivileged timeout cannot reliably terminate children behind sudo.
   if [[ ${podman_cmd[0]} == sudo ]]; then
@@ -94,6 +132,18 @@ cleanup_podman() {
 native_presence() {
   local mode=$1 marker result=0
   shift
+  if [[ $mode == exists && ${native_outer_engine:-podman} == docker ]]; then
+    local offset=${#podman_cmd[@]} index
+    local -a arguments=("$@")
+    (( ${#arguments[@]} == offset + 3 )) || { preserve_run_dir=1; return 2; }
+    for (( index=0; index<offset; index++ )); do
+      [[ ${arguments[index]} == "${podman_cmd[index]}" ]] || { preserve_run_dir=1; return 2; }
+    done
+    [[ ${arguments[offset+1]} == exists ]] || { preserve_run_dir=1; return 2; }
+    native_outer_presence "${arguments[offset]}" "${arguments[offset+2]}" "$run_dir" || result=$?
+    if (( result == 2 )); then preserve_run_dir=1; fi
+    return "$result"
+  fi
   # Both the helper and its process-group teardown need the client's privileges.
   # Keep the root-owned GNU timeout even if Python cannot finish its own cleanup.
   if [[ $1 == sudo ]]; then
@@ -164,14 +214,28 @@ cleanup_network() {
     0) ;;
     *) cleanup_refuse network presence_unknown; return 1 ;;
   esac
+  if [[ ${native_outer_engine:-podman} == docker ]]; then
+    native_outer_binding network "$outer_network_id" "$outer_network" io.dockerlens.native-run "$run_id" >/dev/null || {
+      cleanup_refuse network identity_unknown; return 1;
+    }
+  fi
   owner=$(cleanup_podman network inspect --format '{{index .Labels "io.dockerlens.native-run"}}' "$outer_network") || {
     cleanup_refuse network identity_unknown; return 1;
   }
   [[ $owner == "$run_id" ]] || { cleanup_refuse network identity_mismatch; return 1; }
-  cleanup_remove network network rm "$outer_network" || { cleanup_refuse network remove_failed; return 1; }
+  if [[ ${native_outer_engine:-podman} == docker ]]; then
+    cleanup_remove network network rm "$outer_network_id" || { cleanup_refuse network remove_failed; return 1; }
+  else
+    cleanup_remove network network rm "$outer_network" || { cleanup_refuse network remove_failed; return 1; }
+  fi
   state=0
   native_presence exists "${podman_cmd[@]}" network exists "$outer_network" || state=$?
   (( state == 1 )) || { cleanup_refuse network readback_unknown; return 1; }
+  if [[ ${native_outer_engine:-podman} == docker ]]; then
+    state=0
+    native_outer_presence network "$outer_network_id" "$run_dir" || state=$?
+    (( state == 1 )) || { cleanup_refuse network readback_unknown; return 1; }
+  fi
 }
 cleanup() {
   status=$?
@@ -206,6 +270,24 @@ cleanup_container() {
   local name=$1 role=$2 id=${3:-} attempted=${4:-0} current name_state=0 id_state=0
   (( attempted == 1 )) || return 0
   [[ $id =~ ^[0-9a-f]{64}$ ]] || { cleanup_refuse "$role" identity_unbound; return 1; }
+  if [[ ${native_outer_engine:-podman} == docker ]]; then
+    native_outer_presence container "$name" "$run_dir" || name_state=$?
+    if (( name_state == 1 )); then
+      native_outer_presence container "$id" "$run_dir" || id_state=$?
+      (( id_state == 1 )) || { cleanup_refuse "$role" readback_unknown; return 1; }
+      return 0
+    fi
+    (( name_state == 0 )) || { cleanup_refuse "$role" presence_unknown; return 1; }
+    if [[ $role == container && ${creation_status:-0} != 0 ]]; then
+      native_outer_daemon_binding "$id" "$name" io.dockerlens.native-run "$run_id" "$image" >/dev/null || {
+        cleanup_refuse "$role" identity_unknown; return 1;
+      }
+    fi
+    native_outer_remove "$id" "$name" io.dockerlens.native-run "$run_id" "$run_dir" || {
+      cleanup_refuse "$role" remove_failed; return 1;
+    }
+    return 0
+  fi
   native_presence exists "${podman_cmd[@]}" container exists "$name" || name_state=$?
   case $name_state in
     1)
@@ -215,6 +297,11 @@ cleanup_container() {
     0) ;;
     *) cleanup_refuse "$role" presence_unknown; return 1 ;;
   esac
+  if [[ $role == container && ${creation_status:-0} != 0 ]]; then
+    native_outer_daemon_binding "$id" "$name" io.dockerlens.native-run "$run_id" "$image" >/dev/null || {
+      cleanup_refuse "$role" identity_unknown; return 1;
+    }
+  fi
   current=$(cleanup_podman inspect --format '{{.ID}}|{{.Name}}|{{index .Config.Labels "io.dockerlens.native-run"}}' "$id") || {
     cleanup_refuse "$role" identity_unknown; return 1;
   }
@@ -232,7 +319,7 @@ cleanup_container() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-echo "native lane $lane owns Podman container $container, sidecar $sidecar, network $outer_network, and volume $volume"
+echo "native lane $lane owns $native_outer_engine container $container, sidecar $sidecar, network $outer_network, and volume $volume"
 
 diagnose_native_startup() {
   local state diagnosis
@@ -269,14 +356,18 @@ print("stage=" + stage + " category=" + category + " trace=" + trace)' "$lane") 
   echo "inner daemon startup diagnosis: state=$state $diagnosis" >&2
 }
 
-graph_root=$("${podman_cmd[@]}" info --format '{{.Store.GraphRoot}}')
-[[ $graph_root == /* ]] || { echo 'outer Podman graph root is unavailable' >&2; exit 1; }
+if [[ $native_outer_engine == docker ]]; then
+  graph_root=$native_outer_store_root
+else
+  graph_root=$("${podman_cmd[@]}" info --format '{{.Store.GraphRoot}}')
+fi
+[[ $graph_root == /* ]] || { echo 'outer engine storage root is unavailable' >&2; exit 1; }
 if [[ $EUID == 0 ]]; then
   available_kib=$(df -Pk "$graph_root" | awk 'END {print $4}')
 else
   available_kib=$(sudo -n df -Pk "$graph_root" | awk 'END {print $4}')
 fi
-(( available_kib >= 8 * 1024 * 1024 )) || { echo 'native lane needs at least 8 GiB free in Podman storage' >&2; exit 1; }
+(( available_kib >= 8 * 1024 * 1024 )) || { echo 'native lane needs at least 8 GiB free in outer storage' >&2; exit 1; }
 for resource in container sidecar network volume; do
   case $resource in
     container) name=$container; query=container ;;
@@ -354,23 +445,6 @@ watchdog() {
     fi
   done
 }
-storage_mount="$volume:$(if [[ $expected_mode == rootless ]]; then printf /home/docker/.local/share/docker; else printf /var/lib/docker; fi):U"
-if [[ $lane == debian11-rootless ]]; then
-  # Historical Debian rootless runc cannot RO-remount the named volume when
-  # its outer data store inherits nosuid,nodev. Scope this to the disposable
-  # privileged nesting volume; do not change host mount or AppArmor policy.
-  storage_mount+=,suid,dev
-fi
-# Keep the image's native daemon launcher. Its second Unix listener is bind-mounted
-# for explicit local test capture; neither listener is exposed over TCP.
-start=(/usr/local/bin/start-dockerd --host=unix:///dockerlens-native/docker.sock)
-if [[ $lane == debian11-rootless ]]; then
-  start+=(--storage-driver=vfs)
-fi
-run_flags=(--image-volume=ignore)
-if [[ $lane == debian11-rootless ]]; then
-  run_flags+=(--oom-score-adj=0 --security-opt apparmor=unconfined)
-fi
 validated_outer_ipv4() {
   local role=$1 name=$2 attachment
   case $role in sidecar | daemon) ;; *) return 1 ;; esac
@@ -512,19 +586,33 @@ watchdog &
 watchdog_pid=$!
 # Pull only the reviewed digest under the lane's time and free-space budget.
 # Prevent `run` from doing a second unbounded implicit pull.
-timeout --signal=TERM --kill-after=2s 180s "${podman_cmd[@]}" pull "$image" >/dev/null
-timeout --signal=TERM --kill-after=2s 180s "${podman_cmd[@]}" pull "$FIXTURE_IMAGE" >/dev/null 2>&1 || sidecar_setup_failed image_pull
+native_outer_command 180 pull "$image" >/dev/null
+native_outer_command 180 pull "$FIXTURE_IMAGE" >/dev/null 2>&1 || sidecar_setup_failed image_pull
 network_attempted=1
-timeout --signal=TERM --kill-after=2s 30s "${podman_cmd[@]}" network create --driver bridge \
-  --label "io.dockerlens.native-run=$run_id" "$outer_network" >/dev/null 2>&1 || sidecar_setup_failed network_create
+if [[ $native_outer_engine == docker ]]; then
+  outer_network_id=$(native_outer_command 30 network create --driver bridge \
+    --label "io.dockerlens.native-run=$run_id" "$outer_network" 2>/dev/null) || sidecar_setup_failed network_create
+  [[ $outer_network_id =~ ^[0-9a-f]{64}$ ]] || sidecar_setup_failed network_identity
+else
+  timeout --signal=TERM --kill-after=2s 30s "${podman_cmd[@]}" network create --driver bridge \
+    --label "io.dockerlens.native-run=$run_id" "$outer_network" >/dev/null 2>&1 || sidecar_setup_failed network_create
+fi
 network_created=1
+if [[ $native_outer_engine == docker ]]; then
+  native_outer_binding network "$outer_network_id" "$outer_network" io.dockerlens.native-run "$run_id" >/dev/null ||
+    sidecar_setup_failed network_identity
+fi
 # Preserve only the creation reply privately; never recover a bound ID from a
 # reused name after a failed/uncertain run. No ambient enumeration or retry.
 (umask 077; set -o noclobber; : > "$run_dir/sidecar-create.id") || sidecar_setup_failed sidecar_identity
 sidecar_attempted=1
-sidecar_start_category=$(timeout --signal=TERM --kill-after=2s 120s "${podman_cmd[@]}" run --pull=never -d --name "$sidecar" \
+sidecar_log_flags=()
+if [[ $native_outer_engine == docker ]]; then
+  sidecar_log_flags=(--log-driver=json-file --log-opt max-size=1m --log-opt max-file=1)
+fi
+sidecar_start_category=$(native_outer_command 120 run --pull=never -d --name "$sidecar" \
   --label "io.dockerlens.native-run=$run_id" --network "$outer_network" \
-  --user=65534:65534 --cap-drop=all --security-opt no-new-privileges --pids-limit=64 --memory=128m \
+  --user=65534:65534 --cap-drop=all --security-opt no-new-privileges --pids-limit=64 --memory=128m "${sidecar_log_flags[@]}" \
   "$FIXTURE_IMAGE" sh -c \
   'umask 077
    sidecar_tmp=$(mktemp -d /tmp/dockerlens-sidecar.XXXXXX 2>/dev/null) || exit 1
@@ -569,7 +657,11 @@ sidecar_start_category=$(timeout --signal=TERM --kill-after=2s 120s "${podman_cm
 sidecar_creation_id=$(head -c 66 "$run_dir/sidecar-create.id")
 [[ $sidecar_creation_id =~ ^[0-9a-f]{64}$ && $(wc -c < "$run_dir/sidecar-create.id") == 65 ]] || sidecar_setup_failed sidecar_identity
 sidecar_container_id=$sidecar_creation_id
-sidecar_binding=$(cleanup_podman inspect --format '{{.ID}}|{{.Name}}|{{index .Config.Labels "io.dockerlens.native-run"}}' "$sidecar_container_id") || sidecar_setup_failed sidecar_identity
+if [[ $native_outer_engine == docker ]]; then
+  sidecar_binding=$(native_outer_binding container "$sidecar_container_id" "$sidecar" io.dockerlens.native-run "$run_id") || sidecar_setup_failed sidecar_identity
+else
+  sidecar_binding=$(cleanup_podman inspect --format '{{.ID}}|{{.Name}}|{{index .Config.Labels "io.dockerlens.native-run"}}' "$sidecar_container_id") || sidecar_setup_failed sidecar_identity
+fi
 [[ $sidecar_binding == "$sidecar_container_id|$sidecar|$run_id" ]] || sidecar_setup_failed sidecar_identity
 python3 "$script_dir/native-port-start-diagnostic.py" prepare "$run_dir" "$run_id" "$lane" || {
   echo 'DOCKERLENS_NATIVE_PORT_START_LOG_DIAG: source=none category=unavailable collector=unavailable' >&2
@@ -578,15 +670,26 @@ python3 "$script_dir/native-port-start-diagnostic.py" prepare "$run_dir" "$run_i
 # Hold the original caller-owned file; registration checks this descriptor
 # against the exclusive no-follow creation before reading any native bytes.
 exec {port_start_log_fd}< "$run_dir/diagnostics/daemon.log"
+# Docker has no :U or image-volume suppression. Prepare only the exact empty
+# creation-bound named volume and verify the pinned image's complete VOLUME set.
+if [[ $native_outer_engine == docker ]]; then
+  [[ $(cleanup_podman volume inspect --format '{{.Name}}|{{.Driver}}|{{.Mountpoint}}|{{.CreatedAt}}|{{index .Labels "io.dockerlens.native-run"}}' "$volume") == "$volume_identity" ]] ||
+    sidecar_setup_failed volume_identity
+  native_outer_prepare_data "$image" "$expected_mode" "$volume" "$volume_path" "$graph_root" ||
+    sidecar_setup_failed volume_ownership
+fi
 outer_attempted=1
-outer_container_id=$(timeout --signal=TERM --kill-after=2s 120s "${podman_cmd[@]}" run --pull=never -d --name "$container" --label "io.dockerlens.native-run=$run_id" \
-  --log-driver=k8s-file --log-opt "path=$run_dir/diagnostics/daemon.log" --log-opt max-size=1048576 \
-  --network "$outer_network" \
-  --privileged --pids-limit=512 --memory=4g --cpus=2 "${run_flags[@]}" \
-  --volume "$storage_mount" --volume "$socket_dir:/dockerlens-native" \
-  "$image" "${start[@]}" 2>/dev/null) || { outer_container_id=; sidecar_setup_failed daemon_attach; }
+creation_status=0
+outer_container_id=$(native_outer_bridge_command 120 create-daemon "$container" "$run_id" \
+  io.dockerlens.native-run "$outer_network" "$volume" "$socket_dir" /dockerlens-native \
+  "$lane" "$image" "$run_dir/diagnostics/daemon.log" 2>/dev/null) || creation_status=$?
+(( creation_status == 0 )) || sidecar_setup_failed daemon_attach
 [[ $outer_container_id =~ ^[0-9a-f]{64}$ ]] || sidecar_setup_failed daemon_identity
-outer_binding=$(cleanup_podman inspect --format '{{.ID}}|{{.Name}}|{{index .Config.Labels "io.dockerlens.native-run"}}' "$outer_container_id") || sidecar_setup_failed daemon_identity
+if [[ $native_outer_engine == docker ]]; then
+  outer_binding=$(native_outer_binding container "$outer_container_id" "$container" io.dockerlens.native-run "$run_id") || sidecar_setup_failed daemon_identity
+else
+  outer_binding=$(cleanup_podman inspect --format '{{.ID}}|{{.Name}}|{{index .Config.Labels "io.dockerlens.native-run"}}' "$outer_container_id") || sidecar_setup_failed daemon_identity
+fi
 [[ $outer_binding == "$outer_container_id|$container|$run_id" ]] || sidecar_setup_failed daemon_identity
 sidecar_state=$(timeout --signal=TERM --kill-after=2s 10s "${podman_cmd[@]}" inspect \
   --format '{{.State.Running}}|{{.State.Status}}|{{.State.ExitCode}}' "$sidecar" 2>/dev/null) || {
@@ -640,15 +743,24 @@ print("true" if value else "false")')
 [[ $privileged == true ]] || { echo 'outer container does not have reviewed nesting privilege' >&2; exit 1; }
 # Reuse this existing authorized setup inspection. Registration failures affect
 # only optional observations; the original native assertions remain mandatory.
-printf '%s' "$outer_setup" | python3 "$script_dir/native-port-start-diagnostic.py" register \
-  "$run_dir" "$run_id" "$lane" "$image" "$outer_container_id" "$port_start_log_fd" || true
+if [[ $native_outer_engine == podman ]]; then
+  printf '%s' "$outer_setup" | python3 "$script_dir/native-port-start-diagnostic.py" register \
+    "$run_dir" "$run_id" "$lane" "$image" "$outer_container_id" "$port_start_log_fd" || true
+fi
 unset outer_setup
 volume_mounts=$("${podman_cmd[@]}" inspect --format '{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}}:{{.Destination}}{{"\n"}}{{end}}{{end}}' "$container")
-expected_mount=${storage_mount%:*}
+expected_mount="$volume:$(if [[ $expected_mode == rootless ]]; then printf /home/docker/.local/share/docker; else printf /var/lib/docker; fi)"
 [[ $volume_mounts == "$expected_mount" ]] || {
   echo 'outer container has unexpected image or data-root volumes' >&2
   exit 1
 }
+if [[ $native_outer_engine == docker ]]; then
+  native_outer_check_mounts "$outer_container_id" "$volume" "$expected_mode" "$socket_dir" /dockerlens-native || {
+    echo 'outer container has unexpected image or data-root volumes' >&2
+    exit 1
+  }
+  native_outer_helper check-data "$volume_path" "$graph_root" "$volume" "$expected_mode" || sidecar_setup_failed volume_ownership
+fi
 
 deadline=$((SECONDS + 360))
 while (( SECONDS < deadline )); do
@@ -1026,8 +1138,16 @@ export NATIVE_LIFECYCLE_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 export NATIVE_RUNTIME_FILESYSTEM_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 export NATIVE_TMPFS_EFFECT_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 if [[ $EUID == 0 ]]; then export NATIVE_PODMAN_USE_SUDO=0; else export NATIVE_PODMAN_USE_SUDO=1; fi
+export NATIVE_OUTER_ENGINE="$native_outer_engine" NATIVE_OUTER_RUN_DIRECTORY="$run_dir"
 
 port_start_failure_diagnostic() {
+  if [[ ${native_outer_engine:-podman} == docker ]]; then
+    # Docker's bounded json-file logger cannot register the existing k8s-file
+    # descriptor collector. This optional observation is explicitly unavailable;
+    # no follower, path substitution, or completed-log claim is introduced.
+    echo 'DOCKERLENS_NATIVE_PORT_START_LOG_DIAG: source=none category=unavailable collector=unavailable' >&2
+    return 0
+  fi
   local remaining=$((1800 - SECONDS)) started ended ignored started_cs ended_cs result diagnostic_status=0
   # Failure-only observation lives inside the existing active 30-minute
   # budget. It is not a new parent cleanup reserve or a timeout extension.

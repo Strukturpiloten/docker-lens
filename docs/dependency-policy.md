@@ -61,11 +61,38 @@ longer part of the harness. On image updates, review the published package
 provenance and rerun both Debian modes. Never infer the Debian package
 revision from the v1.0.0 image tag.
 
-The harness uses an explicit named Podman volume at each image's declared
-Docker data root and disables automatic image volumes. It checks the exact
-mounted volume. The Debian 11 rootless profile also requires the privileged
-rootful outer Podman process to set --oom-score-adj=0. This is confined to
-the validation-only test harness.
+The harness uses an explicit owned named volume at each image's declared Docker
+data root. Podman disables automatic image volumes; the hosted Docker backend
+validates/overrides the sole declared volume and checks the complete actual mount
+roster. Debian 11 rootless retains --oom-score-adj=0 in both privileged outer
+backends. These are validation-only prerequisites, not product capabilities.
+
+The [canonical outer runtime](native-outer-runtime.md) verifies the preinstalled
+GitHub ubuntu-24.04 Docker CLI/daemon without package installation, restart or
+global configuration changes. Actual client/server and ImageVersion values plus
+the local root dockerd executable identity are observed in private unqualified
+receipts; sanitized versions appear in job logs. The runner image is version-selected
+but mutable. Its Docker installation has no independently stable distribution
+checksum supplied to this repository: this is an explicit unavailable-integrity,
+manual-review exception like the existing runner Podman/kernel tools, not an
+invented pinned distribution or a native compatibility claim. Runner updates can
+change this prerequisite and need fresh native review. No downloaded tool is added.
+
+The standalone `scripts/native-unix-http.py` supplied for BoxFerry's reviewed
+test closure imports only the existing runner Python standard library. Its
+independent socket tests add no dependency, software pin or extraction path;
+existing DockerLens HTTP consumers are not migrated in this change.
+
+Renovate ownership remains unchanged: the five version/digest image references
+stay uniquely extracted from scripts/native-conformance.sh and retain their
+native-conformance grouping/manual review with automerge disabled. Action SHAs,
+Cargo and toolchain managers are unchanged. The three native workflow consumers
+share the same setup/helper definitions; no duplicate manager, moved software pin
+or historical evidence rewrite is needed. Policy tests retain exact extraction
+and verify all three consumers explicitly select Docker and verify setup. BoxFerry
+uses the reviewed test-only source seam separately; other Lens products and the
+website do not consume this harness. The containers product retains its distinct
+private-store Python adapter rather than weakening that contract to share lifecycle.
 
 The native workflows upload only a closed, sanitized per-lane JSON record
 after all native checks pass. actions/upload-artifact is pinned to a full

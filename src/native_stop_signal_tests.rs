@@ -65,8 +65,10 @@ fn outer_context(run: &HealthRun, cleanup: bool) -> Value {
         "1" => true,
         _ => panic!("closed privilege selector"),
     };
+    run.charge_outer_snapshot(cleanup);
     let mut command = run.timer(cleanup, elevated);
-    command.args(["podman", "inspect", "--format", "{{json .}}", &id]);
+    command.args(crate::native_outer_test_command::prefix());
+    command.args(["inspect", "--format", "{{json .}}", &id]);
     let value: Value = serde_json::from_slice(&run.capture(&mut command, None, cleanup))
         .unwrap_or_else(|_| panic!("private outer JSON"));
     let mounts = value["Mounts"]

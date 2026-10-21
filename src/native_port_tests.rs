@@ -889,10 +889,10 @@ impl NativeRun {
             self.uncertain_mutation.set(true);
         }
         let mut command = self.timer(false, Self::elevated(), 16);
+        command.args(crate::native_outer_test_command::prefix());
         command.args([
-            "podman",
             "exec",
-            &required("NATIVE_OUTER_CONTAINER"),
+            &required("NATIVE_OUTER_CONTAINER_ID"),
             "docker",
             "-H",
             "unix:///dockerlens-native/docker.sock",
@@ -1310,10 +1310,10 @@ impl NativeRun {
         // Same independent process oracle as the existing native target proof,
         // under this test's privilege-aware shared timer/output budget.
         let mut command = self.timer(false, Self::elevated(), 15);
+        command.args(crate::native_outer_test_command::prefix());
         command.args([
-            "podman",
             "exec",
-            &required("NATIVE_OUTER_CONTAINER"),
+            &required("NATIVE_OUTER_CONTAINER_ID"),
             "sh",
             "-ec",
             r#"count=0; effective=

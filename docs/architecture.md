@@ -1,5 +1,18 @@
 # Architecture
 
+Native test subprocesses share the canonical test-only
+[outer command boundary](native-outer-runtime.md), including Rust's cfg(test)-only
+literal argv builder. It reuses the coordinator's selected backend/private client
+configuration beneath each original timeout/capture owner. Outer-proof snapshot
+normalization binds actual image-ID and repository-digest evidence; guest and
+inner Engine oracle results remain untouched. No product executor/API is added.
+
+Native orchestration uses the canonical [test-only outer runtime](native-outer-runtime.md):
+local default rootful Podman, explicitly selected verified rootful Docker only in
+admitted hosted jobs. It introduces no product executor/API and changes none of
+the capture/decoder/target boundaries. The shared host store, exact inner fixture
+ownership and fresh complete/native qualification obligations remain.
+
 ## Data flow
 
 1. An explicitly supplied endpoint and selector create a bounded read request

@@ -7,6 +7,19 @@ The scaffold policy tests check alignment and MSRV failure propagation through
 the shared local, PR/main, native-dispatch, and release offline gate. Earlier
 verification records below retain the Rust versions used at those checkpoints.
 
+## Explicit hosted outer Docker backend
+
+The [canonical test-only outer runtime](native-outer-runtime.md) keeps local default
+Podman and explicitly selects Docker in the three admitted hosted native workflows.
+It verifies local rootful daemon/service/listener identity (including systemd
+activation), private CLI configuration, actual versions and owned inner resources.
+Docker-specific listing, data ownership, logging and removal are not Podman prefix
+substitutions. Four image pins/inner modes, nineteen mandatory tests, source/candidate
+admission, budgets and cleanup boundaries remain unchanged. The narrow legacy-main
+dispatcher policy is documented there; no actor or main-only gate is relaxed.
+Definitions and mocked controls do not establish Docker-backend compatibility.
+Fresh exact-candidate complete and four-lane gates remain required.
+
 ## Mandatory unadmitted runtime-cohort source observations
 
 The canonical harness requires nineteen exact ignored invocations, retaining the
@@ -706,7 +719,7 @@ readiness/product evidence; a separate removal control requires positive
 exact-full-ID CLI inventory, successful native `rm`, successful empty exact-ID
 re-inventory, and fresh server version/API facts.
 
-Run one lane with ./scripts/native-conformance.sh <lane> on Linux with
+Run one lane with ./scripts/native-conformance.sh <lane> locally on Linux with
 rootful Podman through passwordless sudo, at least 8 GiB free, and access
 to the pinned GHCR and BusyBox manifests. The script caps the nested daemon
 at 4 GiB storage, 4 GiB memory, two CPUs and 512 processes. It bounds the
@@ -738,11 +751,12 @@ remain unchanged: adopting a revised harness source separately requires an expli
 consumer contract or a new independently verified producer build and receipt, not a
 hash-only refresh.
 
-Every image declares a Docker data-root VOLUME. The harness disables
-automatic image volumes and mounts exactly one task-labeled named volume at
+Every image declares a Docker data-root VOLUME. Podman disables automatic image
+volumes; Docker validates and overrides the sole declared data volume. Both mount
+exactly one task-labeled named volume at
 the declared data root. It checks the mounted volume after launch; an
 unexpected anonymous or extra volume fails the lane. A watchdog checks the
-owned volume and Podman storage every five seconds. It retries failed `du` or
+owned volume and selected outer storage every five seconds. It retries failed `du` or
 `df` measurements at most twice, one second apart, to tolerate disappearing
 overlay paths during traversal. Both measurements still run on each attempt,
 and any measured volume above 4 GiB, free space below 2 GiB, or elapsed time

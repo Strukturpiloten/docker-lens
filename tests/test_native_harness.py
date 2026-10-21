@@ -296,11 +296,11 @@ if [[ $1 == rm || ${2:-} == rm ]]; then
 else exit 50; fi
 ''')
             env = os.environ.copy()
-            env.update(PATH=f"{root}:{env['PATH']}", FAKE_STATE=str(root),
+            env.update(PATH=f"{root}:{env['PATH']}", FAKE_STATE=str(root), TMPDIR=str(root),
                        FAKE_OUTER_ID="a" * 64, FAKE_SIDECAR_ID="b" * 64)
             for mode in ("success", "container_leftover", "network_error"):
                 with self.subTest(mode=mode), tempfile.TemporaryDirectory(
-                    prefix="dockerlens-native.", dir="/tmp",
+                    prefix="dockerlens-native.", dir=root,
                 ) as temporary:
                     for role in ("container", "sidecar", "network", "volume"):
                         (root / role).touch()
@@ -1445,10 +1445,10 @@ fi
             self.assertNotIn("private", result.stdout + result.stderr)
 
     def test_vfs_launch_argument_is_isolated_to_debian_rootless(self) -> None:
-        source = (ROOT / "scripts/native-conformance.sh").read_text()
+        source = (ROOT / "scripts/native-outer-runtime.sh").read_text()
         block = "start=(/usr/local/bin/start-dockerd" + source.split(
             "start=(/usr/local/bin/start-dockerd", 1
-        )[1].split("\nrun_flags=", 1)[0]
+        )[1].split('\n  mount=', 1)[0]
         for lane in (
             "debian11-rootful",
             "debian11-rootless",
@@ -1457,7 +1457,7 @@ fi
         ):
             with self.subTest(lane=lane):
                 result = subprocess.run(
-                    ["bash", "-c", "set -euo pipefail\nlane=$1\n" + block
+                    ["bash", "-c", "set -euo pipefail\ndeclare -A context=([lane]=$1 [guest_dir]=/dockerlens-native)\nflags=()\n" + block
                      + '\nprintf \'%s\\n\' "${start[@]}"\n', "launch-args", lane],
                     capture_output=True, text=True, timeout=5, check=False,
                 )
@@ -1542,7 +1542,7 @@ fi
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
         fixture = source.split(
             "# A random directory, two containers, network, and volume belong to this lane.", 1
-        )[1].split("\nwatchdog_pid=", 1)[0]
+        )[1].split("\nnative_outer_select ", 1)[0]
         with tempfile.TemporaryDirectory() as temporary:
             env = os.environ.copy()
             env["TMPDIR"] = temporary
@@ -1734,6 +1734,7 @@ esac
         fake_podman = """#!/usr/bin/env bash
 set -eu
 state=$FAKE_NATIVE_STATE
+[[ ${1:-} != --remote=false ]] || shift
 command=$1; shift
 case "$command" in
   info)
@@ -1803,6 +1804,7 @@ case "$command" in
  prior=
  for item in "$@"; do
  if [[ $prior == --name ]]; then name=$item; fi
+      if [[ $prior == --cidfile ]]; then cidfile=$item; fi
  if [[ $item == path=* ]]; then log_path=${item#path=}; fi
  if [[ $item == *@sha256:* ]]; then daemon_image=$item; fi
  prior=$item
@@ -1827,6 +1829,7 @@ case "$command" in
      printf '%s\n' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
      exit 42
    fi
+   printf '%s' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa > "$cidfile"
    printf '%s\n' "$log_path" > "$state/daemon-log-path"
    printf '%s\n' "$daemon_image" > "$state/daemon-image"
    printf '1970-01-01T00:00:00.000000000Z stdout F private-startup-canary\n' >> "$log_path"
@@ -2272,7 +2275,7 @@ sys.exit(exits[min(len(previous), len(exits) - 1)])
     def test_published_image_and_fixture_contracts_are_static(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         self.assertIn("DEBIAN_DOCKER_PACKAGE='20.10.5+dfsg1-1+deb11u2'", source)
-        self.assertIn('storage_mount="$volume:', source)
+        self.assertIn('mount="${context[volume]}:$destination"', (ROOT / "scripts/native-outer-runtime.sh").read_text())
         self.assertIn('rootless ]]; then printf /home/docker/.local/share/docker', source)
         self.assertIn('--user 0:0 --workdir /tmp --hostname dockerlens-native', source)
         self.assertIn('--label io.dockerlens.fixture=synthetic', source)

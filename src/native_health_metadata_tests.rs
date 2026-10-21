@@ -488,6 +488,16 @@ impl HealthRun {
         output
     }
 
+    fn charge_outer_snapshot(&self, cleanup: bool) {
+        let extra = crate::native_outer_test_command::snapshot_extra_calls();
+        self.calls.set(self.calls.get() + extra);
+        self.bytes.set(self.bytes.get() + extra * 65536);
+        assert!(
+            capture_room(self.calls.get(), self.bytes.get(), cleanup),
+            "outer snapshot reserve"
+        );
+    }
+
     fn outer(&self, args: &[String], cleanup: bool) -> Vec<u8> {
         let elevated = match required("NATIVE_PODMAN_USE_SUDO").as_str() {
             "0" => false,
@@ -495,7 +505,8 @@ impl HealthRun {
             _ => panic!("closed privilege selector"),
         };
         let mut command = self.timer(cleanup, elevated);
-        command.args(["podman", "exec", &self.outer]);
+        command.args(crate::native_outer_test_command::prefix());
+        command.args(["exec", &required("NATIVE_OUTER_CONTAINER_ID")]);
         command.args(args);
         self.capture(&mut command, None, cleanup)
     }

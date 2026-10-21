@@ -3,6 +3,14 @@
 Status: accepted harness contract; historical four-lane source evidence reviewed.
 Each changed candidate and release requires fresh complete and native gates.
 
+The current [test-only outer runtime](../native-outer-runtime.md) additionally
+selects verified rootful local Docker in admitted hosted jobs while retaining
+local default Podman. This updates orchestration, not the four maintained inner
+images or this ADR's native evidence/admission obligation. Historical Podman source
+evidence below remains historical; it does not qualify the new Docker backend.
+Both use owned inner container/data-volume/socket identities in the existing
+shared host store; the host Docker daemon/socket is never the fixture itself.
+
 The four independent native lanes use the published, version-tagged and
 digest-pinned containers#260 GHCR images: Debian 11 packaged Engine in
 rootful and rootless mode, and upstream Engine 29 in rootful and rootless

@@ -107,3 +107,10 @@ evidence for live #10 acquisition and #12 target
 request conformance is required before any compatibility claim. See
 [architecture](docs/architecture.md) and
 [verification](docs/verification.md).
+
+The [test-only outer runtime](docs/native-outer-runtime.md) defaults locally to
+rootful Podman; admitted hosted native jobs explicitly select verified local
+rootful Docker. Both orchestrate owned inner fixtures in the existing shared host
+store, never use the host daemon as the test subject or mount its socket into a
+guest. There is no runtime fallback. This backend still needs fresh exact-candidate
+four-lane qualification; mocked controls are not native evidence.

@@ -222,13 +222,14 @@ fn private_docker_command(seconds: &str) -> Command {
     // diagnostic can still run its exact-peer cleanup before the outer gate.
     command.args(["--kill-after=1", seconds]);
     if required("NATIVE_PODMAN_USE_SUDO") == "1" {
-        command.args(["sudo", "-n", "podman"]);
+        command.args(["sudo", "-n"]);
+        command.args(crate::native_outer_test_command::prefix());
     } else {
-        command.arg("podman");
+        command.args(crate::native_outer_test_command::prefix());
     }
     command.args([
         "exec",
-        &required("NATIVE_OUTER_CONTAINER"),
+        &required("NATIVE_OUTER_CONTAINER_ID"),
         "docker",
         "-H",
         "unix:///dockerlens-native/docker.sock",
@@ -943,9 +944,10 @@ fn proof_podman(resources: &InternalProofResources, args: &[&str]) -> BoundedDns
     let mut command = Command::new("timeout");
     command.args(["--kill-after=1", "6"]);
     if required("NATIVE_PODMAN_USE_SUDO") == "1" {
-        command.args(["sudo", "-n", "podman"]);
+        command.args(["sudo", "-n"]);
+        command.args(crate::native_outer_test_command::prefix());
     } else {
-        command.arg("podman");
+        command.args(crate::native_outer_test_command::prefix());
     }
     bounded_cli_command(&mut command, args)
 }
