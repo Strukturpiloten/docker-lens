@@ -341,7 +341,8 @@ trap 'exit 143' TERM
 echo "native lane $lane owns $native_outer_engine container $container, sidecar $sidecar, network $outer_network, and volume $volume"
 
 diagnose_native_startup() {
-  local state diagnosis
+  local state diagnosis inspect_reported_apparmor=${2:-unknown}
+  case $inspect_reported_apparmor in unconfined | docker_default | other | empty | unknown) ;; *) inspect_reported_apparmor=unknown ;; esac
   if (( $# > 0 )); then
     state=$1
     [[ $state =~ ^running=(true|false|unknown),status=(running|exited|created|configured|paused|stopped|restarting|dead|removing|unknown),exit=(zero|nonzero|unknown),oom=(true|false|unknown),error=(true|false|unknown)$ ]] || state=unavailable
@@ -354,9 +355,12 @@ diagnose_native_startup() {
   diagnosis=$(native_outer_command 10 logs --tail 80 "$container" 2>&1 |
     python3 -c 'import re, sys
 tail = bytearray()
+first_retained_line_complete = True
 for chunk in iter(lambda: sys.stdin.buffer.read(65536), b""):
     tail.extend(chunk)
     if len(tail) > 65536:
+        cut = len(tail) - 65536
+        first_retained_line_complete = tail[cut - 1] == 10
         del tail[:-65536]
 stage = "daemon"
 family_order = ("rootless_launcher_unavailable", "rootless_uidmap", "rootless_network",
@@ -373,7 +377,20 @@ preflight_rules = (
 # drivers or successful setup are not error observations or causal evidence.
 families = set()
 preflights = set()
-for raw in tail.decode("utf-8", "replace").splitlines():
+self_reexec_errors = set()
+decoded = tail.decode("utf-8", "replace")
+# The exact source-backed line is independent of family/preflight matching.
+# Split only at LF; do not strip CR, controls, prefixes, or case-fold it.
+for index, raw in enumerate(decoded.split("\n")):
+    if index == 0 and not first_retained_line_complete:
+        continue
+    if re.match(r"^\++ ", raw):
+        continue
+    self_reexec = re.fullmatch(
+        r"\[rootlesskit:parent\] error: failed to start the child: fork/exec /proc/self/exe: (permission denied|operation not permitted)", raw)
+    if self_reexec:
+        self_reexec_errors.add(self_reexec.group(1).replace(" ", "_"))
+for raw in decoded.splitlines():
     if re.match(r"^\++ ", raw):
         continue
     line = raw.lower()
@@ -416,8 +433,10 @@ category = next(iter(families)) if len(families) == 1 else "ambiguous" if famili
 family_projection = ",".join(name for name in family_order if name in families) or "none"
 preflight_projection = ",".join(name for name, _ in preflight_rules if name in preflights) or "none"
 trace = "unavailable"
-print("stage=" + stage + " category=" + category + " families=" + family_projection + " preflight=" + preflight_projection + " trace=" + trace)' "$lane") || diagnosis='stage=unavailable category=unavailable families=unavailable preflight=unavailable trace=unavailable'
-  echo "inner daemon startup diagnosis: state=$state $diagnosis" >&2
+self_reexec_projection = (next(iter(self_reexec_errors)) if len(self_reexec_errors) == 1 else
+                          "ambiguous" if self_reexec_errors else "unobserved")
+print("stage=" + stage + " category=" + category + " families=" + family_projection + " preflight=" + preflight_projection + " trace=" + trace + " rootlesskit_self_reexec=" + self_reexec_projection)' "$lane") || diagnosis='stage=unavailable category=unavailable families=unavailable preflight=unavailable trace=unavailable rootlesskit_self_reexec=unavailable'
+  echo "inner daemon startup diagnosis: state=$state $diagnosis inspect_reported_apparmor=$inspect_reported_apparmor" >&2
 }
 
 if [[ $native_outer_engine == docker ]]; then
@@ -510,10 +529,16 @@ watchdog() {
   done
 }
 validated_outer_ipv4() {
-  local role=$1 name=$2 attachment observation result=0
+  local role=$1 name=$2 attachment observation inspect_format result=0
   case $role in sidecar | daemon) ;; *) return 1 ;; esac
+  inspect_format='{{json .NetworkSettings.Networks}}|{{.State.Running}}|{{.State.Status}}|{{.State.ExitCode}}|{{.State.OOMKilled}}|{{if .State.Error}}true{{else}}false{{end}}'
+  if [[ ${native_outer_engine:-podman} == docker && $role == daemon ]]; then
+    # Project only fixed tokens in the same inspect. Never print profile names;
+    # this is reported metadata, not proof of a live process kernel label.
+    inspect_format='inspect_reported_apparmor={{if ne (printf "%T" .AppArmorProfile) "string"}}unknown{{else if eq .AppArmorProfile "unconfined"}}unconfined{{else if eq .AppArmorProfile "docker-default"}}docker_default{{else if eq .AppArmorProfile ""}}empty{{else}}other{{end}}{{"\n"}}'"$inspect_format"
+  fi
   attachment=$(native_outer_command 10 inspect \
-    --format '{{json .NetworkSettings.Networks}}|{{.State.Running}}|{{.State.Status}}|{{.State.ExitCode}}|{{.State.OOMKilled}}|{{if .State.Error}}true{{else}}false{{end}}' "$name" 2>/dev/null) || {
+    --format "$inspect_format" "$name" 2>/dev/null) || {
     echo "DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=attachment role=$role category=inspect_failed" >&2
     if [[ $role == daemon ]]; then diagnose_native_startup unavailable; fi
     return 1
@@ -527,6 +552,14 @@ validated_outer_ipv4() {
 import ipaddress, json, sys
 
 raw = sys.stdin.read()
+profile = "unknown"
+if sys.argv[3] == "docker" and sys.argv[2] == "daemon":
+    header, separator, remainder = raw.partition("\n")
+    if separator and header.startswith("inspect_reported_apparmor="):
+        raw = remainder
+        candidate = header.removeprefix("inspect_reported_apparmor=")
+        if candidate in ("unconfined", "docker_default", "other", "empty", "unknown"):
+            profile = candidate
 fields = raw.rsplit("|", 5)
 state = "unavailable"
 if len(fields) == 6:
@@ -540,6 +573,7 @@ def fail(category):
     print("DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=attachment role=" + sys.argv[2] +
           " category=" + category, file=sys.stderr)
     print(state)
+    print(profile)
     raise SystemExit(1)
 
 try:
@@ -567,11 +601,11 @@ except (ValueError, TypeError, AttributeError):
 if not address.is_private or address.is_loopback or address.is_link_local:
     fail("ipv4_nonprivate")
 print(address)
-' "$outer_network" "$role") || result=$?
+' "$outer_network" "$role" "${native_outer_engine:-podman}") || result=$?
   if (( result != 0 )); then
     # Failure-only: reuse the held closed State; only the existing logs query
     # is added (10s + 2s kill fallback), inside the lane 30m watchdog.
-    if [[ $role == daemon ]]; then diagnose_native_startup "$observation"; fi
+    if [[ $role == daemon ]]; then diagnose_native_startup "${observation%%$'\n'*}" "${observation#*$'\n'}"; fi
     return "$result"
   fi
   printf '%s\n' "$observation"

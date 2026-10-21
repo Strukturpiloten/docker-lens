@@ -14,6 +14,17 @@ Failure-only rootless diagnostics do not constitute a repair or a compatibility
 claim. The existing attachment inspect retains its 4096-character total bound
 and exact single-network/private-IPv4 predicates; selected daemon State fields
 are projected as closed running/status/exit-class/OOM/Error-presence values.
+The same Docker daemon attachment inspect additionally projects
+`inspect_reported_apparmor=unconfined|docker_default|other|empty|unknown`.
+Only a string exactly equal to `unconfined`, `docker-default`, or the empty
+string selects the corresponding token; other strings select `other`, and
+missing/non-string metadata selects `unknown`. No raw profile name leaves the
+template. The fixed header and original IPv4/State response share the original
+4096-character total bound and ten-second owner. Only startup failure prints the
+token; malformed/missing headers and callers without held metadata use `unknown`.
+This is inspect-reported metadata, not a live kernel-label observation or proof
+of a denied operation. Privileged configuration and a missing explicit security
+option do not establish the effective AppArmor label or the failure cause.
 That same attachment query uses the canonical ten-second command owner, keeping
 `sudo -n` outside GNU timeout without changing its query, client vector or budget.
 On daemon attachment refusal the held sanitized State is reused for startup
@@ -53,19 +64,76 @@ The historical payload manifest declares Apache-2.0; a versioned license was
 not independently verified. Neither archive nor script is redistributed here,
 and this historical source reference adds no operational dependency or pin.
 
+`rootlesskit_self_reexec=permission_denied|operation_not_permitted|ambiguous|unobserved|unavailable`
+is a separate passive observation from the same bounded logs. It matches only
+the complete, case-sensitive raw line
+`[rootlesskit:parent] error: failed to start the child: fork/exec /proc/self/exe: permission denied`
+or the same fixed line ending in `operation not permitted`. LF separates lines;
+CR, spaces, controls, prefixes/suffixes, different paths/errno and default xtrace
+do not match. Both exact errno observations yield `ambiguous`; no matching line
+yields `unobserved`, while a failed log collector yields `unavailable`.
+At each byte-cap trim the collector retains whether the preceding discarded
+byte was LF. An uncertain leading fragment cannot supply this exact-line
+observation, even if truncation removed its nonmatching prefix. A known LF cut
+and later complete LF-delimited lines remain eligible. Only this new observation
+uses the boundary fact; legacy family/preflight matching and tail bytes remain
+unchanged.
+Family/category/preflight matching remains independent and unchanged.
+The observation identifies a reported child-launch refusal, not the particular
+clone/userns/mountns/exec substep, effective label, kernel policy or cause. The
+earlier generic permission projection does not establish this observation.
+
+The same official 29.8.1 archive's `docker-rootless-extras/rootlesskit` member
+has SHA-256 `9a70304fdedb9f526f24d4f82029310506c9e6fde7551ec28a069378ee22d5d6`.
+Read-only `tar -xOf` stdout piped to `strings` identifies RootlessKit v3.1.0,
+revision `62d2101fbbe4f79bc845a337c4e868d27ff602c9`, `vcs.modified=false`, and
+Go 1.26.8; piping the same member to `sha256sum` verifies its hash. No binary
+was executed. The fixed message was independently checked against that revision's
+[parent.go](https://github.com/rootless-containers/rootlesskit/blob/62d2101fbbe4f79bc845a337c4e868d27ff602c9/pkg/parent/parent.go#L176)
+and [main.go](https://github.com/rootless-containers/rootlesskit/blob/62d2101fbbe4f79bc845a337c4e868d27ff602c9/cmd/rootlesskit/main.go#L331),
+and the compiler-matching
+[Go exec wrapper](https://github.com/golang/go/blob/go1.26.8/src/os/exec_posix.go#L55).
+Pinned raw HTTPS source/license reads used bounded `curl` downloads (30 seconds,
+1 MiB source/128 KiB license caps), not execution. The same-revision RootlessKit
+license was independently verified as Apache-2.0 and Go's as BSD-3-Clause.
+Only diagnostic grammar/provenance was inspected: no upstream implementation
+was copied, translated, vendored or redistributed. Archive provenance is not
+fresh attestation of the failing image's bytes, or a compatibility claim.
+
 Failed ordinary internal-proof wget commands classify their already-held bounded
 stderr as connection refusal, no route, timeout, HTTP error, or unknown. The
 probe, its oracle, endpoint, and six-second budget are unchanged. These
 observations do not establish that the independent rootless failures share a
 cause, nor settle address-pool overlap. On failed ordinary control-bridge wget,
-`DOCKERLENS_NATIVE_CONTROL_SUBNET_DIAG` adds only
-`sidecar_on_control_subnet=true|false|unknown`. It compares the already-held
-sidecar IPv4 against `IPAM.Config[].Subnet` from the already-inspected rendered
-control network, retaining only that closed result at the original read. Missing,
+`DOCKERLENS_NATIVE_INTERNAL_SUBNET_DIAG` and
+`DOCKERLENS_NATIVE_CONTROL_SUBNET_DIAG` add only the independent
+`sidecar_on_internal_subnet=true|false|unknown` and
+`sidecar_on_control_subnet=true|false|unknown` observations. Each compares the
+already-held sidecar IPv4 against `IPAM.Config[].Subnet` from its own
+already-inspected rendered network, retaining only that closed result at the
+original read. Neither adds an inspect or reuses the other network snapshot.
+Both are printed only on that same external ordinary-control wget failure,
+not on successful wget or the expected internal-network rejection. Missing,
 malformed, noncanonical-network CIDRs or IPv6-only metadata yield `unknown`;
 IPv4 `/0`, `/32`, and subnet boundaries are handled explicitly. `false` does
 not rule out other held networks, the default bridge, routes or firewall issues,
 and never asserts whole outer/inner CIDR disjointness or a timeout cause.
+The exact rendered requests, CLI oracles and default IPAM remain unchanged;
+these observations do not authorize a network-pool or fixture-routing repair.
+No extra startup-stage grammar is inferred from generic permission errors.
+Optional passive host/kernel/userns facts remain unavailable: bounded byte reads
+alone would not enforce a one-second total deadline, and this change does not
+add a supervisor or privilege/protocol seam to obtain them. There are no host
+reads, active canaries, profile loads, sysctl changes or daemon restarts.
+
+This diagnostic-only change is confined to DockerLens's harness/tests and failure
+sanitizer. It does not change the shared runtime bridge protocol consumed by
+BoxFerry, product APIs, workflow definitions or runtime acceptance. Existing
+Renovate ownership remains unchanged: the five image assignments and their
+comments stay in `scripts/native-conformance.sh`, matched by the existing
+`renovate.json` regex manager and native-image review group. No package, pin,
+extraction path, manager or grouping is added, moved or changed.
+
 Cleanup remains unchanged: its existing
 closed stage/status labels do not identify the stderr cause. A collector was
 omitted because safely retaining closed stderr across the original sudo/timer

@@ -12,6 +12,12 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = (ROOT / "scripts/native-conformance.sh").read_text()
 RUNTIME = (ROOT / "scripts/native-outer-runtime.sh").read_text()
 CANARY = "protected-canary /private/socket 10.89.0.2 uid=987654"
+APPARMOR_PROJECTION = (
+    'inspect_reported_apparmor={{if ne (printf "%T" .AppArmorProfile) "string"}}unknown'
+    '{{else if eq .AppArmorProfile "unconfined"}}unconfined'
+    '{{else if eq .AppArmorProfile "docker-default"}}docker_default'
+    '{{else if eq .AppArmorProfile ""}}empty{{else}}other{{end}}{{"\\n"}}'
+)
 
 
 def definition(name, source=SOURCE):
@@ -62,15 +68,16 @@ class FailureDiagnosticsTests(unittest.TestCase):
                 + definition("validated_outer_ipv4")
                 + "native_outer_cmd=(" + " ".join(repr(item) for item in vector) + ")\n"
                 + 'outer_network=owned\npodman_cmd=("${native_outer_cmd[@]}")\n'
-                + 'diagnose_native_startup() { printf "held-state:%s\\n" "$1" >&2; }\n'
+                + 'diagnose_native_startup() { printf "held-state:%s held-profile:%s\\n" "$1" "${2:-unknown}" >&2; }\n'
                 + 'validated_outer_ipv4 "$1" exact-owned-name\n')
 
     def test_attachment_positive_and_refusal_preserve_privileged_timer_and_exact_vector(self):
         projection = ('{{json .NetworkSettings.Networks}}|{{.State.Running}}|{{.State.Status}}|'
                       '{{.State.ExitCode}}|{{.State.OOMKilled}}|{{if .State.Error}}true{{else}}false{{end}}')
-        query = ["inspect", "--format", projection, "exact-owned-name"]
         prefix = ["--config", "/held/config", "--host", "unix:///held/socket"]
         for engine in ("docker", "podman"):
+            query = ["inspect", "--format", (APPARMOR_PROJECTION if engine == "docker" else "") + projection,
+                     "exact-owned-name"]
             for address, expected in (("10.89.0.2", 0), ("", 1)):
                 self.client_reply(json.dumps({"owned": {"IPAddress": address}}) + "|true|running|0|false|false")
                 sudo_trace = self.private / "sudo-trace"
@@ -84,6 +91,58 @@ class FailureDiagnosticsTests(unittest.TestCase):
                                   str(self.client), *prefix, *query])
                 self.assertEqual(result.stdout, "10.89.0.2\n" if expected == 0 else "")
                 self.assertEqual(result.stderr.count("held-state:"), expected)
+
+    def test_docker_attachment_profiles_are_closed_optional_and_do_not_change_ip_or_state(self):
+        for header, expected in (
+            ("", "unknown"),
+            *((f"inspect_reported_apparmor={value}\n", value)
+              for value in ("unconfined", "docker_default", "other", "empty", "unknown")),
+            (f"inspect_reported_apparmor={CANARY}\n", "unknown"),
+            ("inspect_reported_apparmor=null\n", "unknown"),
+            ('inspect_reported_apparmor={"secret":"protected-canary"}\n', "unknown"),
+        ):
+            for address, status in (("10.89.0.2", 0), ("", 1), ("127.0.0.1", 1)):
+                with self.subTest(header=expected, address=address):
+                    self.client_reply(header + json.dumps({"owned": {"IPAddress": address}})
+                                      + "|false|exited|1|false|false")
+                    result = self.shell(self.attachment_body(), ["daemon"],
+                                        {"native_outer_engine": "docker"})
+                    self.assertEqual(result.returncode, status)
+                    query = json.loads(self.trace.read_text())
+                    self.assertEqual(query[-4:-2], ["inspect", "--format"])
+                    self.assertTrue(query[-2].startswith(APPARMOR_PROJECTION))
+                    if status == 0:
+                        self.assertEqual((result.stdout, result.stderr), ("10.89.0.2\n", ""))
+                    else:
+                        self.assertIn("held-state:running=false,status=exited,exit=nonzero,oom=false,error=false", result.stderr)
+                        self.assertIn("held-profile:" + expected + "\n", result.stderr)
+                    self.assertNotIn(CANARY, result.stdout + result.stderr)
+                    self.assertNotIn("protected-canary", result.stdout + result.stderr)
+
+    def test_docker_profile_reaches_startup_failure_without_another_inspect_or_raw_value(self):
+        for profile in ("unconfined", "docker_default", "other", "empty", "unknown", CANARY):
+            expected = profile if profile != CANARY else "unknown"
+            reply = f"inspect_reported_apparmor={profile}\n" + '{"owned":{}}|false|exited|1|false|false'
+            self.trace.unlink(missing_ok=True)
+            self.tool(self.client, "import json,os,sys\nfrom pathlib import Path\n"
+                      "with Path(os.environ['TRACE']).open('a') as trace: trace.write(json.dumps(sys.argv[1:])+'\\n')\n"
+                      f"if 'inspect' in sys.argv: sys.stdout.write({reply!r})\n"
+                      "else: sys.stderr.write('ERROR: permission denied\\n')\n")
+            body = ("set -euo pipefail\n" + definition("native_outer_command", RUNTIME)
+                    + definition("diagnose_native_startup") + definition("validated_outer_ipv4")
+                    + f"native_outer_cmd=({str(self.client)!r})\n"
+                    + "native_outer_engine=docker\nouter_network=owned\ncontainer=exact-owned-name\nlane=upstream-rootless\n"
+                    + "validated_outer_ipv4 daemon exact-owned-name\n")
+            result = self.shell(body)
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.stdout, "")
+            self.assertIn("category=daemon_permission families=daemon_permission preflight=none trace=unavailable "
+                          f"rootlesskit_self_reexec=unobserved inspect_reported_apparmor={expected}\n", result.stderr)
+            queries = [json.loads(line) for line in self.trace.read_text().splitlines()]
+            self.assertEqual(len(queries), 2)
+            self.assertEqual(queries[0][:2], ["inspect", "--format"])
+            self.assertEqual(queries[1], ["logs", "--tail", "80", "exact-owned-name"])
+            self.assertNotIn(CANARY, result.stdout + result.stderr)
 
     def test_attachment_retains_ip_predicate_and_only_failure_invokes_startup(self):
         state = "|true|running|0|false|false"
@@ -198,8 +257,76 @@ class FailureDiagnosticsTests(unittest.TestCase):
                 self.assertEqual(result.stdout, "")
                 self.assertEqual(result.stderr,
                     "inner daemon startup diagnosis: state=running=false,status=exited,exit=nonzero,oom=false,error=true "
-                    f"stage=daemon category={category} families={families} preflight=none trace=unavailable\n")
+                    f"stage=daemon category={category} families={families} preflight=none trace=unavailable "
+                    "rootlesskit_self_reexec=unobserved inspect_reported_apparmor=unknown\n")
                 self.assertNotIn(CANARY, result.stdout + result.stderr)
+
+    def test_self_reexec_observation_matches_only_the_complete_verified_raw_line(self):
+        prefix = "[rootlesskit:parent] error: failed to start the child: fork/exec /proc/self/exe: "
+        denied = prefix + "permission denied"
+        prohibited = prefix + "operation not permitted"
+        positives = ((denied, "permission_denied"), (prohibited, "operation_not_permitted"),
+                     (denied + "\n" + denied, "permission_denied"),
+                     (denied + "\n" + prohibited, "ambiguous"))
+        for text, expected in positives:
+            self.client_reply(stderr=text + "\n")
+            result = self.shell(self.startup_body())
+            self.assertEqual(result.returncode, 0)
+            self.assertIn(f" rootlesskit_self_reexec={expected} inspect_reported_apparmor=unknown\n", result.stderr)
+            self.assertIn("category=daemon_permission families=daemon_permission preflight=none", result.stderr)
+        negatives = (
+            " " + denied, denied + " ", denied + "\r", denied + "\t", denied.upper(),
+            "echo " + denied, "+ " + denied, "++ " + denied, "+++ " + denied,
+            "\x1b[31m" + denied, denied + "\x1b[0m", denied + CANARY, CANARY + denied,
+            denied.replace("/proc/self/exe", "/proc/1/exe"),
+            denied.replace("/proc/self/exe", "/proc/self/exe2"),
+            denied.replace("permission denied", "resource temporarily unavailable"),
+            denied.replace("[rootlesskit:parent]", "[rootlesskit:child ]"),
+        )
+        for text in negatives:
+            with self.subTest(text=text[:32]):
+                self.client_reply(stderr=text + "\n")
+                result = self.shell(self.startup_body())
+                self.assertEqual(result.returncode, 0)
+                self.assertIn(" rootlesskit_self_reexec=unobserved inspect_reported_apparmor=unknown\n", result.stderr)
+                self.assertNotIn(CANARY, result.stdout + result.stderr)
+        self.client_reply("ERROR: storage driver failed\n", stderr=denied + "\n")
+        result = self.shell(self.startup_body())
+        self.assertIn("category=ambiguous families=daemon_storage,daemon_permission preflight=none", result.stderr)
+        self.assertIn("rootlesskit_self_reexec=permission_denied", result.stderr)
+
+    def test_self_reexec_tail_requires_known_line_boundary_after_each_byte_cap(self):
+        cap = 65536
+        for errno, expected in (("permission denied", "permission_denied"),
+                                ("operation not permitted", "operation_not_permitted")):
+            line = "[rootlesskit:parent] error: failed to start the child: fork/exec /proc/self/exe: " + errno
+            one_line_tail = line + "\n" + "x" * (cap - len(line) - 1)
+            two_line_tail = line + "\n" + line + "\n" + "x" * (cap - 2 * (len(line) + 1))
+            self.assertEqual(len(one_line_tail.encode()), cap)
+            self.assertEqual(len(two_line_tail.encode()), cap)
+            for prefix in (CANARY, "x" * (2 * cap) + CANARY):
+                for payload, observation in (
+                    (prefix + one_line_tail, "unobserved"),
+                    (prefix + two_line_tail, expected),
+                    (prefix + "\n" + one_line_tail, expected),
+                ):
+                    with self.subTest(errno=errno, repeated_trim=len(prefix) > cap,
+                                      observation=observation):
+                        # Independently force the retained bytes to start with
+                        # valid-looking grammar. Only original LF boundaries
+                        # decide whether that first record is complete.
+                        self.assertTrue(payload.encode()[-cap:].startswith(line.encode()))
+                        self.client_reply(stderr=payload)
+                        result = self.shell(self.startup_body())
+                        self.assertEqual(result.returncode, 0)
+                        self.assertIn(f" rootlesskit_self_reexec={observation} inspect_reported_apparmor=unknown\n", result.stderr)
+                        self.assertIn("category=daemon_permission families=daemon_permission preflight=none", result.stderr)
+                        self.assertNotIn(CANARY, result.stdout + result.stderr)
+            for payload in (line + "\n", one_line_tail):
+                self.client_reply(stderr=payload)
+                result = self.shell(self.startup_body())
+                self.assertEqual(result.returncode, 0)
+                self.assertIn(f" rootlesskit_self_reexec={expected} inspect_reported_apparmor=unknown\n", result.stderr)
 
     def test_startup_tail_and_failed_logs_status_keep_original_bounds_and_closed_fallback(self):
         self.client_reply("ERROR: storage driver failed\n" + "x" * 70000 + "\n")
@@ -217,6 +344,7 @@ class FailureDiagnosticsTests(unittest.TestCase):
             result = self.shell(self.startup_body())
             self.assertEqual(result.returncode, 0)
             self.assertIn("stage=unavailable category=unavailable families=unavailable preflight=unavailable trace=unavailable", result.stderr)
+            self.assertIn("rootlesskit_self_reexec=unavailable", result.stderr)
             self.assertNotIn(CANARY, result.stdout + result.stderr)
 
     def test_verified_fatal_preflight_messages_are_closed_observations_not_xtrace_or_echo(self):
@@ -235,7 +363,8 @@ class FailureDiagnosticsTests(unittest.TestCase):
             self.assertEqual(result.stdout, "")
             self.assertEqual(result.stderr,
                 "inner daemon startup diagnosis: state=running=false,status=exited,exit=nonzero,oom=false,error=true "
-                f"stage=daemon category={family} families={family} preflight={preflight} trace=unavailable\n")
+                f"stage=daemon category={family} families={family} preflight={preflight} trace=unavailable "
+                "rootlesskit_self_reexec=unobserved inspect_reported_apparmor=unknown\n")
             for prefix in ("echo ", "+ echo ", "++ echo "):
                 self.client_reply(prefix + message + "\n")
                 result = self.shell(self.startup_body())
@@ -339,7 +468,8 @@ print(json.dumps({'status':code,'stdout':output,'stderr':error}))
         self.assertEqual(observation["stdout"], "")
         self.assertEqual(observation["stderr"],
             "inner daemon startup diagnosis: state=running=false,status=exited,exit=nonzero,oom=false,error=true "
-            "stage=unavailable category=unavailable families=unavailable preflight=unavailable trace=unavailable\n")
+            "stage=unavailable category=unavailable families=unavailable preflight=unavailable trace=unavailable "
+            "rootlesskit_self_reexec=unavailable inspect_reported_apparmor=unknown\n")
         self.assertGreaterEqual(time.monotonic() - started, 9)
         self.assertLess(time.monotonic() - started, 13)
 
@@ -361,6 +491,36 @@ print(json.dumps({'status':code,'stdout':output,'stderr':error}))
             self.assertNotEqual(result.returncode, 0)
             self.assertIn(f"DOCKERLENS_NATIVE_WGET_DIAG: category={category}\n", result.stderr)
             self.assertNotIn("private-canary", result.stdout + result.stderr)
+
+    def test_subnet_pair_sanitizer_keeps_each_closed_observation_and_failure_only_output(self):
+        cargo = self.tools / "cargo"
+        for internal, control in (("true", "false"), ("false", "true"), ("unknown", "true"),
+                                  ("true", "unknown"), (None, "false"), ("false", None),
+                                  (CANARY, "true"), ("true", CANARY)):
+            for success in (False, True):
+                lines = []
+                for label, value in (("INTERNAL", internal), ("CONTROL", control)):
+                    if value is not None:
+                        lines.append(f"DOCKERLENS_NATIVE_{label}_SUBNET_DIAG: sidecar_on_{label.lower()}_subnet={value}")
+                    lines.append(f"DOCKERLENS_NATIVE_{label}_SUBNET_DIAG: sidecar_on_{label.lower()}_subnet=false private-canary")
+                lines.append("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;" if success
+                             else "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;")
+                self.tool(cargo, "import sys\n"
+                          "if '--list' in sys.argv:\n"
+                          " print('native_network_tests::live_internal_network_blocks_external_egress: test')\n"
+                          f"else:\n print({chr(10).join(lines)!r})\n raise SystemExit({0 if success else 101})\n")
+                result = subprocess.run(["/bin/bash", str(ROOT / "scripts/run-exact-native-test.sh"),
+                                         "native_network", "live_internal_network_blocks_external_egress"],
+                                        env=self.env, capture_output=True, text=True, timeout=4)
+                self.assertEqual(result.returncode == 0, success)
+                for label, value in (("INTERNAL", internal), ("CONTROL", control)):
+                    marker = f"DOCKERLENS_NATIVE_{label}_SUBNET_DIAG: sidecar_on_{label.lower()}_subnet="
+                    if not success and value in ("true", "false", "unknown"):
+                        self.assertIn(marker + value + "\n", result.stderr)
+                    else:
+                        self.assertNotIn(marker, result.stderr)
+                self.assertNotIn("private-canary", result.stdout + result.stderr)
+                self.assertNotIn(CANARY, result.stdout + result.stderr)
 
     def test_control_subnet_sanitizer_projects_only_closed_target_membership(self):
         cargo = self.tools / "cargo"

@@ -802,7 +802,7 @@ struct InternalProofResources {
     run_id: String,
     containers: Vec<String>,
     networks: Vec<String>,
-    control_subnet_diagnostic: Option<&'static str>,
+    subnet_diagnostics: Option<SidecarSubnetDiagnostics>,
 }
 
 impl InternalProofResources {
@@ -811,7 +811,7 @@ impl InternalProofResources {
             run_id: run_id.to_owned(),
             containers: Vec::new(),
             networks: Vec::new(),
-            control_subnet_diagnostic: None,
+            subnet_diagnostics: None,
         }
     }
 
@@ -1065,8 +1065,8 @@ fn wget_failure_category(stderr: &[u8]) -> &'static str {
     }
 }
 
-// A pure observation of ONE target IPv4 against ONE already-inspected control
-// network. Never prints addresses or claims outer/inner network disjointness.
+// A pure observation of ONE target IPv4 against ONE already-inspected network.
+// Never prints addresses or claims outer/inner network disjointness.
 enum SubnetMatch {
     Ipv4(bool),
     Ipv6,
@@ -1103,7 +1103,7 @@ fn ipv4_in_subnet(address: Ipv4Addr, subnet: &str) -> Option<SubnetMatch> {
     }
 }
 
-fn sidecar_on_control_subnet(address: Ipv4Addr, network: &Value) -> &'static str {
+fn sidecar_on_subnet(address: Ipv4Addr, network: &Value) -> &'static str {
     let Some(configs) = network
         .get("IPAM")
         .and_then(|ipam| ipam.get("Config"))
@@ -1132,6 +1132,67 @@ fn sidecar_on_control_subnet(address: Ipv4Addr, network: &Value) -> &'static str
         "true"
     } else {
         "false"
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SidecarSubnetDiagnostics {
+    internal: &'static str,
+    control: &'static str,
+}
+
+impl SidecarSubnetDiagnostics {
+    const fn new() -> Self {
+        Self {
+            internal: "unknown",
+            control: "unknown",
+        }
+    }
+
+    fn record(&mut self, is_internal: bool, address: Ipv4Addr, network: &Value) {
+        let observation = sidecar_on_subnet(address, network);
+        if is_internal {
+            self.internal = observation;
+        } else {
+            self.control = observation;
+        }
+    }
+}
+
+#[test]
+fn sidecar_subnet_pair_retains_independent_internal_and_control_inspections() {
+    let address = Ipv4Addr::new(10, 23, 7, 9);
+    let matching = json!({"IPAM": {"Config": [{"Subnet": "10.23.7.0/24"}]}});
+    let disjoint = json!({"IPAM": {"Config": [{"Subnet": "192.168.50.0/24"}]}});
+    let missing = json!({});
+    let malformed = json!({"IPAM": {"Config": [{"Subnet": "10.23.7.9/24"}]}});
+    for (internal, control, expected_internal, expected_control) in [
+        (&matching, &matching, "true", "true"),
+        (&matching, &disjoint, "true", "false"),
+        (&disjoint, &matching, "false", "true"),
+        (&disjoint, &disjoint, "false", "false"),
+        (&missing, &matching, "unknown", "true"),
+        (&matching, &missing, "true", "unknown"),
+        (&malformed, &disjoint, "unknown", "false"),
+        (&disjoint, &malformed, "false", "unknown"),
+    ] {
+        let expected = SidecarSubnetDiagnostics {
+            internal: expected_internal,
+            control: expected_control,
+        };
+        for internal_first in [true, false] {
+            let mut observations = SidecarSubnetDiagnostics::new();
+            assert_eq!(observations.internal, "unknown");
+            assert_eq!(observations.control, "unknown");
+            for is_internal in [internal_first, !internal_first] {
+                observations.record(
+                    is_internal,
+                    address,
+                    if is_internal { internal } else { control },
+                );
+            }
+            assert_eq!(observations, expected);
+        }
     }
 }
 
@@ -1197,7 +1258,7 @@ fn control_subnet_membership_is_closed_and_uses_only_held_control_metadata() {
             "false",
         ),
     ] {
-        let observation = sidecar_on_control_subnet(address, &network);
+        let observation = sidecar_on_subnet(address, &network);
         assert!(matches!(observation, "true" | "false" | "unknown"));
         assert_eq!(observation, expected);
     }
@@ -1225,7 +1286,7 @@ fn control_subnet_malformed_noncanonical_and_boundary_cidrs_do_not_panic_or_clai
         "fd00::/129",
     ] {
         let network = json!({"IPAM":{"Config":[{"Subnet":subnet}]}});
-        assert_eq!(sidecar_on_control_subnet(address, &network), "unknown");
+        assert_eq!(sidecar_on_subnet(address, &network), "unknown");
     }
     let network = json!({"IPAM":{"Config":[{"Subnet":"10.23.7.0/24"}]}});
     for (address, expected) in [
@@ -1234,7 +1295,7 @@ fn control_subnet_malformed_noncanonical_and_boundary_cidrs_do_not_panic_or_clai
         (Ipv4Addr::new(10, 23, 7, 255), "true"),
         (Ipv4Addr::new(10, 23, 8, 0), "false"),
     ] {
-        assert_eq!(sidecar_on_control_subnet(address, &network), expected);
+        assert_eq!(sidecar_on_subnet(address, &network), expected);
     }
 }
 
@@ -1268,9 +1329,14 @@ fn proof_cli_ok(resources: &InternalProofResources, args: &[&str]) -> Vec<u8> {
             "DOCKERLENS_NATIVE_WGET_DIAG: category={}",
             wget_failure_category(&result.stderr)
         );
-        if let Some(membership) = resources.control_subnet_diagnostic {
+        if let Some(observations) = resources.subnet_diagnostics {
             eprintln!(
-                "DOCKERLENS_NATIVE_CONTROL_SUBNET_DIAG: sidecar_on_control_subnet={membership}"
+                "DOCKERLENS_NATIVE_INTERNAL_SUBNET_DIAG: sidecar_on_internal_subnet={}",
+                observations.internal
+            );
+            eprintln!(
+                "DOCKERLENS_NATIVE_CONTROL_SUBNET_DIAG: sidecar_on_control_subnet={}",
+                observations.control
             );
         }
     }
@@ -3922,15 +3988,13 @@ fn live_internal_network_blocks_external_egress() {
         );
         assert_eq!(status, 201, "Engine accepts exact inert proof request");
     }
-    let mut control_subnet_diagnostic = "unknown";
+    let mut subnet_diagnostics = SidecarSubnetDiagnostics::new();
     for (name, is_internal, cli_body) in [
         (&internal, true, &cli_internal_body),
         (&control, false, &cli_control_body),
     ] {
         let body = proof_inspect(&resources, &format!("/v{api_version}/networks/{name}"));
-        if name == &control {
-            control_subnet_diagnostic = sidecar_on_control_subnet(sidecar_ip, &body);
-        }
+        subnet_diagnostics.record(is_internal, sidecar_ip, &body);
         assert_eq!(body["Internal"], is_internal);
         assert_eq!(body["Driver"], "bridge");
         assert_eq!(body["Labels"]["io.dockerlens.native-run"], run_id);
@@ -4010,7 +4074,7 @@ fn live_internal_network_blocks_external_egress() {
     }
     let external_url = format!("http://{sidecar_ip}:18084/");
     eprintln!("DOCKERLENS_NATIVE_CHECK: network_internal_control");
-    resources.control_subnet_diagnostic = Some(control_subnet_diagnostic);
+    resources.subnet_diagnostics = Some(subnet_diagnostics);
     let control_response = proof_cli_ok(
         &resources,
         &[
@@ -4025,7 +4089,7 @@ fn live_internal_network_blocks_external_egress() {
             &external_url,
         ],
     );
-    resources.control_subnet_diagnostic = None;
+    resources.subnet_diagnostics = None;
     assert_eq!(
         control_response, b"proof-egress",
         "ordinary bridge reaches task endpoint"
