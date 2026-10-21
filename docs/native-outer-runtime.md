@@ -10,6 +10,39 @@ controls and definitions do not qualify a native lane.
 
 ## Isolation and rootful identity
 
+Failure-only rootless diagnostics do not constitute a repair or a compatibility
+claim. The existing attachment inspect retains its 4096-character total bound
+and exact single-network/private-IPv4 predicates; selected daemon State fields
+are projected as closed running/status/exit-class/OOM/Error-presence values.
+That same attachment query uses the canonical ten-second command owner, keeping
+`sudo -n` outside GNU timeout without changing its query, client vector or budget.
+On daemon attachment refusal the held sanitized State is reused for startup
+diagnosis, without a second State query. Only the existing bounded log query is
+added: at most 10 seconds plus the 2-second kill fallback, within the lane's
+original 30-minute watchdog. The same logs query uses the canonical command
+owner, keeping `sudo -n` outside the timer so it can terminate the root client.
+Later startup-diagnosis callers without held State retain their two existing
+queries, now both under that canonical ten-second owner: at most 24 seconds
+including both kill fallbacks, not the early path's 12 seconds. No query or
+retry is added. Logs are not persisted or printed.
+
+Failed ordinary internal-proof wget commands classify their already-held bounded
+stderr as connection refusal, no route, timeout, HTTP error, or unknown. The
+probe, its oracle, endpoint, and six-second budget are unchanged. These
+observations do not establish that the independent rootless failures share a
+cause, nor settle address-pool overlap. Cleanup remains unchanged: its existing
+closed stage/status labels do not identify the stderr cause. A collector was
+omitted because safely retaining closed stderr across the original sudo/timer
+owner would broaden the privilege/protocol seam.
+
+Hermetic namespace-cancellation fixtures publish their authored PID receipt
+atomically through a private 0600 file. Malformed or missing receipts still fail;
+closed fixture phase/exception/teardown acknowledgments provide failure context
+without raw stderr, paths or process identities. Positive process-group absence
+proof precedes fallback teardown, which cannot convert a failed proof into a
+pass. Reaping remains within the existing fixture deadline. A forced partial
+receipt reproduces the source race, not the cause of any earlier opaque failure.
+
 DockerLens and BoxFerry retain the shared rootful host outer store used by their
 existing Podman harnesses. Only the named inner daemon container, sidecar, bridge,
 data volume and inner socket belong to an invocation. The host Docker daemon is

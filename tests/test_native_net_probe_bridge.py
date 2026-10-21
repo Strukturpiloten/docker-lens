@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import shlex
 import subprocess
@@ -13,6 +14,13 @@ from unittest import mock
 
 from test_native_daemon_uid_bridge import HOSTED
 from test_native_net_probe import PROBE, SCRIPT
+
+
+def closed_group_failure(stderr):
+    pattern = (r"DOCKERLENS_SYNTHETIC_NAMESPACE_GROUP: phase=(setup|observe|receipt|absence|elapsed|teardown) "
+               r"error=(json|wait_timeout|assertion|io|other|children_alive) cleanup=(complete|incomplete)")
+    return next((line for line in stderr.splitlines() if re.fullmatch(pattern, line)),
+                "closed process-group control failed: diagnostic=unavailable")
 
 
 class NamespaceBridgeTests(unittest.TestCase):
@@ -35,7 +43,22 @@ class NamespaceBridgeTests(unittest.TestCase):
         self.reply = f"{self.cid}|4321|{self.started}|true|owned\n"
         self.environment = {"PATH": str(self.tools), **HOSTED}
 
-    def clients(self, reply=None, status=0, mode="normal"):
+    def clients(self, reply=None, status=0, mode="normal", receipt_mode="atomic"):
+        assert receipt_mode in ("atomic", "partial", "missing")
+        receipt = (
+            f" receipt=Path({str(self.pids)!r})\n"
+            " pending=receipt.with_name(receipt.name+'.pending.'+str(os.getpid()))\n"
+            " descriptor=os.open(pending,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)\n"
+            " with os.fdopen(descriptor,'w') as stream: json.dump([os.getppid(),os.getpid(),child.pid],stream)\n"
+            " pending.replace(receipt)\n"
+        )
+        if receipt_mode == "partial":
+            # Reproduce the former exists-before-JSON race deliberately. The
+            # inspect owner's unchanged group kill must stop this owned writer.
+            receipt = (f" descriptor=os.open({str(self.pids)!r},os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)\n"
+                       " time.sleep(30)\n")
+        elif receipt_mode == "missing":
+            receipt = " time.sleep(30)\n"
         for engine in ("podman", "docker"):
             path = self.tools / engine
             path.write_text("#!/usr/bin/env python3\nimport json,os,signal,subprocess,sys,time\nfrom pathlib import Path\n"
@@ -43,7 +66,7 @@ class NamespaceBridgeTests(unittest.TestCase):
                 f"mode={mode!r}\n"
                 "if mode in ('overflow','child-eof','cancelled','observer-cancel','hard-cancel'):\n"
                 " child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)'])\n"
-                f" Path({str(self.pids)!r}).write_text(json.dumps([os.getppid(),os.getpid(),child.pid]))\n"
+                + receipt +
                 " if mode=='child-eof': raise SystemExit(0)\n"
                 " if mode=='cancelled': os.kill(os.getpid(),signal.SIGTERM)\n"
                 " if mode in ('observer-cancel','hard-cancel'): time.sleep(30)\n"
@@ -138,43 +161,73 @@ import ctypes,importlib.util,json,os,subprocess,sys,time
 assert ctypes.CDLL(None).prctl(36,1,0,0,0)==0
 spec=importlib.util.spec_from_file_location('group_probe',sys.argv[1])
 module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
-start=time.monotonic()
-if sys.argv[5]=='hard-cancel':
- worker="import importlib.util,sys; s=importlib.util.spec_from_file_location('worker',sys.argv[1]);m=importlib.util.module_from_spec(s);sys.modules[s.name]=m;s.loader.exec_module(m);m.inspect('dl-native-owned','owned',sys.argv[2],sys.argv[3])"
- process=subprocess.Popen([sys.executable,'-c',worker,*sys.argv[1:4]],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
- while not os.path.exists(sys.argv[4]) and time.monotonic()-start<1: time.sleep(0.005)
- assert os.path.exists(sys.argv[4])
- # This PID is our still-unreaped direct child, not a recovered native PID.
- os.kill(process.pid,15);process.wait(timeout=1);category='cancelled'
-else:
- if sys.argv[5]=='observer-cancel':
-  def interrupt(*args):
-   while not os.path.exists(sys.argv[4]) and time.monotonic()-start<1: time.sleep(0.005)
-   assert os.path.exists(sys.argv[4])
-   raise KeyboardInterrupt
-  module.select.select=interrupt
- try: module.inspect('dl-native-owned','owned',sys.argv[2],sys.argv[3])
- except module.ProbeFailure as error: category=error.category
- except KeyboardInterrupt: category='cancelled'
- else: raise AssertionError('synthetic group must refuse')
-pids=json.load(open(sys.argv[4]))
-reap_deadline=max(time.monotonic()+0.75,start+3.25 if sys.argv[5]=='hard-cancel' else 0)
-late=False
-for pid in pids:
+start=time.monotonic();phase='setup';failure=None;process=None;cleanup='incomplete'
+try:
+ phase='observe'
+ if sys.argv[5]=='hard-cancel':
+  worker="import importlib.util,sys; s=importlib.util.spec_from_file_location('worker',sys.argv[1]);m=importlib.util.module_from_spec(s);sys.modules[s.name]=m;s.loader.exec_module(m);m.inspect('dl-native-owned','owned',sys.argv[2],sys.argv[3])"
+  process=subprocess.Popen([sys.executable,'-c',worker,*sys.argv[1:4]],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+  while not os.path.exists(sys.argv[4]) and time.monotonic()-start<1: time.sleep(0.005)
+  assert os.path.exists(sys.argv[4])
+  # This PID is our still-unreaped direct child, not a recovered native PID.
+  os.kill(process.pid,15);process.wait(timeout=1);category='cancelled'
+ else:
+  if sys.argv[5]=='observer-cancel':
+   def interrupt(*args):
+    while not os.path.exists(sys.argv[4]) and time.monotonic()-start<1: time.sleep(0.005)
+    assert os.path.exists(sys.argv[4])
+    raise KeyboardInterrupt
+   module.select.select=interrupt
+  try: module.inspect('dl-native-owned','owned',sys.argv[2],sys.argv[3])
+  except module.ProbeFailure as error: category=error.category
+  except KeyboardInterrupt: category='cancelled'
+  else: raise AssertionError('synthetic group must refuse')
+ phase='receipt'
+ with open(sys.argv[4]) as stream: pids=json.load(stream)
+ phase='absence'
+ reap_deadline=max(time.monotonic()+0.75,start+3.25 if sys.argv[5]=='hard-cancel' else 0)
+ late=False
+ for pid in pids:
+  while True:
+   try: reaped,_=os.waitpid(pid,os.WNOHANG)
+   except ChildProcessError:
+    try: os.kill(pid,0)
+    except ProcessLookupError: break
+    else: raise AssertionError('owned descendant was not reaped')
+   if reaped==pid: break
+   if time.monotonic()>=reap_deadline:
+    # waitpid proves this remains our owned unreaped child, not a reused PID.
+    os.kill(pid,9);os.waitpid(pid,0);late=True;break
+   time.sleep(0.005)
+ assert not late
+ phase='elapsed'
+ assert time.monotonic()-start<3.5
+ result={'category':category,'reaped':len(pids)}
+except BaseException as error:
+ kind=('json' if isinstance(error,json.JSONDecodeError) else
+       'wait_timeout' if isinstance(error,subprocess.TimeoutExpired) else
+       'assertion' if isinstance(error,AssertionError) else
+       'io' if isinstance(error,OSError) else 'other')
+ failure=(phase,kind)
+finally:
+ # Positive absence proof above always precedes teardown. Teardown cannot turn
+ # a missing/malformed receipt or a failed assertion into a passing control.
+ if process is not None and process.poll() is None:
+  # Only this direct, still-unreaped Popen child may be signalled here.
+  process.kill()
+  try: process.wait(timeout=max(0.001,start+3.5-time.monotonic()))
+  except subprocess.TimeoutExpired: pass
  while True:
-  try: reaped,_=os.waitpid(pid,os.WNOHANG)
-  except ChildProcessError:
-   try: os.kill(pid,0)
-   except ProcessLookupError: break
-   else: raise AssertionError('owned descendant was not reaped')
-  if reaped==pid: break
-  if time.monotonic()>=reap_deadline:
-   # waitpid proved this is still our unreaped child, not a reused PID.
-   os.kill(pid,9);os.waitpid(pid,0);late=True;break
+  try: reaped,_=os.waitpid(-1,os.WNOHANG)
+  except ChildProcessError: cleanup='complete';break
+  if reaped!=0: continue
+  if time.monotonic()-start>=3.5: break
   time.sleep(0.005)
-assert not late
-assert time.monotonic()-start<3.5
-print(json.dumps({'category':category,'reaped':len(pids)}))
+ if cleanup!='complete' and failure is None: failure=('teardown','children_alive')
+if failure is not None:
+ print('DOCKERLENS_SYNTHETIC_NAMESPACE_GROUP: phase='+failure[0]+' error='+failure[1]+' cleanup='+cleanup,file=sys.stderr)
+ raise SystemExit(1)
+print(json.dumps(result))
 '''
 
     @unittest.skipUnless(sys.platform == "linux", "Linux process-group reaping control")
@@ -188,10 +241,35 @@ print(json.dumps({'category':category,'reaped':len(pids)}))
                     started = time.monotonic()
                     result = subprocess.run([sys.executable, "-c", driver, str(SCRIPT), engine,
                         str(self.run), str(self.pids), mode], env=self.environment, capture_output=True, text=True, timeout=5)
-                    self.assertEqual(result.returncode, 0, "closed process-group control failed")
+                    self.assertEqual(result.returncode, 0, closed_group_failure(result.stderr))
+                    self.assertEqual(self.pids.stat().st_mode & 0o777, 0o600)
                     category = "cancelled" if mode in ("observer-cancel", "hard-cancel") else "inspect"
                     self.assertEqual(json.loads(result.stdout), {"category": category, "reaped": 3})
                     self.assertLess(time.monotonic() - started, 4)
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux process-group reaping control")
+    def test_observer_cancel_partial_or_missing_receipt_fails_with_closed_teardown_ack(self):
+        for engine in ("podman", "docker"):
+            for receipt_mode, phase, error in (("partial", "receipt", "json"),
+                                                ("missing", "observe", "assertion")):
+                with self.subTest(engine=engine, receipt_mode=receipt_mode):
+                    self.pids.unlink(missing_ok=True)
+                    self.clients(mode="observer-cancel", receipt_mode=receipt_mode)
+                    result = subprocess.run([sys.executable, "-c", self.group_driver(), str(SCRIPT), engine,
+                        str(self.run), str(self.pids), "observer-cancel"], env=self.environment,
+                        capture_output=True, text=True, timeout=5)
+                    self.assertEqual(result.returncode, 1)
+                    self.assertEqual(result.stdout, "")
+                    self.assertEqual(result.stderr,
+                        f"DOCKERLENS_SYNTHETIC_NAMESPACE_GROUP: phase={phase} error={error} cleanup=complete\n")
+
+    def test_group_failure_context_accepts_only_closed_fixture_fields(self):
+        valid = "DOCKERLENS_SYNTHETIC_NAMESPACE_GROUP: phase=receipt error=json cleanup=complete"
+        self.assertEqual(closed_group_failure(valid), valid)
+        for raw in (valid + " private-canary", valid.replace("receipt", "private-canary"),
+                    "private-canary /private/path pid=123456"):
+            self.assertEqual(closed_group_failure(raw),
+                             "closed process-group control failed: diagnostic=unavailable")
 
     @unittest.skipUnless(sys.platform == "linux", "Linux process-group reaping control")
     def test_attach_custody_timeout_and_cancellation_cannot_escape_inspect_owner(self):
@@ -203,7 +281,11 @@ print(json.dumps({'category':category,'reaped':len(pids)}))
         stalled = self.private / "stalled-custody.py"
         stalled.write_text("import json,os,subprocess,sys,time\nfrom pathlib import Path\n"
             "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)'])\n"
-            f"Path({str(self.pids)!r}).write_text(json.dumps([os.getpgrp(),os.getppid(),os.getpid(),child.pid]))\n"
+            f"receipt=Path({str(self.pids)!r})\n"
+            "pending=receipt.with_name(receipt.name+'.pending.'+str(os.getpid()))\n"
+            "descriptor=os.open(pending,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)\n"
+            "with os.fdopen(descriptor,'w') as stream: json.dump([os.getpgrp(),os.getppid(),os.getpid(),child.pid],stream)\n"
+            "pending.replace(receipt)\n"
             "time.sleep(30)\n")
         # Only the mirrored custody entry stalls. All other Python invocations
         # use the real interpreter, and clients remain authored private fakes.
@@ -222,7 +304,8 @@ print(json.dumps({'category':category,'reaped':len(pids)}))
                     result = subprocess.run([sys.executable, "-c", self.group_driver(),
                         str(closure / "native-net-probe.py"), engine, str(self.run), str(self.pids), mode],
                         env=self.environment, capture_output=True, text=True, timeout=5)
-                    self.assertEqual(result.returncode, 0, "closed custody containment control failed")
+                    self.assertEqual(result.returncode, 0, closed_group_failure(result.stderr))
+                    self.assertEqual(self.pids.stat().st_mode & 0o777, 0o600)
                     category = "inspect" if mode == "timeout" else "cancelled"
                     self.assertEqual(json.loads(result.stdout), {"category": category, "reaped": 4})
                     self.assertFalse(self.trace.exists())

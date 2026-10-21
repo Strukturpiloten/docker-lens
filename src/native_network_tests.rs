@@ -1048,8 +1048,52 @@ fn outer_sidecar_address_rejects_host_and_nonprivate_addresses() {
     }
 }
 
+fn wget_failure_category(stderr: &[u8]) -> &'static str {
+    let message = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+    if message.contains("connection refused") {
+        "connection_refused"
+    } else if message.contains("no route to host") || message.contains("network is unreachable") {
+        "no_route"
+    } else if message.contains("timed out") || message.contains("timeout") {
+        "timeout"
+    } else if message.contains("server returned error") || message.contains("http/1.") {
+        "http_error"
+    } else {
+        "unknown"
+    }
+}
+
+#[test]
+fn wget_failure_categories_are_closed_and_private() {
+    for (message, expected) in [
+        (
+            "wget: connection refused private-canary",
+            "connection_refused",
+        ),
+        ("wget: No route to host private-canary", "no_route"),
+        ("wget: Network is unreachable private-canary", "no_route"),
+        ("wget: download timed out private-canary", "timeout"),
+        ("wget: timeout private-canary", "timeout"),
+        (
+            "wget: server returned error: HTTP/1.1 500 private-canary",
+            "http_error",
+        ),
+        ("private-canary", "unknown"),
+        ("", "unknown"),
+    ] {
+        assert_eq!(wget_failure_category(message.as_bytes()), expected);
+    }
+    assert_eq!(wget_failure_category(&[0xff]), "unknown");
+}
+
 fn proof_cli_ok(resources: &InternalProofResources, args: &[&str]) -> Vec<u8> {
     let result = proof_cli(resources, args);
+    if !result.success && args.first() == Some(&"exec") && args.get(2) == Some(&"wget") {
+        eprintln!(
+            "DOCKERLENS_NATIVE_WGET_DIAG: category={}",
+            wget_failure_category(&result.stderr)
+        );
+    }
     assert!(!result.output_limit, "bounded proof CLI output");
     if !result.success {
         eprintln!(

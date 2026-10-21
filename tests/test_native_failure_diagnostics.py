@@ -1,0 +1,261 @@
+"""Hermetic diagnostic-only controls: no runtime binary can be resolved."""
+import json
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+SOURCE = (ROOT / "scripts/native-conformance.sh").read_text()
+RUNTIME = (ROOT / "scripts/native-outer-runtime.sh").read_text()
+CANARY = "protected-canary /private/socket 10.89.0.2 uid=987654"
+
+
+def definition(name, source=SOURCE):
+    start = source.index("\n" + name + "() {") + 1
+    return source[start:source.index("\n}\n", start) + 3]
+
+
+class FailureDiagnosticsTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="dockerlens-closed-failure-")
+        self.addCleanup(self.temporary.cleanup)
+        self.private = Path(self.temporary.name)
+        self.tools = self.private / "bin"
+        self.tools.mkdir(mode=0o700)
+        # No inherited PATH, runtime links, dynamic tool lookup or ambient sudo.
+        for name, target in (("python3", sys.executable), ("timeout", "/usr/bin/timeout"),
+                             ("bash", "/bin/bash"), ("grep", "/usr/bin/grep"),
+                             ("sed", "/usr/bin/sed"), ("tail", "/usr/bin/tail"),
+                             ("date", "/usr/bin/date")):
+            (self.tools / name).symlink_to(target)
+        self.client = self.tools / "held-client"
+        self.trace = self.private / "trace"
+        self.env = {"PATH": str(self.tools), "TRACE": str(self.trace)}
+
+    def tool(self, path, body):
+        path.write_text(f"#!{sys.executable}\n" + body)
+        path.chmod(0o700)
+
+    def client_reply(self, stdout="", status=0):
+        self.tool(self.client, "import json,os,sys\nfrom pathlib import Path\n"
+                  "Path(os.environ['TRACE']).write_text(json.dumps(sys.argv[1:]))\n"
+                  f"sys.stdout.write({stdout!r})\nraise SystemExit({status})\n")
+
+    def shell(self, body, args=(), changes=None, timeout=4):
+        return subprocess.run(["/bin/bash", "-c", body, "closed-control", *args],
+                              env=self.env | (changes or {}), capture_output=True,
+                              text=True, timeout=timeout)
+
+    def attachment_body(self, privileged=False):
+        vector = [str(self.client), "--config", "/held/config", "--host", "unix:///held/socket"]
+        if privileged:
+            vector = ["sudo", "-n", *vector]
+            self.tool(self.tools / "sudo", "import json,os,sys\nfrom pathlib import Path\n"
+                      "with Path(os.environ['SUDO_TRACE']).open('a') as trace: trace.write(json.dumps(sys.argv[1:])+'\\n')\n"
+                      "assert sys.argv[1]=='-n'\nos.execvp(sys.argv[2],sys.argv[2:])\n")
+        return ("set -euo pipefail\n" + definition("native_outer_command", RUNTIME)
+                + definition("validated_outer_ipv4")
+                + "native_outer_cmd=(" + " ".join(repr(item) for item in vector) + ")\n"
+                + 'outer_network=owned\npodman_cmd=("${native_outer_cmd[@]}")\n'
+                + 'diagnose_native_startup() { printf "held-state:%s\\n" "$1" >&2; }\n'
+                + 'validated_outer_ipv4 "$1" exact-owned-name\n')
+
+    def test_attachment_positive_and_refusal_preserve_privileged_timer_and_exact_vector(self):
+        projection = ('{{json .NetworkSettings.Networks}}|{{.State.Running}}|{{.State.Status}}|'
+                      '{{.State.ExitCode}}|{{.State.OOMKilled}}|{{if .State.Error}}true{{else}}false{{end}}')
+        query = ["inspect", "--format", projection, "exact-owned-name"]
+        prefix = ["--config", "/held/config", "--host", "unix:///held/socket"]
+        for engine in ("docker", "podman"):
+            for address, expected in (("10.89.0.2", 0), ("", 1)):
+                self.client_reply(json.dumps({"owned": {"IPAddress": address}}) + "|true|running|0|false|false")
+                sudo_trace = self.private / "sudo-trace"
+                sudo_trace.unlink(missing_ok=True)
+                result = self.shell(self.attachment_body(True), ["daemon"],
+                                    {"SUDO_TRACE": str(sudo_trace), "native_outer_engine": engine})
+                self.assertEqual(result.returncode, expected)
+                self.assertEqual(json.loads(self.trace.read_text()), prefix + query)
+                self.assertEqual(json.loads(sudo_trace.read_text()),
+                                 ["-n", "timeout", "--signal=TERM", "--kill-after=2s", "10s",
+                                  str(self.client), *prefix, *query])
+                self.assertEqual(result.stdout, "10.89.0.2\n" if expected == 0 else "")
+                self.assertEqual(result.stderr.count("held-state:"), expected)
+
+    def test_attachment_retains_ip_predicate_and_only_failure_invokes_startup(self):
+        state = "|true|running|0|false|false"
+        for engine in ("docker", "podman"):
+            for role in ("sidecar", "daemon"):
+                for networks, category in (({"owned": {"IPAddress": "10.89.0.2"}}, None),
+                                           ({"owned": {}}, "ipv4_missing"),
+                                           ({"owned": {"IPAddress": "127.0.0.1"}}, "ipv4_nonprivate"),
+                                           ({"owned": {}, "other": {}}, "network_extra")):
+                    self.client_reply(json.dumps(networks) + state)
+                    result = self.shell(self.attachment_body(), [role],
+                                        {"CLIENT": str(self.client), "native_outer_engine": engine})
+                    self.assertEqual(result.returncode, 0 if category is None else 1)
+                    if category is None:
+                        self.assertEqual((result.stdout, result.stderr), ("10.89.0.2\n", ""))
+                    else:
+                        self.assertEqual(result.stdout, "")
+                        self.assertIn(f"role={role} category={category}", result.stderr)
+                        self.assertEqual(result.stderr.count("held-state:"), int(role == "daemon"))
+                        if role == "daemon":
+                            self.assertIn("running=true,status=running,exit=zero,oom=false,error=false", result.stderr)
+                        self.assertNotIn("10.89.0.2", result.stderr)
+
+    def test_attachment_malformed_state_bound_and_command_status_remain_private(self):
+        self.client_reply('{"owned":{}}|secret|secret|secret|secret|secret')
+        result = self.shell(self.attachment_body(), ["daemon"], {"CLIENT": str(self.client)})
+        self.assertIn("running=unknown,status=unknown,exit=unknown,oom=unknown,error=unknown", result.stderr)
+        self.assertNotIn("secret", result.stderr)
+        for raw, category, status in (("x" * 4097, "output_limit", 0),
+                                       (CANARY, "json_shape", 0),
+                                       (CANARY, "inspect_failed", 1),
+                                       (CANARY, "inspect_failed", 124)):
+            self.client_reply(raw, status)
+            result = self.shell(self.attachment_body(), ["daemon"], {"CLIENT": str(self.client)})
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("category=" + category, result.stderr)
+            self.assertEqual(result.stderr.count("held-state:"), 1)
+            self.assertNotIn(CANARY, result.stderr)
+
+    def startup_body(self, privileged=False, held=True):
+        vector = [str(self.client), "--config", "/held/config", "--host", "unix:///held/socket"]
+        if privileged:
+            vector = ["sudo", "-n", *vector]
+            self.tool(self.tools / "sudo", "import json,os,sys\nfrom pathlib import Path\n"
+                      "with Path(os.environ['SUDO_TRACE']).open('a') as trace: trace.write(json.dumps(sys.argv[1:])+'\\n')\n"
+                      "assert sys.argv[1]=='-n'\nos.execvp(sys.argv[2],sys.argv[2:])\n")
+        return ("set -euo pipefail\n" + definition("native_outer_command", RUNTIME)
+                + definition("diagnose_native_startup")
+                + "native_outer_cmd=(" + " ".join(repr(item) for item in vector) + ")\n"
+                + 'podman_cmd=("${native_outer_cmd[@]}")\n'
+                + 'container=exact-owned-name\nlane=upstream-rootless\n'
+                + ('diagnose_native_startup "running=false,status=exited,exit=nonzero,oom=false,error=true"\n'
+                   if held else 'diagnose_native_startup\n'))
+
+    def test_startup_reuses_state_and_only_issues_existing_root_owned_bounded_logs_query(self):
+        self.client_reply(CANARY + " permission denied\n")
+        for privileged in (False, True):
+            sudo_trace = self.private / "sudo-trace"
+            result = self.shell(self.startup_body(privileged), changes={"SUDO_TRACE": str(sudo_trace)})
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(json.loads(self.trace.read_text()),
+                             ["--config", "/held/config", "--host", "unix:///held/socket",
+                              "logs", "--tail", "80", "exact-owned-name"])
+            if privileged:
+                self.assertEqual(json.loads(sudo_trace.read_text()),
+                                 ["-n", "timeout", "--signal=TERM", "--kill-after=2s", "10s",
+                                  str(self.client), "--config", "/held/config", "--host", "unix:///held/socket",
+                                  "logs", "--tail", "80", "exact-owned-name"])
+            self.assertIn("category=daemon_permission", result.stderr)
+            self.assertNotIn(CANARY, result.stdout + result.stderr)
+
+    def test_late_state_query_is_same_projection_under_same_root_owned_ten_second_timer(self):
+        self.tool(self.client, "import json,os,sys\nfrom pathlib import Path\n"
+                  "with Path(os.environ['TRACE']).open('a') as trace: trace.write(json.dumps(sys.argv[1:])+'\\n')\n"
+                  "if 'inspect' in sys.argv: print('exited|1|false')\n"
+                  f"else: print({CANARY + ' permission denied'!r})\n")
+        sudo_trace = self.private / "sudo-trace"
+        result = self.shell(self.startup_body(True, held=False), changes={"SUDO_TRACE": str(sudo_trace)})
+        prefix = ["--config", "/held/config", "--host", "unix:///held/socket"]
+        queries = [["inspect", "--format", "{{.State.Status}}|{{.State.ExitCode}}|{{.State.OOMKilled}}", "exact-owned-name"],
+                   ["logs", "--tail", "80", "exact-owned-name"]]
+        self.assertEqual([json.loads(line) for line in self.trace.read_text().splitlines()],
+                         [prefix + query for query in queries])
+        self.assertEqual([json.loads(line) for line in sudo_trace.read_text().splitlines()],
+                         [["-n", "timeout", "--signal=TERM", "--kill-after=2s", "10s", str(self.client),
+                           *prefix, *query] for query in queries])
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("state=exited|1|false", result.stderr)
+        self.assertNotIn(CANARY, result.stdout + result.stderr)
+
+    @staticmethod
+    def group_driver():
+        # Dedicated subreaper. Mutate only a held unreaped direct child or an
+        # adopted child whose lifetime is independently proven by waitpid.
+        return r'''
+import ctypes,json,os,signal,subprocess,sys,time
+from pathlib import Path
+assert ctypes.CDLL(None).prctl(36,1,0,0,0)==0
+mode,receipt,command=sys.argv[1:]
+process=subprocess.Popen(json.loads(command),stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+try:
+ if mode=='cancel':
+  until=time.monotonic()+3
+  while not Path(receipt).exists() and time.monotonic()<until: time.sleep(0.005)
+  assert Path(receipt).exists()
+  os.kill(process.pid,signal.SIGTERM)
+ output,error=process.communicate(timeout=13)
+ code=process.returncode
+finally:
+ if process.poll() is None:
+  process.kill();process.communicate()
+pid=json.loads(Path(receipt).read_text())
+late=False
+until=time.monotonic()+0.75
+while True:
+ try: reaped,_=os.waitpid(pid,os.WNOHANG)
+ except ChildProcessError: break
+ if reaped==pid: break
+ if time.monotonic()>=until:
+  os.kill(pid,signal.SIGKILL);os.waitpid(pid,0);late=True;break
+ time.sleep(0.005)
+assert not late
+print(json.dumps({'status':code,'stdout':output,'stderr':error}))
+'''
+
+    def test_root_owned_ten_second_log_timer_stall_and_cancellation_reap_owned_client(self):
+        # Projection above proves the diagnostic uses this exact root-owned
+        # command vector; execute its timer directly so cancellation never uses
+        # a recovered PID. The sudo executable is an authored unprivileged fake.
+        self.startup_body(True)
+        receipt = self.private / "pids"
+        self.tool(self.client, "import os,json,time\nfrom pathlib import Path\n"
+                  "receipt=Path(os.environ['PIDS'])\n"
+                  "pending=receipt.with_suffix('.pending')\n"
+                  "pending.write_text(json.dumps(os.getpid()));pending.rename(receipt)\n"
+                  "time.sleep(60)\n")
+        command = [str(self.tools / "sudo"), "-n", "timeout", "--signal=TERM", "--kill-after=2s", "10s",
+                   str(self.client), "--config", "/held/config", "--host", "unix:///held/socket",
+                   "logs", "--tail", "80", "exact-owned-name"]
+        # Popen exposes a directly signalled child's status as negative SIGTERM;
+        # the Bash harness would project the same signal as 128 + SIGTERM.
+        for mode, expected in (("stall", 124), ("cancel", -signal.SIGTERM)):
+            receipt.unlink(missing_ok=True)
+            started = time.monotonic()
+            result = subprocess.run([sys.executable, "-c", self.group_driver(), mode,
+                                     str(receipt), json.dumps(command)],
+                                    env=self.env | {"PIDS": str(receipt), "SUDO_TRACE": str(self.private / "sudo-trace")},
+                                    capture_output=True, text=True, timeout=16)
+            self.assertEqual(result.returncode, 0, "closed owned-group control failed")
+            self.assertEqual(json.loads(result.stdout), {"status": expected, "stdout": "", "stderr": ""})
+            self.assertLess(time.monotonic() - started, 13)
+            if mode == "stall":
+                self.assertGreaterEqual(time.monotonic() - started, 9)
+
+    def test_wget_sanitizer_accepts_only_closed_whole_line_categories(self):
+        cargo = self.tools / "cargo"
+        for category in ("connection_refused", "no_route", "timeout", "http_error", "unknown"):
+            self.tool(cargo, "import sys\n"
+                      "if '--list' in sys.argv:\n"
+                      " print('native_network_tests::live_internal_network_blocks_external_egress: test')\n"
+                      "else:\n"
+                      f" print('DOCKERLENS_NATIVE_WGET_DIAG: category={category}')\n"
+                      f" print('DOCKERLENS_NATIVE_WGET_DIAG: category={CANARY}')\n"
+                      " print('DOCKERLENS_NATIVE_WGET_DIAG: category=timeout private-canary')\n"
+                      " print('test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;')\n"
+                      " raise SystemExit(101)\n")
+            result = subprocess.run(["/bin/bash", str(ROOT / "scripts/run-exact-native-test.sh"),
+                                     "native_network", "live_internal_network_blocks_external_egress"],
+                                    env=self.env, capture_output=True, text=True, timeout=4)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(f"DOCKERLENS_NATIVE_WGET_DIAG: category={category}\n", result.stderr)
+            self.assertNotIn("private-canary", result.stdout + result.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()

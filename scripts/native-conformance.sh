@@ -342,11 +342,16 @@ echo "native lane $lane owns $native_outer_engine container $container, sidecar 
 
 diagnose_native_startup() {
   local state diagnosis
-  state=$("${podman_cmd[@]}" inspect --format '{{.State.Status}}|{{.State.ExitCode}}|{{.State.OOMKilled}}' "$container" 2>/dev/null) || state=unavailable
-  [[ $state =~ ^(running|exited|created|configured|paused|stopped)\|[0-9]+\|(true|false)$ ]] || state=unavailable
+  if (( $# > 0 )); then
+    state=$1
+    [[ $state =~ ^running=(true|false|unknown),status=(running|exited|created|configured|paused|stopped|restarting|dead|removing|unknown),exit=(zero|nonzero|unknown),oom=(true|false|unknown),error=(true|false|unknown)$ ]] || state=unavailable
+  else
+    state=$(native_outer_command 10 inspect --format '{{.State.Status}}|{{.State.ExitCode}}|{{.State.OOMKilled}}' "$container" 2>/dev/null) || state=unavailable
+    [[ $state =~ ^(running|exited|created|configured|paused|stopped)\|[0-9]+\|(true|false)$ ]] || state=unavailable
+  fi
   # Retain only the final 64 KiB of the last 80 lines. Logs can contain protected
   # values, so only fixed stage and category names leave this function.
-  diagnosis=$(timeout --signal=TERM --kill-after=2s 10s "${podman_cmd[@]}" logs --tail 80 "$container" 2>/dev/null |
+  diagnosis=$(native_outer_command 10 logs --tail 80 "$container" 2>/dev/null |
     python3 -c 'import sys
 tail = bytearray()
 for chunk in iter(lambda: sys.stdin.buffer.read(65536), b""):
@@ -465,27 +470,40 @@ watchdog() {
   done
 }
 validated_outer_ipv4() {
-  local role=$1 name=$2 attachment
+  local role=$1 name=$2 attachment observation result=0
   case $role in sidecar | daemon) ;; *) return 1 ;; esac
-  attachment=$(timeout --signal=TERM --kill-after=2s 10s "${podman_cmd[@]}" inspect \
-    --format '{{json .NetworkSettings.Networks}}' "$name" 2>/dev/null) || {
+  attachment=$(native_outer_command 10 inspect \
+    --format '{{json .NetworkSettings.Networks}}|{{.State.Running}}|{{.State.Status}}|{{.State.ExitCode}}|{{.State.OOMKilled}}|{{if .State.Error}}true{{else}}false{{end}}' "$name" 2>/dev/null) || {
     echo "DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=attachment role=$role category=inspect_failed" >&2
+    if [[ $role == daemon ]]; then diagnose_native_startup unavailable; fi
     return 1
   }
   (( ${#attachment} <= 4096 )) || {
     echo "DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=attachment role=$role category=output_limit" >&2
+    if [[ $role == daemon ]]; then diagnose_native_startup unavailable; fi
     return 1
   }
-  printf '%s' "$attachment" | python3 -c '
+  observation=$(printf '%s' "$attachment" | python3 -c '
 import ipaddress, json, sys
+
+raw = sys.stdin.read()
+fields = raw.rsplit("|", 5)
+state = "unavailable"
+if len(fields) == 6:
+    raw, running, status, exit_code, oom, error = fields
+    boolean = lambda value: value if value in ("true", "false") else "unknown"
+    status = status if status in ("running", "exited", "created", "configured", "paused", "stopped", "restarting", "dead", "removing") else "unknown"
+    exit_class = ("zero" if int(exit_code) == 0 else "nonzero") if exit_code.isascii() and exit_code.isdecimal() and len(exit_code) <= 10 else "unknown"
+    state = "running=" + boolean(running) + ",status=" + status + ",exit=" + exit_class + ",oom=" + boolean(oom) + ",error=" + boolean(error)
 
 def fail(category):
     print("DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=attachment role=" + sys.argv[2] +
           " category=" + category, file=sys.stderr)
+    print(state)
     raise SystemExit(1)
 
 try:
-    networks = json.load(sys.stdin)
+    networks = json.loads(raw)
 except (ValueError, UnicodeError):
     fail("json_shape")
 if not isinstance(networks, dict):
@@ -509,7 +527,14 @@ except (ValueError, TypeError, AttributeError):
 if not address.is_private or address.is_loopback or address.is_link_local:
     fail("ipv4_nonprivate")
 print(address)
-' "$outer_network" "$role"
+' "$outer_network" "$role") || result=$?
+  if (( result != 0 )); then
+    # Failure-only: reuse the held closed State; only the existing logs query
+    # is added (10s + 2s kill fallback), inside the lane 30m watchdog.
+    if [[ $role == daemon ]]; then diagnose_native_startup "$observation"; fi
+    return "$result"
+  fi
+  printf '%s\n' "$observation"
 }
 sidecar_setup_failed() {
   echo "DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=$1" >&2

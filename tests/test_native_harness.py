@@ -842,6 +842,8 @@ else exit 50; fi
 
     def test_outer_ipv4_diagnostics_are_closed_for_each_rejection(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
+        runtime = (ROOT / "scripts/native-outer-runtime.sh").read_text(encoding="utf-8")
+        command = runtime.split("native_outer_command() {", 1)[1].split("\n}\n", 1)[0]
         helper = source.split("validated_outer_ipv4() {", 1)[1].split(
             "\n}\nsidecar_setup_failed()", 1
         )[0]
@@ -860,6 +862,9 @@ else exit 50; fi
             ("private-canary" * 300, "output_limit", "0"),
         )
         with tempfile.TemporaryDirectory() as directory:
+            for tool, target in (("bash", "/bin/bash"), ("python3", sys.executable),
+                                 ("timeout", "/usr/bin/timeout")):
+                (Path(directory) / tool).symlink_to(target)
             fake = Path(directory) / "podman"
             fake.write_text(
                 '#!/usr/bin/env bash\nprintf %s "$FAKE_NETWORKS"\nexit "$FAKE_PODMAN_STATUS"\n',
@@ -868,6 +873,9 @@ else exit 50; fi
             fake.chmod(0o755)
             script = (
                 'podman_cmd=("$FAKE_PODMAN")\n'
+                'native_outer_cmd=("${podman_cmd[@]}")\n'
+                f'native_outer_command() {{{command}\n}}\n'
+                'diagnose_native_startup() { :; }\n'
                 f'outer_network={network}\n'
                 f'validated_outer_ipv4() {{{helper}\n}}\n'
                 'validated_outer_ipv4 "$FAKE_ROLE" dl-native-fixture\n'
@@ -875,11 +883,11 @@ else exit 50; fi
             for role in ("sidecar", "daemon"):
                 for networks, category, status in fixtures:
                     with self.subTest(role=role, category=category, status=status):
-                        env = os.environ.copy()
+                        env = {"PATH": directory}
                         env.update(FAKE_PODMAN=str(fake), FAKE_ROLE=role,
                                    FAKE_NETWORKS=networks, FAKE_PODMAN_STATUS=status)
                         result = subprocess.run(
-                            ["bash", "-c", script], env=env, capture_output=True,
+                            ["/bin/bash", "-c", script], env=env, capture_output=True,
                             text=True, timeout=15, check=False,
                         )
                         self.assertNotEqual(result.returncode, 0)
@@ -889,11 +897,11 @@ else exit 50; fi
                             f"DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=attachment role={role} category={category}",
                         )
                         self.assertNotIn("private-canary", result.stderr)
-            env = os.environ.copy()
+            env = {"PATH": directory}
             env.update(FAKE_PODMAN=str(fake), FAKE_ROLE="sidecar",
                        FAKE_NETWORKS=json.dumps(valid), FAKE_PODMAN_STATUS="0")
             result = subprocess.run(
-                ["bash", "-c", script], env=env, capture_output=True,
+                ["/bin/bash", "-c", script], env=env, capture_output=True,
                 text=True, timeout=15, check=False,
             )
             self.assertEqual(result.returncode, 0)

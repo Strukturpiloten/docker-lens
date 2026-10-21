@@ -170,6 +170,7 @@ error_category=$(grep -Eo '^DOCKERLENS_NATIVE_ERROR: (endpoint|cancelled|deadlin
 selection_error=$(grep -Eo '^DOCKERLENS_NATIVE_ERROR: selection$' <<<"$result" | tail -n 1 || true)
 if [[ -n $selection_error ]]; then error_category=$selection_error; fi
 network_cli_diag=$(grep -Eo '^DOCKERLENS_NATIVE_NETWORK_CLI_DIAG: exit=(timeout|other) category=(bridge_filter|icc_configuration|firewall_disabled|firewall|permission|address_pool|invalid_label|invalid_option|unknown)$' <<<"$result" | tail -n 1 || true)
+wget_diag=$(grep -Eo '^DOCKERLENS_NATIVE_WGET_DIAG: category=(connection_refused|no_route|timeout|http_error|unknown)$' <<<"$result" | tail -n 1 || true)
 internal_cleanup=$(grep -Eo '^DOCKERLENS_NATIVE_CLEANUP: internal_proof=(pass|fail)$' <<<"$result" | tail -n 1 || true)
 # A panic's selected test source and numeric location identify an assertion
 # without disclosing its message, compared values, or an absolute build path.
@@ -261,6 +262,7 @@ if (( run_status != 0 )); then
   if [[ -n $reason_marker ]]; then echo "$reason_marker" >&2; fi
   if [[ -n $error_category ]]; then echo "$error_category" >&2; fi
   if [[ -n $network_cli_diag ]]; then echo "$network_cli_diag" >&2; fi
+  if [[ -n $wget_diag ]]; then echo "$wget_diag" >&2; fi
   if [[ -n $internal_cleanup ]]; then echo "$internal_cleanup" >&2; fi
   if [[ -n $panic_site ]]; then echo "$panic_site" >&2; fi
   if [[ -n $summary ]]; then
