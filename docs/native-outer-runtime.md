@@ -26,11 +26,47 @@ queries, now both under that canonical ten-second owner: at most 24 seconds
 including both kill fallbacks, not the early path's 12 seconds. No query or
 retry is added. Logs are not persisted or printed.
 
+The same log query merges Docker CLI stdout and stderr into the existing 64 KiB
+tail before classification. Only anchored default shell xtrace (`+ `, `++ `,
+and deeper repeated-plus prefixes) is removed. Ordinary tool/driver mentions do
+not identify an error family. Explicit error observations retain closed families
+in this fixed order: `rootless_launcher_unavailable`, `rootless_uidmap`,
+`rootless_network`, `daemon_storage`, `daemon_permission`, `daemon_network`,
+`daemon_startup`. `families` is an ordered comma-separated subset, `none`, or
+`unavailable`; `category` is the sole family, `ambiguous`, `unclassified`, or
+`unavailable`. These are observations, not proven causes. Generic permission or
+startup wrappers do not add a second family to the same specific error line.
+`preflight` separately retains an ordered subset of `xdg`, `home`, `rootlesskit`,
+`state`, `uid`, `detach`, or `none`/`unavailable`, using only six verified fatal
+preflight messages. Exact fixed prefixes/suffixes surround dynamic state paths
+and detach values; those values neither leave the collector nor add families.
+The six messages indicate startup prerequisites, not proof of the current
+failure cause. Ordinary echo and filtered xtrace are not those observations.
+
+The message contract was read only from the official Docker rootless extras
+29.8.1 amd64 archive, SHA-256
+`8f1ed16fc6913241e599af6234a7f30502bde6e73bebbbc7176b17802d967d49`;
+the single `dockerd-rootless.sh` member hashes to
+`200203633806081a401e60aefdf68a8fa73fc7dc80aa854c52a69d47710a3488`.
+Inspection used `tar -xOf` stdout only, without execution or broad extraction.
+The historical payload manifest declares Apache-2.0; a versioned license was
+not independently verified. Neither archive nor script is redistributed here,
+and this historical source reference adds no operational dependency or pin.
+
 Failed ordinary internal-proof wget commands classify their already-held bounded
 stderr as connection refusal, no route, timeout, HTTP error, or unknown. The
 probe, its oracle, endpoint, and six-second budget are unchanged. These
 observations do not establish that the independent rootless failures share a
-cause, nor settle address-pool overlap. Cleanup remains unchanged: its existing
+cause, nor settle address-pool overlap. On failed ordinary control-bridge wget,
+`DOCKERLENS_NATIVE_CONTROL_SUBNET_DIAG` adds only
+`sidecar_on_control_subnet=true|false|unknown`. It compares the already-held
+sidecar IPv4 against `IPAM.Config[].Subnet` from the already-inspected rendered
+control network, retaining only that closed result at the original read. Missing,
+malformed, noncanonical-network CIDRs or IPv6-only metadata yield `unknown`;
+IPv4 `/0`, `/32`, and subnet boundaries are handled explicitly. `false` does
+not rule out other held networks, the default bridge, routes or firewall issues,
+and never asserts whole outer/inner CIDR disjointness or a timeout cause.
+Cleanup remains unchanged: its existing
 closed stage/status labels do not identify the stderr cause. A collector was
 omitted because safely retaining closed stderr across the original sudo/timer
 owner would broaden the privilege/protocol seam.

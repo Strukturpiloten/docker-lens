@@ -2,7 +2,7 @@
 
 use std::fs;
 use std::io::{Read, Write};
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -802,6 +802,7 @@ struct InternalProofResources {
     run_id: String,
     containers: Vec<String>,
     networks: Vec<String>,
+    control_subnet_diagnostic: Option<&'static str>,
 }
 
 impl InternalProofResources {
@@ -810,6 +811,7 @@ impl InternalProofResources {
             run_id: run_id.to_owned(),
             containers: Vec::new(),
             networks: Vec::new(),
+            control_subnet_diagnostic: None,
         }
     }
 
@@ -1063,6 +1065,179 @@ fn wget_failure_category(stderr: &[u8]) -> &'static str {
     }
 }
 
+// A pure observation of ONE target IPv4 against ONE already-inspected control
+// network. Never prints addresses or claims outer/inner network disjointness.
+enum SubnetMatch {
+    Ipv4(bool),
+    Ipv6,
+}
+
+fn ipv4_in_subnet(address: Ipv4Addr, subnet: &str) -> Option<SubnetMatch> {
+    let (network, prefix) = subnet.split_once('/')?;
+    if prefix.is_empty()
+        || prefix.len() > 3
+        || !prefix.bytes().all(|byte| byte.is_ascii_digit())
+        || (prefix.len() > 1 && prefix.starts_with('0'))
+    {
+        return None;
+    }
+    let prefix = prefix.parse::<u8>().ok()?;
+    match network.parse::<IpAddr>().ok()? {
+        IpAddr::V4(network) if prefix <= 32 => {
+            let mask = u32::MAX.checked_shl(32 - u32::from(prefix)).unwrap_or(0);
+            let network = u32::from(network);
+            if network & mask != network {
+                return None;
+            }
+            Some(SubnetMatch::Ipv4(u32::from(address) & mask == network))
+        }
+        IpAddr::V6(network) if prefix <= 128 => {
+            let mask = u128::MAX.checked_shl(128 - u32::from(prefix)).unwrap_or(0);
+            let network = u128::from(network);
+            if network & mask != network {
+                return None;
+            }
+            Some(SubnetMatch::Ipv6)
+        }
+        _ => None,
+    }
+}
+
+fn sidecar_on_control_subnet(address: Ipv4Addr, network: &Value) -> &'static str {
+    let Some(configs) = network
+        .get("IPAM")
+        .and_then(|ipam| ipam.get("Config"))
+        .and_then(Value::as_array)
+    else {
+        return "unknown";
+    };
+    let mut ipv4_seen = false;
+    let mut contains = false;
+    for config in configs {
+        let Some(subnet) = config.get("Subnet").and_then(Value::as_str) else {
+            return "unknown";
+        };
+        match ipv4_in_subnet(address, subnet) {
+            Some(SubnetMatch::Ipv4(found)) => {
+                ipv4_seen = true;
+                contains |= found;
+            }
+            Some(SubnetMatch::Ipv6) => {}
+            None => return "unknown",
+        }
+    }
+    if !ipv4_seen {
+        "unknown"
+    } else if contains {
+        "true"
+    } else {
+        "false"
+    }
+}
+
+#[test]
+fn control_subnet_membership_is_closed_and_uses_only_held_control_metadata() {
+    let address = Ipv4Addr::new(10, 23, 7, 9);
+    for (network, expected) in [
+        (
+            json!({"IPAM":{"Config":[{"Subnet":"10.23.7.0/24"}]}}),
+            "true",
+        ),
+        (
+            json!({"IPAM":{"Config":[{"Subnet":"10.23.8.0/24"}]}}),
+            "false",
+        ),
+        (
+            json!({"IPAM":{"Config":[{"Subnet":"10.23.8.0/24"},{"Subnet":"10.23.7.0/24"}]}}),
+            "true",
+        ),
+        (json!({"IPAM":{"Config":[{"Subnet":"0.0.0.0/0"}]}}), "true"),
+        (
+            json!({"IPAM":{"Config":[{"Subnet":"10.23.7.9/32"}]}}),
+            "true",
+        ),
+        (
+            json!({"IPAM":{"Config":[{"Subnet":"10.23.7.10/32"}]}}),
+            "false",
+        ),
+        (
+            json!({"IPAM":{"Config":[{"Subnet":"10.23.7.8/31"}]}}),
+            "true",
+        ),
+        (
+            json!({"IPAM":{"Config":[{"Subnet":"10.23.7.10/31"}]}}),
+            "false",
+        ),
+        (json!({}), "unknown"),
+        (json!({"IPAM":null}), "unknown"),
+        (json!({"IPAM":{}}), "unknown"),
+        (json!({"IPAM":{"Config":null}}), "unknown"),
+        (json!({"IPAM":{"Config":[]}}), "unknown"),
+        (json!({"IPAM":{"Config":[{}]}}), "unknown"),
+        (json!({"IPAM":{"Config":[{"Subnet":null}]}}), "unknown"),
+        (json!({"IPAM":{"Config":[{"Subnet":17}]}}), "unknown"),
+        (
+            json!({"IPAM":{"Config":[{"Subnet":"fd00::/64"}]}}),
+            "unknown",
+        ),
+        (
+            json!({"IPAM":{"Config":[{"Subnet":"fd00::/64"},{"Subnet":"10.23.7.0/24"}]}}),
+            "true",
+        ),
+        (
+            json!({"IPAM":{"Config":[{"Subnet":"10.23.7.0/24"},{"Subnet":"protected-canary"}]}}),
+            "unknown",
+        ),
+        (
+            json!({"IPAM":{"Config":[{"Subnet":"protected-canary"},{"Subnet":"10.23.7.0/24"}]}}),
+            "unknown",
+        ),
+        (
+            json!({"IPAM":{"Config":[{"Subnet":"10.23.8.0/24"}]},"other_network":{"IPAM":{"Config":[{"Subnet":"10.23.7.0/24"}]}}}),
+            "false",
+        ),
+    ] {
+        let observation = sidecar_on_control_subnet(address, &network);
+        assert!(matches!(observation, "true" | "false" | "unknown"));
+        assert_eq!(observation, expected);
+    }
+}
+
+#[test]
+fn control_subnet_malformed_noncanonical_and_boundary_cidrs_do_not_panic_or_claim_certainty() {
+    let address = Ipv4Addr::new(10, 23, 7, 9);
+    for subnet in [
+        "",
+        "private-canary",
+        "10.23.7.0",
+        "10.23.7.0/",
+        "10.23.7.0/33",
+        "10.23.7.0/-1",
+        "10.23.7.0/+24",
+        "10.23.7.0/024",
+        "10.23.7.0/999",
+        "10.23.7.0/24/1",
+        " 10.23.7.0/24",
+        "10.23.7.0/24 ",
+        "010.23.7.0/24",
+        "10.23.7.9/24",
+        "fd00::1/64",
+        "fd00::/129",
+    ] {
+        let network = json!({"IPAM":{"Config":[{"Subnet":subnet}]}});
+        assert_eq!(sidecar_on_control_subnet(address, &network), "unknown");
+    }
+    let network = json!({"IPAM":{"Config":[{"Subnet":"10.23.7.0/24"}]}});
+    for (address, expected) in [
+        (Ipv4Addr::new(10, 23, 6, 255), "false"),
+        (Ipv4Addr::new(10, 23, 7, 0), "true"),
+        (Ipv4Addr::new(10, 23, 7, 255), "true"),
+        (Ipv4Addr::new(10, 23, 8, 0), "false"),
+    ] {
+        assert_eq!(sidecar_on_control_subnet(address, &network), expected);
+    }
+}
+
 #[test]
 fn wget_failure_categories_are_closed_and_private() {
     for (message, expected) in [
@@ -1093,6 +1268,11 @@ fn proof_cli_ok(resources: &InternalProofResources, args: &[&str]) -> Vec<u8> {
             "DOCKERLENS_NATIVE_WGET_DIAG: category={}",
             wget_failure_category(&result.stderr)
         );
+        if let Some(membership) = resources.control_subnet_diagnostic {
+            eprintln!(
+                "DOCKERLENS_NATIVE_CONTROL_SUBNET_DIAG: sidecar_on_control_subnet={membership}"
+            );
+        }
     }
     assert!(!result.output_limit, "bounded proof CLI output");
     if !result.success {
@@ -3742,11 +3922,15 @@ fn live_internal_network_blocks_external_egress() {
         );
         assert_eq!(status, 201, "Engine accepts exact inert proof request");
     }
+    let mut control_subnet_diagnostic = "unknown";
     for (name, is_internal, cli_body) in [
         (&internal, true, &cli_internal_body),
         (&control, false, &cli_control_body),
     ] {
         let body = proof_inspect(&resources, &format!("/v{api_version}/networks/{name}"));
+        if name == &control {
+            control_subnet_diagnostic = sidecar_on_control_subnet(sidecar_ip, &body);
+        }
         assert_eq!(body["Internal"], is_internal);
         assert_eq!(body["Driver"], "bridge");
         assert_eq!(body["Labels"]["io.dockerlens.native-run"], run_id);
@@ -3826,6 +4010,7 @@ fn live_internal_network_blocks_external_egress() {
     }
     let external_url = format!("http://{sidecar_ip}:18084/");
     eprintln!("DOCKERLENS_NATIVE_CHECK: network_internal_control");
+    resources.control_subnet_diagnostic = Some(control_subnet_diagnostic);
     let control_response = proof_cli_ok(
         &resources,
         &[
@@ -3840,6 +4025,7 @@ fn live_internal_network_blocks_external_egress() {
             &external_url,
         ],
     );
+    resources.control_subnet_diagnostic = None;
     assert_eq!(
         control_response, b"proof-egress",
         "ordinary bridge reaches task endpoint"

@@ -351,32 +351,72 @@ diagnose_native_startup() {
   fi
   # Retain only the final 64 KiB of the last 80 lines. Logs can contain protected
   # values, so only fixed stage and category names leave this function.
-  diagnosis=$(native_outer_command 10 logs --tail 80 "$container" 2>/dev/null |
-    python3 -c 'import sys
+  diagnosis=$(native_outer_command 10 logs --tail 80 "$container" 2>&1 |
+    python3 -c 'import re, sys
 tail = bytearray()
 for chunk in iter(lambda: sys.stdin.buffer.read(65536), b""):
     tail.extend(chunk)
     if len(tail) > 65536:
         del tail[:-65536]
-s = tail.decode("utf-8", "replace").lower()
 stage = "daemon"
-# Daemon logs can contain secrets; classifications only emit fixed categories.
-lines = s.splitlines()
-category_text = "\n".join(line for line in lines
-                          if not line.strip().startswith("dockerlens_rootless_trace:"))
-checks = (
-    ("rootless_launcher_unavailable", ("start-dockerd: not found", "start-dockerd: no such file")),
-    ("rootless_uidmap", ("uid_map", "newuidmap", "newgidmap")),
-    ("rootless_network", ("rootlesskit", "slirp4netns")),
-    ("daemon_storage", ("error initializing graphdriver", "failed to mount overlay", "storage driver")),
-    ("daemon_permission", ("operation not permitted", "permission denied")),
-    ("daemon_network", ("iptables", "failed to create nat chain", "error creating default bridge")),
-    ("daemon_startup", ("failed to start daemon",)),
+family_order = ("rootless_launcher_unavailable", "rootless_uidmap", "rootless_network",
+                "daemon_storage", "daemon_permission", "daemon_network", "daemon_startup")
+preflight_rules = (
+    ("xdg", r"xdg_runtime_dir needs to be set and writable"),
+    ("home", r"home needs to be set and exist\."),
+    ("rootlesskit", r"rootlesskit needs to be installed"),
+    ("state", r"dockerd-rootless\.sh conflicts with containerd-rootless\.sh\. stop containerd-rootless\.sh if it\x27s running, and remove .+ if it still exists\."),
+    ("uid", r"this script must be executed as a non-privileged user"),
+    ("detach", r"unknown dockerd_rootless_rootlesskit_detach_netns value: .*"),
 )
-category = next((name for name, needles in checks
-                 if any(item in category_text for item in needles)), "unclassified")
+# Only anchored default shell xtrace is excluded. Ordinary mentions of tools,
+# drivers or successful setup are not error observations or causal evidence.
+families = set()
+preflights = set()
+for raw in tail.decode("utf-8", "replace").splitlines():
+    if re.match(r"^\++ ", raw):
+        continue
+    line = raw.lower()
+    matched_preflight = {name for name, pattern in preflight_rules if re.fullmatch(pattern, line)}
+    if matched_preflight:
+        preflights.update(matched_preflight)
+        families.add("rootless_launcher_unavailable" if "rootlesskit" in matched_preflight else "daemon_startup")
+        # Dynamic state paths/detach values are not additional error evidence.
+        continue
+    launcher = re.search(r"\bstart-dockerd: (?:not found|no such file(?: or directory)?)\b", line)
+    permission = re.search(r"(?:^|:\s*)(?:permission denied|operation not permitted)[. ]*$", line)
+    uidmap_command = re.search(r"\b(?:uid_map|newuidmap|newgidmap):", line)
+    uidmap = uidmap_command and any(word in line[uidmap_command.end():]
+                                   for word in ("failed", "permission denied", "operation not permitted", "not found", "no such file"))
+    explicit = re.search(
+        r"(?:^|\s)(?:error|fatal|panic)(?::|\s)|\blevel=\"?(?:error|fatal|panic)\b|"
+        r"\bfailed to (?:start|setup|set up|initialize|mount|create|launch|open|write|read|run)\b|"
+        r"\berror (?:initializing|creating|starting|mounting)\b", line)
+    observed = set()
+    if launcher:
+        observed.add("rootless_launcher_unavailable")
+    if uidmap or (explicit and any(word in line for word in ("uid_map", "newuidmap", "newgidmap"))):
+        observed.add("rootless_uidmap")
+    if explicit:
+        if "slirp4netns" in line or ("rootlesskit" in line and "network" in line):
+            observed.add("rootless_network")
+        if any(word in line for word in ("graphdriver", "overlay", "storage driver")):
+            observed.add("daemon_storage")
+        if any(word in line for word in ("iptables", "nat chain", "default bridge", "network controller")):
+            observed.add("daemon_network")
+    # Permission and generic startup wrappers are fallback observations, not
+    # extra independent families when the same line names a specific failure.
+    if not observed:
+        if permission or (explicit and any(word in line for word in ("operation not permitted", "permission denied"))):
+            observed.add("daemon_permission")
+        elif "failed to start daemon" in line:
+            observed.add("daemon_startup")
+    families.update(observed)
+category = next(iter(families)) if len(families) == 1 else "ambiguous" if families else "unclassified"
+family_projection = ",".join(name for name in family_order if name in families) or "none"
+preflight_projection = ",".join(name for name, _ in preflight_rules if name in preflights) or "none"
 trace = "unavailable"
-print("stage=" + stage + " category=" + category + " trace=" + trace)' "$lane") || diagnosis='stage=unavailable category=unavailable trace=unavailable'
+print("stage=" + stage + " category=" + category + " families=" + family_projection + " preflight=" + preflight_projection + " trace=" + trace)' "$lane") || diagnosis='stage=unavailable category=unavailable families=unavailable preflight=unavailable trace=unavailable'
   echo "inner daemon startup diagnosis: state=$state $diagnosis" >&2
 }
 

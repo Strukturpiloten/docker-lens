@@ -40,10 +40,11 @@ class FailureDiagnosticsTests(unittest.TestCase):
         path.write_text(f"#!{sys.executable}\n" + body)
         path.chmod(0o700)
 
-    def client_reply(self, stdout="", status=0):
+    def client_reply(self, stdout="", status=0, stderr=""):
         self.tool(self.client, "import json,os,sys\nfrom pathlib import Path\n"
                   "Path(os.environ['TRACE']).write_text(json.dumps(sys.argv[1:]))\n"
-                  f"sys.stdout.write({stdout!r})\nraise SystemExit({status})\n")
+                  f"sys.stdout.write({stdout!r});sys.stdout.flush()\n"
+                  f"sys.stderr.write({stderr!r});sys.stderr.flush()\nraise SystemExit({status})\n")
 
     def shell(self, body, args=(), changes=None, timeout=4):
         return subprocess.run(["/bin/bash", "-c", body, "closed-control", *args],
@@ -138,7 +139,7 @@ class FailureDiagnosticsTests(unittest.TestCase):
                    if held else 'diagnose_native_startup\n'))
 
     def test_startup_reuses_state_and_only_issues_existing_root_owned_bounded_logs_query(self):
-        self.client_reply(CANARY + " permission denied\n")
+        self.client_reply("ERROR: permission denied " + CANARY + "\n")
         for privileged in (False, True):
             sudo_trace = self.private / "sudo-trace"
             result = self.shell(self.startup_body(privileged), changes={"SUDO_TRACE": str(sudo_trace)})
@@ -158,7 +159,7 @@ class FailureDiagnosticsTests(unittest.TestCase):
         self.tool(self.client, "import json,os,sys\nfrom pathlib import Path\n"
                   "with Path(os.environ['TRACE']).open('a') as trace: trace.write(json.dumps(sys.argv[1:])+'\\n')\n"
                   "if 'inspect' in sys.argv: print('exited|1|false')\n"
-                  f"else: print({CANARY + ' permission denied'!r})\n")
+                  f"else: print({'ERROR: permission denied ' + CANARY!r})\n")
         sudo_trace = self.private / "sudo-trace"
         result = self.shell(self.startup_body(True, held=False), changes={"SUDO_TRACE": str(sudo_trace)})
         prefix = ["--config", "/held/config", "--host", "unix:///held/socket"]
@@ -172,6 +173,88 @@ class FailureDiagnosticsTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn("state=exited|1|false", result.stderr)
         self.assertNotIn(CANARY, result.stdout + result.stderr)
+
+    def test_startup_collects_both_streams_with_closed_observed_families_not_normal_mentions(self):
+        cases = (
+            ("rootlesskit slirp4netns iptables storage driver overlay uid_map newuidmap ready\n", "", "unclassified", "none"),
+            ("+ echo ERROR: uid_map failed\n++ echo ERROR: iptables failed\n+++ echo ERROR: storage driver failed\n", "", "unclassified", "none"),
+            ("", "ERROR: failed to create default bridge: iptables: Permission denied\n", "daemon_network", "daemon_network"),
+            ("", "newuidmap: write to uid_map failed: Operation not permitted\n", "rootless_uidmap", "rootless_uidmap"),
+            ("", "/bin/sh: start-dockerd: not found\n", "rootless_launcher_unavailable", "rootless_launcher_unavailable"),
+            ("", "ERROR: rootlesskit failed to setup network\n", "rootless_network", "rootless_network"),
+            ("", "failed to mount overlay: invalid argument\n", "daemon_storage", "daemon_storage"),
+            ("", "nsenter: reassociate to namespace ns/net failed: Operation not permitted\n", "daemon_permission", "daemon_permission"),
+            ("", "failed to start daemon: unknown condition\n", "daemon_startup", "daemon_startup"),
+            ("ERROR: failed to mount overlay: invalid argument\n", 'level=error msg="failed to create NAT chain: iptables"\n', "ambiguous", "daemon_storage,daemon_network"),
+            ("ERROR: storage driver failed\n", "ERROR: overlay failed\n", "daemon_storage", "daemon_storage"),
+            ("+ echo ERROR: iptables failed\nrootlesskit network ready\n", "ERROR: permission denied\n", "daemon_permission", "daemon_permission"),
+            (" + ERROR: permission denied\n", "", "daemon_permission", "daemon_permission"),
+        )
+        for stdout, stderr, category, families in cases:
+            with self.subTest(category=category, families=families):
+                self.client_reply(stdout + CANARY + "\n", stderr=stderr + CANARY + "\n")
+                result = self.shell(self.startup_body())
+                self.assertEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(result.stderr,
+                    "inner daemon startup diagnosis: state=running=false,status=exited,exit=nonzero,oom=false,error=true "
+                    f"stage=daemon category={category} families={families} preflight=none trace=unavailable\n")
+                self.assertNotIn(CANARY, result.stdout + result.stderr)
+
+    def test_startup_tail_and_failed_logs_status_keep_original_bounds_and_closed_fallback(self):
+        self.client_reply("ERROR: storage driver failed\n" + "x" * 70000 + "\n")
+        result = self.shell(self.startup_body())
+        self.assertIn("category=unclassified families=none", result.stderr)
+        self.client_reply("x" * 70000 + "\n", stderr="ERROR: storage driver failed " + CANARY + "\n")
+        result = self.shell(self.startup_body())
+        self.assertIn("category=daemon_storage families=daemon_storage", result.stderr)
+        self.assertNotIn(CANARY, result.stdout + result.stderr)
+        self.client_reply(stderr="newuidmap:" * 10000 + "\n")
+        result = self.shell(self.startup_body())
+        self.assertIn("category=unclassified families=none", result.stderr)
+        for status in (1, 124):
+            self.client_reply(stderr="ERROR: storage driver failed " + CANARY, status=status)
+            result = self.shell(self.startup_body())
+            self.assertEqual(result.returncode, 0)
+            self.assertIn("stage=unavailable category=unavailable families=unavailable preflight=unavailable trace=unavailable", result.stderr)
+            self.assertNotIn(CANARY, result.stdout + result.stderr)
+
+    def test_verified_fatal_preflight_messages_are_closed_observations_not_xtrace_or_echo(self):
+        messages = (
+            ("XDG_RUNTIME_DIR needs to be set and writable", "xdg", "daemon_startup"),
+            ("HOME needs to be set and exist.", "home", "daemon_startup"),
+            ("rootlesskit needs to be installed", "rootlesskit", "rootless_launcher_unavailable"),
+            ("dockerd-rootless.sh conflicts with containerd-rootless.sh. Stop containerd-rootless.sh if it's running, "
+             f"and remove /private/{CANARY} if it still exists.", "state", "daemon_startup"),
+            ("This script must be executed as a non-privileged user", "uid", "daemon_startup"),
+            (f"Unknown DOCKERD_ROOTLESS_ROOTLESSKIT_DETACH_NETNS value: {CANARY}", "detach", "daemon_startup"),
+        )
+        for message, preflight, family in messages:
+            self.client_reply(CANARY + "\n", stderr=message + "\n")
+            result = self.shell(self.startup_body())
+            self.assertEqual(result.stdout, "")
+            self.assertEqual(result.stderr,
+                "inner daemon startup diagnosis: state=running=false,status=exited,exit=nonzero,oom=false,error=true "
+                f"stage=daemon category={family} families={family} preflight={preflight} trace=unavailable\n")
+            for prefix in ("echo ", "+ echo ", "++ echo "):
+                self.client_reply(prefix + message + "\n")
+                result = self.shell(self.startup_body())
+                self.assertIn("category=unclassified families=none preflight=none", result.stderr)
+                self.assertNotIn(CANARY, result.stdout + result.stderr)
+
+    def test_preflight_order_retains_mixed_observations_without_interpreting_dynamic_values(self):
+        self.client_reply("rootlesskit needs to be installed\nHOME needs to be set and exist.\n")
+        result = self.shell(self.startup_body())
+        self.assertIn("category=ambiguous families=rootless_launcher_unavailable,daemon_startup preflight=home,rootlesskit", result.stderr)
+        self.client_reply(
+            "Unknown DOCKERD_ROOTLESS_ROOTLESSKIT_DETACH_NETNS value: ERROR: iptables failed\n",
+            stderr="dockerd-rootless.sh conflicts with containerd-rootless.sh. Stop containerd-rootless.sh if it's running, "
+            f"and remove /private/ERROR: storage driver {CANARY} if it still exists.\n")
+        result = self.shell(self.startup_body())
+        self.assertIn("category=daemon_startup families=daemon_startup preflight=state,detach", result.stderr)
+        self.assertNotIn(CANARY, result.stdout + result.stderr)
+        self.assertNotIn("daemon_network", result.stderr)
+        self.assertNotIn("daemon_storage", result.stderr)
 
     @staticmethod
     def group_driver():
@@ -237,6 +320,29 @@ print(json.dumps({'status':code,'stdout':output,'stderr':error}))
             if mode == "stall":
                 self.assertGreaterEqual(time.monotonic() - started, 9)
 
+    def test_merged_stderr_collector_stall_keeps_original_timer_and_closed_unavailable_status(self):
+        body = self.startup_body(True)
+        receipt = self.private / "pids"
+        self.tool(self.client, "import os,json,sys,time\nfrom pathlib import Path\n"
+                  f"sys.stderr.write('x'*100000+'\\nERROR: storage driver failed {CANARY}\\n');sys.stderr.flush()\n"
+                  "receipt=Path(os.environ['PIDS']);pending=receipt.with_suffix('.pending')\n"
+                  "pending.write_text(json.dumps(os.getpid()));pending.rename(receipt)\n"
+                  "time.sleep(60)\n")
+        started = time.monotonic()
+        result = subprocess.run([sys.executable, "-c", self.group_driver(), "stall",
+                                 str(receipt), json.dumps(["/bin/bash", "-c", body])],
+                                env=self.env | {"PIDS": str(receipt), "SUDO_TRACE": str(self.private / "sudo-trace")},
+                                capture_output=True, text=True, timeout=16)
+        self.assertEqual(result.returncode, 0, "closed owned collector-stall control failed")
+        observation = json.loads(result.stdout)
+        self.assertEqual(observation["status"], 0)
+        self.assertEqual(observation["stdout"], "")
+        self.assertEqual(observation["stderr"],
+            "inner daemon startup diagnosis: state=running=false,status=exited,exit=nonzero,oom=false,error=true "
+            "stage=unavailable category=unavailable families=unavailable preflight=unavailable trace=unavailable\n")
+        self.assertGreaterEqual(time.monotonic() - started, 9)
+        self.assertLess(time.monotonic() - started, 13)
+
     def test_wget_sanitizer_accepts_only_closed_whole_line_categories(self):
         cargo = self.tools / "cargo"
         for category in ("connection_refused", "no_route", "timeout", "http_error", "unknown"):
@@ -255,6 +361,26 @@ print(json.dumps({'status':code,'stdout':output,'stderr':error}))
             self.assertNotEqual(result.returncode, 0)
             self.assertIn(f"DOCKERLENS_NATIVE_WGET_DIAG: category={category}\n", result.stderr)
             self.assertNotIn("private-canary", result.stdout + result.stderr)
+
+    def test_control_subnet_sanitizer_projects_only_closed_target_membership(self):
+        cargo = self.tools / "cargo"
+        for membership in ("true", "false", "unknown"):
+            self.tool(cargo, "import sys\n"
+                      "if '--list' in sys.argv:\n"
+                      " print('native_network_tests::live_internal_network_blocks_external_egress: test')\n"
+                      "else:\n"
+                      f" print('DOCKERLENS_NATIVE_CONTROL_SUBNET_DIAG: sidecar_on_control_subnet={membership}')\n"
+                      f" print('DOCKERLENS_NATIVE_CONTROL_SUBNET_DIAG: sidecar_on_control_subnet={CANARY}')\n"
+                      " print('DOCKERLENS_NATIVE_CONTROL_SUBNET_DIAG: sidecar_on_control_subnet=true private-canary')\n"
+                      " print('test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;')\n"
+                      " raise SystemExit(101)\n")
+            result = subprocess.run(["/bin/bash", str(ROOT / "scripts/run-exact-native-test.sh"),
+                                     "native_network", "live_internal_network_blocks_external_egress"],
+                                    env=self.env, capture_output=True, text=True, timeout=4)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(f"DOCKERLENS_NATIVE_CONTROL_SUBNET_DIAG: sidecar_on_control_subnet={membership}\n", result.stderr)
+            self.assertNotIn("private-canary", result.stdout + result.stderr)
+            self.assertNotIn("10.89.0.2", result.stdout + result.stderr)
 
 
 if __name__ == "__main__":
