@@ -185,6 +185,22 @@ cleanup_refuse() {
   echo "DOCKERLENS_NATIVE_CLEANUP: role=$1 operation=retain category=$2" >&2
   return 1
 }
+cleanup_identity_stage() {
+  local role=$1 stage=$2 result=$3 category
+  case "$role:$stage" in
+    network:network-binding | network:network-owner-inspect | volume:volume-identity-inspect) ;;
+    *) return 1 ;;
+  esac
+  case $result in
+    2) category=refused ;;
+    124) category=timeout ;;
+    137) category=killed ;;
+    130 | 143) category=cancelled ;;
+    125 | 126 | 127) category=command_error ;;
+    *) category=error ;;
+  esac
+  echo "DOCKERLENS_NATIVE_CLEANUP_STAGE: role=$role stage=$stage category=$category" >&2
+}
 cleanup_volume() {
   local current state=0
   (( volume_attempted == 1 )) || return 0
@@ -196,6 +212,7 @@ cleanup_volume() {
     *) cleanup_refuse volume presence_unknown; return 1 ;;
   esac
   current=$(cleanup_podman volume inspect --format '{{.Name}}|{{.Driver}}|{{.Mountpoint}}|{{.CreatedAt}}|{{index .Labels "io.dockerlens.native-run"}}' "$volume") || {
+    cleanup_identity_stage volume volume-identity-inspect "$?"
     cleanup_refuse volume identity_unknown; return 1;
   }
   [[ $current == "$volume_identity" ]] || { cleanup_refuse volume identity_mismatch; return 1; }
@@ -216,10 +233,12 @@ cleanup_network() {
   esac
   if [[ ${native_outer_engine:-podman} == docker ]]; then
     native_outer_binding network "$outer_network_id" "$outer_network" io.dockerlens.native-run "$run_id" >/dev/null || {
+      cleanup_identity_stage network network-binding "$?"
       cleanup_refuse network identity_unknown; return 1;
     }
   fi
   owner=$(cleanup_podman network inspect --format '{{index .Labels "io.dockerlens.native-run"}}' "$outer_network") || {
+    cleanup_identity_stage network network-owner-inspect "$?"
     cleanup_refuse network identity_unknown; return 1;
   }
   [[ $owner == "$run_id" ]] || { cleanup_refuse network identity_mismatch; return 1; }
@@ -831,7 +850,8 @@ PY
 
 inner_docker=("${podman_cmd[@]}" exec "$container" docker -H unix:///dockerlens-native/docker.sock)
 export NATIVE_BIND_RELABEL_DAEMON_UID
-NATIVE_BIND_RELABEL_DAEMON_UID=$(python3 "$script_dir/native-daemon-uid.py" "$outer_container_id" "$expected_mode")
+NATIVE_BIND_RELABEL_DAEMON_UID=$(python3 "$script_dir/native-daemon-uid.py" "$outer_container_id" "$expected_mode" \
+  "$native_outer_engine" "$run_dir")
 docker_root=$(timeout 15 "${inner_docker[@]}" info --format '{{.DockerRootDir}}')
 inner_cgroup=$(timeout 15 "${inner_docker[@]}" info --format '{{.CgroupVersion}}')
 # Report only fixed fields and validated package revision strings. In particular,

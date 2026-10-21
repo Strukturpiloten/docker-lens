@@ -13,6 +13,9 @@ if [[ $operation == preflight ]]; then
   [[ $# == 0 ]] || refuse
   native_outer_select "$engine" "$directory" || refuse
 else
+  # Custody validation and later observations share the original caller's
+  # privilege, timer and process group, including during attach itself.
+  native_outer_helper() { python3 "$native_outer_script_dir/native-outer-observation.py" "$@"; }
   native_outer_attach "$engine" "$directory" || refuse
 fi
 # Never create a second command/invocation budget. Existing caller timers apply
@@ -38,7 +41,7 @@ case $operation in
     [[ $# == 3 && $1 == --format ]] && identity "$3" || refuse
     case $2 in
       '{{json .}}') native_outer_snapshot "$3" ;;
-      '{{json .NetworkSettings.Networks}}'|'{{.State.Running}}')
+      '{{json .NetworkSettings.Networks}}'|'{{.State.Running}}'|'{{.Id}}|{{.State.Pid}}|{{.State.StartedAt}}|{{.State.Running}}|{{index .Config.Labels "io.dockerlens.native-run"}}')
         exec "${native_outer_cmd[@]}" inspect --format "$2" "$3" ;;
       *) refuse ;;
     esac ;;

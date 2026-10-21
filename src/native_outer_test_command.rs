@@ -27,6 +27,19 @@ pub(crate) fn prefix() -> Vec<String> {
     prefix_with(|key| std::env::var(key).ok())
 }
 
+pub(crate) fn context_env() -> Vec<String> {
+    context_env_with(|key| std::env::var(key).ok())
+}
+
+fn context_env_with(mut lookup: impl FnMut(&str) -> Option<String>) -> Vec<String> {
+    // Always placed after the original privilege/timer owner.
+    let mut argv = vec!["env".into()];
+    for key in CONTEXT {
+        argv.push(format!("{key}={}", lookup(key).unwrap_or_default()));
+    }
+    argv
+}
+
 fn prefix_with(mut lookup: impl FnMut(&str) -> Option<String>) -> Vec<String> {
     let engine = lookup("NATIVE_OUTER_ENGINE").unwrap_or_else(|| "podman".into());
     assert!(
@@ -41,10 +54,7 @@ fn prefix_with(mut lookup: impl FnMut(&str) -> Option<String>) -> Vec<String> {
     );
     // Assignments occur after the caller's sudo/timeout, never sudo -E or shell
     // serialization. Canonical policy sees the original allowlisted selectors.
-    let mut argv = vec!["env".into()];
-    for key in CONTEXT {
-        argv.push(format!("{key}={}", lookup(key).unwrap_or_default()));
-    }
+    let mut argv = context_env_with(&mut lookup);
     argv.extend([
         "bash".into(),
         format!(
@@ -87,6 +97,28 @@ fn literal_context_and_local_default_do_not_select_an_executable_or_shell() {
 }
 
 #[test]
+fn reusable_context_is_the_identical_literal_prefix_for_external_helpers() {
+    let lookup = |key: &str| match key {
+        "NATIVE_OUTER_ENGINE" => Some("docker".into()),
+        "NATIVE_OUTER_RUN_DIRECTORY" => Some("/tmp/held;literal".into()),
+        "DOCKER_HOST" => Some("private-selector;not-shell".into()),
+        _ => None,
+    };
+    let context = context_env_with(lookup);
+    let prefix = prefix_with(lookup);
+    assert_eq!(&prefix[..context.len()], context);
+    assert_eq!(context.len(), CONTEXT.len() + 1);
+    assert_eq!(context[0], "env");
+    assert!(context.contains(&"DOCKER_HOST=private-selector;not-shell".into()));
+    assert!(!context.iter().any(|item| item == "-E" || item == "-c"));
+    assert_eq!(
+        &prefix[prefix.len() - 4..],
+        ["--engine", "docker", "--directory", "/tmp/held;literal"]
+    );
+    assert_eq!(context_env().len(), CONTEXT.len() + 1);
+}
+
+#[test]
 fn real_builder_crosses_scrubbed_privilege_timer_and_fixed_bridge_without_a_runtime() {
     use std::fs;
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
@@ -112,6 +144,9 @@ fn real_builder_crosses_scrubbed_privilege_timer_and_fixed_bridge_without_a_runt
         .unwrap();
     let tools = private.0.join("tools");
     fs::DirBuilder::new().mode(0o700).create(&tools).unwrap();
+    for tool in ["env", "timeout", "bash", "python3", "dirname"] {
+        std::os::unix::fs::symlink(format!("/usr/bin/{tool}"), tools.join(tool)).unwrap();
+    }
     let client = private.0.join("docker-client");
     fs::DirBuilder::new().mode(0o700).create(&client).unwrap();
     for name in ["docker", "podman", "sudo"] {
@@ -125,7 +160,7 @@ fn real_builder_crosses_scrubbed_privilege_timer_and_fixed_bridge_without_a_runt
         fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
     }
     let directory = private.0.to_str().unwrap();
-    let path = format!("{}:{}", tools.display(), std::env::var("PATH").unwrap());
+    let path = tools.to_str().unwrap();
     for engine in ["podman", "docker"] {
         let argv = prefix_with(|key| {
             Some(
@@ -151,7 +186,7 @@ fn real_builder_crosses_scrubbed_privilege_timer_and_fixed_bridge_without_a_runt
         let id = "a".repeat(64);
         let output = Command::new(tools.join("sudo"))
             .env_clear()
-            .env("PATH", &path)
+            .env("PATH", path)
             .args(["-n", "timeout", "--signal=TERM", "--kill-after=1s", "4s"])
             .args(&argv)
             .args(["exec", &id, "sh", "-ec", "literal;not-host-shell"])

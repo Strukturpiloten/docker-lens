@@ -72,6 +72,13 @@ cannot replace complete exact-candidate validation or the four native lanes.
 Changed helper bytes require fresh reviewed source binding and producer evidence;
 never refresh only a digest to qualify an old receipt.
 
+Existing cleanup identity failures additionally emit `DOCKERLENS_NATIVE_CLEANUP_STAGE`
+with a fixed role, stage (`network-binding`, `network-owner-inspect`, or
+`volume-identity-inspect`) and closed exit category. The original retention
+decision and `identity_unknown` marker remain unchanged. No raw command status,
+reply, stderr, extra query, retry or renewed budget is introduced; these labels
+locate a failure but do not repair or prove cleanup.
+
 ## Canonical source seam and helper closure
 
 Source `scripts/native-outer-runtime.sh` only from the exact reviewed checkout
@@ -85,6 +92,19 @@ test. The coordinator explicitly exports its selected engine and private run
 directory; the historical `NATIVE_PODMAN_USE_SUDO` variable selects privilege only.
 It no longer selects an executable. Local default remains Podman.
 No product dependency on BoxFerry or Rust API change is introduced.
+
+The independent dockerd UID helper receives the selected engine and private run
+directory explicitly and uses the same attach-only `exec` boundary. Its native
+UID oracle, eight-second root-owned command timer and twelve-second capture
+window are unchanged. The namespace helper likewise receives explicit context;
+Rust forwards only the canonical non-secret policy inputs after its original
+privilege-aware sixteen-second timer. Namespace identity uses one exact allowed
+raw inspect template, never snapshot normalization. Each inspect retains its
+512-byte/two-second limit (including attach), a nested two-second root-owned
+timer and the existing one-second termination allowance. Held process/network
+FD bracketing, running/owner/CID/PID/start identity and namespace probes remain
+independent and unchanged. No endpoint fallback or namespace entry follows a
+failed identity observation.
 
 The separate stdlib-only [Unix-HTTP transport](native-unix-http.md),
 `native-unix-http.py`, is also supplied for BoxFerry's reviewed test closure.
@@ -147,6 +167,10 @@ probes, preflight, privilege escalation or deadline renewal. Attach requires a
 real mode-0700 run directory and, for Docker, an empty real mode-0700 client
 directory owned by the run owner or root. It never accepts an audit receipt as
 authority. Cancellation does not create or replace configuration.
+Attached Python observations, including the initial custody validation, run
+directly under that caller's timer/process group; no nested helper timeout can
+escape its containment. Standalone sourced-runtime and initial preflight helper
+timers retain their existing eight-second behavior and privilege handling.
 
 Rust propagates only the explicit non-secret policy-context allowlist through
 the existing sudo/timeout owner as literal `env` assignments, never sudo -E,
