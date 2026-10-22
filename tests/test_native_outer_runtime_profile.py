@@ -1,6 +1,7 @@
 """Fake-only hosted prerequisite collection; never execute host/package/native tools."""
 
 from contextlib import redirect_stderr, redirect_stdout
+import errno
 import hashlib
 import importlib.util
 import io
@@ -14,6 +15,7 @@ import sys
 import tempfile
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -271,6 +273,8 @@ class HostedDiagnosticTests(unittest.TestCase):
         with patch.object(PROFILE.os, "read", side_effect=race):
             with self.assertRaises(PROFILE.Unavailable) as caught: self.read()
         self.assertEqual(caught.exception.reason, "custody_failure")
+        self.assertEqual(caught.exception.failure_detail,
+                         {"guard": "stability", "component": "leaf", "category": "check_failed"})
         self.assertEqual(source.read_bytes(), b"replacement")
 
     def test_unknown_source_ids_and_standard_os_symlink_are_not_followed(self):
@@ -350,9 +354,160 @@ class HostedDiagnosticTests(unittest.TestCase):
             self.assertNotIn(SECRET, output.getvalue() + errors.getvalue())
             if len(argv) == 1:
                 record = json.loads(output.getvalue())
-                self.assertEqual(record["schema_version"], 1)
+                self.assertEqual(record["schema_version"], 2)
                 self.assertEqual(record["purpose"], "hosted_prerequisite_diagnostic")
                 self.assertEqual(record["admission"], "unadmitted")
+
+    def test_failure_detail_constructor_is_closed_immutable_and_value_free(self):
+        package = {"field": "version", "category": "empty", "row": 1}
+        source = {"guard": "mode", "component": "ancestor_2", "category": "check_failed"}
+        for reason, detail in (("invalid_metadata", package), ("custody_failure", source)):
+            error = PROFILE.Unavailable(reason, detail)
+            self.assertEqual(error.failure_detail, detail)
+            self.assertEqual(str(error), reason)
+            returned = error.failure_detail
+            returned["category"] = SECRET
+            self.assertEqual(error.failure_detail, detail)
+        error = PROFILE.Unavailable("invalid_metadata", package)
+        package["field"] = SECRET
+        self.assertEqual(error.failure_detail["field"], "version")
+        invalid = [({}, "invalid_metadata"), ({"field": SECRET, "category": "empty", "row": 1}, "invalid_metadata"),
+                   ({"field": "version", "category": SECRET, "row": 1}, "invalid_metadata"),
+                   ({"field": "version", "category": "empty", "row": True}, "invalid_metadata"),
+                   ({"field": "version", "category": "empty", "row": -1}, "invalid_metadata"),
+                   ({"field": "version", "category": "empty", "row": 12}, "invalid_metadata"),
+                   ({"field": "version", "category": "empty", "row": 1, "raw": SECRET}, "invalid_metadata"),
+                   ({"guard": SECRET, "component": "leaf", "category": "check_failed"}, "custody_failure"),
+                   ({"guard": "owner", "component": SECRET, "category": "check_failed"}, "custody_failure"),
+                   ({"guard": "owner", "component": "ancestor_5", "category": "check_failed"}, "custody_failure"),
+                   ({"guard": "owner", "component": "leaf", "category": SECRET}, "custody_failure"),
+                   ({"guard": "owner", "component": "leaf", "category": []}, "custody_failure"),
+                   (source, "invalid_metadata"), (source, "command_failed"), (SECRET, "custody_failure")]
+        for detail, reason in invalid:
+            with self.subTest(reason=reason, detail_type=type(detail).__name__):
+                with self.assertRaises(ValueError) as caught: PROFILE.Unavailable(reason, detail)
+                self.assertNotIn(SECRET, str(caught.exception))
+
+    def test_package_failure_fields_categories_order_and_row_are_closed(self):
+        good = b"docker-ce\tinstall ok installed\t1.2.3\tamd64\n"
+        cases = [(b"\xff", "encoding", "invalid_encoding", 0),
+                 (b"x" * (PROFILE.LIMIT + 1), "framing", "oversize", 0),
+                 (b"garbage", "framing", "missing_terminator", 0),
+                 (b"garbage\n", "columns", "invalid_count", 1),
+                 (b"\tbad\tbad\tbad\n", "package", "empty", 1),
+                 ((SECRET + "\tbad\tbad\tbad\n").encode(), "package", "unrecognized", 1),
+                 (good + good, "package", "duplicate", 2),
+                 (b"docker-ce\t\tbad\tbad\n", "status", "empty", 1),
+                 (("docker-ce\t" + SECRET + "\tbad\tbad\n").encode(), "status", "invalid_syntax", 1),
+                 (b"docker-ce\tinstall ok installed\t\tbad\n", "version", "empty", 1),
+                 (("docker-ce\tinstall ok installed\t" + SECRET + "\tbad\n").encode(), "version", "invalid_syntax", 1),
+                 (b"docker-ce\tinstall ok installed\t1\t\n", "architecture", "empty", 1),
+                 (("docker-ce\tinstall ok installed\t1\t" + SECRET + "\n").encode(), "architecture", "unrecognized", 1),
+                 (package_fixture() + good, "package", "duplicate", 11)]
+        for raw, field, category, row in cases:
+            with self.subTest(field=field, category=category, row=row):
+                with self.assertRaises(PROFILE.Unavailable) as caught: PROFILE.package_metadata(raw)
+                self.assertEqual(caught.exception.reason, "invalid_metadata")
+                self.assertEqual(caught.exception.failure_detail, {"field": field, "category": category, "row": row})
+                self.assertNotIn(SECRET, json.dumps(caught.exception.failure_detail))
+                self.assertNotIn(SECRET, str(caught.exception))
+
+    def test_schema2_failure_details_propagate_without_salvage_or_private_bytes(self):
+        raw = b"docker-ce\tinstall ok installed\t1\tamd64\n" + (SECRET + "\tbad\tbad\tbad\n").encode()
+        copyright = self.source("copyright:dpkg")
+        copyright.chmod(0o666)
+        result, calls = self.execute(replacements={PROFILE.PACKAGE_QUERY: raw})
+        self.assertEqual(result["schema_version"], 2)
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(calls, list(PROFILE.COMMANDS))
+        self.assertEqual(result["observations"]["packages"], {"status": "unavailable", "reason": "invalid_metadata",
+                         "failure_detail": {"field": "package", "category": "unrecognized", "row": 2}})
+        self.assertEqual(result["observations"]["files"]["copyright:dpkg"],
+                         {"status": "unavailable", "reason": "custody_failure", "failure_detail":
+                          {"guard": "mode", "component": "leaf", "category": "check_failed"}})
+        self.assertEqual(list(self.raw.iterdir()), [])
+
+    def test_source_owner_mode_kind_and_link_guards_have_only_fixed_components(self):
+        def failure(guard, component):
+            with self.assertRaises(PROFILE.Unavailable) as caught: self.read()
+            self.assertEqual(caught.exception.failure_detail,
+                             {"guard": guard, "component": component, "category": "check_failed"})
+        self.host.chmod(0o722)
+        failure("mode", "root")
+        self.host.chmod(0o700)
+        with patch.object(PROFILE, "EXPECTED_UID", os.geteuid() + 1): failure("owner", "root")
+        directory = self.host / "usr/sbin"
+        directory.chmod(0o777)
+        failure("mode", "ancestor_2")
+        directory.chmod(0o700)
+        source = self.source()
+        source.chmod(0o666)
+        failure("mode", "leaf")
+        source.chmod(0o644)
+        link = self.base / "linked"
+        link.hardlink_to(source)
+        failure("links", "leaf")
+        link.unlink()
+        source.unlink()
+        os.mkfifo(source, 0o600)
+        failure("kind", "leaf")
+        source.unlink()
+        source.write_bytes(b"private")
+        original_stat = os.stat
+        def foreign(path, *args, **kwargs):
+            return SimpleNamespace(st_uid=os.geteuid() + 1) if path == source.name else original_stat(path, *args, **kwargs)
+        with patch.object(PROFILE.os, "stat", side_effect=foreign): failure("owner", "leaf")
+
+    def test_source_open_and_metadata_io_details_never_echo_exception_values(self):
+        original_open = os.open
+        for code, category in ((errno.EACCES, "permission_denied"), (errno.EPERM, "permission_denied"),
+                               (errno.ELOOP, "symlink_refused"), (errno.ENOTDIR, "not_directory"),
+                               (errno.EIO, "io_error"), (errno.EBADF, "other_io")):
+            def fault(path, *args, **kwargs):
+                if path == "sbin": raise OSError(code, SECRET, "/" + SECRET)
+                return original_open(path, *args, **kwargs)
+            with self.subTest(category=category), patch.object(PROFILE.os, "open", side_effect=fault):
+                with self.assertRaises(PROFILE.Unavailable) as caught: self.read()
+                self.assertEqual(caught.exception.failure_detail,
+                                 {"guard": "open", "component": "ancestor_2", "category": category})
+                self.assertNotIn(SECRET, str(caught.exception))
+        original_stat = os.stat
+        def metadata(path, *args, **kwargs):
+            if path == "invoke-rc.d": raise OSError(errno.EIO, SECRET)
+            return original_stat(path, *args, **kwargs)
+        with patch.object(PROFILE.os, "stat", side_effect=metadata):
+            with self.assertRaises(PROFILE.Unavailable) as caught: self.read()
+        self.assertEqual(caught.exception.failure_detail,
+                         {"guard": "metadata", "component": "leaf", "category": "io_error"})
+
+    def test_source_close_failure_is_fixed_detail_and_retains_original_io_context(self):
+        original_close, original_read = os.close, os.read
+        source_inode = self.source().stat().st_ino
+        for primary in (False, True):
+            attempted = []
+            def close(descriptor):
+                target = os.fstat(descriptor).st_ino == source_inode
+                original_close(descriptor)
+                if target:
+                    attempted.append(descriptor)
+                    raise OSError(errno.EIO, SECRET)
+            def read(descriptor, count):
+                if primary and os.fstat(descriptor).st_ino == source_inode: raise OSError(errno.EIO, SECRET)
+                return original_read(descriptor, count)
+            with self.subTest(primary=primary), patch.object(PROFILE.os, "close", side_effect=close), \
+                    patch.object(PROFILE.os, "read", side_effect=read):
+                with self.assertRaises(PROFILE.Unavailable) as caught: self.read()
+            self.assertEqual(len(attempted), 1)
+            self.assertEqual(caught.exception.failure_detail,
+                             {"guard": "metadata" if primary else "close", "component": "leaf", "category": "io_error"})
+
+    def test_schema2_success_has_no_failure_detail_and_preserves_observations(self):
+        result, calls = self.execute()
+        self.assertEqual((result["schema_version"], result["status"], result["reason"]), (2, "observed", "complete"))
+        self.assertNotIn("failure_detail", json.dumps(result))
+        self.assertEqual(calls, list(PROFILE.COMMANDS))
+        self.assertEqual(PROFILE.package_metadata(b""), {name: {"status": "missing"} for name in PROFILE.PACKAGES})
+        self.assertEqual((PROFILE.LIMIT, PROFILE.FILE_LIMIT, PROFILE.TOTAL_SOURCE), (65536, 2097152, 8388608))
 
 
     def test_duplex_stderr_cap_and_hard_deadline_do_not_call_kill_or_communicate(self):
