@@ -1,0 +1,455 @@
+"""Fake-only hosted prerequisite collection; never execute host/package/native tools."""
+
+from contextlib import redirect_stderr, redirect_stdout
+import hashlib
+import importlib.util
+import io
+import json
+import os
+from pathlib import Path
+import signal
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parents[1]
+SPEC = importlib.util.spec_from_file_location("hosted_diagnostic", ROOT / "scripts/native-outer-runtime-profile.py")
+PROFILE = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(PROFILE)
+SECRET = "private-host-source-user-stderr-canary"
+HEAD = "a" * 40
+CI = {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted", "RUNNER_OS": "Linux",
+      "RUNNER_ARCH": "X64", "ImageOS": "ubuntu24", "ImageVersion": "20261021.1.0",
+      "GITHUB_REPOSITORY": "Strukturpiloten/docker-lens", "GITHUB_EVENT_NAME": "workflow_dispatch",
+      "GITHUB_REF": "refs/heads/main", "GITHUB_WORKFLOW": "Check", "GITHUB_WORKFLOW_REF": PROFILE.WORKFLOW,
+      "GITHUB_WORKFLOW_SHA": HEAD, "GITHUB_SHA": HEAD, "GITHUB_JOB": PROFILE.JOB,
+      "GITHUB_RUN_ID": "123456789", "GITHUB_RUN_ATTEMPT": "2"}
+
+
+def package_fixture():
+    return "".join(name + "\tinstall ok installed\t1.2.3-1ubuntu1\tamd64\n"
+                   for name in PROFILE.PACKAGES).encode()
+
+
+def owner_fixture():
+    return "".join(("dpkg" if name in {"dpkg-query", "start-stop-daemon"} else
+                    "systemd" if name == "systemctl" else "init-system-helpers") + ": " + path + "\n"
+                   for name, path in PROFILE.HELPERS.items()).encode()
+
+
+def unit_fixture():
+    return "\n".join("Id=" + name + "\nLoadState=loaded\nActiveState=active\nSubState=" +
+                     ("listening" if name.endswith("socket") else "running") +
+                     "\nUnitFileState=enabled\nFragmentPath=/lib/systemd/system/" + name + "\nDropInPaths=\n"
+                     for name in PROFILE.UNITS).encode()
+
+
+class HostedDiagnosticTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="dl-diagnostic-test-")
+        self.addCleanup(self.temporary.cleanup)
+        self.base = Path(self.temporary.name)
+        self.host = self.base / "host"
+        self.host.mkdir(mode=0o700)
+        self.raw = self.base / "private"
+        self.raw.mkdir(mode=0o700)
+        for source_id, path in PROFILE.SOURCE_PATHS.items():
+            target = self.host / path.lstrip("/")
+            target.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+            if source_id in PROFILE.DIRECTORY_IDS:
+                target.mkdir(mode=0o700)
+            else:
+                target.write_text('ID=ubuntu\nVERSION_ID="24.04"\nIGNORED=' + SECRET + "\n"
+                                  if source_id == "os-release" else SECRET + "\n")
+                target.chmod(0o644)
+        self.addCleanup(patch.stopall)
+        patch.object(PROFILE, "EXPECTED_UID", os.geteuid()).start()
+        patch.object(PROFILE, "SOURCE_ROOT", str(self.host)).start()
+        original = tempfile.mkdtemp
+        patch.object(PROFILE.tempfile, "mkdtemp", side_effect=lambda **kw: original(dir=self.raw, **kw)).start()
+
+    def execute(self, environment=None, replacements=None, statuses=None, missing=None):
+        outputs = {PROFILE.CHECKOUT: (HEAD + "\n").encode(), PROFILE.PACKAGE_QUERY: package_fixture(),
+                   PROFILE.OWNER_QUERY: owner_fixture(), PROFILE.UNIT_QUERY: unit_fixture()}
+        outputs.update(replacements or {})
+        statuses = statuses or {}
+        calls, children, sizes = [], [], []
+        real_popen, real_discard = subprocess.Popen, PROFILE.RawFiles.discard
+
+        def fake(command, **kwargs):
+            self.assertIn(command, PROFILE.COMMANDS)
+            calls.append(command)
+            self.assertEqual(kwargs["env"], PROFILE.ENVIRONMENT)
+            self.assertEqual(kwargs["stdin"], subprocess.DEVNULL)
+            self.assertEqual(kwargs["cwd"], ROOT)
+            for directory in self.raw.iterdir():
+                self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o700)
+                self.assertEqual({item.name for item in directory.iterdir()}, set(PROFILE.RAW_NAMES))
+                for item in directory.iterdir():
+                    self.assertEqual(stat.S_IMODE(item.stat().st_mode), 0o600)
+            if command == missing:
+                raise FileNotFoundError(SECRET)
+            data = outputs[command]
+            expression = repr(data) if len(data) < 4096 else "b'X' * " + str(len(data))
+            program = ("import sys; sys.stdout.buffer.write(" + expression + "); sys.stdout.flush(); "
+                       "sys.stderr.buffer.write(" + repr(SECRET.encode()) + "); sys.exit(" +
+                       str(statuses.get(command, 0)) + ")")
+            child = real_popen([sys.executable, "-c", program], **kwargs)
+            children.append(child)
+            return child
+
+        def discard(files):
+            sizes.extend(os.fstat(fd).st_size for fd in files.values())
+            real_discard(files)
+
+        stdout, stderr = io.StringIO(), io.StringIO()
+        try:
+            with patch.object(PROFILE.subprocess, "Popen", side_effect=fake), \
+                    patch.object(PROFILE.RawFiles, "discard", discard), redirect_stdout(stdout), redirect_stderr(stderr):
+                result = PROFILE.sample(CI if environment is None else environment)
+        finally:
+            for child in children:
+                child.wait(timeout=2)
+        self.assertEqual(list(self.raw.iterdir()), [])
+        self.assertEqual((stdout.getvalue(), stderr.getvalue()), ("", ""))
+        self.assertTrue(all(size <= PROFILE.LIMIT for size in sizes))
+        self.assertNotIn(SECRET, json.dumps(result))
+        self.assertEqual(result["admission"], "unadmitted")
+        return result, calls
+
+    def test_fixed_commands_bound_identity_hashes_and_no_native_query(self):
+        result, calls = self.execute(environment=CI | {"GITHUB_TOKEN": SECRET, "DOCKER_HOST": SECRET,
+                                                       "GITHUB_ACTOR": SECRET, "CONTAINER_HOST": SECRET})
+        self.assertEqual(calls, list(PROFILE.COMMANDS))
+        self.assertEqual((result["status"], result["reason"]), ("observed", "complete"))
+        self.assertEqual(result["binding"]["checkout_sha"], HEAD)
+        self.assertEqual(result["binding"]["workflow_ref"], PROFILE.WORKFLOW)
+        self.assertEqual(result["observations"]["files"]["helper:invoke-rc.d"]["sha256"],
+                         hashlib.sha256((SECRET + "\n").encode()).hexdigest())
+        self.assertEqual(result["observations"]["units"]["docker.service"]["fragment"], "vendor")
+        self.assertEqual(result["observations"]["trigger_execution_set"], "not_established")
+        for command in PROFILE.COMMANDS:
+            self.assertEqual(command[:4], ("/usr/bin/timeout", "--signal=TERM", "--kill-after=1s", "2s"))
+            self.assertNotIn(command[4], {"/usr/bin/docker", "/usr/bin/podman", "/usr/bin/sudo"})
+            self.assertNotIn("start", command)
+            self.assertNotIn("restart", command)
+            self.assertNotIn("install", command)
+        self.assertIn("--show", PROFILE.PACKAGE_QUERY)
+        self.assertIn("--search", PROFILE.OWNER_QUERY)
+        self.assertIn("show", PROFILE.UNIT_QUERY)
+        self.assertLess(len(json.dumps(result).encode()), PROFILE.LIMIT)
+
+    def test_capture_rejects_nonallowlisted_command_before_any_child(self):
+        with PROFILE.private_outputs() as files, patch.object(PROFILE.subprocess, "Popen") as native:
+            for command in (("docker", "info"), ("podman", "info"), ("sudo", "systemctl", "restart", "docker"),
+                            ("dpkg", "--install", SECRET), ("sh", "-c", SECRET)):
+                with self.assertRaises(PROFILE.Unavailable):
+                    PROFILE.capture(command, files, "command", time.monotonic() + 1)
+            native.assert_not_called()
+        self.assertNotIn("control:docker-ce:arm64:postinst", PROFILE.SOURCE_IDS)
+
+    def test_dispatch_provenance_refuses_before_any_host_query(self):
+        for key in CI:
+            with self.subTest(key=key):
+                result, calls = self.execute(environment=CI | {key: SECRET})
+                self.assertEqual((result["status"], result["reason"]), ("unavailable", "ci_identity_unavailable"))
+                self.assertEqual(calls, [])
+        for update in ({"GITHUB_EVENT_NAME": "pull_request"}, {"GITHUB_REF": "refs/heads/feature"},
+                       {"GITHUB_RUN_ID": "01"}, {"GITHUB_SHA": "b" * 40}):
+            self.assertEqual(self.execute(environment=CI | update)[1], [])
+        result, calls = self.execute(replacements={PROFILE.CHECKOUT: b"b" * 40 + b"\n"})
+        self.assertEqual(result["reason"], "checkout_unavailable")
+        self.assertEqual(calls, [PROFILE.CHECKOUT])
+
+    def test_short_staged_stdout_cannot_become_false_package_absence(self):
+        result, _ = self.execute()
+        self.assertEqual(result["status"], "observed")
+        self.assertTrue(all(record["status"] == "reported"
+                            for record in result["observations"]["packages"].values()))
+        original_read = os.read
+        injected = []
+
+        def short_read(descriptor, count):
+            raw = original_read(descriptor, count)
+            if (count == PROFILE.LIMIT + 1 and stat.S_ISREG(os.fstat(descriptor).st_mode)
+                    and raw == package_fixture()):
+                injected.append(True)
+                return raw.splitlines(keepends=True)[0]
+            return raw
+
+        with patch.object(PROFILE.os, "read", side_effect=short_read):
+            result, _ = self.execute()
+        self.assertEqual(injected, [True])
+        self.assertEqual((result["status"], result["reason"]),
+                         ("unavailable", "collector_io_failure"))
+        self.assertIsNone(result["observations"])
+
+    def test_missing_tools_invalid_and_oversize_command_output_are_explicit(self):
+        result, _ = self.execute(missing=PROFILE.CHECKOUT)
+        self.assertEqual(result["reason"], "tool_unavailable")
+        for data in (b"", b"garbage\n", package_fixture() + package_fixture(), b"foreign\tinstalled\t1\tamd64\n"):
+            result, _ = self.execute(replacements={PROFILE.PACKAGE_QUERY: data})
+            # Empty is a complete absence observation; malformed data is not.
+            self.assertEqual(result["status"], "observed" if data == b"" else "partial")
+        result, _ = self.execute(replacements={PROFILE.UNIT_QUERY: SECRET.encode()})
+        self.assertEqual(result["status"], "partial")
+        result, _ = self.execute(replacements={PROFILE.OWNER_QUERY: b"X" * 65537})
+        self.assertEqual(result["reason"], "output_overflow")
+
+    def test_package_states_arch_aliases_and_owner_records_are_closed(self):
+        raw = b"docker-ce\tdeinstall ok config-files\t5:29.8.1-1~ubuntu.24.04~noble\tamd64\n"
+        records = PROFILE.package_metadata(raw)
+        self.assertEqual(records["docker-ce"]["package_status"], "deinstall ok config-files")
+        self.assertEqual(records["containerd.io"]["status"], "missing")
+        for raw in (b"docker-ce\tinstall ok installed\tsecret/version\tamd64\n",
+                    b"docker-ce\tinstall ok installed\t1\tarm64\n", b"docker-ce\tbad\t1\tamd64\n"):
+            with self.assertRaises(PROFILE.Unavailable):
+                PROFILE.package_metadata(raw)
+        owners = PROFILE.owner_metadata(b"dpkg:amd64: /sbin/start-stop-daemon\nsystemd: /bin/systemctl\n")
+        self.assertEqual(owners["start-stop-daemon"]["packages"], ["dpkg:amd64"])
+        self.assertEqual(owners["systemctl"]["packages"], ["systemd"])
+        with self.assertRaises(PROFILE.Unavailable):
+            PROFILE.owner_metadata(("dpkg: /" + SECRET + "\n").encode())
+
+    def source(self, source_id="helper:invoke-rc.d"):
+        return self.host / PROFILE.SOURCE_PATHS[source_id].lstrip("/")
+
+    def read(self, source_id="helper:invoke-rc.d"):
+        with PROFILE.private_outputs() as files:
+            return PROFILE.read_source(source_id, files, time.monotonic() + 2)
+
+    def test_missing_symlink_fifo_mode_owner_and_oversize_source_outcomes(self):
+        source = self.source()
+        source.unlink()
+        self.assertEqual(self.read(), {"status": "missing"})
+        source.symlink_to("/" + SECRET)
+        self.assertEqual(self.read()["status"], "symlink")
+        source.unlink()
+        os.mkfifo(source, 0o600)
+        with self.assertRaises(PROFILE.Unavailable): self.read()
+        source.unlink()
+        source.write_bytes(b"private")
+        source.chmod(0o666)
+        with self.assertRaises(PROFILE.Unavailable): self.read()
+        source.chmod(0o644)
+        with patch.object(PROFILE, "EXPECTED_UID", os.geteuid() + 1):
+            with self.assertRaises(PROFILE.Unavailable): self.read()
+        with source.open("wb") as stream: stream.truncate(PROFILE.FILE_LIMIT + 1)
+        with self.assertRaises(PROFILE.Unavailable) as caught: self.read()
+        self.assertEqual(caught.exception.reason, "output_overflow")
+
+    def test_masks_override_presence_and_bounded_directory_roster(self):
+        source = self.source("etc:docker.service")
+        source.unlink()
+        source.symlink_to("/dev/null")
+        self.assertEqual(self.read("etc:docker.service")["mask"], True)
+        directory = self.source("etc:docker.service.d")
+        (directory / SECRET).write_bytes(b"private")
+        record = self.read("etc:docker.service.d")
+        self.assertEqual(record["entries"], 1)
+        self.assertNotIn(SECRET, json.dumps(record))
+        for index in range(16): (directory / str(index)).touch()
+        with self.assertRaises(PROFILE.Unavailable) as caught: self.read("etc:docker.service.d")
+        self.assertEqual(caught.exception.reason, "output_overflow")
+
+    def test_source_replacement_during_held_read_is_refused_and_preserved(self):
+        source = self.source()
+        real_read = os.read
+        changed = False
+        def race(descriptor, count):
+            nonlocal changed
+            value = real_read(descriptor, count)
+            if not changed:
+                changed = True
+                source.unlink()
+                source.write_bytes(b"replacement")
+            return value
+        with patch.object(PROFILE.os, "read", side_effect=race):
+            with self.assertRaises(PROFILE.Unavailable) as caught: self.read()
+        self.assertEqual(caught.exception.reason, "custody_failure")
+        self.assertEqual(source.read_bytes(), b"replacement")
+
+    def test_unknown_source_ids_and_standard_os_symlink_are_not_followed(self):
+        with self.assertRaises(PROFILE.Unavailable): self.read("/" + SECRET)
+        etc = self.host / "etc/os-release"
+        etc.parent.mkdir(mode=0o700, exist_ok=True)
+        etc.symlink_to("../usr/lib/os-release")
+        self.assertEqual(self.read("os-release")["distribution"], "ubuntu")
+
+    def test_malformed_os_data_and_symlink_ancestors_are_refused(self):
+        source = self.source("os-release")
+        for raw in (b"", b'ID=""ubuntu""\nVERSION_ID="24.04"\n',
+                    b'ID=ubuntu\nID=ubuntu\nVERSION_ID="24.04"\n', b"\xff"):
+            with self.subTest(raw=raw):
+                source.write_bytes(raw)
+                with self.assertRaises(PROFILE.Unavailable): self.read("os-release")
+        directory = self.host / "usr/sbin"
+        moved = self.host / "usr/held-sbin"
+        directory.rename(moved)
+        directory.symlink_to("held-sbin", target_is_directory=True)
+        with self.assertRaises(PROFILE.Unavailable): self.read()
+        self.assertTrue(directory.is_symlink())
+
+    def test_total_source_budget_cancellation_and_expired_deadline_refuse(self):
+        with PROFILE.private_outputs() as files:
+            files.used = PROFILE.TOTAL_SOURCE
+            with self.assertRaises(PROFILE.Unavailable) as caught:
+                PROFILE.read_source("helper:invoke-rc.d", files, time.monotonic() + 2)
+            self.assertEqual(caught.exception.reason, "output_overflow")
+            with self.assertRaises(PROFILE.Unavailable) as caught:
+                PROFILE.read_source("helper:invoke-rc.d", files, time.monotonic() - 1)
+            self.assertEqual(caught.exception.reason, "timeout")
+            cancellation = PROFILE.Cancellation()
+            cancellation.request(signal.SIGTERM)
+            with self.assertRaises(PROFILE.Cancelled):
+                PROFILE.read_source("helper:invoke-rc.d", files, time.monotonic() + 2, cancellation)
+
+    def test_programming_error_is_nonpositive_and_still_cleans_raw_files(self):
+        with patch.object(PROFILE, "package_metadata", side_effect=TypeError(SECRET)):
+            with self.assertRaisesRegex(TypeError, SECRET):
+                self.execute()
+        self.assertEqual(list(self.raw.iterdir()), [])
+
+    def test_cleanup_failure_is_closed_and_owned_replacements_are_preserved(self):
+        with patch.object(PROFILE.os, "unlink", side_effect=OSError(SECRET)):
+            with self.assertRaises(PROFILE.Unavailable) as caught:
+                with PROFILE.private_outputs():
+                    pass
+        self.assertEqual(caught.exception.reason, "cleanup_failure")
+        self.assertEqual(len(list(self.raw.iterdir())), 1)
+
+    def test_raw_file_replacement_is_not_deleted_or_claimed_clean(self):
+        with self.assertRaises(PROFILE.Unavailable) as caught:
+            with PROFILE.private_outputs() as files:
+                os.unlink("command.stdout", dir_fd=files.held)
+                replacement = os.open("command.stdout", os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600, dir_fd=files.held)
+                os.write(replacement, b"foreign-replacement")
+                os.close(replacement)
+        self.assertEqual(caught.exception.reason, "cleanup_failure")
+        directory = next(self.raw.iterdir())
+        self.assertEqual((directory / "command.stdout").read_bytes(), b"foreign-replacement")
+
+    def test_caller_exception_is_not_operation_cleanup_state(self):
+        try:
+            raise LookupError("unrelated")
+        except LookupError:
+            with PROFILE.private_outputs():
+                pass
+        self.assertEqual(list(self.raw.iterdir()), [])
+
+    def test_main_schema_and_argument_refusal_are_value_free(self):
+        for argv in (["diagnostic", "--path", SECRET], ["diagnostic"]):
+            output, errors = io.StringIO(), io.StringIO()
+            with patch.object(PROFILE.sys, "argv", argv), patch.dict(os.environ, {}, clear=True), \
+                    redirect_stdout(output), redirect_stderr(errors):
+                self.assertEqual(PROFILE.main(), 2)
+            self.assertNotIn(SECRET, output.getvalue() + errors.getvalue())
+            if len(argv) == 1:
+                record = json.loads(output.getvalue())
+                self.assertEqual(record["schema_version"], 1)
+                self.assertEqual(record["purpose"], "hosted_prerequisite_diagnostic")
+                self.assertEqual(record["admission"], "unadmitted")
+
+
+    def test_duplex_stderr_cap_and_hard_deadline_do_not_call_kill_or_communicate(self):
+        real_popen = subprocess.Popen
+        children = []
+        for program, seconds, expected in (("import sys; sys.stderr.buffer.write(b'X'*65537)", 2, "output_overflow"),
+                                           ("import sys; sys.stdout.buffer.write(b'X'*65537); sys.stderr.buffer.write(b'X'*65537)", 2, "output_overflow"),
+                                           ("import time; time.sleep(0.15)", 0.03, "completion_unknown")):
+            def fake(_command, **kwargs):
+                child = real_popen([sys.executable, "-c", program], **kwargs)
+                children.append(child)
+                return child
+            with PROFILE.private_outputs() as files, patch.object(PROFILE.subprocess, "Popen", side_effect=fake):
+                began = time.monotonic()
+                with self.assertRaises(PROFILE.Unavailable) as caught:
+                    PROFILE.capture(PROFILE.CHECKOUT, files, "command", began + seconds)
+                self.assertEqual(caught.exception.reason, expected)
+                self.assertLess(time.monotonic() - began, seconds + 0.25)
+                self.assertTrue(all(os.fstat(fd).st_size <= 65536 for fd in files.values()))
+                if expected == "completion_unknown":
+                    self.assertEqual(dict(files), {})
+                    self.assertIsNone(children[-1].poll())
+            for child in children:
+                child.wait(timeout=1)
+        source = (ROOT / "scripts/native-outer-runtime-profile.py").read_text()
+        for forbidden in (".communicate(", ".kill(", ".terminate(", "shell=True", "shutil.rmtree"):
+            self.assertNotIn(forbidden, source)
+
+
+    def test_active_child_io_failure_interruption_and_signal_cleanup_before_reap(self):
+        real_popen = subprocess.Popen
+        for failure in (OSError(SECRET), KeyboardInterrupt(), TypeError(SECRET), "cancel", "cancel_unknown", "io_unknown"):
+            cancellation = PROFILE.Cancellation()
+            children, reaped, raw_removed = [], [], []
+            with PROFILE.private_outputs() as files:
+                def fake(_command, **kwargs):
+                    child = real_popen([sys.executable, "-c", "import time; time.sleep(0.15)"], **kwargs)
+                    children.append(child)
+                    real_wait = child.wait
+
+                    def wait(**options):
+                        raw_removed.append(not files and not os.listdir(files.held))
+                        result = real_wait(**options)
+                        reaped.append(True)
+                        return result
+
+                    child.wait = wait
+                    return child
+
+                def select(_timeout):
+                    if failure in ("cancel", "cancel_unknown"):
+                        os.write(files["command.stdout"], SECRET.encode())
+                        os.kill(os.getpid(), signal.SIGTERM)
+                        return []
+                    if failure == "io_unknown":
+                        raise OSError(SECRET)
+                    raise failure
+
+                with patch.object(PROFILE.subprocess, "Popen", side_effect=fake), \
+                     patch.object(PROFILE.selectors.DefaultSelector, "select", side_effect=select):
+                    expected = PROFILE.Cancelled if failure in ("cancel", "cancel_unknown") else (PROFILE.Unavailable if isinstance(failure, OSError) or failure == "io_unknown" else type(failure))
+                    previous = signal.signal(signal.SIGTERM, cancellation.request)
+                    try:
+                        with self.assertRaises(expected) as caught:
+                            PROFILE.capture(PROFILE.CHECKOUT, files, "command", time.monotonic() + (0.03 if failure in ("cancel_unknown", "io_unknown") else 1), cancellation)
+                    finally:
+                        signal.signal(signal.SIGTERM, previous)
+                self.assertEqual(dict(files), {})
+                self.assertTrue(raw_removed and all(raw_removed))
+                if failure in ("cancel_unknown", "io_unknown"):
+                    self.assertEqual(caught.exception.reason, "cancelled_completion_unknown" if failure == "cancel_unknown" else "completion_unknown")
+                    self.assertFalse(reaped)
+                    self.assertIsNone(children[0].returncode)
+                    # Test-fixture cleanup only, not evidence that capture reaped it.
+                    children[0].wait(timeout=1)
+                else:
+                    self.assertTrue(reaped)
+                    self.assertIsNotNone(children[0].returncode)
+
+
+    def test_cancellation_main_is_closed_nonzero_and_restores_signal_handlers(self):
+        for number in (signal.SIGTERM, signal.SIGINT):
+            previous = signal.getsignal(number)
+            output = io.StringIO()
+
+            def cancelled(_environment, cancellation):
+                os.kill(os.getpid(), number)
+                cancellation.check()
+
+            with patch.object(PROFILE, "sample", side_effect=cancelled), \
+                 patch.object(PROFILE.sys, "argv", ["native-outer-runtime-profile.py"]), redirect_stdout(output):
+                self.assertEqual(PROFILE.main(), 128 + number)
+            self.assertEqual(json.loads(output.getvalue())["status"], "cancelled")
+            self.assertNotIn(SECRET, output.getvalue())
+            self.assertEqual(signal.getsignal(number), previous)
+
+
+
+if __name__ == "__main__":
+    unittest.main()

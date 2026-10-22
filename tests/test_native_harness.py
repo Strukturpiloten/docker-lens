@@ -300,7 +300,7 @@ else exit 50; fi
                        FAKE_OUTER_ID="a" * 64, FAKE_SIDECAR_ID="b" * 64)
             for mode in ("success", "container_leftover", "network_error"):
                 with self.subTest(mode=mode), tempfile.TemporaryDirectory(
-                    prefix="dockerlens-native.", dir="/tmp",
+                    prefix="dockerlens-native.", dir=env.get("TMPDIR") or "/tmp",
                 ) as temporary:
                     for role in ("container", "sidecar", "network", "volume"):
                         (root / role).touch()

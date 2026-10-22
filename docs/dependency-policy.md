@@ -1,5 +1,23 @@
 # Dependency and pin policy
 
+The [hosted prerequisite diagnostic](hosted-prerequisite-diagnostic.md) adds no
+software installation, product dependency or operational version pin. Its sole
+consumer is Check's main-only diagnostic job; normal PR/main validation, native
+dispatch, release validation and the other workspace products retain their gates.
+The new Action occurrences reuse the existing full checkout v4.2.2 and
+upload-artifact v4.6.2 SHAs and remain uniquely extracted by the enabled GitHub
+Actions manager. The two regex-manager paths, five native-image extractions,
+grouping/manual approvals, Cargo and toolchain ownership are unchanged; dedicated
+policy regressions verify no duplicate or moved extraction, so Renovate needs no
+configuration edit. The `Required CI` display correction changes no job identity
+or software pin. Runner Python/coreutils/dpkg/systemd follow the existing mutable
+Ubuntu 24.04 runner unavailable-integrity/manual-review boundary. Observed
+installed package versions and hash-only helper/control/unit metadata are not
+new pins, authenticated publisher integrity or permission to update/install them.
+No third-party source is redistributed; copyright hashes and fixed provenance
+references support later independent source/license review. Historical evidence
+is not rewritten or added to automatic update streams.
+
 The decoder pins serde_json 1.0.151 for pure Engine JSON parsing and BoxFerry's
 reviewed consumer floor. The bounded Unix-socket connector pins socket2 0.6.5
 for connect_timeout. Cargo.lock
