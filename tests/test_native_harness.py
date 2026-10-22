@@ -2180,6 +2180,14 @@ esac
 
     def test_native_curl_readiness_sites_keep_exact_argv_counts_and_final_fallback(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text()
+        diagnostic_start = source.index("\nouter_guest_http_failure_diagnostic() {") + 1
+        diagnostic_end = source.index("\n}\n", diagnostic_start) + 3
+        diagnostic = source[diagnostic_start:diagnostic_end]
+        source = source[:diagnostic_start] + source[diagnostic_end:]
+        self.assertEqual(len(re.findall(r"\bcurl\b", diagnostic)), 1)
+        self.assertIn('native_outer_command 3 exec "$outer_container_id" /usr/bin/curl --disable -sS', diagnostic)
+        self.assertIn("--noproxy '*' --retry 0 --proto '=http' --max-time 2 --request GET", diagnostic)
+        self.assertIn('--output /dev/null --write-out \'%{http_code}\' "http://$sidecar_ip:18084/"', diagnostic)
         self.assertEqual(len(re.findall(r"\bcurl\b", source)), 4)  # Preflight and three sites.
         readiness = "deadline=$((SECONDS + 360))" + source.split(
             "deadline=$((SECONDS + 360))", 1

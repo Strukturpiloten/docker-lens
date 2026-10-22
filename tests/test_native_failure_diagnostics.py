@@ -1,5 +1,6 @@
 """Hermetic diagnostic-only controls: no runtime binary can be resolved."""
 import json
+import os
 from pathlib import Path
 import signal
 import subprocess
@@ -56,6 +57,149 @@ class FailureDiagnosticsTests(unittest.TestCase):
         return subprocess.run(["/bin/bash", "-c", body, "closed-control", *args],
                               env=self.env | (changes or {}), capture_output=True,
                               text=True, timeout=timeout)
+
+    def guest_http_body(self, *, privileged=False, remaining=9, watchdog=True, invoke=True):
+        vector = [str(self.client)]
+        if privileged:
+            self.tool(self.tools / "sudo", "import os,sys\n"
+                      "assert sys.argv[1]=='-n'\nos.execvp(sys.argv[2],sys.argv[2:])\n")
+            vector = ["sudo", "-n", *vector]
+        body = ("set -euo pipefail\n" + definition("native_outer_command", RUNTIME)
+                + definition("outer_guest_http_failure_diagnostic")
+                + "native_outer_cmd=(" + " ".join(repr(item) for item in vector) + ")\n"
+                + "native_outer_engine=docker\nexpected_mode=rootless\nmain_pid=$$\n"
+                + ("watchdog_pid=$$\n" if watchdog else "watchdog_pid=\n")
+                + "outer_container_id=" + "a" * 64 + "\nsidecar_ip=10.23.7.9\n"
+                + f"SECONDS={1800 - remaining}\n"
+                + "trap 'exit 130' INT\ntrap 'exit 143' TERM\n")
+        if invoke:
+            body += "outer_guest_http_failure_diagnostic || true\nexit 17\n"
+        return body
+
+    def test_guest_http_status_only_fixed_direct_client_and_unavailable_inputs(self):
+        expected = ["exec", "a" * 64, "/usr/bin/curl", "--disable", "-sS", "--noproxy", "*",
+                    "--retry", "0", "--proto", "=http", "--max-time", "2", "--request", "GET",
+                    "--output", "/dev/null", "--write-out", "%{http_code}", "http://10.23.7.9:18084/"]
+        for stdout, status, result_status in (
+            ("200", 0, "http_200"), ("201", 0, "http_other"), ("404", 0, "http_other"),
+            ("599", 0, "http_other"), ("", 127, "unavailable"), ("200", 7, "unavailable"),
+            ("200", 124, "unavailable"), ("000", 0, "unavailable"), ("600", 0, "unavailable"),
+            ("200\n", 0, "unavailable"), ("200200", 0, "unavailable"), (CANARY, 0, "unavailable"),
+            ("200x", 0, "unavailable"), ("2" * 100000, 0, "unavailable"),
+        ):
+            with self.subTest(status=status, output_class=result_status):
+                self.client_reply(stdout, status, CANARY)
+                result = self.shell(self.guest_http_body(privileged=True), timeout=9)
+                self.assertEqual(result.returncode, 17)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(result.stderr,
+                                 f"DOCKERLENS_NATIVE_OUTER_GUEST_HTTP: status={result_status}\n")
+                self.assertEqual(json.loads(self.trace.read_text()), expected)
+                self.assertNotIn(CANARY, result.stdout + result.stderr)
+
+    def test_guest_http_late_budget_missing_watchdog_and_boottime_refuse_positive(self):
+        self.client_reply("200")
+        for body in (self.guest_http_body(remaining=8), self.guest_http_body(watchdog=False)):
+            self.trace.unlink(missing_ok=True)
+            result = self.shell(body)
+            self.assertEqual(result.returncode, 17)
+            self.assertEqual(result.stderr, "DOCKERLENS_NATIVE_OUTER_GUEST_HTTP: status=unavailable\n")
+            self.assertFalse(self.trace.exists())
+        for body in (self.guest_http_body().replace("expected_mode=rootless", "expected_mode=rootful"),
+                     self.guest_http_body().replace("native_outer_engine=docker", "native_outer_engine=podman")):
+            self.trace.unlink(missing_ok=True)
+            result = self.shell(body)
+            self.assertEqual((result.returncode, result.stderr), (17, ""))
+            self.assertFalse(self.trace.exists())
+        for ended in ("107.98", "107.99", "99.99"):
+            body = self.guest_http_body(invoke=False)
+            body += ("read() { case $2 in started) printf -v started '%s' 100.00 ;; "
+                     f"ended) printf -v ended '%s' {ended} ;; esac; }}\n"
+                     "outer_guest_http_failure_diagnostic || true\nexit 17\n")
+            result = self.shell(body)
+            self.assertEqual(result.returncode, 17)
+            expected = "http_200" if ended == "107.98" else "unavailable"
+            self.assertEqual(result.stderr, f"DOCKERLENS_NATIVE_OUTER_GUEST_HTTP: status={expected}\n")
+
+    def test_guest_http_original_native_status_and_cancellation_skip_contact(self):
+        start = SOURCE.index("internal_network_status=0\n")
+        end = SOURCE.index('"$(dirname "$0")/run-exact-native-test.sh" native_volume ', start)
+        wrapper = SOURCE[start:end]
+        fake_native = self.private / "fake-native-test"
+        self.client_reply("200")
+        for native_status in (0, 17, 130, 143):
+            self.trace.unlink(missing_ok=True)
+            self.tool(fake_native, f"raise SystemExit({native_status})\n")
+            body = self.guest_http_body(invoke=False)
+            body += wrapper.replace('"$(dirname "$0")/run-exact-native-test.sh"', repr(str(fake_native)))
+            body += "exit 0\n"
+            result = self.shell(body)
+            self.assertEqual(result.returncode, native_status)
+            self.assertEqual(self.trace.exists(), native_status == 17)
+            self.assertEqual(result.stderr,
+                             "DOCKERLENS_NATIVE_OUTER_GUEST_HTTP: status=http_200\n" if native_status == 17 else "")
+        # Explicit child cancellation exits through the existing cleanup owner.
+        for status in (130, 143):
+            self.client_reply("200", status)
+            result = self.shell(self.guest_http_body())
+            self.assertEqual(result.returncode, status)
+            self.assertNotIn("status=http_200", result.stderr)
+
+    def test_guest_http_child_cancellation_exits_cleanup_with_inherited_ignored_sigint(self):
+        receipt = self.private / "guest-http-cleanup-status"
+        for status in (130, 143):
+            receipt.unlink(missing_ok=True)
+            self.client_reply("200", status)
+            body = self.guest_http_body(invoke=False)
+            body += ("trap 'cleanup_status=$?; printf \"%s\\n\" \"$cleanup_status\" > \"$CLEANUP_RECEIPT\"' EXIT\n"
+                     "outer_guest_http_failure_diagnostic || true\n"
+                     "printf 'unexpected-resume\\n' >&2\nexit 17\n")
+            # An asynchronous Bash gate passes ignored SIGINT across exec.
+            # The inner trap cannot restore it; cancellation must not rely on
+            # delivering INT to self or a return swallowed by the || caller.
+            result = subprocess.run(["/bin/bash", "-c", "trap '' INT; exec /bin/bash -c \"$1\"",
+                                     "ignored-int-driver", body],
+                                    env=self.env | {"CLEANUP_RECEIPT": str(receipt)},
+                                    capture_output=True, text=True, timeout=4)
+            self.assertEqual(result.returncode, status)
+            self.assertEqual(result.stdout, "")
+            self.assertEqual(result.stderr, "")
+            self.assertEqual(receipt.read_text(), f"{status}\n")
+            self.assertNotIn("status=http_200", result.stderr)
+            self.assertNotIn("unexpected-resume", result.stderr)
+
+    def test_guest_http_direct_term_resistant_client_has_finite_eof_and_cancellation(self):
+        receipt = self.private / "guest-client-pid"
+        group = self.private / "guest-client-group"
+        self.tool(self.client, "import json,os,signal,sys,time\nfrom pathlib import Path\n"
+                  "signal.signal(signal.SIGTERM,signal.SIG_IGN)\n"
+                  "receipt=Path(os.environ['PIDS']);pending=receipt.with_suffix('.pending')\n"
+                  "pending.write_text(json.dumps(os.getpid()));pending.rename(receipt)\n"
+                  "Path(os.environ['PGROUP']).write_text(str(os.getpgrp()))\n"
+                  "sys.stdout.write('200');sys.stdout.flush()\ntime.sleep(60)\n")
+        for mode, expected in (("stall", 17), ("cancel", 143)):
+            receipt.unlink(missing_ok=True)
+            started = time.monotonic()
+            result = subprocess.run([sys.executable, "-c", self.group_driver(), mode,
+                                     str(receipt), json.dumps(["/bin/bash", "-c", self.guest_http_body(privileged=True)])],
+                                    env=self.env | {"PIDS": str(receipt), "PGROUP": str(group)},
+                                    capture_output=True, text=True, timeout=11)
+            self.assertEqual(result.returncode, 0, "closed direct-client lifetime control failed")
+            observation = json.loads(result.stdout)
+            self.assertEqual(observation["status"], expected)
+            self.assertNotIn("status=http_200", observation["stderr"])
+            self.assertLess(time.monotonic() - started, 8)
+            self.assertGreaterEqual(time.monotonic() - started, 4.5)
+            with self.assertRaises(ProcessLookupError):
+                os.killpg(int(group.read_text()), 0)
+        # Cancellation before the observation starts never launches the client.
+        self.trace.unlink(missing_ok=True)
+        receipt.unlink(missing_ok=True)
+        body = self.guest_http_body(invoke=False) + 'kill -TERM "$main_pid"\nouter_guest_http_failure_diagnostic\n'
+        result = self.shell(body)
+        self.assertEqual(result.returncode, 143)
+        self.assertFalse(self.trace.exists())
+        self.assertFalse(receipt.exists())
 
     def attachment_body(self, privileged=False):
         vector = [str(self.client), "--config", "/held/config", "--host", "unix:///held/socket"]

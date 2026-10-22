@@ -1320,6 +1320,65 @@ export NATIVE_TMPFS_EFFECT_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 if [[ $EUID == 0 ]]; then export NATIVE_PODMAN_USE_SUDO=0; else export NATIVE_PODMAN_USE_SUDO=1; fi
 export NATIVE_OUTER_ENGINE="$native_outer_engine" NATIVE_OUTER_RUN_DIRECTORY="$run_dir"
 
+outer_guest_http_failure_diagnostic() {
+  [[ ${native_outer_engine:-} == docker && ${expected_mode:-} == rootless ]] || return 0
+  local unavailable='DOCKERLENS_NATIVE_OUTER_GUEST_HTTP: status=unavailable'
+  local remaining=$((1800 - SECONDS)) started ended ignored started_cs ended_cs result diagnostic_status=0
+  # Admit the seven-second timer envelope plus two seconds of lane margin.
+  # Pre-timer sudo startup remains the existing privilege boundary, not a new
+  # wall-clock guarantee. This is NOT a protected cleanup reserve or renewal.
+  if (( remaining < 9 )) || [[ -z ${watchdog_pid:-} ]] || ! kill -0 "$watchdog_pid" 2>/dev/null ||
+    [[ ! ${outer_container_id:-} =~ ^[0-9a-f]{64}$ ||
+       ! ${sidecar_ip:-} =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+    echo "$unavailable" >&2
+    return 0
+  fi
+  read -r started ignored < /proc/uptime || { echo "$unavailable" >&2; return 0; }
+  [[ $started =~ ^[0-9]+\.[0-9]{2}$ ]] || { echo "$unavailable" >&2; return 0; }
+  started_cs=${started/./}
+  result=$(
+    set +e
+    # The already-selected DIRECT client has no attach/custody helper. Its
+    # existing privilege-aware owner bounds TERM-resistant clients at 3+2s.
+    native_outer_command 3 exec "$outer_container_id" /usr/bin/curl --disable -sS \
+      --noproxy '*' --retry 0 --proto '=http' --max-time 2 --request GET \
+      --output /dev/null --write-out '%{http_code}' "http://$sidecar_ip:18084/" 2>/dev/null |
+      timeout --signal=TERM --kill-after=1s 6s python3 -I -S -c '
+import os
+raw = b""
+while len(raw) < 4:
+    part = os.read(0, 4 - len(raw))
+    if not part:
+        break
+    raw += part
+if len(raw) != 3 or raw[:1] not in b"12345" or not raw.isdigit():
+    raise SystemExit(1)
+print("http_200" if raw == b"200" else "http_other")
+' 2>/dev/null
+    command_statuses=("${PIPESTATUS[@]}")
+    for command_status in "${command_statuses[@]}"; do
+      case $command_status in 130 | 143) exit "$command_status" ;; esac
+    done
+    (( command_statuses[0] == 0 && command_statuses[1] == 0 ))
+  ) 2>/dev/null || diagnostic_status=$?
+  # This function runs in the coordinator's main shell after the pipeline has
+  # completed. Exit through its existing EXIT cleanup owner, even when an
+  # asynchronous caller inherited ignored SIGINT; never resume via || true.
+  case $diagnostic_status in 130 | 143) exit "$diagnostic_status" ;; esac
+  read -r ended ignored < /proc/uptime || { echo "$unavailable" >&2; return 0; }
+  [[ $ended =~ ^[0-9]+\.[0-9]{2}$ ]] || { echo "$unavailable" >&2; return 0; }
+  ended_cs=${ended/./}
+  if (( diagnostic_status != 0 || ended_cs < started_cs || ended_cs - started_cs >= 799 || SECONDS >= 1800 )) ||
+      ! kill -0 "$watchdog_pid" 2>/dev/null; then
+    echo "$unavailable" >&2
+  elif [[ $result == http_200 || $result == http_other ]]; then
+    printf 'DOCKERLENS_NATIVE_OUTER_GUEST_HTTP: status=%s\n' "$result" >&2
+  else
+    echo "$unavailable" >&2
+  fi
+  return 0
+}
+
 port_start_failure_diagnostic() {
   if [[ ${native_outer_engine:-podman} == docker ]]; then
     # Docker's bounded json-file logger cannot register the existing k8s-file
@@ -1369,7 +1428,15 @@ port_start_failure_diagnostic() {
 "$(dirname "$0")/run-exact-native-test.sh" native_selection live_network_membership_matches_engine
 "$(dirname "$0")/run-exact-native-test.sh" native_target live_target_render_matches_engine
 "$(dirname "$0")/run-exact-native-test.sh" native_network live_network_render_matches_engine
+internal_network_status=0
+{
 "$(dirname "$0")/run-exact-native-test.sh" native_network live_internal_network_blocks_external_egress
+} || internal_network_status=$?
+if (( internal_network_status != 0 )); then
+  case $internal_network_status in 130 | 143) exit "$internal_network_status" ;; esac
+  outer_guest_http_failure_diagnostic || true
+  exit "$internal_network_status"
+fi
 "$(dirname "$0")/run-exact-native-test.sh" native_volume live_existing_volume_prerequisite_matches_engine
 "$(dirname "$0")/run-exact-native-test.sh" native_volume_label live_created_volume_labels_match_engine
 "$(dirname "$0")/run-exact-native-test.sh" native_identity live_container_process_identity_matches_engine

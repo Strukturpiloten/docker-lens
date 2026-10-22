@@ -158,6 +158,48 @@ rather than replacing the original proof failure. This is a limited snapshot
 of declared default-bridge subnet membership, not a kernel-route observation,
 application compatibility proof, or established timeout cause. Neither true
 nor false authorizes changing IPAM, routes, firewall policy or the fixture.
+
+After that exact internal-network test returns nonzero, the shell coordinator
+may make one status-only guest-to-sidecar GET, only for selected outer Docker
+and the already-verified rootless lane. Original cancellation statuses 130/143
+bypass this observation. It uses the existing selected `native_outer_command`
+directly, the held creation-bound daemon ID and held sidecar IPv4/port 18084/root
+path. There is no attach helper, new inspection, endpoint, resource, retry,
+namespace entry, installation or fallback. Fixed guest `/usr/bin/curl` disables
+configuration/proxy/retry/redirect behavior, has a two-second transfer limit,
+discards the response body and emits only its HTTP status. Missing curl and any
+nonzero, malformed, multiline or over-cap result remain unavailable.
+
+The direct client's existing privilege-aware timer has a three-second TERM plus
+two-second kill envelope. A separate six-second TERM plus one-second kill owner
+bounds the no-child host reader, which reads at most four bytes and emits only
+a closed category. These are timer envelopes, not a universal seven-second wall
+or process-death guarantee: pre-timer sudo/PAM startup remains the existing
+admitted direct-client privilege boundary. No new privilege supervisor is added.
+Collection requires an alive original watchdog and at least nine seconds of the
+original 1800-second lane budget. A positive observation requires the whole
+pipeline to complete within the conservative BOOTTIME interval of less than 799
+centiseconds, with the watchdog and lane budget still valid. Late or uncertain
+completion is unavailable; existing lane/job disposal obligations remain.
+The two seconds of lane margin are not a protected cleanup reserve. Rust's
+180-second invocation, 90-second cleanup reservation and default-bridge read's
+98-second admission are unchanged and are not borrowed or renewed here.
+
+Only `DOCKERLENS_NATIVE_OUTER_GUEST_HTTP: status=http_200|http_other|unavailable`
+is printed. HTTP 200 is a later status snapshot, not an exact-body proof,
+route/RootlessKit correctness, established timeout cause, lifecycle/cleanup proof
+or native acceptance. The original nonzero test status is retained, unless
+explicit child cancellation exits through the coordinator's existing EXIT
+cleanup owner. It does not depend on self-signalling SIGINT, which may be
+inherited as ignored from an asynchronous gate, and cannot resume via `|| true`.
+
+Check/main, trusted native dispatch and release validation all consume the same
+canonical nineteen-test harness and inherit this failure-only observation. No
+image, Action, tool or dependency pin/extraction path changes; the existing Cargo,
+GitHub Actions and five-image Renovate ownership/grouping/manual review remain
+unchanged. Guest curl is observation-only image software and unavailable if
+absent, not an installed operational dependency. Other workspace products and
+the shared runtime bridge protocol receive no change from this private diagnostic.
 No extra startup-stage grammar is inferred from generic permission errors.
 The separately bounded [failure-only kernel window](native-rootless-kernel-window.md)
 may read the current-boot journal only after the exact hosted rootless self-reexec

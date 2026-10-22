@@ -27,6 +27,17 @@ the [kernel window](native-rootless-kernel-window.md) and the owned inner Engine
 [default-bridge subnet observation](native-outer-runtime.md) preserve original
 failures, fixed budgets and cleanup. Neither diagnostic establishes a cause or
 replaces fresh exact-candidate four-lane validation.
+The coordinator's optional post-failure guest HTTP-status observation additionally
+has synthetic fixed-argv, status/cap, lane-budget, BOOTTIME, cancellation and
+direct-client EOF controls. It preserves the original failed test status and
+bypasses original cancellation. Explicit child cancellation exits through the
+existing EXIT cleanup owner even when SIGINT was inherited as ignored from an
+asynchronous gate; synthetic controls verify its cleanup receipt and no resumed
+test progression. Its timer envelopes reuse the admitted direct
+client's privilege boundary: they do not bound pre-timer sudo/PAM startup or
+prove universal process disposal. A completed HTTP status is not an exact body,
+cause, route, cleanup or native-acceptance proof; all original complete/native
+gates and lane/job disposal obligations remain unchanged.
 
 The separate [hosted prerequisite diagnostic](hosted-prerequisite-diagnostic.md)
 is a main-only no-input dispatch in Check. It checks out the dispatch's immutable
