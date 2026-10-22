@@ -120,19 +120,62 @@ not rule out other held networks, the default bridge, routes or firewall issues,
 and never asserts whole outer/inner CIDR disjointness or a timeout cause.
 The exact rendered requests, CLI oracles and default IPAM remain unchanged;
 these observations do not authorize a network-pool or fixture-routing repair.
+Only at that failed ordinary-control wget boundary, with its explicit held
+sidecar/API/socket/client context, one optional read may additionally inspect
+the owned inner Engine's exact `/v<held-api>/networks/bridge`. It additionally
+requires the held observed daemon mode to be rootless and the canonical explicit
+`NATIVE_OUTER_ENGINE` selector to be exactly `docker`. Rootful Docker, local
+Podman, missing selectors and unrelated failures add no read; neither an image
+label nor an Engine version substitutes for either fact. The optional
+default-bridge subcontext is absent when the observed API is missing; no API
+default or new assertion is introduced, and existing internal/control subnet
+observations are retained independently. The general
+executor allowlist remains unchanged; no other name, method, path, endpoint,
+listing, retry or resource is introduced. A response must identify `Name=bridge`,
+`Driver=bridge` and a canonical native ID. Its complete IPAM subnet list uses the
+same strict membership helper: malformed, missing, partial or IPv6-only evidence
+is unknown, not a salvaged positive match. The complete JSON document rejects
+duplicate decoded keys at every depth, including ignored objects and escaped-key
+collisions, before membership can be reported. Serde supplies JSON parsing;
+its normal recursion and end-of-input checks remain enabled. The closed failure-only
+`DOCKERLENS_NATIVE_DEFAULT_BRIDGE_SUBNET_DIAG` reports
+`sidecar_on_default_bridge_subnet=true|false`, or `unknown` with
+`reason=unavailable|budget_exhausted`. No address, ID, reply, error text or socket
+path is printed or persisted. The failure sanitizer accepts only those complete
+fixed lines; the original wget failure, assertions and exact native summary
+checks remain authoritative even when this optional collector fails.
+
+The optional read rechecks the original 180-second proof deadline **after**
+wget. Eight owned liabilities reserve 90 seconds for existing cleanup, so less
+than 98 seconds remaining skips the read before launch. Missing, expired or
+malformed deadline evidence also skips it. There is no deadline renewal or
+cleanup-reserve reduction. The request has a six-second curl/TERM deadline,
+one-second kill allowance inside the eight-second operation reservation, and a
+64 KiB total response cap. Its foreground timeout remains in the original
+cancellation group; no new cancellation handler is installed. Stderr is
+discarded, and spawn/read/wait/join/status/framing errors return unavailable
+rather than replacing the original proof failure. This is a limited snapshot
+of declared default-bridge subnet membership, not a kernel-route observation,
+application compatibility proof, or established timeout cause. Neither true
+nor false authorizes changing IPAM, routes, firewall policy or the fixture.
 No extra startup-stage grammar is inferred from generic permission errors.
-Optional passive host/kernel/userns facts remain unavailable: bounded byte reads
-alone would not enforce a one-second total deadline, and this change does not
-add a supervisor or privilege/protocol seam to obtain them. There are no host
-reads, active canaries, profile loads, sysctl changes or daemon restarts.
+The separately bounded [failure-only kernel window](native-rootless-kernel-window.md)
+may read the current-boot journal only after the exact hosted rootless self-reexec
+failure. It preserves the original lane failure and reports job-window evidence,
+not exact-process attribution or cause. Other passive per-process host/userns
+facts remain unavailable. There are no active canaries, profile loads, sysctl
+changes or daemon restarts.
 
 This diagnostic-only change is confined to DockerLens's harness/tests and failure
 sanitizer. It does not change the shared runtime bridge protocol consumed by
 BoxFerry, product APIs, workflow definitions or runtime acceptance. Existing
 Renovate ownership remains unchanged: the five image assignments and their
 comments stay in `scripts/native-conformance.sh`, matched by the existing
-`renovate.json` regex manager and native-image review group. No package, pin,
-extraction path, manager or grouping is added, moved or changed.
+`renovate.json` regex manager and native-image review group. The only dependency
+addition is the already-locked dev-only Serde declaration described in
+[dependency policy](dependency-policy.md); its existing Cargo manager remains
+the unique owner. No operational pin, extraction path, manager or grouping is
+added, moved or changed.
 
 Cleanup remains unchanged: its existing
 closed stage/status labels do not identify the stderr cause. A collector was

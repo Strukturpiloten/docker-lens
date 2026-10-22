@@ -2,6 +2,8 @@
 
 use std::path::Path;
 
+pub(crate) const PODMAN_ENGINE: &str = "podman";
+
 const CONTEXT: &[&str] = &[
     "GITHUB_ACTIONS",
     "RUNNER_ENVIRONMENT",
@@ -41,9 +43,9 @@ fn context_env_with(mut lookup: impl FnMut(&str) -> Option<String>) -> Vec<Strin
 }
 
 fn prefix_with(mut lookup: impl FnMut(&str) -> Option<String>) -> Vec<String> {
-    let engine = lookup("NATIVE_OUTER_ENGINE").unwrap_or_else(|| "podman".into());
+    let engine = lookup("NATIVE_OUTER_ENGINE").unwrap_or_else(|| PODMAN_ENGINE.into());
     assert!(
-        matches!(engine.as_str(), "podman" | "docker"),
+        matches!(engine.as_str(), PODMAN_ENGINE | "docker"),
         "closed outer engine"
     );
     let directory = lookup("NATIVE_OUTER_RUN_DIRECTORY")

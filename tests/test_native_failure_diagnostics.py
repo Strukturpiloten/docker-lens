@@ -129,6 +129,7 @@ class FailureDiagnosticsTests(unittest.TestCase):
                       f"if 'inspect' in sys.argv: sys.stdout.write({reply!r})\n"
                       "else: sys.stderr.write('ERROR: permission denied\\n')\n")
             body = ("set -euo pipefail\n" + definition("native_outer_command", RUNTIME)
+                    + definition("rootless_kernel_window_diagnostic")
                     + definition("diagnose_native_startup") + definition("validated_outer_ipv4")
                     + f"native_outer_cmd=({str(self.client)!r})\n"
                     + "native_outer_engine=docker\nouter_network=owned\ncontainer=exact-owned-name\nlane=upstream-rootless\n"
@@ -190,6 +191,7 @@ class FailureDiagnosticsTests(unittest.TestCase):
                       "with Path(os.environ['SUDO_TRACE']).open('a') as trace: trace.write(json.dumps(sys.argv[1:])+'\\n')\n"
                       "assert sys.argv[1]=='-n'\nos.execvp(sys.argv[2],sys.argv[2:])\n")
         return ("set -euo pipefail\n" + definition("native_outer_command", RUNTIME)
+                + definition("rootless_kernel_window_diagnostic")
                 + definition("diagnose_native_startup")
                 + "native_outer_cmd=(" + " ".join(repr(item) for item in vector) + ")\n"
                 + 'podman_cmd=("${native_outer_cmd[@]}")\n'

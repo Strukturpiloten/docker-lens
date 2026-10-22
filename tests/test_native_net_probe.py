@@ -4,6 +4,7 @@ import importlib.util
 import contextlib
 import errno
 import io
+import json
 import socket
 import os
 import shutil
@@ -15,7 +16,6 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
-
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts/native-net-probe.py"
 SPEC = importlib.util.spec_from_file_location("dockerlens_native_net_probe", SCRIPT)
@@ -143,7 +143,7 @@ import os
 import sys
 import time
 with open(os.environ['TEST_PIDFILE'], 'w') as pidfile:
-    pidfile.write(str(os.getpid()))
+    pidfile.write('[' + str(os.getpid()) + ']')
 mode = os.environ['TEST_INSPECT_MODE']
 if mode == 'normal':
     sys.stdout.write(os.environ['TEST_INSPECT_LINE'])
@@ -177,22 +177,33 @@ else:
                         with self.assertRaises(PROBE.ProbeFailure):
                             PROBE.inspect(self.outer, self.run_id, "podman", directory)
 
+    @unittest.skipUnless(sys.platform == "linux", "Linux process-group reaping control")
     def test_inspect_kills_and_reaps_oversized_or_stalled_process(self) -> None:
+        import test_native_net_probe_bridge as group_controls
+
+        # Reuse the isolated subreaper fixture: SIGKILL can orphan the dead fake
+        # client before PID1 reaps it. The driver adopts/reaps that exact child,
+        # and a live child fails before any fallback teardown can make it absent.
+        driver = group_controls.NamespaceBridgeTests.group_driver()
         with tempfile.TemporaryDirectory() as directory:
             self.fake_podman(Path(directory))
             pidfile = Path(directory) / "pid"
             for mode in ("overflow", "timeout"):
+                pidfile.unlink(missing_ok=True)
                 with self.subTest(mode=mode), mock.patch.dict(os.environ, {
                     "PATH": directory,
                     "TEST_PIDFILE": str(pidfile), "TEST_INSPECT_MODE": mode,
                     "TEST_INSPECT_LINE": "",
                 }, clear=True):
                     start = time.monotonic()
-                    with self.assertRaises(PROBE.ProbeFailure):
-                        PROBE.inspect(self.outer, self.run_id, "podman", directory)
+                    result = subprocess.run(
+                        [sys.executable, "-c", driver, str(SCRIPT), "podman",
+                         directory, str(pidfile), mode],
+                        capture_output=True, text=True, timeout=4,
+                    )
+                    self.assertEqual(result.returncode, 0, "closed owned-client reaping control failed")
+                    self.assertEqual(json.loads(result.stdout), {"category": "inspect", "reaped": 1})
                     self.assertLess(time.monotonic() - start, 3)
-                    with self.assertRaises(ProcessLookupError):
-                        os.kill(int(pidfile.read_text()), 0)
 
     def test_identity_token_is_closed_and_rejects_wrong_pid_or_source(self) -> None:
         token = PROBE.Identity(*self.expected, 777).token()

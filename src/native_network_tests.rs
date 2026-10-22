@@ -802,7 +802,7 @@ struct InternalProofResources {
     run_id: String,
     containers: Vec<String>,
     networks: Vec<String>,
-    subnet_diagnostics: Option<SidecarSubnetDiagnostics>,
+    subnet_diagnostics: Option<ProofSubnetContext>,
 }
 
 impl InternalProofResources {
@@ -1159,6 +1159,789 @@ impl SidecarSubnetDiagnostics {
     }
 }
 
+// Held only around the ordinary control wget, never a general request capability.
+struct ProofSubnetContext {
+    observations: SidecarSubnetDiagnostics,
+    default_bridge: Option<DefaultBridgeContext>,
+    address: Ipv4Addr,
+    client: String,
+}
+
+struct DefaultBridgeContext {
+    api: crate::version::ApiVersion,
+    socket: PathBuf,
+}
+
+const DEFAULT_BRIDGE_RESPONSE_CAP: usize = 64 * 1024;
+
+fn default_bridge_eligible(mode: DaemonMode, selected_engine: Option<&str>) -> bool {
+    mode == DaemonMode::Rootless && selected_engine == Some("docker")
+}
+
+fn default_bridge_context(
+    mode: DaemonMode,
+    selected_engine: Option<&str>,
+    api: Option<crate::version::ApiVersion>,
+    socket: PathBuf,
+) -> Option<DefaultBridgeContext> {
+    if !default_bridge_eligible(mode, selected_engine) {
+        return None;
+    }
+    Some(DefaultBridgeContext { api: api?, socket })
+}
+
+// Test-only JSON wrapper: every object, including ignored nested metadata, has
+// unique decoded keys. Serde supplies JSON parsing, recursion and end checks.
+struct UniqueDiagnosticJson(Value);
+
+impl<'de> serde::Deserialize<'de> for UniqueDiagnosticJson {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct UniqueVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for UniqueVisitor {
+            type Value = UniqueDiagnosticJson;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a JSON value with unique object keys")
+            }
+
+            fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
+                Ok(UniqueDiagnosticJson(Value::Bool(value)))
+            }
+
+            fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
+                Ok(UniqueDiagnosticJson(Value::Number(value.into())))
+            }
+
+            fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
+                Ok(UniqueDiagnosticJson(Value::Number(value.into())))
+            }
+
+            fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                serde_json::Number::from_f64(value)
+                    .map(|number| UniqueDiagnosticJson(Value::Number(number)))
+                    .ok_or_else(|| E::custom("invalid diagnostic JSON number"))
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+                Ok(UniqueDiagnosticJson(Value::String(value.to_owned())))
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+                Ok(UniqueDiagnosticJson(Value::String(value)))
+            }
+
+            fn visit_unit<E>(self) -> Result<Self::Value, E> {
+                Ok(UniqueDiagnosticJson(Value::Null))
+            }
+
+            fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                let mut values = Vec::new();
+                while let Some(value) = sequence.next_element::<UniqueDiagnosticJson>()? {
+                    values.push(value.0);
+                }
+                Ok(UniqueDiagnosticJson(Value::Array(values)))
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut values = serde_json::Map::new();
+                while let Some(key) = map.next_key::<String>()? {
+                    if values.contains_key(&key) {
+                        return Err(serde::de::Error::custom("duplicate diagnostic JSON key"));
+                    }
+                    let value: UniqueDiagnosticJson = map.next_value()?;
+                    values.insert(key, value.0);
+                }
+                Ok(UniqueDiagnosticJson(Value::Object(values)))
+            }
+        }
+
+        deserializer.deserialize_any(UniqueVisitor)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DefaultBridgeObservation {
+    Membership(bool),
+    Unavailable,
+    BudgetExhausted,
+}
+
+impl DefaultBridgeObservation {
+    fn diagnostic(self) -> &'static str {
+        match self {
+            Self::Membership(true) => "sidecar_on_default_bridge_subnet=true",
+            Self::Membership(false) => "sidecar_on_default_bridge_subnet=false",
+            Self::Unavailable => "sidecar_on_default_bridge_subnet=unknown reason=unavailable",
+            Self::BudgetExhausted => {
+                "sidecar_on_default_bridge_subnet=unknown reason=budget_exhausted"
+            }
+        }
+    }
+}
+
+fn default_bridge_membership(address: Ipv4Addr, output: &[u8]) -> Option<bool> {
+    if output.len() > DEFAULT_BRIDGE_RESPONSE_CAP {
+        return None;
+    }
+    let body = output.strip_suffix(b"\n200")?;
+    let UniqueDiagnosticJson(network) = serde_json::from_slice(body).ok()?;
+    if network.get("Name")?.as_str()? != "bridge"
+        || network.get("Driver")?.as_str()? != "bridge"
+        || canonical_inspected_container_id(&network).is_none()
+    {
+        return None;
+    }
+    match sidecar_on_subnet(address, &network) {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
+}
+
+fn default_bridge_command(context: &DefaultBridgeContext) -> Command {
+    let mut command = Command::new("timeout");
+    command.args([
+        "--foreground",
+        "--kill-after=1",
+        "6",
+        "curl",
+        // Disable user curl configuration, proxies and retries; this capability
+        // has exactly one method, one path and the already-held inner socket.
+        "--disable",
+        "-sS",
+        "--noproxy",
+        "*",
+        "--retry",
+        "0",
+        "--proto",
+        "=http",
+        "--max-time",
+        "6",
+        "--unix-socket",
+    ]);
+    command.arg(&context.socket).args([
+        "-X",
+        "GET",
+        "-w",
+        "\n%{http_code}",
+        &format!(
+            "http://localhost/v{}.{}/networks/bridge",
+            context.api.major, context.api.minor
+        ),
+    ]);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    command
+}
+
+fn read_default_bridge_stream(reader: impl Read) -> std::io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    reader
+        .take((DEFAULT_BRIDGE_RESPONSE_CAP + 1) as u64)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > DEFAULT_BRIDGE_RESPONSE_CAP {
+        return Err(std::io::Error::from(std::io::ErrorKind::InvalidData));
+    }
+    Ok(bytes)
+}
+
+fn read_default_bridge(context: &DefaultBridgeContext) -> Option<Vec<u8>> {
+    let mut child = default_bridge_command(context).spawn().ok()?;
+    let Some(stdout) = child.stdout.take() else {
+        let _ = child.wait();
+        return None;
+    };
+    let reader = match std::thread::Builder::new().spawn(move || read_default_bridge_stream(stdout))
+    {
+        Ok(reader) => reader,
+        Err(_) => {
+            let _ = child.wait();
+            return None;
+        }
+    };
+    // The reader drains at most cap+1 bytes. On overflow it closes the pipe;
+    // otherwise the original command group ends after six seconds plus kill.
+    // No new process group, cancellation handler or deadline is installed.
+    let status = child.wait();
+    if status.is_err() {
+        let _ = child.wait();
+    }
+    let output = reader.join().ok()?.ok()?;
+    status.ok()?.success().then_some(output)
+}
+
+fn optional_default_bridge<F>(
+    context: Option<&ProofSubnetContext>,
+    args: &[&str],
+    result: &BoundedDnsCliOutput,
+    remaining: Option<u64>,
+    outstanding: usize,
+    read: F,
+) -> Option<DefaultBridgeObservation>
+where
+    F: FnOnce(&DefaultBridgeContext) -> Option<Vec<u8>>,
+{
+    let context = context?;
+    let default_bridge = context.default_bridge.as_ref()?;
+    let url = format!("http://{}:18084/", context.address);
+    if result.success
+        || args
+            != [
+                "exec",
+                &context.client,
+                "wget",
+                "-Y",
+                "off",
+                "-T",
+                "2",
+                "-qO-",
+                &url,
+            ]
+    {
+        return None;
+    }
+    // Eight liabilities require 90 seconds of cleanup, plus eight for this
+    // optional read. Re-evaluate AFTER wget; never assert or renew a budget.
+    if !remaining.is_some_and(|remaining| proof_budget_sufficient(remaining, outstanding, 8)) {
+        return Some(DefaultBridgeObservation::BudgetExhausted);
+    }
+    Some(
+        read(default_bridge)
+            .and_then(|bytes| default_bridge_membership(context.address, &bytes))
+            .map_or(
+                DefaultBridgeObservation::Unavailable,
+                DefaultBridgeObservation::Membership,
+            ),
+    )
+}
+
+fn optional_remaining(deadline: Option<&str>, now: Option<u64>) -> Option<u64> {
+    let deadline = deadline?;
+    if deadline.is_empty() || !deadline.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    deadline.parse::<u64>().ok()?.checked_sub(now?)
+}
+
+fn optional_proof_remaining() -> Option<u64> {
+    let deadline = std::env::var("NATIVE_NETWORK_TEST_DEADLINE_EPOCH").ok();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|now| now.as_secs());
+    optional_remaining(deadline.as_deref(), now)
+}
+
+fn default_bridge_test_context() -> ProofSubnetContext {
+    ProofSubnetContext {
+        observations: SidecarSubnetDiagnostics::new(),
+        default_bridge: default_bridge_context(
+            DaemonMode::Rootless,
+            Some("docker"),
+            Some(crate::version::ApiVersion::new(
+                std::num::NonZeroU16::new(1).unwrap(),
+                41,
+            )),
+            PathBuf::from("/held-private-canary/inner.sock"),
+        ),
+        address: Ipv4Addr::new(10, 23, 7, 9),
+        client: "held-private-canary-control".to_owned(),
+    }
+}
+
+fn default_bridge_test_response(subnet: &str) -> Vec<u8> {
+    let mut bytes = serde_json::to_vec(&json!({
+        "Name": "bridge", "Driver": "bridge", "Id": "a".repeat(64),
+        "IPAM": {"Config": [{"Subnet": subnet}]}, "private": "private-canary"
+    }))
+    .unwrap();
+    bytes.extend_from_slice(b"\n200");
+    bytes
+}
+
+#[test]
+fn default_bridge_read_has_one_exact_readonly_endpoint_and_finite_capture() {
+    let context = default_bridge_test_context();
+    let command = default_bridge_command(context.default_bridge.as_ref().unwrap());
+    assert_eq!(command.get_program(), "timeout");
+    let args: Vec<_> = command
+        .get_args()
+        .map(|arg| arg.to_str().unwrap())
+        .collect();
+    assert_eq!(
+        args,
+        [
+            "--foreground",
+            "--kill-after=1",
+            "6",
+            "curl",
+            "--disable",
+            "-sS",
+            "--noproxy",
+            "*",
+            "--retry",
+            "0",
+            "--proto",
+            "=http",
+            "--max-time",
+            "6",
+            "--unix-socket",
+            "/held-private-canary/inner.sock",
+            "-X",
+            "GET",
+            "-w",
+            "\n%{http_code}",
+            "http://localhost/v1.41/networks/bridge"
+        ]
+    );
+    for method in ["GET", "POST", "DELETE"] {
+        assert!(!allowed_request(
+            method,
+            "/v1.41/networks/bridge",
+            "1.41",
+            "owned",
+            "image",
+            None
+        ));
+        assert!(!allowed_request(
+            method,
+            "/v1.41/networks/arbitrary",
+            "1.41",
+            "owned",
+            "image",
+            None
+        ));
+    }
+    assert_eq!(read_default_bridge_stream(&b"held"[..]).unwrap(), b"held");
+    assert!(read_default_bridge_stream(std::io::repeat(b'x')).is_err());
+    struct FailedReader;
+    impl Read for FailedReader {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("private-canary"))
+        }
+    }
+    assert!(read_default_bridge_stream(FailedReader).is_err());
+}
+
+#[test]
+fn default_bridge_optional_query_requires_observed_rootless_and_explicit_outer_docker() {
+    let mut context = default_bridge_test_context();
+    let result = BoundedDnsCliOutput {
+        success: false,
+        code: Some(124),
+        stdout: Vec::new(),
+        stderr: Vec::new(),
+        output_limit: false,
+    };
+    let api = crate::version::ApiVersion::new(std::num::NonZeroU16::new(1).unwrap(), 49);
+    context.observations = SidecarSubnetDiagnostics {
+        internal: "true",
+        control: "false",
+    };
+    let original_observations = context.observations;
+    let url = format!("http://{}:18084/", context.address);
+    for (mode, engine, observed_api, expected) in [
+        (DaemonMode::Rootless, Some("docker"), Some(api), true),
+        (DaemonMode::Rootful, Some("docker"), Some(api), false),
+        (DaemonMode::Unknown, Some("docker"), Some(api), false),
+        (
+            DaemonMode::Rootless,
+            Some(crate::native_outer_test_command::PODMAN_ENGINE),
+            Some(api),
+            false,
+        ),
+        (DaemonMode::Rootless, None, Some(api), false),
+        (DaemonMode::Rootless, Some(""), Some(api), false),
+        (DaemonMode::Rootless, Some("Docker"), Some(api), false),
+        (DaemonMode::Rootless, Some("docker"), None, false),
+        (DaemonMode::Rootful, Some("docker"), None, false),
+        (
+            DaemonMode::Rootless,
+            Some(crate::native_outer_test_command::PODMAN_ENGINE),
+            None,
+            false,
+        ),
+    ] {
+        context.default_bridge = default_bridge_context(
+            mode,
+            engine,
+            observed_api,
+            PathBuf::from("/held-private-canary/inner.sock"),
+        );
+        assert_eq!(context.default_bridge.is_some(), expected);
+        let args = [
+            "exec",
+            context.client.as_str(),
+            "wget",
+            "-Y",
+            "off",
+            "-T",
+            "2",
+            "-qO-",
+            &url,
+        ];
+        let calls = std::cell::Cell::new(0);
+        let observation =
+            optional_default_bridge(Some(&context), &args, &result, Some(98), 8, |held| {
+                calls.set(calls.get() + 1);
+                assert_eq!(held.api, api);
+                assert_eq!(
+                    held.socket,
+                    PathBuf::from("/held-private-canary/inner.sock")
+                );
+                assert_eq!(
+                    default_bridge_command(held).get_args().last().unwrap(),
+                    "http://localhost/v1.49/networks/bridge"
+                );
+                Some(default_bridge_test_response("10.23.7.0/24"))
+            });
+        assert_eq!(calls.get(), usize::from(expected));
+        assert_eq!(
+            observation,
+            expected.then_some(DefaultBridgeObservation::Membership(true))
+        );
+        assert_eq!(context.observations, original_observations);
+    }
+}
+
+#[test]
+fn default_bridge_rejects_duplicate_decoded_keys_recursively_in_both_orders() {
+    let address = default_bridge_test_context().address;
+    // Raw authored fields, never a Value/json! roundtrip that erases duplicates.
+    // Each context has exactly one FIRST/SECOND pair at the tested depth.
+    for (template, first, second) in [
+        (
+            r#"{FIRST,SECOND,"Driver":"bridge","Id":"NATIVE_ID","IPAM":{"Config":[{"Subnet":"10.23.7.0/24"}]}}"#,
+            r#""Name":"private-canary""#,
+            r#""Name":"bridge""#,
+        ),
+        (
+            r#"{"Name":"bridge",FIRST,SECOND,"Id":"NATIVE_ID","IPAM":{"Config":[{"Subnet":"10.23.7.0/24"}]}}"#,
+            r#""Driver":"private-canary""#,
+            r#""Driver":"bridge""#,
+        ),
+        (
+            r#"{"Name":"bridge","Driver":"bridge",FIRST,SECOND,"IPAM":{"Config":[{"Subnet":"10.23.7.0/24"}]}}"#,
+            r#""Id":"private-canary""#,
+            r#""Id":"NATIVE_ID""#,
+        ),
+        (
+            r#"{"Name":"bridge","Driver":"bridge","Id":"NATIVE_ID",FIRST,SECOND}"#,
+            r#""IPAM":{"Config":[{"Subnet":"private-canary"}]}"#,
+            r#""IPAM":{"Config":[{"Subnet":"10.23.7.0/24"}]}"#,
+        ),
+        (
+            r#"{"Name":"bridge","Driver":"bridge","Id":"NATIVE_ID","IPAM":{FIRST,SECOND}}"#,
+            r#""Config":[{"Subnet":"private-canary"}]"#,
+            r#""Config":[{"Subnet":"10.23.7.0/24"}]"#,
+        ),
+        (
+            r#"{"Name":"bridge","Driver":"bridge","Id":"NATIVE_ID","IPAM":{"Config":[{FIRST,SECOND}]}}"#,
+            r#""Subnet":"private-canary""#,
+            r#""Subnet":"10.23.7.0/24""#,
+        ),
+        (
+            r#"{FIRST,SECOND,"Driver":"bridge","Id":"NATIVE_ID","IPAM":{"Config":[{"Subnet":"10.23.7.0/24"}]}}"#,
+            r#""Name":"private-canary""#,
+            r#""Na\u006de":"bridge""#,
+        ),
+        (
+            r#"{"Name":"bridge","Driver":"bridge","Id":"NATIVE_ID","IPAM":{"Config":[{FIRST,SECOND}]}}"#,
+            r#""Subnet":"private-canary""#,
+            r#""Sub\u006eet":"10.23.7.0/24""#,
+        ),
+        (
+            r#"{"Name":"bridge","Driver":"bridge","Id":"NATIVE_ID","IPAM":{"Config":[{"Subnet":"10.23.7.0/24"}]},"ignored":{"nested":[{FIRST,SECOND}]}}"#,
+            r#""private-canary":true"#,
+            r#""private-canary":false"#,
+        ),
+        (
+            r#"{"Name":"bridge","Driver":"bridge","Id":"NATIVE_ID","IPAM":{"Config":[{"Subnet":"10.23.7.0/24"}]},"ignored":{"nested":[{FIRST,SECOND}]}}"#,
+            r#""private-canary":null"#,
+            r#""private-\u0063anary":17"#,
+        ),
+        (
+            r#"{FIRST,SECOND,"Driver":"bridge","Id":"NATIVE_ID","IPAM":{"Config":[{"Subnet":"10.23.7.0/24"}]}}"#,
+            r#""Name":"bridge""#,
+            r#""Name":"bridge""#,
+        ),
+    ] {
+        for (first, second) in [(first, second), (second, first)] {
+            let body = template
+                .replace("FIRST", first)
+                .replace("SECOND", second)
+                .replace("NATIVE_ID", &"a".repeat(64));
+            let response = [body.as_bytes(), b"\n200"].concat();
+            assert_eq!(default_bridge_membership(address, &response), None);
+        }
+    }
+    // Unique escaped keys are legal; only decoded-key collisions refuse.
+    let escaped = r#"{"Na\u006de":"bridge","Driver":"bridge","Id":"NATIVE_ID","IPAM":{"Config":[{"Subnet":"10.23.7.0/24"}]},"ignored":[null,true,false,1,-1,1.5,"private-canary",{"unique":[]}]}"#
+        .replace("NATIVE_ID", &"a".repeat(64));
+    assert_eq!(
+        default_bridge_membership(address, &[escaped.as_bytes(), b"\n200"].concat()),
+        Some(true)
+    );
+    assert_eq!(
+        default_bridge_membership(address, &[escaped.as_bytes(), b" {}\n200"].concat()),
+        None
+    );
+    let nested = format!("{}0{}\n200", "[".repeat(256), "]".repeat(256));
+    assert_eq!(default_bridge_membership(address, nested.as_bytes()), None);
+}
+
+#[test]
+fn default_bridge_requires_exact_identity_complete_response_and_valid_whole_ipam() {
+    let context = default_bridge_test_context();
+    assert_eq!(
+        default_bridge_membership(
+            context.address,
+            &default_bridge_test_response("10.23.7.0/24")
+        ),
+        Some(true)
+    );
+    assert_eq!(
+        default_bridge_membership(
+            context.address,
+            &default_bridge_test_response("10.23.8.0/24")
+        ),
+        Some(false)
+    );
+    assert_eq!(
+        default_bridge_membership(
+            context.address,
+            &default_bridge_test_response("10.23.7.9/24")
+        ),
+        None
+    );
+    let valid = default_bridge_test_response("10.23.7.0/24");
+    let body = valid.strip_suffix(b"\n200").unwrap();
+    for (field, values) in [
+        (
+            "Name",
+            vec![Value::Null, json!("private-canary"), json!(17)],
+        ),
+        (
+            "Driver",
+            vec![Value::Null, json!("private-canary"), json!(true)],
+        ),
+        (
+            "Id",
+            vec![
+                Value::Null,
+                json!("a".repeat(63)),
+                json!("A".repeat(64)),
+                json!("private-canary"),
+            ],
+        ),
+        (
+            "IPAM",
+            vec![
+                Value::Null,
+                json!({"Config":[]}),
+                json!({"Config":[{"Subnet":"fd00::/64"}]}),
+                json!({"Config":[{"Subnet":"10.23.7.0/24"},{"Subnet":"private-canary"}]}),
+            ],
+        ),
+    ] {
+        for replacement in values.into_iter().map(Some).chain([None]) {
+            let mut network: Value = serde_json::from_slice(body).unwrap();
+            if let Some(value) = replacement {
+                network[field] = value;
+            } else {
+                network.as_object_mut().unwrap().remove(field);
+            }
+            let mut response = serde_json::to_vec(&network).unwrap();
+            response.extend_from_slice(b"\n200");
+            assert_eq!(default_bridge_membership(context.address, &response), None);
+        }
+    }
+    for response in [
+        Vec::new(),
+        body.to_vec(),
+        b"private-canary\n200".to_vec(),
+        b"{\n200".to_vec(),
+        b"\xff\n200".to_vec(),
+        [body, b"\n404"].concat(),
+        [body, b"\n200\n"].concat(),
+        [body, b" trailing\n200"].concat(),
+        vec![b'x'; DEFAULT_BRIDGE_RESPONSE_CAP + 1],
+    ] {
+        assert_eq!(default_bridge_membership(context.address, &response), None);
+    }
+}
+
+#[test]
+fn default_bridge_optional_budget_checks_after_wget_and_never_renews_cleanup() {
+    let context = default_bridge_test_context();
+    let url = format!("http://{}:18084/", context.address);
+    let args = [
+        "exec",
+        context.client.as_str(),
+        "wget",
+        "-Y",
+        "off",
+        "-T",
+        "2",
+        "-qO-",
+        &url,
+    ];
+    let mut failure = BoundedDnsCliOutput {
+        success: false,
+        code: Some(124),
+        stdout: b"private-canary-out".to_vec(),
+        stderr: b"private-canary-error".to_vec(),
+        output_limit: false,
+    };
+    assert_eq!(proof_required_remaining(8, 8), 98);
+    for remaining in [None, Some(0), Some(97)] {
+        assert_eq!(
+            optional_default_bridge(Some(&context), &args, &failure, remaining, 8, |_| panic!(
+                "must not launch without original cleanup reserve"
+            )),
+            Some(DefaultBridgeObservation::BudgetExhausted)
+        );
+    }
+    let calls = std::cell::Cell::new(0);
+    assert_eq!(
+        optional_default_bridge(Some(&context), &args, &failure, Some(98), 8, |_| {
+            calls.set(calls.get() + 1);
+            Some(default_bridge_test_response("10.23.7.0/24"))
+        }),
+        Some(DefaultBridgeObservation::Membership(true))
+    );
+    assert_eq!(calls.get(), 1);
+    for output in [
+        None,
+        Some(b"private-canary\n200".to_vec()),
+        Some(b"{\n200".to_vec()),
+    ] {
+        assert_eq!(
+            optional_default_bridge(Some(&context), &args, &failure, Some(98), 8, |_| output),
+            Some(DefaultBridgeObservation::Unavailable)
+        );
+    }
+    assert!(!failure.success);
+    assert_eq!(failure.code, Some(124));
+    assert_eq!(failure.stdout, b"private-canary-out");
+    assert_eq!(failure.stderr, b"private-canary-error");
+    assert!(!failure.output_limit);
+    assert_eq!(
+        optional_default_bridge(None, &args, &failure, Some(98), 8, |_| panic!("no context")),
+        None
+    );
+    assert_eq!(
+        optional_default_bridge(
+            Some(&context),
+            &["exec", "other", "wget"],
+            &failure,
+            Some(98),
+            8,
+            |_| panic!("not the held ordinary control")
+        ),
+        None
+    );
+    failure.success = true;
+    assert_eq!(
+        optional_default_bridge(Some(&context), &args, &failure, Some(98), 8, |_| panic!(
+            "successful wget"
+        )),
+        None
+    );
+    for deadline in [
+        None,
+        Some(""),
+        Some("private-canary"),
+        Some("+200"),
+        Some("18446744073709551616"),
+    ] {
+        assert_eq!(optional_remaining(deadline, Some(100)), None);
+    }
+    assert_eq!(optional_remaining(Some("99"), Some(100)), None);
+    assert_eq!(optional_remaining(Some("198"), Some(100)), Some(98));
+    assert_eq!(optional_remaining(Some("198"), None), None);
+}
+
+#[test]
+fn default_bridge_membership_is_independent_of_all_internal_control_pairs_and_private() {
+    let mut context = default_bridge_test_context();
+    let mut result = BoundedDnsCliOutput {
+        success: false,
+        code: Some(1),
+        stdout: Vec::new(),
+        stderr: b"private-canary".to_vec(),
+        output_limit: false,
+    };
+    for internal in ["true", "false", "unknown"] {
+        for control in ["true", "false", "unknown"] {
+            for (subnet, expected) in [
+                ("10.23.7.0/24", DefaultBridgeObservation::Membership(true)),
+                ("10.23.8.0/24", DefaultBridgeObservation::Membership(false)),
+                ("private-canary", DefaultBridgeObservation::Unavailable),
+            ] {
+                context.observations = SidecarSubnetDiagnostics { internal, control };
+                let url = format!("http://{}:18084/", context.address);
+                let args = [
+                    "exec",
+                    context.client.as_str(),
+                    "wget",
+                    "-Y",
+                    "off",
+                    "-T",
+                    "2",
+                    "-qO-",
+                    &url,
+                ];
+                assert_eq!(
+                    optional_default_bridge(Some(&context), &args, &result, Some(98), 8, |_| Some(
+                        default_bridge_test_response(subnet)
+                    )),
+                    Some(expected)
+                );
+                assert_eq!(
+                    context.observations,
+                    SidecarSubnetDiagnostics { internal, control }
+                );
+                let diagnostic = expected.diagnostic();
+                assert!(!diagnostic.contains("private-canary"));
+                assert!(!diagnostic.contains("10.23"));
+                assert!(!diagnostic.contains("inner.sock"));
+                assert!(matches!(
+                    diagnostic,
+                    "sidecar_on_default_bridge_subnet=true"
+                        | "sidecar_on_default_bridge_subnet=false"
+                        | "sidecar_on_default_bridge_subnet=unknown reason=unavailable"
+                ));
+                // Nonzero exit, timeout, kill, and unknown wait status all retain
+                // the same original failure, independently of optional evidence.
+                for code in [Some(1), Some(124), Some(137), None] {
+                    result.code = code;
+                    assert!(!result.success);
+                }
+            }
+        }
+    }
+    assert_eq!(
+        DefaultBridgeObservation::BudgetExhausted.diagnostic(),
+        "sidecar_on_default_bridge_subnet=unknown reason=budget_exhausted"
+    );
+}
+
 #[test]
 fn sidecar_subnet_pair_retains_independent_internal_and_control_inspections() {
     let address = Ipv4Addr::new(10, 23, 7, 9);
@@ -1329,15 +2112,28 @@ fn proof_cli_ok(resources: &InternalProofResources, args: &[&str]) -> Vec<u8> {
             "DOCKERLENS_NATIVE_WGET_DIAG: category={}",
             wget_failure_category(&result.stderr)
         );
-        if let Some(observations) = resources.subnet_diagnostics {
+        if let Some(context) = &resources.subnet_diagnostics {
             eprintln!(
                 "DOCKERLENS_NATIVE_INTERNAL_SUBNET_DIAG: sidecar_on_internal_subnet={}",
-                observations.internal
+                context.observations.internal
             );
             eprintln!(
                 "DOCKERLENS_NATIVE_CONTROL_SUBNET_DIAG: sidecar_on_control_subnet={}",
-                observations.control
+                context.observations.control
             );
+            if let Some(observation) = optional_default_bridge(
+                Some(context),
+                args,
+                &result,
+                optional_proof_remaining(),
+                resources.containers.len() + resources.networks.len(),
+                read_default_bridge,
+            ) {
+                eprintln!(
+                    "DOCKERLENS_NATIVE_DEFAULT_BRIDGE_SUBNET_DIAG: {}",
+                    observation.diagnostic()
+                );
+            }
         }
     }
     assert!(!result.output_limit, "bounded proof CLI output");
@@ -3831,6 +4627,7 @@ fn live_internal_network_blocks_external_egress() {
     let run_id = run_id();
     let api_version = required("NATIVE_API_VERSION");
     let image = required("NATIVE_FIXTURE_IMAGE");
+    let engine_socket = PathBuf::from(required("NATIVE_ENGINE_SOCKET"));
     let proof_path = required("NATIVE_NETWORK_PROBES_PATH");
     let prior: Value = serde_json::from_slice(&fs::read(&proof_path).expect("prior network proof"))
         .expect("closed prior network proof");
@@ -3887,7 +4684,7 @@ fn live_internal_network_blocks_external_egress() {
     let source_id = required("NATIVE_CONTAINER_ID");
     resources.require_budget(32);
     let capture = acquire(
-        &Endpoint::unix_socket(PathBuf::from(required("NATIVE_ENGINE_SOCKET"))),
+        &Endpoint::unix_socket(engine_socket.clone()),
         Selector::ContainerIds(vec![NativeId::new(source_id).unwrap()]),
         Limits {
             max_requests: 16,
@@ -4074,7 +4871,17 @@ fn live_internal_network_blocks_external_egress() {
     }
     let external_url = format!("http://{sidecar_ip}:18084/");
     eprintln!("DOCKERLENS_NATIVE_CHECK: network_internal_control");
-    resources.subnet_diagnostics = Some(subnet_diagnostics);
+    resources.subnet_diagnostics = Some(ProofSubnetContext {
+        observations: subnet_diagnostics,
+        default_bridge: default_bridge_context(
+            facts.mode,
+            std::env::var("NATIVE_OUTER_ENGINE").ok().as_deref(),
+            facts.api_version,
+            engine_socket,
+        ),
+        address: sidecar_ip,
+        client: control_client.clone(),
+    });
     let control_response = proof_cli_ok(
         &resources,
         &[

@@ -103,6 +103,9 @@ if [[ $native_outer_engine == docker ]]; then
   native_outer_preflight || { echo 'native outer Docker preflight refused' >&2; exit 1; }
 fi
 watchdog_pid=
+rootless_startup_us=
+rootless_startup_boot_ns=
+rootless_kernel_attempted=0
 native_success_summary=
 preserve_run_dir=0
 outer_container_id=
@@ -340,6 +343,53 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 echo "native lane $lane owns $native_outer_engine container $container, sidecar $sidecar, network $outer_network, and volume $volume"
 
+rootless_kernel_window_diagnostic() {
+  # No journal contact locally, for rootful inner lanes, or before exact startup
+  # self-reexec evidence. Reuse canonical hosted admission, never add a fallback.
+  [[ ${native_outer_engine:-podman} == docker && ${expected_mode:-} == rootless ]] || return 0
+  case ${1:-} in permission_denied | operation_not_permitted | ambiguous) ;; *) return 0 ;; esac
+  (( ${rootless_kernel_attempted:-0} == 0 )) || return 0
+  rootless_kernel_attempted=1
+  local unavailable='DOCKERLENS_NATIVE_ROOTLESS_KERNEL_WINDOW: scope=job_window observation=unavailable operation=unknown errno=absent'
+  local remaining=$((1800 - SECONDS)) started ignored started_cs ended ended_cs result diagnostic_status=0
+  local key
+  local -a privilege=() context=()
+  if ! native_outer_policy docker || (( remaining < 5 )) ||
+    [[ ! ${rootless_startup_us:-} =~ ^[0-9]{1,20}$ || ! ${rootless_startup_boot_ns:-} =~ ^[0-9]{1,20}$ || -z ${watchdog_pid:-} ]] ||
+    ! kill -0 "$watchdog_pid" 2>/dev/null; then
+    echo "$unavailable" >&2
+    return 0
+  fi
+  read -r started ignored < /proc/uptime || { echo "$unavailable" >&2; return 0; }
+  [[ $started =~ ^[0-9]+\.[0-9]{2}$ ]] || { echo "$unavailable" >&2; return 0; }
+  started_cs=${started/./}
+  if [[ $EUID != 0 ]]; then privilege=(sudo -n); fi
+  for key in GITHUB_ACTIONS RUNNER_ENVIRONMENT RUNNER_OS GITHUB_REF GITHUB_EVENT_NAME \
+    GITHUB_REPOSITORY GITHUB_WORKFLOW_REF ImageOS ImageVersion; do context+=("$key=${!key-}"); done
+  # Root owns the whole helper's TERM/KILL envelope, including parse/cleanup;
+  # an unprivileged timeout around sudo cannot provide this containment.
+  result=$("${privilege[@]}" timeout --signal=TERM --kill-after=0.5s 3s \
+    env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C LC_ALL=C "${context[@]}" \
+    python3 "$script_dir/native-rootless-kernel-window.py" \
+    "$native_outer_engine" "$expected_mode" "$run_dir" "$rootless_startup_us" "$rootless_startup_boot_ns" \
+    "$started_cs" "$remaining" "$watchdog_pid" 2>/dev/null) || diagnostic_status=$?
+  # Propagate explicit cancellation through the existing lane traps. Timeout
+  # or uncertain privileged completion remains unavailable, not child-death proof.
+  case $diagnostic_status in 130) kill -INT "$main_pid"; return 130 ;; 143) kill -TERM "$main_pid"; return 143 ;; esac
+  read -r ended ignored < /proc/uptime || { echo "$unavailable" >&2; return 0; }
+  [[ $ended =~ ^[0-9]+\.[0-9]{2}$ ]] || { echo "$unavailable" >&2; return 0; }
+  ended_cs=${ended/./}
+  if (( diagnostic_status != 0 || ended_cs < started_cs || ended_cs - started_cs >= 399 || SECONDS >= 1800 )) ||
+    ! kill -0 "$watchdog_pid" 2>/dev/null; then
+    echo "$unavailable" >&2
+  elif [[ $result =~ ^DOCKERLENS_NATIVE_ROOTLESS_KERNEL_WINDOW:\ scope=job_window\ observation=(observed|unobserved|ambiguous|unavailable)\ operation=(userns_create|exec|other|unknown)\ errno=(permission_denied|operation_not_permitted|other|absent)$ ]]; then
+    printf '%s\n' "$result" >&2
+  else
+    echo "$unavailable" >&2
+  fi
+  return 0
+}
+
 diagnose_native_startup() {
   local state diagnosis inspect_reported_apparmor=${2:-unknown}
   case $inspect_reported_apparmor in unconfined | docker_default | other | empty | unknown) ;; *) inspect_reported_apparmor=unknown ;; esac
@@ -437,6 +487,7 @@ self_reexec_projection = (next(iter(self_reexec_errors)) if len(self_reexec_erro
                           "ambiguous" if self_reexec_errors else "unobserved")
 print("stage=" + stage + " category=" + category + " families=" + family_projection + " preflight=" + preflight_projection + " trace=" + trace + " rootlesskit_self_reexec=" + self_reexec_projection)' "$lane") || diagnosis='stage=unavailable category=unavailable families=unavailable preflight=unavailable trace=unavailable rootlesskit_self_reexec=unavailable'
   echo "inner daemon startup diagnosis: state=$state $diagnosis inspect_reported_apparmor=$inspect_reported_apparmor" >&2
+  rootless_kernel_window_diagnostic "${diagnosis##* rootlesskit_self_reexec=}"
 }
 
 if [[ $native_outer_engine == docker ]]; then
@@ -798,6 +849,16 @@ if [[ $native_outer_engine == docker ]]; then
 fi
 outer_attempted=1
 creation_status=0
+# Hold once immediately before actual create/start; failure cannot move this
+# boundary forward. No journal query or optional tool preflight occurs here.
+if [[ $native_outer_engine == docker && $expected_mode == rootless ]]; then
+  rootless_startup_pair=$(python3 "$script_dir/native-rootless-kernel-window.py" startup-clock 2>/dev/null) || rootless_startup_pair=
+  if [[ $rootless_startup_pair =~ ^([0-9]{1,20})\ ([0-9]{1,20})$ ]]; then
+    rootless_startup_us=${BASH_REMATCH[1]}
+    rootless_startup_boot_ns=${BASH_REMATCH[2]}
+  fi
+  unset rootless_startup_pair
+fi
 outer_container_id=$(native_outer_bridge_command 120 create-daemon "$container" "$run_id" \
   io.dockerlens.native-run "$outer_network" "$volume" "$socket_dir" /dockerlens-native \
   "$lane" "$image" "$run_dir/diagnostics/daemon.log" 2>/dev/null) || creation_status=$?

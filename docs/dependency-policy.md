@@ -18,6 +18,20 @@ No third-party source is redistributed; copyright hashes and fixed provenance
 references support later independent source/license review. Historical evidence
 is not rewritten or added to automatic update streams.
 
+The optional default-bridge failure diagnostic uses the exact dev-only `serde`
+declaration for its recursive duplicate-key-rejecting JSON visitor. The reviewed
+addition reused the registry package and integrity record already present in
+`Cargo.lock`; only the root package's dependency edge was added, with all locked
+package versions, checksums and other dependency lists preserved. Product
+dependencies remain unchanged. The existing enabled Cargo Renovate manager
+uniquely owns both the manifest dev pin and lockfile. Read-only configuration
+review found no matching custom manager, disabled Cargo rule, extraction-path,
+grouping, approval or automerge change; no Renovate configuration edit is needed.
+The diagnostic regression derives the version from the exact manifest pin and
+checks its matching lock record/checksum and unique Cargo ownership, rather than
+duplicating an operational version or checksum outside Cargo. Historical native
+source/profile evidence and intentional fixtures remain immutable.
+
 The decoder pins serde_json 1.0.151 for pure Engine JSON parsing and BoxFerry's
 reviewed consumer floor. The bounded Unix-socket connector pins socket2 0.6.5
 for connect_timeout. Cargo.lock

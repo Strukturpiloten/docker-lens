@@ -22,6 +22,12 @@ Fresh exact-candidate complete and four-lane gates remain required.
 
 ## Hosted prerequisite diagnostic
 
+Failure-only native diagnostics also have bounded, synthetic regression coverage:
+the [kernel window](native-rootless-kernel-window.md) and the owned inner Engine's
+[default-bridge subnet observation](native-outer-runtime.md) preserve original
+failures, fixed budgets and cleanup. Neither diagnostic establishes a cause or
+replaces fresh exact-candidate four-lane validation.
+
 The separate [hosted prerequisite diagnostic](hosted-prerequisite-diagnostic.md)
 is a main-only no-input dispatch in Check. It checks out the dispatch's immutable
 SHA and collects only bounded package/helper/unit metadata and hashes, with no
