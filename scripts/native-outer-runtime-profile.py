@@ -7,6 +7,7 @@ product dependencies.
 """
 
 from contextlib import contextmanager
+import errno
 import hashlib
 import json
 import os
@@ -60,6 +61,7 @@ SOURCE_IDS = frozenset(SOURCE_PATHS)
 DIRECTORY_IDS = frozenset(source_id for source_id in SOURCE_IDS
                           if source_id.startswith(("vendor:", "etc:", "run:")) and source_id.endswith(".d"))
 PURPOSE = "hosted_prerequisite_diagnostic"
+SCHEMA_VERSION = 2
 WORKFLOW = "Strukturpiloten/docker-lens/.github/workflows/check.yml@refs/heads/main"
 JOB = "hosted-prerequisite-diagnostic"
 REASONS = {"complete", "ci_identity_unavailable", "checkout_unavailable", "tool_unavailable",
@@ -79,14 +81,39 @@ UNIT_QUERY = bounded_command("/usr/bin/systemctl", "--no-pager", "--no-ask-passw
                              "--property=SubState", "--property=UnitFileState", "--property=FragmentPath",
                              "--property=DropInPaths")
 COMMANDS = (CHECKOUT, PACKAGE_QUERY, OWNER_QUERY, UNIT_QUERY)
+PACKAGE_FIELDS = frozenset({"encoding", "framing", "columns", "package", "status", "version", "architecture"})
+PACKAGE_CATEGORIES = frozenset({"empty", "invalid_syntax", "unrecognized", "duplicate", "invalid_count",
+                                "invalid_encoding", "oversize", "missing_terminator"})
+SOURCE_GUARDS = frozenset({"open", "metadata", "owner", "mode", "kind", "links", "stability", "close"})
+SOURCE_COMPONENTS = frozenset({"root", "ancestor_1", "ancestor_2", "ancestor_3", "ancestor_4", "leaf"})
+SOURCE_CATEGORIES = frozenset({"check_failed", "symlink_refused", "not_directory", "permission_denied",
+                               "io_error", "other_io"})
 
 
 class Unavailable(Exception):
-    def __init__(self, reason):
-        if reason not in REASONS or reason == "complete":
+    def __init__(self, reason, failure_detail=None):
+        if type(reason) is not str or reason not in REASONS or reason == "complete":
             raise ValueError("invalid diagnostic reason")
+        if failure_detail is not None:
+            valid = False
+            if type(failure_detail) is dict and all(type(key) is str for key in failure_detail):
+                if reason == "invalid_metadata" and set(failure_detail) == {"field", "category", "row"}:
+                    valid = (type(failure_detail["field"]) is str and failure_detail["field"] in PACKAGE_FIELDS
+                             and type(failure_detail["category"]) is str and failure_detail["category"] in PACKAGE_CATEGORIES
+                             and type(failure_detail["row"]) is int and 0 <= failure_detail["row"] <= 11)
+                elif reason == "custody_failure" and set(failure_detail) == {"guard", "component", "category"}:
+                    valid = (type(failure_detail["guard"]) is str and failure_detail["guard"] in SOURCE_GUARDS
+                             and type(failure_detail["component"]) is str and failure_detail["component"] in SOURCE_COMPONENTS
+                             and type(failure_detail["category"]) is str and failure_detail["category"] in SOURCE_CATEGORIES)
+            if not valid:
+                raise ValueError("invalid diagnostic failure detail") from None
         self.reason = reason
+        self._failure_detail = None if failure_detail is None else tuple(failure_detail.items())
         super().__init__(reason)
+
+    @property
+    def failure_detail(self):
+        return None if self._failure_detail is None else dict(self._failure_detail)
 
 
 class Cancelled(Exception):
@@ -290,9 +317,18 @@ def capture(command, files, prefix, deadline, cancellation=None, allowed_statuse
 
 
 
-def require(condition, reason="invalid_metadata"):
+def require(condition, reason="invalid_metadata", failure_detail=None):
     if not condition:
-        raise Unavailable(reason)
+        raise Unavailable(reason, failure_detail)
+
+
+def source_failure(guard, component, category="check_failed"):
+    return Unavailable("custody_failure", {"guard": guard, "component": component, "category": category})
+
+
+def source_check(condition, guard, component):
+    if not condition:
+        raise source_failure(guard, component)
 
 
 def checkpoint(deadline, cancellation):
@@ -317,26 +353,36 @@ def read_source(source_id, files, deadline, cancellation=None):
     components = path.split("/")[1:]
     require(path.startswith("/") and all(part not in {"", ".", ".."} for part in components))
     descriptors, ancestors = [], []
+    descriptor_components = {}
     failure = None
+    guard, component_code = "open", "root"
     try:
         flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
         descriptor = os.open(SOURCE_ROOT, flags)
         descriptors.append(descriptor)
+        descriptor_components[descriptor] = "root"
+        guard = "metadata"
         root_metadata = directory_identity(os.fstat(descriptor))
-        require(root_metadata[3] == EXPECTED_UID and root_metadata[2] & 0o022 == 0, "custody_failure")
-        for component in components[:-1]:
+        source_check(root_metadata[3] == EXPECTED_UID, "owner", "root")
+        source_check(root_metadata[2] & 0o022 == 0, "mode", "root")
+        for ordinal, component in enumerate(components[:-1], 1):
             checkpoint(deadline, cancellation)
+            guard, component_code = "open", "ancestor_" + str(ordinal)
             child = os.open(component, flags, dir_fd=descriptor)
             descriptors.append(child)
+            descriptor_components[child] = component_code
+            guard = "metadata"
             info = os.fstat(child)
-            require(stat.S_ISDIR(info.st_mode) and info.st_uid == EXPECTED_UID
-                    and info.st_mode & 0o022 == 0, "custody_failure")
+            source_check(stat.S_ISDIR(info.st_mode), "kind", component_code)
+            source_check(info.st_uid == EXPECTED_UID, "owner", component_code)
+            source_check(info.st_mode & 0o022 == 0, "mode", component_code)
             ancestors.append((descriptor, component, child, directory_identity(info)))
             descriptor = child
         checkpoint(deadline, cancellation)
+        guard, component_code = "metadata", "leaf"
         before = os.stat(components[-1], dir_fd=descriptor, follow_symlinks=False)
-        require(before.st_uid == EXPECTED_UID and (stat.S_ISLNK(before.st_mode)
-                or before.st_mode & 0o022 == 0), "custody_failure")
+        source_check(before.st_uid == EXPECTED_UID, "owner", "leaf")
+        source_check(stat.S_ISLNK(before.st_mode) or before.st_mode & 0o022 == 0, "mode", "leaf")
         result = {"status": "observed", "uid": before.st_uid, "gid": before.st_gid,
                   "mode": stat.S_IMODE(before.st_mode), "size": before.st_size}
         if stat.S_ISLNK(before.st_mode):
@@ -344,11 +390,15 @@ def read_source(source_id, files, deadline, cancellation=None):
             target = os.readlink(components[-1], dir_fd=descriptor)
             result.update(status="symlink", mask=target == "/dev/null")
         elif stat.S_ISDIR(before.st_mode):
-            require(source_id in DIRECTORY_IDS, "custody_failure")
+            source_check(source_id in DIRECTORY_IDS, "kind", "leaf")
+            guard = "open"
             child = os.open(components[-1], flags, dir_fd=descriptor)
             descriptors.append(child)
-            require(directory_identity(os.fstat(child)) == directory_identity(before), "custody_failure")
+            descriptor_components[child] = "leaf"
+            guard = "stability"
+            source_check(directory_identity(os.fstat(child)) == directory_identity(before), "stability", "leaf")
             count = 0
+            guard = "metadata"
             with os.scandir(child) as entries:
                 for _entry in entries:
                     checkpoint(deadline, cancellation)
@@ -356,13 +406,18 @@ def read_source(source_id, files, deadline, cancellation=None):
                     require(count <= 16, "output_overflow")
             result.update(kind="directory", entries=count)
         else:
-            require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1, "custody_failure")
+            source_check(stat.S_ISREG(before.st_mode), "kind", "leaf")
+            source_check(before.st_nlink == 1, "links", "leaf")
             require(0 <= before.st_size <= FILE_LIMIT, "output_overflow")
+            guard = "open"
             child = os.open(components[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
                             dir_fd=descriptor)
             descriptors.append(child)
-            require(source_identity(os.fstat(child)) == source_identity(before), "custody_failure")
+            descriptor_components[child] = "leaf"
+            guard = "stability"
+            source_check(source_identity(os.fstat(child)) == source_identity(before), "stability", "leaf")
             raw = bytearray()
+            guard = "metadata"
             while len(raw) <= FILE_LIMIT:
                 checkpoint(deadline, cancellation)
                 part = os.read(child, min(4096, FILE_LIMIT + 1 - len(raw)))
@@ -372,10 +427,12 @@ def read_source(source_id, files, deadline, cancellation=None):
                 if not part:
                     break
             require(len(raw) == before.st_size <= FILE_LIMIT, "output_overflow")
-            require(source_identity(os.fstat(child)) == source_identity(before), "custody_failure")
+            guard = "stability"
+            source_check(source_identity(os.fstat(child)) == source_identity(before), "stability", "leaf")
             result.update(kind="regular", sha256=hashlib.sha256(raw).hexdigest())
             if source_id == "os-release":
                 # Parse data only; never source shell assignments.
+                guard = "metadata"
                 text = bytes(raw).decode("utf-8")
                 fields = {}
                 for line in text.splitlines():
@@ -388,18 +445,26 @@ def read_source(source_id, files, deadline, cancellation=None):
                 result["distribution"] = "ubuntu"
                 result["version_id"] = "24.04"
         checkpoint(deadline, cancellation)
-        require(source_identity(os.stat(components[-1], dir_fd=descriptor, follow_symlinks=False))
-                == source_identity(before), "custody_failure")
-        for parent, component, child, original in ancestors:
-            require(directory_identity(os.fstat(child)) == original
-                    and directory_identity(os.stat(component, dir_fd=parent, follow_symlinks=False)) == original,
-                    "custody_failure")
-        require(directory_identity(os.lstat(SOURCE_ROOT)) == root_metadata, "custody_failure")
+        guard, component_code = "stability", "leaf"
+        source_check(source_identity(os.stat(components[-1], dir_fd=descriptor, follow_symlinks=False))
+                     == source_identity(before), "stability", "leaf")
+        for ordinal, (parent, component, child, original) in enumerate(ancestors, 1):
+            component_code = "ancestor_" + str(ordinal)
+            source_check(directory_identity(os.fstat(child)) == original, "stability", component_code)
+            source_check(directory_identity(os.stat(component, dir_fd=parent, follow_symlinks=False)) == original,
+                         "stability", component_code)
+        component_code = "root"
+        source_check(directory_identity(os.lstat(SOURCE_ROOT)) == root_metadata, "stability", "root")
         return result
     except FileNotFoundError:
         return {"status": "missing"}
-    except (OSError, UnicodeError):
-        raise Unavailable("custody_failure") from None
+    except (OSError, UnicodeError) as error:
+        category = ({errno.ELOOP: "symlink_refused", errno.ENOTDIR: "not_directory",
+                     errno.EACCES: "permission_denied", errno.EPERM: "permission_denied",
+                     errno.EIO: "io_error"}.get(error.errno, "other_io")
+                    if isinstance(error, OSError) else "check_failed")
+        failure = source_failure(guard, component_code, category)
+        raise failure from None
     except BaseException as error:
         failure = error
         raise
@@ -410,28 +475,36 @@ def read_source(source_id, files, deadline, cancellation=None):
                 os.close(descriptor)
             except BaseException as error:
                 if close_failure is None:
-                    close_failure = error
+                    close_failure = (error, descriptor_components[descriptor])
         if close_failure is not None and failure is None:
-            raise Unavailable("custody_failure") from None
+            raise source_failure("close", close_failure[1], "io_error" if isinstance(close_failure[0], OSError)
+                                 else "check_failed") from None
 
 
 def package_metadata(raw):
     try:
         text = raw.decode("ascii")
     except UnicodeError:
-        raise Unavailable("invalid_metadata") from None
-    require(len(raw) <= LIMIT and (not text or text.endswith("\n")))
+        raise Unavailable("invalid_metadata", {"field": "encoding", "category": "invalid_encoding", "row": 0}) from None
+    require(len(raw) <= LIMIT, failure_detail={"field": "framing", "category": "oversize", "row": 0})
+    require(not text or text.endswith("\n"),
+            failure_detail={"field": "framing", "category": "missing_terminator", "row": 0})
     result = {name: {"status": "missing"} for name in PACKAGES}
     seen = set()
-    for line in text.splitlines():
+    for ordinal, line in enumerate(text.splitlines(), 1):
+        row = min(ordinal, 11)
         parts = line.split("\t")
-        require(len(parts) == 4)
+        require(len(parts) == 4, failure_detail={"field": "columns", "category": "invalid_count", "row": row})
         name, state, version, architecture = parts
-        require(name in PACKAGES and name not in seen
-                and re.fullmatch(r"(unknown|install|hold|deinstall|purge) (ok|reinstreq) "
-                                 r"(not-installed|config-files|half-installed|unpacked|half-configured|triggers-awaited|triggers-pending|installed)", state)
-                and re.fullmatch(r"[0-9][A-Za-z0-9.+:~\-]{0,95}", version)
-                and architecture in {"amd64", "all"})
+        require(name in PACKAGES, failure_detail={"field": "package", "category": "unrecognized" if name else "empty", "row": row})
+        require(name not in seen, failure_detail={"field": "package", "category": "duplicate", "row": row})
+        require(re.fullmatch(r"(unknown|install|hold|deinstall|purge) (ok|reinstreq) "
+                             r"(not-installed|config-files|half-installed|unpacked|half-configured|triggers-awaited|triggers-pending|installed)", state),
+                failure_detail={"field": "status", "category": "invalid_syntax" if state else "empty", "row": row})
+        require(re.fullmatch(r"[0-9][A-Za-z0-9.+:~\-]{0,95}", version),
+                failure_detail={"field": "version", "category": "invalid_syntax" if version else "empty", "row": row})
+        require(architecture in {"amd64", "all"},
+                failure_detail={"field": "architecture", "category": "unrecognized" if architecture else "empty", "row": row})
         seen.add(name)
         result[name] = {"status": "reported", "package_status": state, "version": version,
                         "architecture": architecture, "provenance": "unverified_installed_metadata",
@@ -528,7 +601,7 @@ def binding(environment):
 
 
 def sample(environment, cancellation=None):
-    result = {"schema_version": 1, "purpose": PURPOSE, "admission": "unadmitted",
+    result = {"schema_version": SCHEMA_VERSION, "purpose": PURPOSE, "admission": "unadmitted",
               "provenance": "unverified_installed_observation", "status": "unavailable",
               "reason": "ci_identity_unavailable", "binding": None, "observations": None}
     deadline = time.monotonic() + 45
@@ -557,6 +630,8 @@ def sample(environment, cancellation=None):
                     if error.reason in {"completion_unknown", "cleanup_failure", "collector_io_failure", "output_overflow"}:
                         raise
                     observations[field] = {"status": "unavailable", "reason": error.reason}
+                    if error.failure_detail is not None:
+                        observations[field]["failure_detail"] = error.failure_detail
                     partial = True
             for source_id in sorted(SOURCE_IDS):
                 checkpoint(deadline, cancellation)
@@ -566,6 +641,8 @@ def sample(environment, cancellation=None):
                     if error.reason in {"output_overflow", "timeout", "cleanup_failure"}:
                         raise
                     record = {"status": "unavailable", "reason": error.reason}
+                    if error.failure_detail is not None:
+                        record["failure_detail"] = error.failure_detail
                 observations["files"][source_id] = record
                 if record["status"] not in {"observed", "missing"}:
                     # Known masks are observations, not positive policy admission.
@@ -576,6 +653,8 @@ def sample(environment, cancellation=None):
         result.update(status="partial" if partial else "observed", reason="complete")
     except Unavailable as error:
         result.update(status="unavailable", reason=error.reason, observations=None)
+        if error.failure_detail is not None:
+            result["failure_detail"] = error.failure_detail
     return result
 
 
@@ -590,13 +669,13 @@ def main():
             result = sample(os.environ, cancellation)
             cancellation.check()
         except Cancelled as failure:
-            result = {"schema_version": 1, "purpose": PURPOSE, "admission": "unadmitted",
+            result = {"schema_version": SCHEMA_VERSION, "purpose": PURPOSE, "admission": "unadmitted",
                       "status": "cancelled", "reason": failure.reason, "cleanup": failure.cleanup}
             print(json.dumps(result, sort_keys=True, separators=(",", ":")))
             return 128 + failure.signum
         raw = json.dumps(result, sort_keys=True, separators=(",", ":"))
         if len(raw.encode()) > LIMIT:
-            result = {"schema_version": 1, "purpose": PURPOSE, "admission": "unadmitted",
+            result = {"schema_version": SCHEMA_VERSION, "purpose": PURPOSE, "admission": "unadmitted",
                       "status": "unavailable", "reason": "manifest_overflow"}
             raw = json.dumps(result, separators=(",", ":"))
         print(raw)

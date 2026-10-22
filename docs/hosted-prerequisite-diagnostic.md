@@ -72,6 +72,42 @@ references, and installed copyright hashes for independent version/source/licens
 comparison. It does not redistribute third-party source or infer a license from
 a hash. Hash equality alone does not authenticate packages, helpers or history.
 
+## Schema 2: closed failure context
+
+Schema 2 preserves the observation/status/reason and unadmitted semantics, adding
+only optional validated `failure_detail` on existing unavailable records. Schema
+1's historical main run `39805004506` and its artifact remain unchanged. Its
+package `invalid_metadata` and copyright `custody_failure` outcomes do not reveal
+their cause; this change neither guesses that cause nor loosens validation.
+
+Package failure detail has exactly `field`, `category` and `row`. Fields are
+`encoding`, `framing`, `columns`, `package`, `status`, `version`, `architecture`.
+Categories are `empty`, `invalid_syntax`, `unrecognized`, `duplicate`,
+`invalid_count`, `invalid_encoding`, `oversize`, `missing_terminator`. Row 0 means
+a failure before row parsing; 1–10 identify a bounded row and 11 is the capped
+first-outside-ten marker. The same predicates run in the same order, rejecting
+the whole package parse at its first failure; no valid rows are salvaged. Empty
+payload behavior and successful package representations are unchanged. Rejected
+package names, statuses, versions, architectures and raw rows are never echoed.
+
+Fixed-source custody failure detail has exactly `guard`, `component`, `category`.
+Guards are `open`, `metadata`, `owner`, `mode`, `kind`, `links`, `stability`,
+`close`. Components are `root`, `ancestor_1` through `ancestor_4`, or `leaf`,
+relative to the existing fixed source inventory; the record's existing key
+identifies that source. Categories are `check_failed`, `symlink_refused`,
+`not_directory`, `permission_denied`, `io_error`, `other_io`. These identify an
+existing guard or syscall category, not new paths or permission to traverse a
+refused link. No dynamic component/path text, owner value, exception message or
+source bytes are added. Constructor validation refuses unknown fields, values,
+types and out-of-bound ordinals, and returns copies of immutable detail data.
+
+The emitted manifest version is 2, including cancellation/unavailable envelopes.
+Successful observations differ only in that explicit version. Existing commands,
+source paths, predicate order, deadlines, byte caps, private cleanup and cancellation
+remain unchanged, as do the main-only dispatch, Action pins and Renovate ownership.
+Fake controls establish only localization/privacy; a fresh independently reviewed
+main diagnostic is still needed to learn the actual missing prerequisite facts.
+
 ## Limits, containment and cleanup
 
 The collector reuses the reviewed runtime sampler's incremental duplex capture,
