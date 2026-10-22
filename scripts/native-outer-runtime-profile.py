@@ -61,7 +61,7 @@ SOURCE_IDS = frozenset(SOURCE_PATHS)
 DIRECTORY_IDS = frozenset(source_id for source_id in SOURCE_IDS
                           if source_id.startswith(("vendor:", "etc:", "run:")) and source_id.endswith(".d"))
 PURPOSE = "hosted_prerequisite_diagnostic"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 WORKFLOW = "Strukturpiloten/docker-lens/.github/workflows/check.yml@refs/heads/main"
 JOB = "hosted-prerequisite-diagnostic"
 REASONS = {"complete", "ci_identity_unavailable", "checkout_unavailable", "tool_unavailable",
@@ -84,6 +84,8 @@ COMMANDS = (CHECKOUT, PACKAGE_QUERY, OWNER_QUERY, UNIT_QUERY)
 PACKAGE_FIELDS = frozenset({"encoding", "framing", "columns", "package", "status", "version", "architecture"})
 PACKAGE_CATEGORIES = frozenset({"empty", "invalid_syntax", "unrecognized", "duplicate", "invalid_count",
                                 "invalid_encoding", "oversize", "missing_terminator"})
+VALIDATED_DPKG_STATES = frozenset({"not-installed", "config-files", "half-installed", "unpacked",
+                                   "half-configured", "triggers-awaited", "triggers-pending", "installed"})
 SOURCE_GUARDS = frozenset({"open", "metadata", "owner", "mode", "kind", "links", "stability", "close"})
 SOURCE_COMPONENTS = frozenset({"root", "ancestor_1", "ancestor_2", "ancestor_3", "ancestor_4", "leaf"})
 SOURCE_CATEGORIES = frozenset({"check_failed", "symlink_refused", "not_directory", "permission_denied",
@@ -97,10 +99,15 @@ class Unavailable(Exception):
         if failure_detail is not None:
             valid = False
             if type(failure_detail) is dict and all(type(key) is str for key in failure_detail):
-                if reason == "invalid_metadata" and set(failure_detail) == {"field", "category", "row"}:
+                if reason == "invalid_metadata" and set(failure_detail) in (
+                        {"field", "category", "row"}, {"field", "category", "row", "validated_dpkg_state"}):
                     valid = (type(failure_detail["field"]) is str and failure_detail["field"] in PACKAGE_FIELDS
                              and type(failure_detail["category"]) is str and failure_detail["category"] in PACKAGE_CATEGORIES
                              and type(failure_detail["row"]) is int and 0 <= failure_detail["row"] <= 11)
+                    if valid and "validated_dpkg_state" in failure_detail:
+                        valid = (failure_detail["field"] in {"version", "architecture"} and failure_detail["row"] > 0
+                                 and type(failure_detail["validated_dpkg_state"]) is str
+                                 and failure_detail["validated_dpkg_state"] in VALIDATED_DPKG_STATES)
                 elif reason == "custody_failure" and set(failure_detail) == {"guard", "component", "category"}:
                     valid = (type(failure_detail["guard"]) is str and failure_detail["guard"] in SOURCE_GUARDS
                              and type(failure_detail["component"]) is str and failure_detail["component"] in SOURCE_COMPONENTS
@@ -501,10 +508,13 @@ def package_metadata(raw):
         require(re.fullmatch(r"(unknown|install|hold|deinstall|purge) (ok|reinstreq) "
                              r"(not-installed|config-files|half-installed|unpacked|half-configured|triggers-awaited|triggers-pending|installed)", state),
                 failure_detail={"field": "status", "category": "invalid_syntax" if state else "empty", "row": row})
+        validated_dpkg_state = state.split(" ")[2]
         require(re.fullmatch(r"[0-9][A-Za-z0-9.+:~\-]{0,95}", version),
-                failure_detail={"field": "version", "category": "invalid_syntax" if version else "empty", "row": row})
+                failure_detail={"field": "version", "category": "invalid_syntax" if version else "empty", "row": row,
+                                "validated_dpkg_state": validated_dpkg_state})
         require(architecture in {"amd64", "all"},
-                failure_detail={"field": "architecture", "category": "unrecognized" if architecture else "empty", "row": row})
+                failure_detail={"field": "architecture", "category": "unrecognized" if architecture else "empty", "row": row,
+                                "validated_dpkg_state": validated_dpkg_state})
         seen.add(name)
         result[name] = {"status": "reported", "package_status": state, "version": version,
                         "architecture": architecture, "provenance": "unverified_installed_metadata",

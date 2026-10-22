@@ -101,12 +101,40 @@ refused link. No dynamic component/path text, owner value, exception message or
 source bytes are added. Constructor validation refuses unknown fields, values,
 types and out-of-bound ordinals, and returns copies of immutable detail data.
 
-The emitted manifest version is 2, including cancellation/unavailable envelopes.
-Successful observations differ only in that explicit version. Existing commands,
+Schema 2 emitted manifest version 2, including cancellation/unavailable envelopes.
+Successful observations differed only in that explicit version. Existing commands,
 source paths, predicate order, deadlines, byte caps, private cleanup and cancellation
 remain unchanged, as do the main-only dispatch, Action pins and Renovate ownership.
 Fake controls establish only localization/privacy; a fresh independently reviewed
 main diagnostic is still needed to learn the actual missing prerequisite facts.
+
+## Schema 3: validated dpkg status context
+
+The emitted manifest version is now 3, including cancellation/unavailable
+envelopes. Package `failure_detail` may additionally contain
+`validated_dpkg_state`, and only for a later `version` or `architecture` failure
+on a positive row ordinal. The parser derives this value from the third token
+only after the existing full dpkg Status grammar has passed, without stripping,
+normalization or a new acceptance rule. Its exact closed values are
+`not-installed`, `config-files`, `half-installed`, `unpacked`, `half-configured`,
+`triggers-awaited`, `triggers-pending`, `installed`. Earlier/at-status failures
+omit this context: the status is then not established, not an inferred class.
+The constructor refuses other values, types, fields, reasons or row-zero context.
+
+This is solely a reported package-database declaration, not actual package
+presence/absence, binary ownership, safe installation or native qualification.
+The whole package parse still becomes unavailable at its first failure, with no
+row salvage or name/raw Status/version/architecture exposure. Successful fields,
+source custody and mode guards, helper-owner timeout handling, commands, paths,
+predicate order, caps, deadlines and cleanup remain unchanged. Successful
+observations differ only in the manifest version; admission remains unadmitted.
+
+Historical schema-1 and schema-2 artifacts remain unchanged. Schema-2 main run
+`39813217449` localized empty version at row 2 but did not establish that row's
+package name, full Status or architecture. Its copyright ancestor-2 mode refusals
+remain refusals; its helper-owner timeout cannot inherit older owner reports.
+A fresh schema-3 diagnostic and independent review are required for new facts;
+the missing status context must not be inferred from the historical empty value.
 
 ## Limits, containment and cleanup
 
