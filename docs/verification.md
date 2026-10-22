@@ -20,6 +20,23 @@ dispatcher policy is documented there; no actor or main-only gate is relaxed.
 Definitions and mocked controls do not establish Docker-backend compatibility.
 Fresh exact-candidate complete and four-lane gates remain required.
 
+## Hosted prerequisite diagnostic
+
+The separate [hosted prerequisite diagnostic](hosted-prerequisite-diagnostic.md)
+is a main-only no-input dispatch in Check. It checks out the dispatch's immutable
+SHA and collects only bounded package/helper/unit metadata and hashes, with no
+native daemon query, package/service mutation or native suite execution. Its
+sanitized JSON is always unadmitted; missing/partial/unavailable observations and
+installed hashes are not publisher integrity, compatibility or a provisioner
+prerequisite approval. The maintainer's live branch-rules read for #129 requires
+the exact `Required CI` context with strict up-to-date policy; only the existing
+aggregate's display name changes to match it. Job ID, dependencies, normal
+PR/push failure propagation, nineteen-test native cohort and release gates remain
+unchanged. All diagnostic dispatches exclude scaffold; only main's diagnostic
+event excludes aggregate, while another ref fails closed.
+Actual hosted sampling and independent artifact review are required after merge;
+definitions/fake controls alone establish no hosted prerequisite facts.
+
 ## Mandatory unadmitted runtime-cohort source observations
 
 The canonical harness requires nineteen exact ignored invocations, retaining the

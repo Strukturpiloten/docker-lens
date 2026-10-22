@@ -5,13 +5,38 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  hosted-prerequisite-diagnostic:
+    name: Hosted prerequisite diagnostic (not native validation)
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Collect bounded read-only prerequisite observations
+        run: |
+          set -euo pipefail
+          umask 077
+          set -o noclobber
+          timeout --signal=TERM --kill-after=2s 55s python3 -B scripts/native-outer-runtime-profile.py > "$RUNNER_TEMP/dockerlens-hosted-prerequisite.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dockerlens-hosted-prerequisite
+          path: ${{ runner.temp }}/dockerlens-hosted-prerequisite.json
+          if-no-files-found: error
+          retention-days: 7
+
   scaffold:
     name: Complete offline gate
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -53,7 +78,7 @@ jobs:
 
   check-gate:
     name: Required CI
-    if: always()
+    if: always() && !(github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     needs: [scaffold, native-conformance]
     runs-on: ubuntu-24.04
     timeout-minutes: 5

@@ -230,6 +230,79 @@ class ScaffoldPolicyTests(unittest.TestCase):
         self.assertIn('test "$NATIVE_RESULT" = success', release)
         self.assertIn('git fetch --no-tags origin main', release)
 
+    def test_hosted_diagnostic_dispatch_is_closed_and_does_not_replace_required_ci(self) -> None:
+        check = (ROOT / ".github/workflows/check.yml").read_text()
+        diagnostic = check.split("  hosted-prerequisite-diagnostic:\n", 1)[1].split("  scaffold:\n", 1)[0]
+        scaffold = check.split("  scaffold:\n", 1)[1].split("  native-conformance:\n", 1)[0]
+        aggregate = check.split("  check-gate:\n", 1)[1]
+        self.assertIn("  workflow_dispatch:\n", check)
+        self.assertNotIn("inputs:", check)
+        self.assertIn("if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'", diagnostic)
+        self.assertIn("ref: ${{ github.sha }}", diagnostic)
+        self.assertIn("persist-credentials: false", diagnostic)
+        self.assertIn("timeout-minutes: 5", diagnostic)
+        self.assertIn("--kill-after=2s 55s python3 -B scripts/native-outer-runtime-profile.py", diagnostic)
+        self.assertIn("set -o noclobber", diagnostic)
+        self.assertIn("umask 077", diagnostic)
+        self.assertIn("dockerlens-hosted-prerequisite.json", diagnostic)
+        self.assertIn("if-no-files-found: error", diagnostic)
+        self.assertNotIn("sudo", diagnostic)
+        self.assertNotIn("native-conformance.sh", diagnostic)
+        self.assertNotIn("check-all.sh", diagnostic)
+        self.assertNotIn("continue-on-error", diagnostic)
+        self.assertIn("if: github.event_name != 'workflow_dispatch'", scaffold)
+        self.assertIn("name: Required CI\n", aggregate)
+        self.assertIn("if: always() && !(github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')", aggregate)
+        self.assertIn("needs: [scaffold, native-conformance]", aggregate)
+        self.assertEqual(check.count("name: Required CI"), 1)
+        self.assertIn("permissions:\n  contents: read", check)
+        self.assertNotIn("write", check)
+        for name in ("native-validation.yml", "release-validation.yml"):
+            self.assertNotIn("native-outer-runtime-profile.py", (ROOT / ".github/workflows" / name).read_text())
+
+    def test_hosted_diagnostic_event_ref_job_selection(self) -> None:
+        workflow = (ROOT / ".github/workflows/check.yml").read_text()
+        job_names = ("hosted-prerequisite-diagnostic", "scaffold", "native-conformance", "check-gate")
+        conditions = {}
+        for name in job_names:
+            body = workflow.split("  " + name + ":\n", 1)[1]
+            body = re.split(r"\n  [a-z][a-z-]*:\n", body, maxsplit=1)[0]
+            conditions[name] = re.search(r"^    if: (.+)$", body, re.MULTILINE).group(1)
+        for event, ref, expected in (
+            ("workflow_dispatch", "refs/heads/main", (True, False, False, False)),
+            ("workflow_dispatch", "refs/heads/feature", (False, False, False, True)),
+            ("pull_request", "refs/pull/1/merge", (False, True, False, True)),
+            ("push", "refs/heads/main", (False, True, True, True)),
+            ("push", "refs/heads/feature", (False, True, False, True)),
+        ):
+            with self.subTest(event=event, ref=ref):
+                actual = []
+                for name in job_names:
+                    # These closed job predicates use the shared boolean/string
+                    # subset of Actions expressions and Bash conditional syntax.
+                    expression = (conditions[name].replace("github.event_name", '"$EVENT_NAME"')
+                                  .replace("github.ref", '"$EVENT_REF"')
+                                  .replace("always()", "true").replace("!(", "! ("))
+                    result = subprocess.run(["bash", "-c", "[[ " + expression + " ]]"],
+                                            env=dict(os.environ, EVENT_NAME=event, EVENT_REF=ref),
+                                            capture_output=True, text=True, check=False)
+                    self.assertIn(result.returncode, (0, 1), result.stderr)
+                    actual.append(result.returncode == 0)
+                self.assertEqual(tuple(actual), expected)
+
+    def test_diagnostic_pins_have_existing_unique_renovate_ownership(self) -> None:
+        renovate = json.loads((ROOT / "renovate.json").read_text())
+        self.assertEqual(renovate["enabledManagers"].count("github-actions"), 1)
+        self.assertEqual(len(renovate["customManagers"]), 2)
+        workflow = (ROOT / ".github/workflows/check.yml").read_text()
+        diagnostic = workflow.split("  hosted-prerequisite-diagnostic:\n", 1)[1].split("  scaffold:\n", 1)[0]
+        self.assertEqual(re.findall(r"uses: (.+)", diagnostic), [
+            "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2",
+            "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2",
+        ])
+        self.assertEqual(len([name for name in (ROOT / ".github/workflows").glob("*.yml")
+                              if "native-outer-runtime-profile.py" in name.read_text()]), 1)
+
     def test_pr_gate_is_offline_only_and_main_requires_native(self) -> None:
         check = (ROOT / ".github/workflows/check.yml").read_text()
         self.assertEqual(check.count("  check-gate:\n"), 1)
@@ -237,7 +310,7 @@ class ScaffoldPolicyTests(unittest.TestCase):
         header = aggregate.split("    steps:\n", 1)[0]
         self.assertEqual(re.findall(r"^    name: (.+)$", header, re.MULTILINE), ["Required CI"])
         self.assertEqual(check.count("    name: Required CI\n"), 1)
-        self.assertIn("    if: always()\n    needs: [scaffold, native-conformance]\n", header)
+        self.assertIn("    if: always() && !(github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')\n    needs: [scaffold, native-conformance]\n", header)
         self.assertNotIn("continue-on-error:", aggregate)
         gate = aggregate.split("        run: |\n", 1)[1]
         script = textwrap.dedent(gate)
@@ -256,6 +329,7 @@ class ScaffoldPolicyTests(unittest.TestCase):
             ("non-main native success", "push", "refs/heads/other", "success", False),
             ("unexpected dispatch", "workflow_dispatch", "refs/heads/main", "success", False),
             ("untrusted PR event", "pull_request_target", "refs/heads/main", "success", False),
+            ("non-main diagnostic", "workflow_dispatch", "refs/heads/feature", "skipped", False),
         ):
             for scaffold in ("success", "failure", "cancelled", "skipped"):
                 with self.subTest(scenario=scenario, scaffold=scaffold):
