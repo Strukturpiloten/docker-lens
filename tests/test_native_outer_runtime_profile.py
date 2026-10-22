@@ -354,7 +354,7 @@ class HostedDiagnosticTests(unittest.TestCase):
             self.assertNotIn(SECRET, output.getvalue() + errors.getvalue())
             if len(argv) == 1:
                 record = json.loads(output.getvalue())
-                self.assertEqual(record["schema_version"], 2)
+                self.assertEqual(record["schema_version"], 3)
                 self.assertEqual(record["purpose"], "hosted_prerequisite_diagnostic")
                 self.assertEqual(record["admission"], "unadmitted")
 
@@ -408,16 +408,19 @@ class HostedDiagnosticTests(unittest.TestCase):
             with self.subTest(field=field, category=category, row=row):
                 with self.assertRaises(PROFILE.Unavailable) as caught: PROFILE.package_metadata(raw)
                 self.assertEqual(caught.exception.reason, "invalid_metadata")
-                self.assertEqual(caught.exception.failure_detail, {"field": field, "category": category, "row": row})
+                expected = {"field": field, "category": category, "row": row}
+                if field in {"version", "architecture"}:
+                    expected["validated_dpkg_state"] = "installed"
+                self.assertEqual(caught.exception.failure_detail, expected)
                 self.assertNotIn(SECRET, json.dumps(caught.exception.failure_detail))
                 self.assertNotIn(SECRET, str(caught.exception))
 
-    def test_schema2_failure_details_propagate_without_salvage_or_private_bytes(self):
+    def test_schema3_failure_details_propagate_without_salvage_or_private_bytes(self):
         raw = b"docker-ce\tinstall ok installed\t1\tamd64\n" + (SECRET + "\tbad\tbad\tbad\n").encode()
         copyright = self.source("copyright:dpkg")
         copyright.chmod(0o666)
         result, calls = self.execute(replacements={PROFILE.PACKAGE_QUERY: raw})
-        self.assertEqual(result["schema_version"], 2)
+        self.assertEqual(result["schema_version"], 3)
         self.assertEqual(result["status"], "partial")
         self.assertEqual(calls, list(PROFILE.COMMANDS))
         self.assertEqual(result["observations"]["packages"], {"status": "unavailable", "reason": "invalid_metadata",
@@ -501,13 +504,80 @@ class HostedDiagnosticTests(unittest.TestCase):
             self.assertEqual(caught.exception.failure_detail,
                              {"guard": "metadata" if primary else "close", "component": "leaf", "category": "io_error"})
 
-    def test_schema2_success_has_no_failure_detail_and_preserves_observations(self):
+    def test_schema3_success_has_no_failure_detail_and_preserves_observations(self):
         result, calls = self.execute()
-        self.assertEqual((result["schema_version"], result["status"], result["reason"]), (2, "observed", "complete"))
+        self.assertEqual((result["schema_version"], result["status"], result["reason"]), (3, "observed", "complete"))
         self.assertNotIn("failure_detail", json.dumps(result))
         self.assertEqual(calls, list(PROFILE.COMMANDS))
         self.assertEqual(PROFILE.package_metadata(b""), {name: {"status": "missing"} for name in PROFILE.PACKAGES})
         self.assertEqual((PROFILE.LIMIT, PROFILE.FILE_LIMIT, PROFILE.TOTAL_SOURCE), (65536, 2097152, 8388608))
+
+    def test_schema3_only_reports_validated_final_state_for_later_failures(self):
+        states = ("not-installed", "config-files", "half-installed", "unpacked", "half-configured",
+                  "triggers-awaited", "triggers-pending", "installed")
+        self.assertEqual(PROFILE.VALIDATED_DPKG_STATES, frozenset(states))
+        for state in states:
+            for field, version, architecture, category in (("version", "", "amd64", "empty"),
+                                                           ("architecture", "1", SECRET, "unrecognized")):
+                with self.subTest(state=state, field=field):
+                    raw = ("docker-ce\tunknown reinstreq " + state + "\t" + version + "\t" + architecture + "\n").encode()
+                    with self.assertRaises(PROFILE.Unavailable) as caught: PROFILE.package_metadata(raw)
+                    self.assertEqual(caught.exception.reason, "invalid_metadata")
+                    self.assertEqual(caught.exception.failure_detail,
+                                     {"field": field, "category": category, "row": 1, "validated_dpkg_state": state})
+                    self.assertNotIn(SECRET, json.dumps(caught.exception.failure_detail))
+            # A fully accepted row retains its original reported fields; final
+            # tokens never become inferred package-presence classifications.
+            valid = ("docker-ce\tunknown reinstreq " + state + "\t1\tamd64\n").encode()
+            self.assertEqual(PROFILE.package_metadata(valid)["docker-ce"]["package_status"], "unknown reinstreq " + state)
+
+    def test_status_context_is_omitted_before_or_at_full_status_validation(self):
+        good = b"docker-ce\tinstall ok installed\t1\tamd64\n"
+        cases = [(b"\xff", "encoding"), (b"missing terminator", "framing"), (b"bad\n", "columns"),
+                 ((SECRET + "\tinstall ok installed\t\tamd64\n").encode(), "package"),
+                 (good + good, "package")]
+        for state in ("", "Install ok installed", "install  ok installed", "install ok installed ",
+                      "install " + SECRET + " installed", "install ok " + SECRET):
+            cases.append((("docker-ce\t" + state + "\t\tamd64\n").encode(), "status"))
+        for raw, field in cases:
+            with self.subTest(field=field):
+                with self.assertRaises(PROFILE.Unavailable) as caught: PROFILE.package_metadata(raw)
+                self.assertEqual(caught.exception.failure_detail["field"], field)
+                self.assertNotIn("validated_dpkg_state", caught.exception.failure_detail)
+                self.assertNotIn(SECRET, json.dumps(caught.exception.failure_detail))
+
+    def test_schema3_status_context_is_row_local_and_whole_parse_stays_unavailable(self):
+        raw = (b"docker-ce\tinstall ok installed\t1\tamd64\n"
+               b"docker-ce-cli\tdeinstall ok config-files\t\tamd64\n")
+        result, calls = self.execute(replacements={PROFILE.PACKAGE_QUERY: raw})
+        self.assertEqual((result["schema_version"], result["status"], result["admission"]), (3, "partial", "unadmitted"))
+        self.assertEqual(calls, list(PROFILE.COMMANDS))
+        self.assertEqual(result["observations"]["packages"],
+                         {"status": "unavailable", "reason": "invalid_metadata", "failure_detail":
+                          {"field": "version", "category": "empty", "row": 2, "validated_dpkg_state": "config-files"}})
+        self.assertNotIn("docker-ce", result["observations"]["packages"])
+        duplicate = b"docker-ce\tdeinstall ok config-files\t1\tamd64\n" + raw.splitlines(keepends=True)[0]
+        with self.assertRaises(PROFILE.Unavailable) as caught: PROFILE.package_metadata(duplicate)
+        self.assertNotIn("validated_dpkg_state", caught.exception.failure_detail)
+
+    def test_status_context_constructor_rejects_unvalidated_or_misplaced_values(self):
+        base = {"field": "version", "category": "empty", "row": 1, "validated_dpkg_state": "installed"}
+        error = PROFILE.Unavailable("invalid_metadata", base)
+        base["validated_dpkg_state"] = SECRET
+        self.assertEqual(error.failure_detail["validated_dpkg_state"], "installed")
+        for value in (SECRET, "unknown", "", " installed", "installed\n", True, None, []):
+            with self.subTest(value_type=type(value).__name__):
+                with self.assertRaises(ValueError) as caught:
+                    PROFILE.Unavailable("invalid_metadata", base | {"validated_dpkg_state": value})
+                self.assertNotIn(SECRET, str(caught.exception))
+        base["validated_dpkg_state"] = "installed"
+        for field in ("encoding", "framing", "columns", "package", "status"):
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                PROFILE.Unavailable("invalid_metadata", base | {"field": field})
+        with self.assertRaises(ValueError): PROFILE.Unavailable("invalid_metadata", base | {"row": 0})
+        with self.assertRaises(ValueError):
+            PROFILE.Unavailable("custody_failure", {"guard": "mode", "component": "ancestor_2",
+                                                     "category": "check_failed", "validated_dpkg_state": "installed"})
 
 
     def test_duplex_stderr_cap_and_hard_deadline_do_not_call_kill_or_communicate(self):
