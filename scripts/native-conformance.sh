@@ -154,6 +154,26 @@ cleanup_podman() {
     timeout --signal=TERM --kill-after=2s 8s "${podman_cmd[@]}" "$@" 2>/dev/null
   fi
 }
+cleanup_inspect_query() {
+  [[ $# == 2 ]] || return 2
+  local kind=$1 name=$2
+  case $kind in network-owner-inspect|volume-identity-inspect) ;; *) return 2 ;; esac
+  if [[ ${native_outer_engine:-podman} == docker ]]; then
+    # The fixed entry hands one sampled deadline to the original 8s+2s owner.
+    # It does not launch the query until that owner covers the collector too.
+    if [[ ${native_outer_cmd[0]} == sudo ]]; then
+      "${native_outer_cmd[@]:0:2}" python3 "$script_dir/native-cleanup-inspect-diagnostic.py" owner \
+        --engine docker --directory "$run_dir" --kind "$kind" --name "$name"
+    else
+      python3 "$script_dir/native-cleanup-inspect-diagnostic.py" owner \
+        --engine docker --directory "$run_dir" --kind "$kind" --name "$name"
+    fi
+  elif [[ $kind == network-owner-inspect ]]; then
+    cleanup_podman network inspect --format '{{index .Labels "io.dockerlens.native-run"}}' "$name"
+  else
+    cleanup_podman volume inspect --format '{{.Name}}|{{.Driver}}|{{.Mountpoint}}|{{.CreatedAt}}|{{index .Labels "io.dockerlens.native-run"}}' "$name"
+  fi
+}
 native_presence() {
   local mode=$1 marker result=0
   shift
@@ -236,7 +256,7 @@ cleanup_volume() {
     0) ;;
     *) cleanup_refuse volume presence_unknown; return 1 ;;
   esac
-  current=$(cleanup_podman volume inspect --format '{{.Name}}|{{.Driver}}|{{.Mountpoint}}|{{.CreatedAt}}|{{index .Labels "io.dockerlens.native-run"}}' "$volume") || {
+  current=$(cleanup_inspect_query volume-identity-inspect "$volume") || {
     cleanup_identity_stage volume volume-identity-inspect "$?"
     cleanup_refuse volume identity_unknown; return 1;
   }
@@ -262,7 +282,7 @@ cleanup_network() {
       cleanup_refuse network identity_unknown; return 1;
     }
   fi
-  owner=$(cleanup_podman network inspect --format '{{index .Labels "io.dockerlens.native-run"}}' "$outer_network") || {
+  owner=$(cleanup_inspect_query network-owner-inspect "$outer_network") || {
     cleanup_identity_stage network network-owner-inspect "$?"
     cleanup_refuse network identity_unknown; return 1;
   }
@@ -1381,7 +1401,8 @@ export NATIVE_OUTER_ENGINE="$native_outer_engine" NATIVE_OUTER_RUN_DIRECTORY="$r
 
 outer_guest_http_failure_diagnostic() {
   [[ ${native_outer_engine:-} == docker && ${expected_mode:-} == rootless ]] || return 0
-  local unavailable='DOCKERLENS_NATIVE_OUTER_GUEST_HTTP: status=unavailable'
+  local unavailable='DOCKERLENS_NATIVE_OUTER_GUEST_HTTP: status=unavailable
+DOCKERLENS_NATIVE_OUTER_GUEST_CURL: tool=unavailable callable=unavailable curl_exit=unavailable'
   local remaining=$((1800 - SECONDS)) started ended ignored started_cs ended_cs result diagnostic_status=0
   # Admit the seven-second timer envelope plus two seconds of lane margin.
   # Pre-timer sudo startup remains the existing privilege boundary, not a new
@@ -1399,20 +1420,59 @@ outer_guest_http_failure_diagnostic() {
     set +e
     # The already-selected DIRECT client has no attach/custody helper. Its
     # existing privilege-aware owner bounds TERM-resistant clients at 3+2s.
-    native_outer_command 3 exec "$outer_container_id" /usr/bin/curl --disable -sS \
-      --noproxy '*' --retry 0 --proto '=http' --max-time 2 --request GET \
-      --output /dev/null --write-out '%{http_code}' "http://$sidecar_ip:18084/" 2>/dev/null |
+    # One fixed guest shell checks availability and frames the same GET. Curl
+    # streams directly into the existing bounded reader; no extra capture,
+    # request, timer, session, or command supplied by the guest is admitted.
+    native_outer_command 3 exec "$outer_container_id" /bin/sh -c '
+LC_ALL=C LANG=C
+export LC_ALL LANG
+if [ ! -e /usr/bin/curl ]; then
+  printf "DLHTTP1|absent||-\n"
+elif [ ! -x /usr/bin/curl ]; then
+  printf "DLHTTP1|not_executable||-\n"
+else
+  printf "DLHTTP1|executable|"
+  /usr/bin/curl --disable -sS --noproxy "*" --retry 0 --proto "=http" \
+    --max-time 2 --request GET --output /dev/null --write-out "%{http_code}" "$1"
+  curl_status=$?
+  case $curl_status in 130 | 143) exit "$curl_status" ;; esac
+  printf "|%s\n" "$curl_status"
+fi
+' dockerlens-guest-http "http://$sidecar_ip:18084/" 2>/dev/null |
       timeout --signal=TERM --kill-after=1s 6s python3 -I -S -c '
 import os
+import re
 raw = b""
-while len(raw) < 4:
-    part = os.read(0, 4 - len(raw))
+while len(raw) < 65:
+    part = os.read(0, 65 - len(raw))
     if not part:
         break
     raw += part
-if len(raw) != 3 or raw[:1] not in b"12345" or not raw.isdigit():
+match = re.fullmatch(rb"DLHTTP1\|(absent|not_executable|executable)\|(000|[1-5][0-9]{2})?\|(-|0|[1-9][0-9]{0,2})\n", raw)
+if not match:
     raise SystemExit(1)
-print("http_200" if raw == b"200" else "http_other")
+tool, http, code = match.groups()
+status, callable_status, category = "unavailable", "no", "not_called"
+if tool != b"executable":
+    if http is not None or code != b"-":
+        raise SystemExit(1)
+else:
+    if code == b"-" or int(code) > 127:
+        raise SystemExit(1)
+    code = int(code)
+    if code in (126, 127):
+        if http is not None:
+            raise SystemExit(1)
+        category = "unavailable"
+    else:
+        callable_status = "yes"
+        category = {0: "success", 5: "resolve_proxy", 6: "resolve_host", 7: "connect_failed",
+                    28: "timeout", 52: "empty_reply", 55: "send_failed", 56: "receive_failed"}.get(code, "other")
+        if code == 0:
+            if http is None or http[:1] not in b"12345":
+                raise SystemExit(1)
+            status = "http_200" if http == b"200" else "http_other"
+print(f"{status} tool={tool.decode()} callable={callable_status} curl_exit={category}")
 ' 2>/dev/null
     command_statuses=("${PIPESTATUS[@]}")
     for command_status in "${command_statuses[@]}"; do
@@ -1430,8 +1490,9 @@ print("http_200" if raw == b"200" else "http_other")
   if (( diagnostic_status != 0 || ended_cs < started_cs || ended_cs - started_cs >= 799 || SECONDS >= 1800 )) ||
       ! kill -0 "$watchdog_pid" 2>/dev/null; then
     echo "$unavailable" >&2
-  elif [[ $result == http_200 || $result == http_other ]]; then
-    printf 'DOCKERLENS_NATIVE_OUTER_GUEST_HTTP: status=%s\n' "$result" >&2
+  elif [[ $result =~ ^(http_200|http_other|unavailable)\ tool=(absent|not_executable|executable)\ callable=(yes|no)\ curl_exit=(not_called|unavailable|success|resolve_proxy|resolve_host|connect_failed|timeout|empty_reply|send_failed|receive_failed|other)$ ]]; then
+    printf 'DOCKERLENS_NATIVE_OUTER_GUEST_HTTP: status=%s\nDOCKERLENS_NATIVE_OUTER_GUEST_CURL: %s\n' \
+      "${result%% *}" "${result#* }" >&2
   else
     echo "$unavailable" >&2
   fi

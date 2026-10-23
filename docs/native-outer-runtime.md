@@ -272,15 +272,18 @@ and the already-verified rootless lane. Original cancellation statuses 130/143
 bypass this observation. It uses the existing selected `native_outer_command`
 directly, the held creation-bound daemon ID and held sidecar IPv4/port 18084/root
 path. There is no attach helper, new inspection, endpoint, resource, retry,
-namespace entry, installation or fallback. Fixed guest `/usr/bin/curl` disables
+namespace entry, installation or fallback. One fixed guest shell checks curl's
+existence and executable bit before the same GET. Guest `/usr/bin/curl` disables
 configuration/proxy/retry/redirect behavior, has a two-second transfer limit,
-discards the response body and emits only its HTTP status. Missing curl and any
-nonzero, malformed, multiline or over-cap result remain unavailable.
+discards the response body and emits a bounded versioned status frame. Missing
+or non-executable curl, loader errors and transfer failures get separate closed
+categories, never a positive HTTP status. Tool checks do not authenticate its
+version or origin. Malformed, partial, extra or over-cap frames are unavailable.
 
 The direct client's existing privilege-aware timer has a three-second TERM plus
 two-second kill envelope. A separate six-second TERM plus one-second kill owner
-bounds the no-child host reader, which reads at most four bytes and emits only
-a closed category. These are timer envelopes, not a universal seven-second wall
+bounds the no-child host reader, which reads at most 65 bytes and requires a
+complete frame and EOF. These are timer envelopes, not a universal seven-second wall
 or process-death guarantee: pre-timer sudo/PAM startup remains the existing
 admitted direct-client privilege boundary. No new privilege supervisor is added.
 Collection requires an alive original watchdog and at least nine seconds of the
@@ -292,8 +295,10 @@ The two seconds of lane margin are not a protected cleanup reserve. Rust's
 180-second invocation, 90-second cleanup reservation and default-bridge read's
 98-second admission are unchanged and are not borrowed or renewed here.
 
-Only `DOCKERLENS_NATIVE_OUTER_GUEST_HTTP: status=http_200|http_other|unavailable`
-is printed. HTTP 200 is a later status snapshot, not an exact-body proof,
+`DOCKERLENS_NATIVE_OUTER_GUEST_HTTP: status=http_200|http_other|unavailable`
+is retained. A separate `DOCKERLENS_NATIVE_OUTER_GUEST_CURL` record contains
+only closed tool, callable and exit categories. An unavailable observation
+does not establish a network failure. HTTP 200 is a later status snapshot, not an exact-body proof,
 route/RootlessKit correctness, established timeout cause, lifecycle/cleanup proof
 or native acceptance. The original nonzero test status is retained, unless
 explicit child cancellation exits through the coordinator's existing EXIT
@@ -372,6 +377,38 @@ to skip live setup or establish inner compatibility. Only closed version/setup
 summaries leave the private directory. Official Docker references:
 [contexts](https://docs.docker.com/engine/manage-resources/contexts/) and
 [dockerd](https://docs.docker.com/reference/cli/dockerd/).
+
+## Bounded cleanup inspection diagnostics
+
+Only the two existing outer Docker network-owner and volume-identity formatted
+queries use `native-cleanup-inspect-diagnostic.py`. Their derived task-owned
+names, canonical client/query vectors and one invocation are fixed; local
+Podman cleanup keeps its original direct path. No extra daemon query, retry,
+fallback, ownership relaxation or removal authority is introduced.
+
+A root-side entry samples one absolute monotonic deadline immediately before
+exec of the same eight-second TERM/two-second KILL owner. Context validation
+and collection run under that owner, using the handed deadline unchanged.
+There is no nested timer, new session/group or renewed budget. Pre-owner
+sudo/interpreter startup is outside the claimed envelope; this is not a
+universal wall-clock or process-disposal guarantee.
+
+The shared capture's additive outcome path checks bounded complete stdout and
+stderr, their final counts and real settled return status. Kernel-window and
+AppArmor consumers retain the legacy capture behavior, particularly uncertainty
+reasons and original-owner waiting. The fixed frontend projects only closed
+query-exit, stderr-family and collector-completion categories after private
+cleanup succeeds. Raw streams, exact statuses, counts, identities and paths are
+not logged. Complete successful identity output remains private to the original
+caller comparison; nonzero queries emit none and preserve their settled status,
+including 128+signal normalization.
+
+Capture, cancellation or private-cleanup uncertainty suppresses raw/positive output and
+waits for the original hard owner rather than disarming it. Existing identity
+comparisons, original failure status and resource retention remain authoritative.
+A diagnostic category never authorizes deletion, proves a cause or establishes
+native compatibility. Downstream consumers still need their own exact-source
+validation; one repository passing is not a completed shared rollout.
 
 ## Closed preflight diagnostics
 

@@ -38,6 +38,18 @@ and cancellation remain failures; missing/uncertain cleanup remains retained.
 
 ## Hosted prerequisite diagnostic
 
+Failure-only guest HTTP controls also distinguish missing/non-executable tools,
+loader failure and closed curl-exit categories from HTTP status using one bounded
+frame under the original owner. The fixed cleanup-inspection frontend has
+independent fake controls for canonical query vectors, real nonzero/signal
+statuses, both stream counts, malformed/overflow/partial capture, private cleanup
+and cancellation. Actual GNU-timeout tests use only fake clients and verify the
+original eight-second TERM/two-second KILL ownership with resistant clients;
+they launch no native daemon or host-policy change. Legacy kernel-window and
+AppArmor capture consumers retain their separate regression coverage. These
+synthetic results never establish hosted executable availability, a networking
+cause, successful native cleanup or compatibility.
+
 Failure-only native diagnostics also have bounded, synthetic regression coverage:
 the [kernel window](native-rootless-kernel-window.md) and the owned inner Engine's
 [default-bridge subnet observation](native-outer-runtime.md) preserve original

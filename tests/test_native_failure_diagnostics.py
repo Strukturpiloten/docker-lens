@@ -13,6 +13,22 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = (ROOT / "scripts/native-conformance.sh").read_text()
 RUNTIME = (ROOT / "scripts/native-outer-runtime.sh").read_text()
 CANARY = "protected-canary /private/socket 10.89.0.2 uid=987654"
+GUEST_HTTP_SCRIPT = r'''
+LC_ALL=C LANG=C
+export LC_ALL LANG
+if [ ! -e /usr/bin/curl ]; then
+  printf "DLHTTP1|absent||-\n"
+elif [ ! -x /usr/bin/curl ]; then
+  printf "DLHTTP1|not_executable||-\n"
+else
+  printf "DLHTTP1|executable|"
+  /usr/bin/curl --disable -sS --noproxy "*" --retry 0 --proto "=http" \
+    --max-time 2 --request GET --output /dev/null --write-out "%{http_code}" "$1"
+  curl_status=$?
+  case $curl_status in 130 | 143) exit "$curl_status" ;; esac
+  printf "|%s\n" "$curl_status"
+fi
+'''
 APPARMOR_PROJECTION = (
     'inspect_reported_apparmor={{if ne (printf "%T" .AppArmorProfile) "string"}}unknown'
     '{{else if eq .AppArmorProfile "unconfined"}}unconfined'
@@ -58,6 +74,20 @@ class FailureDiagnosticsTests(unittest.TestCase):
                               env=self.env | (changes or {}), capture_output=True,
                               text=True, timeout=timeout)
 
+    def guest_client_reply(self, stdout="200", status=0, stderr="", *, curl_status=0):
+        self.client_reply(f"DLHTTP1|executable|{stdout}|{curl_status}\n", status, stderr)
+
+    @staticmethod
+    def guest_observation(status="unavailable", *, tool="unavailable", callable_status="unavailable",
+                          curl_exit="unavailable"):
+        return (f"DOCKERLENS_NATIVE_OUTER_GUEST_HTTP: status={status}\n"
+                f"DOCKERLENS_NATIVE_OUTER_GUEST_CURL: tool={tool} callable={callable_status} curl_exit={curl_exit}\n")
+
+    @staticmethod
+    def guest_argv():
+        return ["exec", "a" * 64, "/bin/sh", "-c", GUEST_HTTP_SCRIPT,
+                "dockerlens-guest-http", "http://10.23.7.9:18084/"]
+
     def guest_http_body(self, *, privileged=False, remaining=9, watchdog=True, invoke=True):
         vector = [str(self.client)]
         if privileged:
@@ -80,9 +110,7 @@ class FailureDiagnosticsTests(unittest.TestCase):
         return body
 
     def test_guest_http_status_only_fixed_direct_client_and_unavailable_inputs(self):
-        expected = ["exec", "a" * 64, "/usr/bin/curl", "--disable", "-sS", "--noproxy", "*",
-                    "--retry", "0", "--proto", "=http", "--max-time", "2", "--request", "GET",
-                    "--output", "/dev/null", "--write-out", "%{http_code}", "http://10.23.7.9:18084/"]
+        expected = self.guest_argv()
         for stdout, status, result_status in (
             ("200", 0, "http_200"), ("201", 0, "http_other"), ("404", 0, "http_other"),
             ("599", 0, "http_other"), ("", 127, "unavailable"), ("200", 7, "unavailable"),
@@ -91,22 +119,23 @@ class FailureDiagnosticsTests(unittest.TestCase):
             ("200x", 0, "unavailable"), ("2" * 100000, 0, "unavailable"),
         ):
             with self.subTest(status=status, output_class=result_status):
-                self.client_reply(stdout, status, CANARY)
+                self.guest_client_reply(stdout, status, CANARY)
                 result = self.shell(self.guest_http_body(privileged=True), timeout=9)
                 self.assertEqual(result.returncode, 17)
                 self.assertEqual(result.stdout, "")
-                self.assertEqual(result.stderr,
-                                 f"DOCKERLENS_NATIVE_OUTER_GUEST_HTTP: status={result_status}\n")
+                self.assertEqual(result.stderr, self.guest_observation(result_status, **(
+                    {"tool": "executable", "callable_status": "yes", "curl_exit": "success"}
+                    if result_status != "unavailable" else {})))
                 self.assertEqual(json.loads(self.trace.read_text()), expected)
                 self.assertNotIn(CANARY, result.stdout + result.stderr)
 
     def test_guest_http_late_budget_missing_watchdog_and_boottime_refuse_positive(self):
-        self.client_reply("200")
+        self.guest_client_reply("200")
         for body in (self.guest_http_body(remaining=8), self.guest_http_body(watchdog=False)):
             self.trace.unlink(missing_ok=True)
             result = self.shell(body)
             self.assertEqual(result.returncode, 17)
-            self.assertEqual(result.stderr, "DOCKERLENS_NATIVE_OUTER_GUEST_HTTP: status=unavailable\n")
+            self.assertEqual(result.stderr, self.guest_observation())
             self.assertFalse(self.trace.exists())
         for body in (self.guest_http_body().replace("expected_mode=rootless", "expected_mode=rootful"),
                      self.guest_http_body().replace("native_outer_engine=docker", "native_outer_engine=podman")):
@@ -122,14 +151,104 @@ class FailureDiagnosticsTests(unittest.TestCase):
             result = self.shell(body)
             self.assertEqual(result.returncode, 17)
             expected = "http_200" if ended == "107.98" else "unavailable"
-            self.assertEqual(result.stderr, f"DOCKERLENS_NATIVE_OUTER_GUEST_HTTP: status={expected}\n")
+            self.assertEqual(result.stderr, self.guest_observation(expected, **(
+                {"tool": "executable", "callable_status": "yes", "curl_exit": "success"}
+                if expected == "http_200" else {})))
+
+    def test_guest_http_fixed_shell_tool_availability_and_closed_curl_exits(self):
+        curl = self.private / "fake-curl"
+        calls = self.private / "curl-calls"
+        expected_options = ["--disable", "-sS", "--noproxy", "*", "--retry", "0", "--proto", "=http",
+                            "--max-time", "2", "--request", "GET", "--output", "/dev/null",
+                            "--write-out", "%{http_code}", "http://10.23.7.9:18084/"]
+        self.tool(self.client, "import json,os,sys\nfrom pathlib import Path\n"
+                  f"assert sys.argv[1:] == {self.guest_argv()!r}\n"
+                  "Path(os.environ['TRACE']).write_text(json.dumps(sys.argv[1:]))\n"
+                  f"script=sys.argv[5].replace('/usr/bin/curl', {str(curl)!r})\n"
+                  "os.execv('/bin/sh', ['/bin/sh', '-c', script, sys.argv[6], sys.argv[7]])\n")
+        cases = (
+            ("absent", "", 0, "unavailable", "absent", "no", "not_called"),
+            ("not_executable", "", 0, "unavailable", "not_executable", "no", "not_called"),
+            ("missing_loader", "", 0, "unavailable", "executable", "no", "unavailable"),
+            ("executable", "", 126, "unavailable", "executable", "no", "unavailable"),
+            ("executable", "200", 0, "http_200", "executable", "yes", "success"),
+            ("executable", "404", 0, "http_other", "executable", "yes", "success"),
+            *(("executable", "200", code, "unavailable", "executable", "yes", category)
+              for code, category in ((5, "resolve_proxy"), (6, "resolve_host"), (7, "connect_failed"),
+                                     (28, "timeout"), (52, "empty_reply"), (55, "send_failed"),
+                                     (56, "receive_failed"), (1, "other"), (99, "other"))),
+        )
+        for fixture, stdout, code, status, tool, callable_status, category in cases:
+            with self.subTest(fixture=fixture, curl_exit=code):
+                curl.unlink(missing_ok=True)
+                calls.unlink(missing_ok=True)
+                if fixture != "absent":
+                    self.tool(curl, "import json,os,sys\nfrom pathlib import Path\n"
+                              "assert os.environ['LC_ALL'] == os.environ['LANG'] == 'C'\n"
+                              f"with Path({str(calls)!r}).open('a') as calls:\n"
+                              " calls.write(json.dumps(sys.argv[1:])+'\\n')\n"
+                              f"sys.stdout.write({stdout!r});sys.stdout.flush()\n"
+                              f"sys.stderr.write({CANARY!r});raise SystemExit({code})\n")
+                    if fixture == "not_executable":
+                        curl.chmod(0o600)
+                    elif fixture == "missing_loader":
+                        curl.write_text("#!/nonexistent/dockerlens-fake-loader\n")
+                result = self.shell(self.guest_http_body(privileged=True), timeout=9)
+                self.assertEqual(result.returncode, 17)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(result.stderr, self.guest_observation(status, tool=tool,
+                                 callable_status=callable_status, curl_exit=category))
+                self.assertEqual(json.loads(self.trace.read_text()), self.guest_argv())
+                self.assertEqual(calls.exists(), fixture == "executable")
+                if calls.exists():
+                    self.assertEqual([json.loads(line) for line in calls.read_text().splitlines()],
+                                     [expected_options])
+                self.assertNotIn(CANARY, result.stdout + result.stderr)
+        # A curl cancellation exits the fixed shell before a trailer is emitted.
+        for code in (130, 143):
+            self.tool(curl, f"raise SystemExit({code})\n")
+            result = self.shell(self.guest_http_body())
+            self.assertEqual((result.returncode, result.stdout, result.stderr), (code, "", ""))
+
+    def test_guest_http_complete_bounded_frame_is_required_for_all_facts(self):
+        valid = "DLHTTP1|executable|200|0\n"
+        malformed = (
+            "", "200", "DLHTTP1|executable|", valid[:-1], valid + "\n", valid + valid,
+            "prefix" + valid, valid + "suffix", "DLHTTP1|executable|200|0\nprotected-canary",
+            "DLHTTP1|executable|200|00\n", "DLHTTP1|executable|200|+0\n",
+            "DLHTTP1|executable|200|-1\n", "DLHTTP1|executable|200|128\n",
+            "DLHTTP1|executable|200|256\n", "DLHTTP1|executable|200|9999\n",
+            "DLHTTP1|executable|099|7\n", "DLHTTP1|executable|600|7\n",
+            "DLHTTP1|executable|20|7\n", "DLHTTP1|executable|200|127\n",
+            "DLHTTP1|executable||-\n", "DLHTTP1|absent|200|-\n",
+            "DLHTTP1|absent||0\n", "DLHTTP1|not_executable||127\n",
+            "DLHTTP1|other||-\n", "DLHTTP1|executable|000|0\n",
+            valid.replace("\n", "\r\n"), valid + "x" * 100000,
+        )
+        for raw in malformed:
+            with self.subTest(length=len(raw), prefix=raw[:32]):
+                self.client_reply(raw, stderr=CANARY)
+                result = self.shell(self.guest_http_body())
+                self.assertEqual((result.returncode, result.stdout), (17, ""))
+                self.assertEqual(result.stderr, self.guest_observation())
+                self.assertNotIn(CANARY, result.stdout + result.stderr)
+        # Valid bytes are not facts unless the original owner also completes.
+        for code in (1, 124, 125, 126, 127, 137):
+            self.client_reply(valid, code)
+            result = self.shell(self.guest_http_body())
+            self.assertEqual(result.returncode, 17)
+            self.assertEqual(result.stderr, self.guest_observation())
+        for code in (130, 143):
+            self.client_reply("invalid partial frame", code)
+            result = self.shell(self.guest_http_body())
+            self.assertEqual((result.returncode, result.stdout, result.stderr), (code, "", ""))
 
     def test_guest_http_original_native_status_and_cancellation_skip_contact(self):
         start = SOURCE.index("internal_network_status=0\n")
         end = SOURCE.index('"$(dirname "$0")/run-exact-native-test.sh" native_volume ', start)
         wrapper = SOURCE[start:end]
         fake_native = self.private / "fake-native-test"
-        self.client_reply("200")
+        self.guest_client_reply("200")
         for native_status in (0, 17, 130, 143):
             self.trace.unlink(missing_ok=True)
             self.tool(fake_native, f"raise SystemExit({native_status})\n")
@@ -140,10 +259,11 @@ class FailureDiagnosticsTests(unittest.TestCase):
             self.assertEqual(result.returncode, native_status)
             self.assertEqual(self.trace.exists(), native_status == 17)
             self.assertEqual(result.stderr,
-                             "DOCKERLENS_NATIVE_OUTER_GUEST_HTTP: status=http_200\n" if native_status == 17 else "")
+                             self.guest_observation("http_200", tool="executable", callable_status="yes",
+                                                    curl_exit="success") if native_status == 17 else "")
         # Explicit child cancellation exits through the existing cleanup owner.
         for status in (130, 143):
-            self.client_reply("200", status)
+            self.guest_client_reply("200", status)
             result = self.shell(self.guest_http_body())
             self.assertEqual(result.returncode, status)
             self.assertNotIn("status=http_200", result.stderr)
@@ -156,7 +276,7 @@ class FailureDiagnosticsTests(unittest.TestCase):
         # A real elapsed second exhausted the former special SECONDS clock's
         # nine-second admission boundary before the fake client could be called.
         self.tool(fake_native, "import time\ntime.sleep(1.1)\nraise SystemExit(17)\n")
-        self.client_reply("200")
+        self.guest_client_reply("200")
         body = self.guest_http_body(invoke=False)
         body += wrapper.replace('"$(dirname "$0")/run-exact-native-test.sh"', repr(str(fake_native)))
         body += "exit 0\n"
@@ -164,13 +284,14 @@ class FailureDiagnosticsTests(unittest.TestCase):
         self.assertEqual(result.returncode, 17)
         self.assertEqual(result.stdout, "")
         self.assertTrue(self.trace.exists())
-        self.assertEqual(result.stderr, "DOCKERLENS_NATIVE_OUTER_GUEST_HTTP: status=http_200\n")
+        self.assertEqual(result.stderr, self.guest_observation("http_200", tool="executable",
+                                                             callable_status="yes", curl_exit="success"))
 
     def test_guest_http_child_cancellation_exits_cleanup_with_inherited_ignored_sigint(self):
         receipt = self.private / "guest-http-cleanup-status"
         for status in (130, 143):
             receipt.unlink(missing_ok=True)
-            self.client_reply("200", status)
+            self.guest_client_reply("200", status)
             body = self.guest_http_body(invoke=False)
             body += ("trap 'cleanup_status=$?; printf \"%s\\n\" \"$cleanup_status\" > \"$CLEANUP_RECEIPT\"' EXIT\n"
                      "outer_guest_http_failure_diagnostic || true\n"
@@ -197,7 +318,7 @@ class FailureDiagnosticsTests(unittest.TestCase):
                   "receipt=Path(os.environ['PIDS']);pending=receipt.with_suffix('.pending')\n"
                   "pending.write_text(json.dumps(os.getpid()));pending.rename(receipt)\n"
                   "Path(os.environ['PGROUP']).write_text(str(os.getpgrp()))\n"
-                  "sys.stdout.write('200');sys.stdout.flush()\ntime.sleep(60)\n")
+                  "sys.stdout.write('DLHTTP1|executable|200|0\\n');sys.stdout.flush()\ntime.sleep(60)\n")
         for mode, expected in (("stall", 17), ("cancel", 143)):
             receipt.unlink(missing_ok=True)
             started = time.monotonic()
@@ -209,6 +330,9 @@ class FailureDiagnosticsTests(unittest.TestCase):
             observation = json.loads(result.stdout)
             self.assertEqual(observation["status"], expected)
             self.assertNotIn("status=http_200", observation["stderr"])
+            self.assertNotIn("tool=executable", observation["stderr"])
+            if mode == "stall":
+                self.assertEqual(observation["stderr"], self.guest_observation())
             self.assertLess(time.monotonic() - started, 8)
             self.assertGreaterEqual(time.monotonic() - started, 4.5)
             with self.assertRaises(ProcessLookupError):

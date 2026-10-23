@@ -1,5 +1,16 @@
 # Dependency and pin policy
 
+The bounded guest HTTP and cleanup-inspection diagnostics add no software
+installation, dependency, image, Action or toolchain pin. Their Python/coreutils
+use stays within the existing preinstalled runner exception; guest curl remains
+optional observation-only image software, not an assumed installed dependency.
+All five canonical native-image extractions, Cargo/lockfile, toolchain and
+GitHub Actions ownership, grouping and approvals remain unchanged. The shared
+capture's kernel-window and AppArmor consumers keep their legacy contract; the
+new fixed cleanup frontend alone opts into complete outcomes. Policy regressions
+still verify the existing extraction paths, with no duplicate manager or
+Renovate edit required. Historical evidence and fixtures are untouched.
+
 The [hosted prerequisite diagnostic](hosted-prerequisite-diagnostic.md) adds no
 software installation, product dependency or operational version pin. Its sole
 consumer is Check's main-only diagnostic job; normal PR/main validation, native

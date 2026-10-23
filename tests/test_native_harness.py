@@ -2226,10 +2226,14 @@ esac
         diagnostic_end = source.index("\n}\n", diagnostic_start) + 3
         diagnostic = source[diagnostic_start:diagnostic_end]
         source = source[:diagnostic_start] + source[diagnostic_end:]
-        self.assertEqual(len(re.findall(r"\bcurl\b", diagnostic)), 1)
-        self.assertIn('native_outer_command 3 exec "$outer_container_id" /usr/bin/curl --disable -sS', diagnostic)
-        self.assertIn("--noproxy '*' --retry 0 --proto '=http' --max-time 2 --request GET", diagnostic)
-        self.assertIn('--output /dev/null --write-out \'%{http_code}\' "http://$sidecar_ip:18084/"', diagnostic)
+        self.assertEqual(len(re.findall(r"/usr/bin/curl --disable\b", diagnostic)), 1)
+        self.assertIn('native_outer_command 3 exec "$outer_container_id" /bin/sh -c', diagnostic)
+        self.assertIn('if [ ! -e /usr/bin/curl ]; then', diagnostic)
+        self.assertIn('elif [ ! -x /usr/bin/curl ]; then', diagnostic)
+        self.assertIn('/usr/bin/curl --disable -sS --noproxy "*" --retry 0 --proto "=http"', diagnostic)
+        self.assertIn('--max-time 2 --request GET --output /dev/null --write-out "%{http_code}" "$1"', diagnostic)
+        self.assertIn('\' dockerlens-guest-http "http://$sidecar_ip:18084/"', diagnostic)
+        self.assertEqual(diagnostic.count('http://$sidecar_ip:18084/'), 1)
         self.assertEqual(len(re.findall(r"\bcurl\b", source)), 4)  # Preflight and three sites.
         readiness = "deadline=$((SECONDS + 360))" + source.split(
             "deadline=$((SECONDS + 360))", 1

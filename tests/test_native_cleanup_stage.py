@@ -39,9 +39,10 @@ native_outer_binding() {
   binding_calls=$((binding_calls+1))
   if [[ $stage == network-binding ]]; then return "$code"; fi
 }
-cleanup_podman() {
+cleanup_inspect_query() {
   # Command substitutions cannot update parent counters; an explicit marker
-  # counts the existing native call without running a client.
+  # counts the existing query outcome without running a client. The actual
+  # selected-client handoff has separate integration coverage.
   printf 'inspect-call\n' >&2
   return "$code"
 }

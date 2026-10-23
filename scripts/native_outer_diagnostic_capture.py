@@ -18,6 +18,17 @@ import time
 from types import MappingProxyType
 
 
+@dataclass(frozen=True, repr=False)
+class CaptureOutcome:
+    """Complete bounded streams; returncode is data, not a success decision."""
+
+    stdout: bytes
+    stderr: bytes
+    returncode: int
+    stdout_count: int
+    stderr_count: int
+
+
 class Cancelled(Exception):
     def __init__(self, signum):
         self.signum = signum
@@ -175,6 +186,13 @@ class CaptureContext:
 
     def capture(self, command, files, prefix, deadline, cancellation=None, allowed_statuses=(0,)):
         """Drain incrementally under this purpose's exact command/prefix policy."""
+        return self._capture(command, files, prefix, deadline, cancellation, allowed_statuses, False)
+
+    def capture_outcome(self, command, files, prefix, deadline, cancellation=None):
+        """Return both authenticated complete streams without interpreting child status."""
+        return self._capture(command, files, prefix, deadline, cancellation, (), True)
+
+    def _capture(self, command, files, prefix, deadline, cancellation, allowed_statuses, outcome):
         if (type(command) is not tuple or type(prefix) is not str
                 or any(type(argument) is not str for argument in command)
                 or (command, prefix) not in self.commands
@@ -247,12 +265,18 @@ class CaptureContext:
             process.stdout.close()
             process.stderr.close()
             completed = True
-            try:
-                process.wait(timeout=max(0, deadline - time.monotonic()))
-            except subprocess.TimeoutExpired:
-                completed = False
-                if isinstance(failure, self.cancelled_type):
-                    failure.reason = "cancelled_completion_unknown"
+            if outcome:
+                # The outcome frontend retains the original hard owner itself.
+                # Release its private leaf before awaiting that owner; a bounded
+                # wait here could otherwise strand the leaf at owner's SIGKILL.
+                completed = process.poll() is not None
+            else:
+                try:
+                    process.wait(timeout=max(0, deadline - time.monotonic()))
+                except subprocess.TimeoutExpired:
+                    completed = False
+            if not completed and isinstance(failure, self.cancelled_type):
+                failure.reason = "cancelled_completion_unknown"
             if isinstance(failure, OSError):
                 raise self.unavailable("collector_io_failure" if completed else "completion_unknown") from None
             raise
@@ -266,6 +290,20 @@ class CaptureContext:
             raise self.unavailable("completion_unknown")
         if overflow:
             raise self.unavailable("output_overflow")
+        if outcome:
+            if timed_out:
+                raise self.unavailable("timeout")
+            streams = {}
+            try:
+                for name in ("stdout", "stderr"):
+                    os.lseek(files[prefix + "." + name], 0, os.SEEK_SET)
+                    streams[name] = os.read(files[prefix + "." + name], self.stream_limit + 1)
+                    if len(streams[name]) != counts[name]:
+                        raise self.unavailable("collector_io_failure")
+            except OSError:
+                raise self.unavailable("collector_io_failure") from None
+            return CaptureOutcome(streams["stdout"], streams["stderr"], status,
+                                  counts["stdout"], counts["stderr"])
         if timed_out or status in (124, 137):
             raise self.unavailable("timeout")
         if status in (126, 127):
