@@ -1,6 +1,7 @@
 """Synthetic fixture allocation contracts; never query a daemon or host network."""
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -22,6 +23,7 @@ SPEC.loader.exec_module(TOPO)
 CANDIDATE = "c" * 40
 NETWORK = "a" * 64
 CANARY = "private-canary /private/socket 10.253.253.7"
+DIAGNOSTIC = "DOCKERLENS_NATIVE_HOST_NETWORK_PREFLIGHT: phase="
 HOSTED = {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted", "RUNNER_OS": "Linux",
           "GITHUB_REF": "refs/heads/main", "GITHUB_EVENT_NAME": "workflow_dispatch", "ImageOS": "ubuntu24",
           "ImageVersion": "20261023.1.0", "GITHUB_REPOSITORY": "Strukturpiloten/docker-lens",
@@ -69,7 +71,55 @@ def host_record():
                        "executable": "/usr/bin/dockerd", "executable_device": 1, "executable_inode": 7}}
 
 
+def broken_diagnostic_streams():
+    class MissingFlush:
+        def __init__(self):
+            self.parts = []
+        def write(self, text):
+            self.parts.append(text)
+            return len(text)
+        def getvalue(self):
+            return "".join(self.parts)
+    class RuntimeWrite(MissingFlush):
+        def write(self, _text):
+            raise RuntimeError(CANARY)
+    class RuntimeFlush(MissingFlush):
+        def flush(self):
+            raise RuntimeError(CANARY)
+    class InterruptWrite(MissingFlush):
+        def write(self, _text):
+            raise KeyboardInterrupt(CANARY)
+    class ExitFlush(MissingFlush):
+        def flush(self):
+            raise SystemExit(CANARY)
+    return [("missing_flush", MissingFlush(), True), ("runtime_write", RuntimeWrite(), False),
+            ("runtime_flush", RuntimeFlush(), True), ("interrupt_write", InterruptWrite(), False),
+            ("exit_flush", ExitFlush(), True)]
+
+
 class ParserTests(unittest.TestCase):
+    def test_inactive_up_no_carrier_is_metadata_not_an_address_exemption(self):
+        inactive = {"ifindex": 2, "ifname": "docker0", "flags": ["NO-CARRIER", "BROADCAST", "MULTICAST", "UP"],
+                    "mtu": 1500, "qdisc": "noqueue", "operstate": "DOWN", "group": "default", "link_type": "ether",
+                    "address": "02:00:00:00:00:02", "broadcast": "ff:ff:ff:ff:ff:ff",
+                    "addr_info": [{"family": "inet", "local": "172.17.0.1", "prefixlen": 16,
+                                   "broadcast": "172.17.255.255", "scope": "global", "label": "docker0",
+                                   "valid_life_time": 4294967295, "preferred_life_time": 4294967295}]}
+        TOPO.host_addresses(raw([inactive]))
+        for address, prefix, broadcast in (("10.253.253.7", 24, "10.253.253.255"),
+                                            ("10.0.0.1", 8, "10.255.255.255")):
+            for noprefixroute in (False, True):
+                changed = json.loads(raw(inactive))
+                changed["addr_info"][0].update(local=address, prefixlen=prefix, broadcast=broadcast)
+                if noprefixroute:
+                    changed["addr_info"][0]["noprefixroute"] = True
+                with self.subTest(address=address, noprefixroute=noprefixroute), self.assertRaises(TOPO.Refused):
+                    TOPO.host_addresses(raw([changed]))
+        for flags in (["NO-CARRIER", "UP", "unknown-private-canary"], ["NO-CARRIER", "NO-CARRIER", "UP"]):
+            changed = inactive | {"flags": flags}
+            with self.subTest(flags=flags), self.assertRaises(TOPO.Refused):
+                TOPO.host_addresses(raw([changed]))
+
     def test_address_prefix_peer_and_noprefixroute_are_not_host_only_checks(self):
         TOPO.host_addresses(raw(interface()))
         TOPO.host_addresses(raw(interface("10.1.2.3", 8, peer="192.0.2.1")))
@@ -196,7 +246,7 @@ class ParserTests(unittest.TestCase):
 
 
 class PreflightTests(unittest.TestCase):
-    def sample(self, bad_route=False, peer_swap=False, dead=False, malformed=None):
+    def sample(self, bad_route=False, peer_swap=False, dead=False, malformed=None, capture_failure=None, diagnostic_io_failure=False, diagnostic_override=None):
         from native_outer_diagnostic_capture import CaptureOutcome
         import native_outer_diagnostic_capture as capture_module
         calls = []
@@ -206,6 +256,26 @@ class PreflightTests(unittest.TestCase):
         original_stat = os.stat
         class Retained(BaseException):
             pass
+        class DiagnosticStream(io.StringIO):
+            flushed = 0
+            def flush(self):
+                self.flushed += 1
+                if diagnostic_io_failure:
+                    raise OSError(CANARY)
+                super().flush()
+        diagnostic = DiagnosticStream() if diagnostic_override is None else diagnostic_override
+        stdout = io.StringIO()
+        expected_phase = ("routes_parse" if bad_route else "peer_match" if peer_swap else "identity_before" if dead else
+                          {"version": "version_parse", "addresses": "addresses_parse", "routes": "routes_parse"}.get(malformed[0]) if malformed else None)
+        if capture_failure is not None:
+            expected_phase = {"service": "service_before", "version": "version_capture", "addresses": "addresses_capture", "routes": "routes_capture"}[capture_failure[0]]
+        def retain():
+            # The production frontend must flush the finite line BEFORE it
+            # waits for the original hard owner's KILL, even on cancellation.
+            if diagnostic_override is None:
+                self.assertEqual(diagnostic.getvalue(), DIAGNOSTIC + expected_phase + " result=refused\n")
+                self.assertEqual(diagnostic.flushed, 1)
+            raise Retained()
         class FakeCapture:
             def __init__(self, **kwargs):
                 self.policy = kwargs
@@ -214,6 +284,12 @@ class PreflightTests(unittest.TestCase):
                 yield {}
             def capture_outcome(self, argv, files, prefix, deadline, cancellation):
                 calls.append((argv, deadline))
+                if capture_failure is not None and prefix == capture_failure[0]:
+                    if capture_failure[1] == "cancel":
+                        raise capture_module.Cancelled(signal.SIGINT)
+                    if capture_failure[1] == "late_eof":
+                        raise TOPO.Refused(CANARY)
+                    return CaptureOutcome(b"", CANARY.encode(), 42, 0, len(CANARY))
                 if prefix == "service":
                     stdout = b"MainPID=5\nActiveState=active\nSubState=running\n"
                 elif prefix == "version":
@@ -243,15 +319,20 @@ class PreflightTests(unittest.TestCase):
                 patch.object(TOPO, "process_start", return_value=10), \
                 patch.object(TOPO.select, "select", return_value=([100] if dead else [], [], [])), \
                 patch.object(TOPO.signal, "signal"), \
-                patch.object(TOPO, "hold_original_owner", side_effect=Retained), \
-                patch.object(TOPO.time, "monotonic", return_value=100):
-            if bad_route or peer_swap or dead or malformed is not None:
+                patch.object(TOPO, "hold_original_owner", side_effect=retain), \
+                patch.object(TOPO.time, "monotonic", return_value=100), redirect_stderr(diagnostic), redirect_stdout(stdout):
+            if bad_route or peer_swap or dead or malformed is not None or capture_failure is not None:
                 with self.assertRaises(Retained):
                     TOPO.preflight("test", CANDIDATE, lambda *_: peers.pop(0))
             else:
                 result = TOPO.preflight("test", CANDIDATE, lambda *_: peers.pop(0))
                 self.assertEqual(result["reservation"], "10.253.253.0/24")
                 self.assertTrue(result["disjoint"])
+                self.assertEqual((diagnostic.getvalue(), diagnostic.flushed), ("", 0))
+        self.assertNotIn("private-canary", diagnostic.getvalue())
+        self.assertNotIn("/private/socket", diagnostic.getvalue())
+        self.assertNotIn("10.253.253.7", diagnostic.getvalue())
+        self.assertEqual(stdout.getvalue(), "")
         self.assertEqual({deadline for _, deadline in calls}, {107})
         return [argv for argv, _ in calls]
 
@@ -269,11 +350,13 @@ class PreflightTests(unittest.TestCase):
 
     def test_unknown_hosted_context_refuses_before_tools(self):
         for key in HOSTED:
+            diagnostic = io.StringIO()
             with self.subTest(key=key), patch.dict(os.environ, HOSTED | {key: CANARY}, clear=True), \
-                    patch.object(TOPO, "trusted_tool") as tool:
+                    patch.object(TOPO, "trusted_tool") as tool, redirect_stderr(diagnostic):
                 with self.assertRaises(TOPO.Refused):
                     TOPO.preflight("test", CANDIDATE, lambda *_: {})
                 tool.assert_not_called()
+            self.assertEqual(diagnostic.getvalue(), DIAGNOSTIC + "admission result=refused\n")
 
     def test_malformed_or_empty_tool_and_host_output_keeps_original_owner(self):
         for prefix, output in (("version", b""), ("version", CANARY.encode()),
@@ -281,6 +364,74 @@ class PreflightTests(unittest.TestCase):
                                ("routes", b"{}"), ("routes", b"[{\"dst\":\"default\",\"dst\":\"default\"}]")):
             with self.subTest(prefix=prefix, output=output):
                 self.sample(malformed=(prefix, output))
+
+    def test_failed_captures_cancellation_and_late_eof_retain_original_refusal_phase(self):
+        for prefix in ("service", "version", "addresses", "routes"):
+            for reason in ("nonzero", "cancel", "late_eof"):
+                with self.subTest(prefix=prefix, reason=reason):
+                    self.sample(capture_failure=(prefix, reason))
+
+    def test_diagnostic_flush_failure_cannot_skip_original_owner(self):
+        self.sample(bad_route=True, diagnostic_io_failure=True)
+
+    def test_prelaunch_exception_is_not_replaced_or_rendered(self):
+        original = OSError(CANARY)
+        diagnostic = io.StringIO()
+        with patch.dict(os.environ, HOSTED, clear=True), patch.object(TOPO.os, "geteuid", return_value=0), \
+                patch.object(TOPO.signal, "signal"), patch.object(TOPO, "trusted_tool", side_effect=original), \
+                patch.object(TOPO, "hold_original_owner") as retain, redirect_stderr(diagnostic):
+            with self.assertRaises(OSError) as caught:
+                TOPO.preflight("test", CANDIDATE, lambda *_: {})
+            self.assertIs(caught.exception, original)
+            retain.assert_not_called()
+        self.assertEqual(diagnostic.getvalue(), DIAGNOSTIC + "ip_custody result=refused\n")
+
+    def test_any_diagnostic_failure_preserves_prelaunch_exception_identity(self):
+        for name, diagnostic, wrote in broken_diagnostic_streams():
+            original = OSError(CANARY)
+            stdout = io.StringIO()
+            with self.subTest(stream=name), patch.dict(os.environ, HOSTED, clear=True), \
+                    patch.object(TOPO.os, "geteuid", return_value=0), patch.object(TOPO.signal, "signal"), \
+                    patch.object(TOPO, "trusted_tool", side_effect=original), \
+                    patch.object(TOPO, "hold_original_owner") as retain, \
+                    redirect_stderr(diagnostic), redirect_stdout(stdout):
+                with self.assertRaises(OSError) as caught:
+                    TOPO.preflight("test", CANDIDATE, lambda *_: {})
+                self.assertIs(caught.exception, original)
+                retain.assert_not_called()
+            self.assertEqual(diagnostic.getvalue(), DIAGNOSTIC + "ip_custody result=refused\n" if wrote else "")
+            self.assertEqual(stdout.getvalue(), "")
+
+    def test_any_diagnostic_failure_cannot_prevent_postlaunch_owner_hold(self):
+        for name, diagnostic, wrote in broken_diagnostic_streams():
+            with self.subTest(stream=name):
+                self.sample(bad_route=True, diagnostic_override=diagnostic)
+            self.assertEqual(diagnostic.getvalue(), DIAGNOSTIC + "routes_parse result=refused\n" if wrote else "")
+
+
+class DiagnosticTests(unittest.TestCase):
+    def test_phase_projection_is_closed_and_never_renders_a_near_miss_or_value(self):
+        for phase in ("routes_parse", "peer_match", "complete"):
+            output = io.StringIO()
+            with redirect_stderr(output):
+                TOPO.preflight_refusal(phase)
+            self.assertEqual(output.getvalue(), DIAGNOSTIC + phase + " result=refused\n")
+        for phase in (CANARY, "routes_parse private-canary", "routes_parse\nprivate-canary", "routes_parse\r", "routes_parse\x1b[0m", None, [], {}, True):
+            output = io.StringIO()
+            with self.subTest(phase=phase), redirect_stderr(output):
+                TOPO.preflight_refusal(phase)
+            self.assertEqual(output.getvalue(), DIAGNOSTIC + "unclassified result=refused\n")
+
+    def test_closed_stderr_write_cannot_raise_in_place_of_original_refusal(self):
+        class Broken:
+            def write(self, _value):
+                raise OSError(CANARY)
+        with redirect_stderr(Broken()):
+            TOPO.preflight_refusal("routes_parse")
+        output = io.StringIO()
+        with redirect_stderr(None), redirect_stdout(output):
+            TOPO.preflight_refusal("routes_parse")
+        self.assertEqual(output.getvalue(), "")
 
 
 class OriginalOwnerTests(unittest.TestCase):
@@ -319,6 +470,7 @@ class OriginalOwnerTests(unittest.TestCase):
                     "  capture.capture_outcome(command,files,'fake',time.monotonic()+0.2,cancellation)\n"
                     "except BaseException:\n"
                     " (base/'retained').write_text('original-owner')\n"
+                    " topology.preflight_refusal('routes_capture')\n"
                     " topology.hold_original_owner()\n"
                     "raise SystemExit(90)\n"
                 )
@@ -333,6 +485,7 @@ class OriginalOwnerTests(unittest.TestCase):
                     self.assertTrue((root / "retained").exists())
                     self.assertLess(time.monotonic() - started, 3)
                     self.assertEqual(stdout, b"")
+                    self.assertEqual(stderr.count((DIAGNOSTIC + "routes_capture result=refused\n").encode()), 1)
                     self.assertNotIn(b"private-canary", stderr)
                     self.assertEqual(list(root.glob("dockerlens-runtime-profile.*")), [])
                     pid = int((root / "child.pid").read_text())

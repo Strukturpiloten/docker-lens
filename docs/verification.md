@@ -61,6 +61,18 @@ mandatory context while retaining prior failure/privacy/timer/AppArmor assertion
 These synthetic checks do not qualify a lane, identify a route cause, admit the
 temporary experiment or replace fresh final-candidate complete/native gates.
 
+Host-preflight refusal diagnostics have independent fixed-phase/privacy controls:
+success stays silent, malformed captures and cancellation retain their original
+refusal/owner, and stderr failure cannot suppress the hold or divert a line to
+stdout. Real fake-client GNU-timeout controls check the line is flushed before
+the existing KILL fallback, including resistant descendants and late EOF. The
+source-established `NO-CARRIER` formatter flag additionally has an independent
+inactive-UP positive fixture and colliding-prefix/`noprefixroute`, unknown-flag
+and duplicate-flag negatives. No interface's addresses are skipped because of
+state or flags. Campaign `39974464569` established only that all four native
+lanes refused host preflight before native invocations; neither that flag nor
+another predicate can be attributed as the first failure from those logs.
+
 The same existing `live_internal_network_blocks_external_egress` test now first
 requires an independent CLI-created client on the already CLI-created ordinary
 bridge to return exact sidecar `proof-egress`, before the original rendered

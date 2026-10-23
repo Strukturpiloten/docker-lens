@@ -29,9 +29,16 @@ ROUTE_KEYS = frozenset({"dst", "type", "table", "protocol", "scope", "metric", "
 ROUTE_TYPES = frozenset({"unicast", "local", "broadcast", "multicast", "throw", "unreachable", "prohibit", "blackhole"})
 ROUTE_FLAGS = frozenset({"onlink", "linkdown", "pervasive"})
 LINK_KEYS = frozenset({"ifindex", "ifname", "flags", "mtu", "qdisc", "operstate", "group", "txqlen", "link_type", "address", "broadcast", "master", "link_index", "link_netnsid", "altnames", "addr_info"})
-LINK_FLAGS = frozenset({"LOOPBACK", "BROADCAST", "POINTOPOINT", "MULTICAST", "NOARP", "UP", "LOWER_UP", "DORMANT", "PROMISC", "ALLMULTI", "MASTER", "SLAVE", "NOTRAILERS", "DEBUG", "ECHO"})
+LINK_FLAGS = frozenset({"LOOPBACK", "BROADCAST", "POINTOPOINT", "MULTICAST", "NOARP", "UP", "LOWER_UP", "NO-CARRIER", "DORMANT", "PROMISC", "ALLMULTI", "MASTER", "SLAVE", "NOTRAILERS", "DEBUG", "ECHO"})
 ADDRESS_FLAGS = frozenset({"secondary", "dynamic", "deprecated", "tentative", "dadfailed", "noprefixroute", "autojoin", "mngtmpaddr", "home", "permanent", "stable-privacy"})
 ADDRESS_KEYS = frozenset({"family", "local", "address", "peer", "prefixlen", "broadcast", "scope", "label", "valid_life_time", "preferred_life_time"}) | ADDRESS_FLAGS
+PREFLIGHT_PHASES = frozenset({
+    "context", "admission", "privilege", "signal_setup", "ip_custody", "systemctl_custody",
+    "capture_setup", "capture_files", "service_before", "peer_before", "process_handles", "identity_before",
+    "version_capture", "version_parse", "addresses_capture", "addresses_parse", "identity_addresses",
+    "routes_capture", "routes_parse", "identity_routes", "service_after", "peer_after", "peer_match",
+    "identity_after", "ip_recheck", "systemctl_recheck", "capture_cleanup", "complete", "unclassified",
+})
 
 
 class Refused(ValueError):
@@ -442,28 +449,49 @@ def hold_original_owner():
         signal.pause()
 
 
+def preflight_refusal(phase):
+    """Best-effort closed projection; presentation cannot replace the refusal."""
+    try:
+        if type(phase) is not str or phase not in PREFLIGHT_PHASES:
+            phase = "unclassified"
+        stream = sys.stderr
+        if stream is None:
+            return
+        print(f"DOCKERLENS_NATIVE_HOST_NETWORK_PREFLIGHT: phase={phase} result=refused", file=stream, flush=True)
+    except BaseException:
+        pass  # The original exception and hard owner remain authoritative.
+
+
 def preflight(run, candidate, peer_observer):
     from native_outer_diagnostic_capture import Cancelled, Cancellation, CaptureContext
-    context(run, candidate, "docker")
-    admitted(os.environ)
-    need(os.geteuid() == 0 and os.environ.get("DOCKERLENS_NATIVE_CANDIDATE_SHA", candidate) == candidate)
-    deadline = time.monotonic() + 7
-    cancellation = Cancellation()
-    for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
-        signal.signal(signum, cancellation.request)
     launched = False
     held = []
+    phase = "context"
     try:
+        context(run, candidate, "docker")
+        phase = "admission"
+        admitted(os.environ)
+        phase = "privilege"
+        need(os.geteuid() == 0 and os.environ.get("DOCKERLENS_NATIVE_CANDIDATE_SHA", candidate) == candidate)
+        deadline = time.monotonic() + 7
+        phase = "signal_setup"
+        cancellation = Cancellation()
+        for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            signal.signal(signum, cancellation.request)
+        phase = "ip_custody"
         ip = trusted_tool("/usr/sbin/ip", deadline, cancellation)
+        phase = "systemctl_custody"
         systemctl = trusted_tool("/usr/bin/systemctl", deadline, cancellation)
         service = (systemctl[0], "show", "docker.service", "--property=MainPID", "--property=ActiveState", "--property=SubState")
         version = (ip[0], "-Version")
         addresses = (ip[0], "-j", "-4", "address", "show")
         routes = (ip[0], "-j", "-4", "route", "show", "table", "all")
+        phase = "capture_setup"
         capture = CaptureContext(unavailable=Refused, cancelled_type=Cancelled,
             commands=((service, "service"), (version, "version"), (addresses, "addresses"), (routes, "routes")),
             environment=ENVIRONMENT, directory=Path(__file__).resolve().parent,
             stream_limit=LIMIT, total_source_limit=8 * LIMIT, reuse_outputs=True)
+        phase = "capture_files"
         with capture.private_outputs() as files:
             def command(argv, prefix):
                 nonlocal launched
@@ -473,7 +501,11 @@ def preflight(run, candidate, peer_observer):
                 need(result.returncode == 0 and not result.stderr)
                 checkpoint(deadline, cancellation)
                 return result.stdout
-            before = peer_observer("/var/run/docker.sock", command(service, "service").decode("ascii"))
+            phase = "service_before"
+            service_before = command(service, "service").decode("ascii")
+            phase = "peer_before"
+            before = peer_observer("/var/run/docker.sock", service_before)
+            phase = "process_handles"
             pid = before["daemon_pid"]
             held.append(os.pidfd_open(pid, 0))
             held.append(os.open(f"/proc/{pid}/ns/net", os.O_RDONLY))
@@ -489,18 +521,38 @@ def preflight(run, candidate, peer_observer):
                      == (current.st_dev, current.st_ino) == (observer.st_dev, observer.st_ino))
                 root, current_root, observer_root = os.fstat(held[3]), os.stat(f"/proc/{pid}/root"), os.stat("/")
                 need((root.st_dev, root.st_ino) == (current_root.st_dev, current_root.st_ino) == (observer_root.st_dev, observer_root.st_ino))
+            phase = "identity_before"
             stable()
+            phase = "version_capture"
             tool_version = command(version, "version").decode("ascii").strip()
+            phase = "version_parse"
             need(re.fullmatch(r"ip utility, iproute2-[0-9]+\.[0-9]+\.[0-9]+(?:, libbpf [0-9]+\.[0-9]+\.[0-9]+)?", tool_version) is not None)
-            host_addresses(command(addresses, "addresses"))
+            phase = "addresses_capture"
+            address_bytes = command(addresses, "addresses")
+            phase = "addresses_parse"
+            host_addresses(address_bytes)
+            phase = "identity_addresses"
             stable()
-            host_routes(command(routes, "routes"))
+            phase = "routes_capture"
+            route_bytes = command(routes, "routes")
+            phase = "routes_parse"
+            host_routes(route_bytes)
+            phase = "identity_routes"
             stable()
-            after = peer_observer("/var/run/docker.sock", command(service, "service").decode("ascii"))
+            phase = "service_after"
+            service_after = command(service, "service").decode("ascii")
+            phase = "peer_after"
+            after = peer_observer("/var/run/docker.sock", service_after)
+            phase = "peer_match"
             need(before == after)
+            phase = "identity_after"
             stable()
-            need(ip == trusted_tool(ip[0], deadline, cancellation)
-                 and systemctl == trusted_tool(systemctl[0], deadline, cancellation))
+            phase = "ip_recheck"
+            need(ip == trusted_tool(ip[0], deadline, cancellation))
+            phase = "systemctl_recheck"
+            need(systemctl == trusted_tool(systemctl[0], deadline, cancellation))
+            phase = "capture_cleanup"
+        phase = "complete"
         checkpoint(deadline, cancellation)
         namespace = os.fstat(held[1])
         return {"schema_version": 1, "kind": "test-only-host-network-preflight", "candidate": candidate,
@@ -509,6 +561,7 @@ def preflight(run, candidate, peer_observer):
                          "device": ip[1][0], "inode": ip[1][1]},
             "daemon": before, "namespace": {"device": namespace.st_dev, "inode": namespace.st_ino}}
     except BaseException:
+        preflight_refusal(phase)
         if launched:
             hold_original_owner()
         raise

@@ -44,6 +44,25 @@ requires complete stdout/stderr EOF and child status. Cancellation or uncertain
 child/descendant completion discards private raw staging and retains that same
 hard owner through KILL, without a renewed timer, new session or retry.
 
+The known iproute2 `NO-CARRIER` link flag is accepted as metadata, including an
+administratively UP but inactive bridge. Its assigned prefixes are still checked
+unconditionally, with or without `noprefixroute`; unknown and duplicate flags
+still refuse. Versioned formatter/source/license provenance is recorded in
+[dependency policy](dependency-policy.md). This fixes a source-established
+formatter-coverage gap, not a demonstrated cause of campaign `39974464569`:
+all four lanes stopped at host preflight before native tests, and those logs
+identify no failed predicate.
+
+On refusal, `DOCKERLENS_NATIVE_HOST_NETWORK_PREFLIGHT` adds only
+`phase=<closed enum> result=refused`. The helper's `PREFLIGHT_PHASES` defines that
+fixed operation/predicate vocabulary, including separate capture and parsing
+phases. Success emits no line. No exception, command output, status, address,
+ID, path or other native value is projected. The finite stderr line is flushed
+before an uncertain-child/cancellation hold awaits the original owner's KILL;
+unavailable stderr never replaces the original refusal or skips that hold.
+This diagnostic adds no probe, retry, timer, session, permission or acceptance,
+and a failed phase does not establish a route or timeout cause.
+
 One explicit `bridge`/default-IPAM create then uses Docker's local allocator
 conflict refusal. It is not a transaction proving absence across all plugins,
 namespaces or side effects. Existing uncertain-create intent/cleanup remains

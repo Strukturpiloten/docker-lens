@@ -10,6 +10,27 @@ Ubuntu-24 unavailable-integrity/manual-review exception: no installation,
 download, package update, namespace entry or host network-policy edit is added.
 Unknown or changed custody/schema refuses before outer network mutation intent.
 
+The `NO-CARRIER` metadata coverage correction is backed by a read-only
+2026-10-23 review of iproute2 **v6.1.0**, not guessed runner output or a new tool
+pin. The versioned [address formatter](https://raw.githubusercontent.com/iproute2/iproute2/v6.1.0/ip/ipaddress.c)
+emits the flag in its JSON flags array for an UP interface without RUNNING;
+the parser still checks every assigned prefix. Reviewed source SHA-256:
+`35f8a8918cb92cc4ede5236cfbc8a85060970dd9df0f75aed2d35db4a46f8018`.
+The source header licenses that file GPL-2.0-or-later. The versioned
+[COPYING](https://raw.githubusercontent.com/iproute2/iproute2/v6.1.0/COPYING)
+contains the GNU GPL version 2 text, SHA-256
+`e6d6a009505e345fe949e1310334fcb0747f28dae2856759de102ab66b722cb4`.
+Both public GitHub raw resources were read using `curl --proto '=https'
+--tlsv1.2 --connect-timeout 10 --max-time 30 --max-filesize <cap> --fail --silent
+--show-error <versioned-url> -o <private-file>`, with respective caps 1048576 and
+131072 bytes, in a private umask-077 temporary directory. They were not executed,
+copied/translated into implementation, or redistributed in the repository;
+only semantic provenance is retained. This observation does not prove the
+failed campaign's predicate or qualify a native lane. The closed failure-phase
+diagnostic adds no tool, dependency, command, timer or source-extraction path;
+all existing pins, Renovate ownership and manual-review exceptions below remain
+unchanged.
+
 The orchestration-owned `10.253.253.0/24` reservation is a reviewed allocation
 definition, not a dependency version or globally reserved range. Its canonical
 definition and all consumers are DockerLens's native-conformance coordinator,
