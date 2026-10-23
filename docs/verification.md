@@ -63,6 +63,20 @@ failure still does not establish renderer causality because daemon-selected IPAM
 differs. Fresh final-candidate complete and four-lane native gates remain required;
 no new native evidence is claimed.
 
+The earlier CLI-positive failure also has a capture-only retained-fixture subnet
+observation, documented in [the runtime contract](native-outer-runtime.md).
+Pure Rust tests cover canonical identity, exact selection/root and attachment,
+coherent actual request APIs (including 1.49 rather than advertised 1.56), the
+stopped-container missing/empty-ID name fallback with matching metadata,
+failure-only exact argv, strict whole-IPAM boundaries, unavailable evidence,
+recursive duplicate keys and incomplete/trailing bodies. Hermetic
+`tests/test_native_fixture_subnet.py` controls run the actual closed sanitizer
+with fake cargo only, checking privacy, near misses, original failure/stage and
+cleanup markers, success suppression and unchanged acquisition bounds. These
+tests do not establish overlap in a native lane, routing cause or compatibility;
+fresh complete and four-lane native gates remain required. No new capture,
+native invocation, runtime resource, dependency, pin or Renovate path is added.
+
 ## Hosted prerequisite diagnostic
 
 Failure-only guest HTTP controls also distinguish missing/non-executable tools,

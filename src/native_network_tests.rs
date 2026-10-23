@@ -803,6 +803,7 @@ struct InternalProofResources {
     containers: Vec<String>,
     networks: Vec<String>,
     subnet_diagnostics: Option<ProofSubnetContext>,
+    fixture_subnet: Option<FixtureSubnetContext>,
 }
 
 impl InternalProofResources {
@@ -812,6 +813,7 @@ impl InternalProofResources {
             containers: Vec::new(),
             networks: Vec::new(),
             subnet_diagnostics: None,
+            fixture_subnet: None,
         }
     }
 
@@ -1173,6 +1175,655 @@ struct DefaultBridgeContext {
 }
 
 const DEFAULT_BRIDGE_RESPONSE_CAP: usize = 64 * 1024;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FixtureSubnetObservation {
+    Membership(bool),
+    Unavailable,
+}
+
+impl FixtureSubnetObservation {
+    fn diagnostic(self) -> &'static str {
+        match self {
+            Self::Membership(true) => "sidecar_on_fixture_subnet=true",
+            Self::Membership(false) => "sidecar_on_fixture_subnet=false",
+            Self::Unavailable => "sidecar_on_fixture_subnet=unknown reason=unavailable",
+        }
+    }
+}
+
+// Closed observation only: this context grants no additional read capability.
+struct FixtureSubnetContext {
+    observation: FixtureSubnetObservation,
+    address: Ipv4Addr,
+    client: String,
+}
+
+fn failed_fixture_subnet(
+    context: Option<&FixtureSubnetContext>,
+    args: &[&str],
+    result: &BoundedDnsCliOutput,
+) -> Option<FixtureSubnetObservation> {
+    let context = context?;
+    let url = format!("http://{}:18084/", context.address);
+    (!result.success
+        && args
+            == [
+                "exec",
+                context.client.as_str(),
+                "wget",
+                "-Y",
+                "off",
+                "-T",
+                "2",
+                "-qO-",
+                url.as_str(),
+            ])
+    .then_some(context.observation)
+}
+
+fn captured_fixture_subnet(
+    capture: &crate::evidence::Capture,
+    source_id: &str,
+    network_id: Option<&str>,
+    run_id: &str,
+    address: Ipv4Addr,
+) -> FixtureSubnetObservation {
+    captured_fixture_membership(capture, source_id, network_id, run_id, address).map_or(
+        FixtureSubnetObservation::Unavailable,
+        FixtureSubnetObservation::Membership,
+    )
+}
+
+fn captured_fixture_membership(
+    capture: &crate::evidence::Capture,
+    source_id: &str,
+    network_id: Option<&str>,
+    run_id: &str,
+    address: Ipv4Addr,
+) -> Option<bool> {
+    use crate::acquisition::{ReadRequest, RootKind, SelectionReason};
+    use crate::evidence::CaptureRoute;
+
+    let network_id = network_id?;
+    if capture.route() != CaptureRoute::ExplicitUnixSocket
+        || !matches!(capture.selector(), Some(Selector::ContainerIds(ids))
+            if ids.len() == 1 && ids[0].as_str() == source_id)
+    {
+        return None;
+    }
+    let [root] = capture.selected_roots() else {
+        return None;
+    };
+    if root.kind != RootKind::Container || root.reason != SelectionReason::ExactId {
+        return None;
+    }
+    let mut containers = capture
+        .exchanges()
+        .iter()
+        .filter(|exchange| matches!(exchange.request(), ReadRequest::InspectContainer(_)));
+    let container = containers.next()?;
+    if containers.next().is_some()
+        || !matches!(container.request(), ReadRequest::InspectContainer(id) if id.as_str() == source_id)
+        || container.resource() != Some(root.resource)
+        || container.status().code() != 200
+        || container.body().as_bytes().len() > DEFAULT_BRIDGE_RESPONSE_CAP
+    {
+        return None;
+    }
+    let api = container.api_version()?;
+    let UniqueDiagnosticJson(source) = serde_json::from_slice(container.body().as_bytes()).ok()?;
+    let network_name = format!("dl-{run_id}-net");
+    if canonical_inspected_container_id(&source)? != source_id
+        || source.get("Name")?.as_str()? != format!("/dl-{run_id}-box")
+    {
+        return None;
+    }
+    let attachment = source
+        .get("NetworkSettings")?
+        .get("Networks")?
+        .as_object()?
+        .get(&network_name)?
+        .as_object()?;
+    // Acquisition sanctions a name expansion for stopped endpoints with no ID.
+    // Null/non-string and a nonempty foreign ID are deliberately not salvaged.
+    let by_name = match attachment.get("NetworkID") {
+        None => true,
+        Some(Value::String(id)) if id.is_empty() => true,
+        Some(Value::String(id)) if id == network_id => false,
+        _ => return None,
+    };
+    let request_id = if by_name {
+        network_name.as_str()
+    } else {
+        network_id
+    };
+    let mut networks = capture.exchanges().iter().filter(|exchange| {
+        matches!(exchange.request(), ReadRequest::InspectNetwork(id) if id.as_str() == request_id)
+    });
+    let network = networks.next()?;
+    let reference = network.resource()?;
+    if networks.next().is_some()
+        || reference == root.resource
+        || capture.network_name_fallbacks().contains(&reference) != by_name
+        || network.api_version() != Some(api)
+        || network.status().code() != 200
+        || network.body().as_bytes().len() > DEFAULT_BRIDGE_RESPONSE_CAP
+    {
+        return None;
+    }
+    let UniqueDiagnosticJson(body) = serde_json::from_slice(network.body().as_bytes()).ok()?;
+    if canonical_inspected_container_id(&body)? != network_id
+        || body.get("Name")?.as_str()? != network_name
+        || body.get("Driver")?.as_str()? != "bridge"
+    {
+        return None;
+    }
+    match sidecar_on_subnet(address, &body) {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
+}
+
+mod fixture_subnet_tests {
+    use super::*;
+    use crate::acquisition::{ReadRequest, RootKind, SelectedRoot, SelectionReason};
+    use crate::evidence::{Capture, CaptureBounds, CapturedExchange, HttpStatus, ProtectedValue};
+    use crate::version::{ApiVersion, ObservationId};
+
+    struct Input {
+        source: Vec<u8>,
+        network: Vec<u8>,
+        request: String,
+        fallback: bool,
+        apis: [Option<ApiVersion>; 2],
+        statuses: [u16; 2],
+        references: [Option<ResourceRef>; 2],
+        duplicates: [bool; 2],
+        explicit_socket: bool,
+    }
+
+    impl Input {
+        fn new(by_name: bool) -> Self {
+            Self {
+                source: serde_json::to_vec(&json!({
+                    "Id": "a".repeat(64), "Name": "/dl-test-box",
+                    "NetworkSettings": {"Networks": {"dl-test-net": {
+                        "NetworkID": if by_name { String::new() } else { "b".repeat(64) }
+                    }}}
+                }))
+                .unwrap(),
+                network: serde_json::to_vec(&json!({
+                    "Id": "b".repeat(64), "Name": "dl-test-net", "Driver": "bridge",
+                    "IPAM": {"Config": [{"Subnet": "10.23.7.0/24"}]}
+                }))
+                .unwrap(),
+                request: if by_name {
+                    "dl-test-net".to_owned()
+                } else {
+                    "b".repeat(64)
+                },
+                fallback: by_name,
+                // Captured request API, deliberately not advertised API 1.56.
+                apis: [Some(ApiVersion {
+                    major: std::num::NonZeroU16::new(1).unwrap(),
+                    minor: 49,
+                }); 2],
+                statuses: [200; 2],
+                references: [Some(ResourceRef::new(1)), Some(ResourceRef::new(2))],
+                duplicates: [false; 2],
+                explicit_socket: true,
+            }
+        }
+
+        fn capture(&self) -> Capture {
+            let mut exchanges = Vec::new();
+            for index in 0..2 {
+                for _ in 0..=usize::from(self.duplicates[index]) {
+                    exchanges.push(CapturedExchange::new(
+                        if index == 0 {
+                            ReadRequest::InspectContainer(NativeId::new("a".repeat(64)).unwrap())
+                        } else {
+                            ReadRequest::InspectNetwork(
+                                NativeId::new(self.request.clone()).unwrap(),
+                            )
+                        },
+                        self.references[index],
+                        self.apis[index],
+                        HttpStatus::new(self.statuses[index]).unwrap(),
+                        ProtectedValue::new(if index == 0 {
+                            self.source.clone()
+                        } else {
+                            self.network.clone()
+                        }),
+                    ));
+                }
+            }
+            // The source fixture also expands its named volume. It is not a
+            // network observation and must neither hide nor invalidate one.
+            exchanges.push(CapturedExchange::new(
+                ReadRequest::InspectVolume(NativeId::new("dl-test-vol".to_owned()).unwrap()),
+                Some(ResourceRef::new(3)),
+                self.apis[0],
+                HttpStatus::new(200).unwrap(),
+                ProtectedValue::new(
+                    br#"{"Name":"dl-test-vol","Driver":"local","Mountpoint":"/private-canary"}"#
+                        .to_vec(),
+                ),
+            ));
+            let capture = Capture::from_completed(
+                ObservationId::fresh().unwrap(),
+                CaptureBounds {
+                    request_count: exchanges.len(),
+                    selected_resources: 1,
+                    expansions: 2,
+                    bytes_read: exchanges
+                        .iter()
+                        .map(|exchange| exchange.body().as_bytes().len())
+                        .sum(),
+                },
+                exchanges,
+            )
+            .unwrap()
+            .with_selector(Selector::ContainerIds(vec![
+                NativeId::new("a".repeat(64)).unwrap(),
+            ]))
+            .with_selected_roots(vec![SelectedRoot {
+                resource: ResourceRef::new(1),
+                kind: RootKind::Container,
+                reason: SelectionReason::ExactId,
+            }])
+            .with_network_name_fallbacks(if self.fallback {
+                [ResourceRef::new(2)].into()
+            } else {
+                Default::default()
+            });
+            if self.explicit_socket {
+                capture.with_explicit_socket()
+            } else {
+                capture
+            }
+        }
+
+        fn source(&mut self, change: impl FnOnce(&mut Value)) {
+            let mut body: Value = serde_json::from_slice(&self.source).unwrap();
+            change(&mut body);
+            self.source = serde_json::to_vec(&body).unwrap();
+        }
+
+        fn network(&mut self, change: impl FnOnce(&mut Value)) {
+            let mut body: Value = serde_json::from_slice(&self.network).unwrap();
+            change(&mut body);
+            self.network = serde_json::to_vec(&body).unwrap();
+        }
+    }
+
+    fn observe(capture: &Capture) -> FixtureSubnetObservation {
+        captured_fixture_subnet(
+            capture,
+            &"a".repeat(64),
+            Some(&"b".repeat(64)),
+            "test",
+            Ipv4Addr::new(10, 23, 7, 9),
+        )
+    }
+
+    #[test]
+    fn fixture_subnet_binds_normal_id_and_stopped_name_fallback_without_new_reads() {
+        for by_name in [false, true] {
+            let mut input = Input::new(by_name);
+            assert_eq!(
+                observe(&input.capture()),
+                FixtureSubnetObservation::Membership(true)
+            );
+            input.apis = [Some(ApiVersion {
+                major: std::num::NonZeroU16::new(1).unwrap(),
+                minor: 41,
+            }); 2];
+            assert_eq!(
+                observe(&input.capture()),
+                FixtureSubnetObservation::Membership(true)
+            );
+        }
+        let mut input = Input::new(true);
+        input.source(|body| {
+            body["NetworkSettings"]["Networks"]["dl-test-net"]
+                .as_object_mut()
+                .unwrap()
+                .remove("NetworkID");
+        });
+        assert_eq!(
+            observe(&input.capture()),
+            FixtureSubnetObservation::Membership(true)
+        );
+        assert_eq!(
+            captured_fixture_subnet(
+                &input.capture(),
+                &"a".repeat(64),
+                None,
+                "test",
+                Ipv4Addr::LOCALHOST
+            ),
+            FixtureSubnetObservation::Unavailable
+        );
+    }
+
+    #[test]
+    fn fixture_subnet_requires_exact_source_network_and_fallback_custody() {
+        for case in 0..21 {
+            let mut input = Input::new(case >= 15);
+            match case {
+                0 => input.source(|body| body["Id"] = json!("c".repeat(64))),
+                1 => input.source(|body| body["Name"] = json!("/dl-other-box")),
+                2 => input.source(|body| {
+                    body["NetworkSettings"]["Networks"] =
+                        json!({"dl-other-net": {"NetworkID": "b".repeat(64)}})
+                }),
+                3 => input.source(|body| {
+                    body["NetworkSettings"]["Networks"]["dl-test-net"]["NetworkID"] =
+                        json!("c".repeat(64))
+                }),
+                4 => input.network(|body| body["Id"] = json!("c".repeat(64))),
+                5 => input.network(|body| body["Id"] = json!("B".repeat(64))),
+                6 => input.network(|body| body["Name"] = json!("dl-other-net")),
+                7 => input.network(|body| body["Driver"] = json!("overlay")),
+                8 => input.apis[0] = None,
+                9 => input.apis[1] = None,
+                10 => {
+                    input.apis[1] = Some(ApiVersion {
+                        major: std::num::NonZeroU16::new(1).unwrap(),
+                        minor: 56,
+                    })
+                }
+                11 => input.statuses[0] = 404,
+                12 => input.statuses[1] = 500,
+                13 => input.fallback = true,
+                14 => input.request = "dl-test-net".to_owned(),
+                15 => input.fallback = false,
+                16 => input.request = "b".repeat(64),
+                17 => input.request = "dl-other-net".to_owned(),
+                18 => input.source(|body| {
+                    body["NetworkSettings"]["Networks"]["dl-test-net"]["NetworkID"] = Value::Null
+                }),
+                19 => input.source(|body| {
+                    body["NetworkSettings"]["Networks"]["dl-test-net"]["NetworkID"] = json!(42)
+                }),
+                _ => input.source(|body| {
+                    body["NetworkSettings"]["Networks"]["dl-test-net"]["NetworkID"] =
+                        json!("c".repeat(64))
+                }),
+            }
+            assert_eq!(
+                observe(&input.capture()),
+                FixtureSubnetObservation::Unavailable,
+                "case {case}"
+            );
+        }
+        for index in 0..2 {
+            let mut input = Input::new(false);
+            input.references[index] = None;
+            assert_eq!(
+                observe(&input.capture()),
+                FixtureSubnetObservation::Unavailable
+            );
+            input = Input::new(false);
+            input.duplicates[index] = true;
+            assert_eq!(
+                observe(&input.capture()),
+                FixtureSubnetObservation::Unavailable
+            );
+        }
+        let input = Input::new(false);
+        let source = NativeId::new("c".repeat(64)).unwrap();
+        assert_eq!(
+            observe(
+                &input
+                    .capture()
+                    .with_selector(Selector::ContainerIds(vec![source]))
+            ),
+            FixtureSubnetObservation::Unavailable
+        );
+        assert_eq!(
+            observe(&input.capture().with_selected_roots(Vec::new())),
+            FixtureSubnetObservation::Unavailable
+        );
+        let root = SelectedRoot {
+            resource: ResourceRef::new(9),
+            kind: RootKind::Container,
+            reason: SelectionReason::ExactId,
+        };
+        assert_eq!(
+            observe(&input.capture().with_selected_roots(vec![root])),
+            FixtureSubnetObservation::Unavailable
+        );
+        for (kind, reason) in [
+            (RootKind::Network, SelectionReason::ExactId),
+            (RootKind::Container, SelectionReason::ExactName),
+        ] {
+            let root = SelectedRoot {
+                resource: ResourceRef::new(1),
+                kind,
+                reason,
+            };
+            assert_eq!(
+                observe(&input.capture().with_selected_roots(vec![root])),
+                FixtureSubnetObservation::Unavailable
+            );
+        }
+        let roots = input.capture().selected_roots().repeat(2);
+        assert_eq!(
+            observe(&input.capture().with_selected_roots(roots)),
+            FixtureSubnetObservation::Unavailable
+        );
+        let mut input = Input::new(false);
+        input.explicit_socket = false;
+        assert_eq!(
+            observe(&input.capture()),
+            FixtureSubnetObservation::Unavailable
+        );
+        input.explicit_socket = true;
+        input.references[1] = input.references[0];
+        assert_eq!(
+            observe(&input.capture()),
+            FixtureSubnetObservation::Unavailable
+        );
+        let input = Input::new(false);
+        assert_eq!(
+            observe(
+                &input
+                    .capture()
+                    .with_network_name_fallbacks([ResourceRef::new(9)].into())
+            ),
+            FixtureSubnetObservation::Membership(true)
+        );
+        let input = Input::new(true);
+        assert_eq!(
+            observe(
+                &input
+                    .capture()
+                    .with_network_name_fallbacks([ResourceRef::new(9)].into())
+            ),
+            FixtureSubnetObservation::Unavailable
+        );
+    }
+
+    #[test]
+    fn fixture_subnet_requires_complete_unique_json_and_strict_whole_ipam() {
+        for source in [true, false] {
+            for suffix in [b" {}".as_slice(), b" private-canary", b"\0"] {
+                let mut input = Input::new(false);
+                if source {
+                    input.source.extend_from_slice(suffix);
+                } else {
+                    input.network.extend_from_slice(suffix);
+                }
+                assert_eq!(
+                    observe(&input.capture()),
+                    FixtureSubnetObservation::Unavailable
+                );
+            }
+            let mut input = Input::new(false);
+            if source {
+                input.source.pop();
+            } else {
+                input.network.pop();
+            }
+            assert_eq!(
+                observe(&input.capture()),
+                FixtureSubnetObservation::Unavailable
+            );
+            for metadata in [
+                r#""ignored":{"key":1,"key":2}"#,
+                r#""ignored":{"key":1,"\u006bey":2}"#,
+                r#""ignored":{"\u006bey":1,"key":2}"#,
+            ] {
+                let mut input = Input::new(false);
+                let body = if source {
+                    &mut input.source
+                } else {
+                    &mut input.network
+                };
+                body.pop();
+                body.extend_from_slice(format!(",{metadata}}}").as_bytes());
+                assert_eq!(
+                    observe(&input.capture()),
+                    FixtureSubnetObservation::Unavailable
+                );
+            }
+            let mut input = Input::new(false);
+            if source {
+                input.source = vec![b' '; DEFAULT_BRIDGE_RESPONSE_CAP + 1];
+            } else {
+                input.network = vec![b' '; DEFAULT_BRIDGE_RESPONSE_CAP + 1];
+            }
+            assert_eq!(
+                observe(&input.capture()),
+                FixtureSubnetObservation::Unavailable
+            );
+        }
+        for endpoint in [
+            format!(
+                r#"{{"NetworkID":"{}","NetworkID":"foreign"}}"#,
+                "b".repeat(64)
+            ),
+            format!(
+                r#"{{"NetworkID":"foreign","\u004eetworkID":"{}"}}"#,
+                "b".repeat(64)
+            ),
+        ] {
+            let mut input = Input::new(false);
+            input.source = format!(r#"{{"Id":"{}","Name":"/dl-test-box","NetworkSettings":{{"Networks":{{"dl-test-net":{endpoint}}}}}}}"#, "a".repeat(64)).into_bytes();
+            assert_eq!(
+                observe(&input.capture()),
+                FixtureSubnetObservation::Unavailable
+            );
+        }
+        let mut input = Input::new(false);
+        input.source = format!(r#"{{"Id":"{}","Name":"/dl-test-box","NetworkSettings":{{"Networks":{{"dl-test-net":{{"NetworkID":"{}"}},"dl-test-net":{{"NetworkID":"foreign"}}}}}}}}"#, "a".repeat(64), "b".repeat(64)).into_bytes();
+        assert_eq!(
+            observe(&input.capture()),
+            FixtureSubnetObservation::Unavailable
+        );
+        input = Input::new(false);
+        input.network = format!(r#"{{"Id":"{}","Name":"dl-test-net","Driver":"bridge","IPAM":{{"Config":[{{"Subnet":"10.23.7.0/24","Subnet":"10.23.8.0/24"}}]}}}}"#, "b".repeat(64)).into_bytes();
+        assert_eq!(
+            observe(&input.capture()),
+            FixtureSubnetObservation::Unavailable
+        );
+        for (subnets, expected) in [
+            (json!([{"Subnet": "0.0.0.0/0"}]), Some(true)),
+            (json!([{"Subnet": "10.23.7.9/32"}]), Some(true)),
+            (json!([{"Subnet": "10.23.7.10/32"}]), Some(false)),
+            (json!([{"Subnet": "10.23.8.0/24"}]), Some(false)),
+            (json!([{"Subnet": "10.23.7.8/31"}]), Some(true)),
+            (json!([{"Subnet": "10.23.7.10/31"}]), Some(false)),
+            (json!([{"Subnet": "10.23.7.9/24"}]), None),
+            (json!([{"Subnet": "10.23.7.0/024"}]), None),
+            (json!([{"Subnet": "10.23.7.0/33"}]), None),
+            (json!([{"Subnet": "2001:db8::/64"}]), None),
+            (
+                json!([{"Subnet": "10.23.7.0/24"}, {"Subnet": "broken"}]),
+                None,
+            ),
+            (json!([{"Subnet": "10.23.7.0/24"}, {}]), None),
+            (json!([]), None),
+            (Value::Null, None),
+        ] {
+            let mut input = Input::new(false);
+            input.network(|body| body["IPAM"]["Config"] = subnets);
+            assert_eq!(
+                observe(&input.capture()),
+                expected.map_or(
+                    FixtureSubnetObservation::Unavailable,
+                    FixtureSubnetObservation::Membership
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn fixture_subnet_marker_is_exact_failed_cli_positive_only() {
+        let context = FixtureSubnetContext {
+            observation: FixtureSubnetObservation::Membership(true),
+            address: Ipv4Addr::new(10, 23, 7, 9),
+            client: "dl-network-test-proof-cli-control-client".to_owned(),
+        };
+        let args = [
+            "exec",
+            context.client.as_str(),
+            "wget",
+            "-Y",
+            "off",
+            "-T",
+            "2",
+            "-qO-",
+            "http://10.23.7.9:18084/",
+        ];
+        let mut result = BoundedDnsCliOutput {
+            success: false,
+            code: Some(1),
+            stdout: Vec::new(),
+            stderr: b"private-canary".to_vec(),
+            output_limit: false,
+        };
+        assert_eq!(
+            failed_fixture_subnet(Some(&context), &args, &result),
+            Some(FixtureSubnetObservation::Membership(true))
+        );
+        assert_eq!(failed_fixture_subnet(None, &args, &result), None);
+        for index in 0..args.len() {
+            let mut wrong = args;
+            wrong[index] = "other-private-canary";
+            assert_eq!(failed_fixture_subnet(Some(&context), &wrong, &result), None);
+        }
+        for client in [
+            "dl-network-test-proof-control-client",
+            "dl-network-other-proof-cli-control-client",
+        ] {
+            let mut wrong = args;
+            wrong[1] = client;
+            assert_eq!(failed_fixture_subnet(Some(&context), &wrong, &result), None);
+        }
+        assert_eq!(
+            failed_fixture_subnet(Some(&context), &args[..8], &result),
+            None
+        );
+        let mut extra = args.to_vec();
+        extra.push("extra-private-canary");
+        assert_eq!(failed_fixture_subnet(Some(&context), &extra, &result), None);
+        result.success = true;
+        assert_eq!(failed_fixture_subnet(Some(&context), &args, &result), None);
+        assert_eq!(
+            FixtureSubnetObservation::Unavailable.diagnostic(),
+            "sidecar_on_fixture_subnet=unknown reason=unavailable"
+        );
+        assert_eq!(
+            FixtureSubnetObservation::Membership(false).diagnostic(),
+            "sidecar_on_fixture_subnet=false"
+        );
+    }
+}
 
 fn default_bridge_eligible(mode: DaemonMode, selected_engine: Option<&str>) -> bool {
     mode == DaemonMode::Rootless && selected_engine == Some("docker")
@@ -2107,6 +2758,14 @@ fn wget_failure_categories_are_closed_and_private() {
 
 fn proof_cli_ok(resources: &InternalProofResources, args: &[&str]) -> Vec<u8> {
     let result = proof_cli(resources, args);
+    if let Some(observation) =
+        failed_fixture_subnet(resources.fixture_subnet.as_ref(), args, &result)
+    {
+        eprintln!(
+            "DOCKERLENS_NATIVE_FIXTURE_SUBNET_DIAG: {}",
+            observation.diagnostic()
+        );
+    }
     if !result.success && args.first() == Some(&"exec") && args.get(2) == Some(&"wget") {
         eprintln!(
             "DOCKERLENS_NATIVE_WGET_DIAG: category={}",
@@ -4748,7 +5407,7 @@ fn live_internal_network_blocks_external_egress() {
     resources.require_budget(32);
     let capture = acquire(
         &Endpoint::unix_socket(engine_socket.clone()),
-        Selector::ContainerIds(vec![NativeId::new(source_id).unwrap()]),
+        Selector::ContainerIds(vec![NativeId::new(source_id.clone()).unwrap()]),
         Limits {
             max_requests: 16,
             max_selected_resources: 2,
@@ -4784,6 +5443,13 @@ fn live_internal_network_blocks_external_egress() {
         }
         _ => panic!("invalid native lane mode"),
     }
+    let fixture_subnet = captured_fixture_subnet(
+        &capture,
+        &source_id,
+        std::env::var("NATIVE_NETWORK_ID").ok().as_deref(),
+        &run_id,
+        sidecar_ip,
+    );
     let intent = TargetIntent::new(vec![
         TargetResource::Network(internal_proof_create(&internal, &run_id, true)),
         TargetResource::Network(internal_proof_create(&control, &run_id, false)),
@@ -4955,6 +5621,11 @@ fn live_internal_network_blocks_external_egress() {
     );
     proof_cli_ok(&resources, &["start", &cli_control_client]);
     assert_single_homed_running(&resources, &cli_control_client, &cli_control, &api_version);
+    resources.fixture_subnet = Some(FixtureSubnetContext {
+        observation: fixture_subnet,
+        address: sidecar_ip,
+        client: cli_control_client.clone(),
+    });
     let cli_control_response = proof_cli_ok(
         &resources,
         &[
@@ -4969,6 +5640,7 @@ fn live_internal_network_blocks_external_egress() {
             &external_url,
         ],
     );
+    resources.fixture_subnet = None;
     assert_eq!(
         cli_control_response, b"proof-egress",
         "independent CLI ordinary bridge reaches task endpoint"

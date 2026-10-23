@@ -245,6 +245,31 @@ not rule out other held networks, the default bridge, routes or firewall issues,
 and never asserts whole outer/inner CIDR disjointness or a timeout cause.
 The exact rendered requests, CLI oracles and default IPAM remain unchanged;
 these observations do not authorize a network-pool or fixture-routing repair.
+At the earlier failed **CLI-positive** external wget only,
+`DOCKERLENS_NATIVE_FIXTURE_SUBNET_DIAG` separately reports
+`sidecar_on_fixture_subnet=true|false`, or `unknown reason=unavailable`, for the
+retained early `dl-<run>-net` fixture bridge. This is not the CLI-control,
+rendered-control or default bridge. It reuses only the already-completed bounded
+source-container acquisition: no read, process, timer, privilege, resource,
+retry or cleanup liability is added. Its exact selected container/root and
+attachment must bind the held canonical fixture ID, exact name and bridge
+driver. Both strict duplicate-rejecting JSON documents must have successful
+responses and the same actual captured request API, not the daemon's advertised
+or rendering API. A stopped endpoint's missing/empty `NetworkID` admits the
+exact fixture-name request only with the acquisition's matching network-name
+fallback metadata; null, wrong-type or foreign nonempty IDs are unavailable.
+Missing, oversized, partial, duplicate, trailing, malformed or IPv6-only
+evidence is unavailable; the same whole-IPAM membership rules apply. No raw
+address, ID, CIDR, response, error or path is exported. `true` is only address
+membership, not a routing, NAT or failure cause; `false` excludes only this
+fixture network, not other networks or routes. The context is held only around
+the exact CLI-control client/sidecar URL wget; successful wget, other commands,
+same-bridge traffic and the later rendered-control failure emit no fixture
+observation. Unavailable diagnostics never replace the original strict failure.
+The existing closed subnet sanitizer pipeline accepts this exact alternative
+without adding a presentation process; fixture and rendered-internal failure
+observations are mutually exclusive. Default IPAM and all original budgets,
+assertions, nineteen invocations and experimental non-acceptance remain intact.
 Only at that failed ordinary-control wget boundary, with its explicit held
 sidecar/API/socket/client context, one optional read may additionally inspect
 the owned inner Engine's exact `/v<held-api>/networks/bridge`. It additionally
