@@ -126,6 +126,36 @@ RootlessKit behavior, cleanup success or compatibility. No bridges are added
 later in this proof. All nineteen invocations, original assertions, endpoint
 canary and experimental non-acceptance remain mandatory.
 
+Campaign `39988715765`, attempt 1, passed all nineteen tests in each Debian
+lane; each upstream lane passed six tests and then failed the mandatory
+internal-network topology assertion at original source
+`src/native_network_tests.rs:6277`. The closed logs identify that assertion,
+not its first rejected predicate. They establish neither an actual pool overlap
+nor CLI egress failure, a rendered traffic result, a timing cause or an AppArmor
+cause. Both upstream failures precede sidecar health, peers, the independent
+CLI-positive control and internal blocking probes. Their panic-time inner
+cleanup reported pass; the upstream-rootless experiment remains unadmitted.
+
+The existing inner-topology evaluation now carries a fixed, value-free
+`InnerTopologyRefusal` reason from its first rejected predicate. It preserves
+the original predicate order, exact acceptance, assertion and cleanup. Categories
+distinguish snapshot/set bounds, held roles/IDs, native identity/uniqueness,
+scope and IPAM driver, builtin empty pools, retained bridge membership/driver,
+held identity binding, complete bridge IPAM, actual IPv4 intersection and final
+retained coverage. Only the existing computed interval intersection can select
+`ipv4_overlap`; a generic structural refusal cannot. An earlier refusal says
+nothing about unevaluated predicates. No native names, IDs, addresses, counts,
+payloads, exception text or Debug output enter the diagnostic.
+
+One best-effort write of static bytes occurs only on refusal inside the original
+assertion evaluation; ordinary stderr I/O failure cannot replace the assertion
+or bypass its unwind cleanup. The exact-test wrapper projects at most one exact
+closed line only for that test's failed invocation at `network_internal_topology`;
+duplicate/conflicting, malformed and unrelated lines are suppressed. Success
+remains silent. The native process's original status and the wrapper's failure
+status are unchanged. There is no additional query, probe, native invocation,
+resource, retry, timer, session, allocation fallback or policy/pin change.
+
 Activation is DockerLens-native-conformance-specific. Shared observation/runtime
 imports and `id|name|run` wire behavior stay unchanged for existing BoxFerry
 consumers. The three canonical native workflow consumers inherit the same script;

@@ -1,5 +1,26 @@
 # Dependency and pin policy
 
+The inner-topology first-refusal diagnostic adds only a test-local closed Rust
+enum/static-byte projection and an exact failure-only sanitizer vocabulary.
+It adds no dependency, software/tool/Action/image pin, installation, query,
+native invocation or timeout. Canonical consumers remain DockerLens's Check,
+native-validation and release-validation workflows through the same coordinator
+and exact-test wrapper; none needs a workflow definition change. BoxFerry's
+reviewed outer-runtime closure and its native-script/readiness checks are
+unchanged; fresh exact-SHA consumer qualification is still required, not claimed.
+Read-only consumer review found no corresponding harness consumer in ComposeLens,
+PodmanLens, QuadletLens or the website. No cross-repository rollout is implied.
+
+Verified Renovate no-change review: the existing native-image regex manager
+still extracts the same five version/digest pairs solely from
+`scripts/native-conformance.sh`, with `DockerLens native conformance images`
+grouping, manual review and automerge disabled. Toolchain, Cargo/lockfile and
+GitHub Actions managers, paths, extraction and approvals remain unchanged.
+The scaffold-policy ownership regression checks these existing records; no
+Renovate edit or duplicate manager is needed. Historical source/native evidence,
+including failed campaign `39988715765` and the unadmitted AppArmor exception,
+retains its original status.
+
 The maintained hosted fixture allocation uses preinstalled Ubuntu-24 iproute2
 and systemctl only, at reviewed root-owned system paths. The single bounded
 preflight records the actual iproute2 version and installed executable SHA-256,

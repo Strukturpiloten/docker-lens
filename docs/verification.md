@@ -38,6 +38,30 @@ and cancellation remain failures; missing/uncertain cleanup remains retained.
 
 ## Strict CLI-positive internal-network precontrol
 
+Campaign `39988715765`, attempt 1, is failed evidence: both Debian lanes passed
+nineteen tests; both upstream lanes passed six and stopped at the mandatory
+topology assertion at original `src/native_network_tests.rs:6277`. The first
+rejected predicate is unavailable in its closed logs. The stage does not prove
+overlap, CLI egress failure, rendered traffic behavior, timeout or AppArmor
+causality; the later positive controls and blocking probes were not reached.
+Panic-time internal cleanup reported pass. The upstream-rootless AppArmor
+experiment remains unadmitted, and no ordinary acceptance or release claim follows.
+
+The diagnostic-only first-refusal projection is checked by
+`tests/test_native_inner_topology_diagnostic.py`: isolated fake-cargo controls
+exercise every independent closed reason, malformed/CR/ANSI/prefix/suffix and
+protected canaries, duplicate/conflicting lines, exact test/stage failure-only
+scope, zero-selected refusal, original status-101 reporting/wrapper-status-1 and
+cleanup markers. Static checks retain original predicate order, one evaluation,
+static best-effort bytes and nineteen native invocations. Rust topology controls
+independently check first-refusal competing defects, schema versus actual
+overlap, mixed-family input, a second outer pool, containing `/0`, inside `/32`,
+adjacent/outside pools and failing-writer assertion/unwind preservation. No
+acceptance/schema, native query, timing, cleanup, AppArmor or pin is changed.
+These are synthetic checks, not native compatibility evidence or a diagnosis of
+the failed campaign; fresh exact-candidate gates and independent review remain
+necessary.
+
 The [maintained allocation/topology contract](native-outer-runtime.md) adds a
 hosted-Docker-only outer reservation with mandatory bounded host preflight and
 post-create pool/endpoint validation. Local Podman remains automatic. A mandatory

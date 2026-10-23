@@ -1505,16 +1505,89 @@ fn inner_topology_disjoint(
     held_ids: &[(String, String)],
     outer: &[TopologyPool],
 ) -> bool {
+    assess_inner_topology(networks, run, held_ids, outer).is_ok()
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InnerTopologyRefusal {
+    SnapshotArray,
+    SnapshotBounds,
+    NetworkCount,
+    HeldCount,
+    OuterPools,
+    HeldRoles,
+    HeldIds,
+    NativeId,
+    NativeName,
+    DuplicateId,
+    DuplicateName,
+    Scope,
+    IpamDriver,
+    BuiltinPools,
+    BridgeMembership,
+    BridgeDriver,
+    HeldBinding,
+    BridgeIpam,
+    Ipv4Overlap,
+    RetainedSet,
+}
+
+impl InnerTopologyRefusal {
+    fn diagnostic(self) -> &'static [u8] {
+        match self {
+            Self::SnapshotArray => b"DOCKERLENS_NATIVE_INNER_TOPOLOGY: reason=snapshot_array\n",
+            Self::SnapshotBounds => b"DOCKERLENS_NATIVE_INNER_TOPOLOGY: reason=snapshot_bounds\n",
+            Self::NetworkCount => b"DOCKERLENS_NATIVE_INNER_TOPOLOGY: reason=network_count\n",
+            Self::HeldCount => b"DOCKERLENS_NATIVE_INNER_TOPOLOGY: reason=held_count\n",
+            Self::OuterPools => b"DOCKERLENS_NATIVE_INNER_TOPOLOGY: reason=outer_pools\n",
+            Self::HeldRoles => b"DOCKERLENS_NATIVE_INNER_TOPOLOGY: reason=held_roles\n",
+            Self::HeldIds => b"DOCKERLENS_NATIVE_INNER_TOPOLOGY: reason=held_ids\n",
+            Self::NativeId => b"DOCKERLENS_NATIVE_INNER_TOPOLOGY: reason=native_id\n",
+            Self::NativeName => b"DOCKERLENS_NATIVE_INNER_TOPOLOGY: reason=native_name\n",
+            Self::DuplicateId => b"DOCKERLENS_NATIVE_INNER_TOPOLOGY: reason=duplicate_id\n",
+            Self::DuplicateName => b"DOCKERLENS_NATIVE_INNER_TOPOLOGY: reason=duplicate_name\n",
+            Self::Scope => b"DOCKERLENS_NATIVE_INNER_TOPOLOGY: reason=scope\n",
+            Self::IpamDriver => b"DOCKERLENS_NATIVE_INNER_TOPOLOGY: reason=ipam_driver\n",
+            Self::BuiltinPools => b"DOCKERLENS_NATIVE_INNER_TOPOLOGY: reason=builtin_pools\n",
+            Self::BridgeMembership => {
+                b"DOCKERLENS_NATIVE_INNER_TOPOLOGY: reason=bridge_membership\n"
+            }
+            Self::BridgeDriver => b"DOCKERLENS_NATIVE_INNER_TOPOLOGY: reason=bridge_driver\n",
+            Self::HeldBinding => b"DOCKERLENS_NATIVE_INNER_TOPOLOGY: reason=held_binding\n",
+            Self::BridgeIpam => b"DOCKERLENS_NATIVE_INNER_TOPOLOGY: reason=bridge_ipam\n",
+            Self::Ipv4Overlap => b"DOCKERLENS_NATIVE_INNER_TOPOLOGY: reason=ipv4_overlap\n",
+            Self::RetainedSet => b"DOCKERLENS_NATIVE_INNER_TOPOLOGY: reason=retained_set\n",
+        }
+    }
+}
+
+fn emit_inner_topology_refusal(output: &mut impl Write, reason: InnerTopologyRefusal) {
+    // Presentation is best effort; an I/O error must not replace the assertion
+    // or interrupt the existing panic-time resource cleanup owner.
+    let _ = output.write_all(reason.diagnostic());
+}
+
+fn assess_inner_topology(
+    networks: &Value,
+    run: &str,
+    held_ids: &[(String, String)],
+    outer: &[TopologyPool],
+) -> Result<(), InnerTopologyRefusal> {
     let Some(networks) = networks.as_array() else {
-        return false;
+        return Err(InnerTopologyRefusal::SnapshotArray);
     };
     let expected = retained_topology_names(run);
-    if !bounded_topology_json(&Value::Array(networks.clone()))
-        || networks.len() != expected.len() + 2
-        || held_ids.len() != 5
-        || outer.is_empty()
-    {
-        return false;
+    if !bounded_topology_json(&Value::Array(networks.clone())) {
+        return Err(InnerTopologyRefusal::SnapshotBounds);
+    }
+    if networks.len() != expected.len() + 2 {
+        return Err(InnerTopologyRefusal::NetworkCount);
+    }
+    if held_ids.len() != 5 {
+        return Err(InnerTopologyRefusal::HeldCount);
+    }
+    if outer.is_empty() {
+        return Err(InnerTopologyRefusal::OuterPools);
     }
     let held_names: std::collections::HashSet<_> =
         held_ids.iter().map(|(name, _)| name.as_str()).collect();
@@ -1529,7 +1602,7 @@ fn inner_topology_disjoint(
         .iter()
         .any(|suffix| !held_names.contains(format!("dl-network-{run}-{suffix}").as_str()))
     {
-        return false;
+        return Err(InnerTopologyRefusal::HeldRoles);
     }
     let held_values: std::collections::HashSet<_> =
         held_ids.iter().map(|(_, id)| id.as_str()).collect();
@@ -1538,23 +1611,28 @@ fn inner_topology_disjoint(
             .iter()
             .any(|id| canonical_inspected_container_id(&json!({"Id": id})).is_none())
     {
-        return false;
+        return Err(InnerTopologyRefusal::HeldIds);
     }
     let mut ids = std::collections::HashSet::new();
     let mut names = std::collections::HashSet::new();
     for network in networks {
         let Some(id) = canonical_inspected_container_id(network) else {
-            return false;
+            return Err(InnerTopologyRefusal::NativeId);
         };
         let Some(name) = network.get("Name").and_then(Value::as_str) else {
-            return false;
+            return Err(InnerTopologyRefusal::NativeName);
         };
-        if !ids.insert(id)
-            || !names.insert(name)
-            || network["Scope"] != "local"
-            || network["IPAM"]["Driver"] != "default"
-        {
-            return false;
+        if !ids.insert(id) {
+            return Err(InnerTopologyRefusal::DuplicateId);
+        }
+        if !names.insert(name) {
+            return Err(InnerTopologyRefusal::DuplicateName);
+        }
+        if network["Scope"] != "local" {
+            return Err(InnerTopologyRefusal::Scope);
+        }
+        if network["IPAM"]["Driver"] != "default" {
+            return Err(InnerTopologyRefusal::IpamDriver);
         }
         let builtin = matches!(
             (name, network["Driver"].as_str()),
@@ -1565,33 +1643,41 @@ fn inner_topology_disjoint(
                 .as_array()
                 .is_some_and(Vec::is_empty)
             {
-                return false;
+                return Err(InnerTopologyRefusal::BuiltinPools);
             }
             continue;
         }
-        if !expected.iter().any(|expected| expected == name)
-            || network["Driver"] != "bridge"
-            || held_ids
-                .iter()
-                .any(|(held_name, held_id)| held_name == name && held_id != id)
+        if !expected.iter().any(|expected| expected == name) {
+            return Err(InnerTopologyRefusal::BridgeMembership);
+        }
+        if network["Driver"] != "bridge" {
+            return Err(InnerTopologyRefusal::BridgeDriver);
+        }
+        if held_ids
+            .iter()
+            .any(|(held_name, held_id)| held_name == name && held_id != id)
         {
-            return false;
+            return Err(InnerTopologyRefusal::HeldBinding);
         }
         let Some(pools) = topology_ipam(&network["IPAM"]["Config"]) else {
-            return false;
+            return Err(InnerTopologyRefusal::BridgeIpam);
         };
         if pools
             .iter()
             .filter(|pool| pool.address.is_ipv4())
             .any(|pool| outer.iter().any(|other| pool.overlaps(*other)))
         {
-            return false;
+            return Err(InnerTopologyRefusal::Ipv4Overlap);
         }
     }
-    expected.iter().all(|name| names.contains(name.as_str()))
+    if !(expected.iter().all(|name| names.contains(name.as_str()))
         && names.contains("host")
         && names.contains("none")
-        && held_ids.iter().all(|(name, _)| expected.contains(name))
+        && held_ids.iter().all(|(name, _)| expected.contains(name)))
+    {
+        return Err(InnerTopologyRefusal::RetainedSet);
+    }
+    Ok(())
 }
 
 fn read_inner_topology(context: &DefaultBridgeContext) -> Option<Value> {
@@ -1750,6 +1836,175 @@ mod topology_tests {
         earlier[2]["Id"] = json!("e".repeat(64));
         assert!(inner_topology_disjoint(&earlier, "test", &held, &outer));
         assert!(!inner_topology_disjoint(&earlier, "test", &held, &[]));
+    }
+
+    #[test]
+    fn topology_refusal_categories_preserve_first_failed_predicate() {
+        let (networks, held, outer) = fixture();
+        let check = |value: &Value, ids: &[(String, String)], pools: &[TopologyPool], reason| {
+            assert!(assess_inner_topology(value, "test", ids, pools) == Err(reason));
+            assert!(!inner_topology_disjoint(value, "test", ids, pools));
+        };
+        check(&Value::Null, &[], &[], InnerTopologyRefusal::SnapshotArray);
+        let mut excessive = networks.clone();
+        excessive[0]["unrelated"] = json!(vec![0; 8193]);
+        check(&excessive, &[], &[], InnerTopologyRefusal::SnapshotBounds);
+        check(&json!([]), &[], &[], InnerTopologyRefusal::NetworkCount);
+        check(&networks, &[], &[], InnerTopologyRefusal::HeldCount);
+        check(&networks, &held, &[], InnerTopologyRefusal::OuterPools);
+        let mut wrong_roles = held.clone();
+        wrong_roles[0].0 = "private-role-canary".to_owned();
+        wrong_roles[0].1 = "invalid-id-canary".to_owned();
+        check(
+            &networks,
+            &wrong_roles,
+            &outer,
+            InnerTopologyRefusal::HeldRoles,
+        );
+        let mut wrong_ids = held.clone();
+        wrong_ids[0].1 = wrong_ids[1].1.clone();
+        check(&networks, &wrong_ids, &outer, InnerTopologyRefusal::HeldIds);
+        for (field, value, reason) in [
+            (
+                "Id",
+                json!("private-id-canary"),
+                InnerTopologyRefusal::NativeId,
+            ),
+            ("Name", Value::Null, InnerTopologyRefusal::NativeName),
+            ("Scope", json!("swarm"), InnerTopologyRefusal::Scope),
+            ("IPAM", Value::Null, InnerTopologyRefusal::IpamDriver),
+            (
+                "Name",
+                json!("private-name-canary"),
+                InnerTopologyRefusal::BridgeMembership,
+            ),
+            (
+                "Driver",
+                json!("overlay"),
+                InnerTopologyRefusal::BridgeDriver,
+            ),
+        ] {
+            let mut changed = networks.clone();
+            changed[0][field] = value;
+            check(&changed, &held, &outer, reason);
+        }
+        let mut duplicate = networks.clone();
+        duplicate[1]["Id"] = duplicate[0]["Id"].clone();
+        duplicate[1]["Name"] = duplicate[0]["Name"].clone();
+        duplicate[1]["Scope"] = Value::Null;
+        check(&duplicate, &held, &outer, InnerTopologyRefusal::DuplicateId);
+        duplicate[1]["Id"] = networks[1]["Id"].clone();
+        check(
+            &duplicate,
+            &held,
+            &outer,
+            InnerTopologyRefusal::DuplicateName,
+        );
+        let mut binding = networks.clone();
+        binding[1]["Id"] = json!("e".repeat(64));
+        binding[1]["IPAM"]["Config"] = Value::Null;
+        check(&binding, &held, &outer, InnerTopologyRefusal::HeldBinding);
+        for pools in [Value::Null, json!([{}]), json!([{"Subnet": "fd00::/64"}])] {
+            let mut changed = networks.clone();
+            changed[11]["IPAM"]["Config"] = pools;
+            check(&changed, &held, &outer, InnerTopologyRefusal::BuiltinPools);
+        }
+        for (pools, reason) in [
+            (
+                json!([{"Subnet": "10.253.253.0/24"}]),
+                InnerTopologyRefusal::Ipv4Overlap,
+            ),
+            // An overlapping prefix followed by incomplete data is a schema
+            // refusal: no overlap category until the whole IPAM passes.
+            (
+                json!([{"Subnet": "10.253.253.0/24"}, {}]),
+                InnerTopologyRefusal::BridgeIpam,
+            ),
+            (
+                json!([{"Subnet": "fd00::/64"}]),
+                InnerTopologyRefusal::BridgeIpam,
+            ),
+            (
+                json!([{"Subnet": "172.20.0.1/24"}]),
+                InnerTopologyRefusal::BridgeIpam,
+            ),
+        ] {
+            let mut changed = networks.clone();
+            changed[0]["IPAM"]["Config"] = pools;
+            check(&changed, &held, &outer, reason);
+        }
+        let mut second_outer = outer.clone();
+        second_outer.push(TopologyPool::parse("10.88.0.0/16").unwrap());
+        let mut changed = networks.clone();
+        changed[0]["IPAM"]["Config"] = json!([
+            {"Subnet": "172.20.0.0/24"}, {"Subnet": "fd00::/64"}, {"Subnet": "10.88.3.0/24"}
+        ]);
+        check(
+            &changed,
+            &held,
+            &second_outer,
+            InnerTopologyRefusal::Ipv4Overlap,
+        );
+        for (subnet, refused) in [
+            ("0.0.0.0/0", true),
+            ("10.253.253.255/32", true),
+            ("10.253.252.0/24", false),
+            ("10.253.254.0/32", false),
+        ] {
+            let mut changed = networks.clone();
+            changed[0]["IPAM"]["Config"] = json!([{"Subnet": subnet}, {"Subnet": "fd00::/64"}]);
+            if refused {
+                check(&changed, &held, &outer, InnerTopologyRefusal::Ipv4Overlap);
+            } else {
+                assert!(assess_inner_topology(&changed, "test", &held, &outer).is_ok());
+                assert!(inner_topology_disjoint(&changed, "test", &held, &outer));
+            }
+        }
+    }
+
+    #[test]
+    fn topology_diagnostic_io_failure_preserves_assertion_and_unwind_cleanup() {
+        struct BrokenOutput;
+        impl Write for BrokenOutput {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("synthetic output failure"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        struct Cleanup<'a>(&'a std::cell::Cell<bool>);
+        impl Drop for Cleanup<'_> {
+            fn drop(&mut self) {
+                self.0.set(true);
+            }
+        }
+        let cleaned = std::cell::Cell::new(false);
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _cleanup = Cleanup(&cleaned);
+            assert!(
+                {
+                    let result = assess_inner_topology(&Value::Null, "test", &[], &[]);
+                    if let Err(reason) = result {
+                        emit_inner_topology_refusal(&mut BrokenOutput, reason);
+                    }
+                    result.is_ok()
+                },
+                "all retained inner bridge pools are disjoint from actual outer pools"
+            );
+        }));
+        assert!(cleaned.get());
+        let payload = panic.expect_err("original assertion remains a failure");
+        assert_eq!(
+            payload.downcast_ref::<&str>().copied(),
+            Some("all retained inner bridge pools are disjoint from actual outer pools")
+        );
+        let mut output = Vec::new();
+        emit_inner_topology_refusal(&mut output, InnerTopologyRefusal::BridgeIpam);
+        assert_eq!(
+            output,
+            b"DOCKERLENS_NATIVE_INNER_TOPOLOGY: reason=bridge_ipam\n"
+        );
     }
 
     #[test]
@@ -6275,7 +6530,13 @@ fn live_internal_network_blocks_external_egress() {
     })
     .expect("complete bounded inner network snapshot");
     assert!(
-        inner_topology_disjoint(&networks, &run_id, &held_network_ids, &pools),
+        {
+            let result = assess_inner_topology(&networks, &run_id, &held_network_ids, &pools);
+            if let Err(reason) = result {
+                emit_inner_topology_refusal(&mut std::io::stderr().lock(), reason);
+            }
+            result.is_ok()
+        },
         "all retained inner bridge pools are disjoint from actual outer pools"
     );
 

@@ -53,6 +53,14 @@ source_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: (source_(fixture_oracles|dis
 if [[ -n $source_marker ]]; then marker=$source_marker; fi
 network_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: network_(identity|oracle(_((primary|alternate)_(create|inspect|assert)|external_(create|inspect)))?|render|apply|inspect|aliases|traffic|isolation(_(edge_fixture(_exited)?|edge_alias_missing|backend_alias_missing|edge_dns(_(output_limit|cli_(timeout|resolver|lookup|docker|exec|answer_present|unclassified)|answer_(missing|wrong_ip|malformed|inconsistent)|alias_missing|fixture_exited|readiness_exhausted))?|edge_http|local_dns|local_http|collision_dns|collision_http|foreign_route|cleanup_unverified))?|internal_(oracle|render|sidecar|peers|cli_control|control|blocked|cleanup|topology)|external|negative|evidence)$' <<<"$result" | tail -n 1 || true)
 if [[ -n $network_marker ]]; then marker=$network_marker; fi
+inner_topology_diag=
+if [[ $target == native_network && $test_name == live_internal_network_blocks_external_egress &&
+      $network_marker == 'DOCKERLENS_NATIVE_CHECK: network_internal_topology' ]]; then
+    inner_topology_diag=$(grep -Ex '^DOCKERLENS_NATIVE_INNER_TOPOLOGY: reason=(snapshot_array|snapshot_bounds|network_count|held_count|outer_pools|held_roles|held_ids|native_id|native_name|duplicate_id|duplicate_name|scope|ipam_driver|builtin_pools|bridge_membership|bridge_driver|held_binding|bridge_ipam|ipv4_overlap|retained_set)$' <<<"$result" || true)
+    # The original evaluation emits once. Duplicate/conflicting lines are not
+    # evidence; never concatenate them or project arbitrary native text.
+    if [[ $inner_topology_diag == *$'\n'* ]]; then inner_topology_diag=; fi
+fi
 volume_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: volume_(missing_precheck|seed|read_only|read_write|persistence|identity|cleanup_unverified)$' <<<"$result" | tail -n 1 || true)
 if [[ -n $volume_marker ]]; then marker=$volume_marker; fi
 dns_diag=$(grep -Eo '^DOCKERLENS_NATIVE_DNS_DIAG: peer=(ready|invalid|unavailable) resolver=(unrun|unavailable|embedded_(search|plain)|other_(search|plain)) default_a=(pass|fail|unrun) explicit_a=(pass|fail|unrun) dotted_a=(pass|fail|unrun) name_http=(pass|fail|unrun) ip_http=(pass|fail|unrun) edge_app=(pass|fail|unrun) cleanup=(pass|fail)$' <<<"$result" | tail -n 1 || true)
@@ -270,6 +278,7 @@ if (( run_status != 0 )); then
   if [[ -n $internal_subnet_diag ]]; then echo "$internal_subnet_diag" >&2; fi
   if [[ -n $default_bridge_subnet_diag ]]; then echo "$default_bridge_subnet_diag" >&2; fi
   if [[ -n $internal_cleanup ]]; then echo "$internal_cleanup" >&2; fi
+    if [[ -n $inner_topology_diag ]]; then echo "$inner_topology_diag" >&2; fi
   if [[ -n $panic_site ]]; then echo "$panic_site" >&2; fi
   if [[ -n $summary ]]; then
     echo "$summary" >&2
