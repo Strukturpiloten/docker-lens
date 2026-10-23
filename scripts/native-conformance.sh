@@ -56,6 +56,25 @@ case "$lane" in
   *) usage ;;
 esac
 
+select_apparmor_experiment() {
+  # Fixed reviewed source selector, not an environment-provided policy/path.
+  # The installed trusted dispatcher predates this deliberately unadmitted run.
+  apparmor_experiment=
+  [[ $lane == upstream-rootless &&
+     ${GITHUB_WORKFLOW_REF:-} == Strukturpiloten/docker-lens/.github/workflows/native-validation.yml@refs/heads/main ]] || return 0
+  [[ $native_outer_engine == docker && ${GITHUB_EVENT_NAME:-} == workflow_dispatch &&
+     ${GITHUB_JOB:-} == native-conformance && ${GITHUB_REPOSITORY:-} == Strukturpiloten/docker-lens &&
+     ${GITHUB_RUN_ID:-} =~ ^[1-9][0-9]{0,19}$ && ${GITHUB_RUN_ATTEMPT:-} =~ ^[1-9][0-9]{0,19}$ &&
+     ${DOCKERLENS_NATIVE_CANDIDATE_SHA:-} =~ ^[0-9a-f]{40}$ ]] || return 2
+  native_outer_policy docker || return 2
+  local head dirty
+  head=$(timeout --signal=TERM --kill-after=2s 8s git -C "$script_dir/.." rev-parse HEAD) || return 2
+  dirty=$(timeout --signal=TERM --kill-after=2s 8s git -C "$script_dir/.." status --porcelain --untracked-files=all) || return 2
+  [[ $head == "$DOCKERLENS_NATIVE_CANDIDATE_SHA" && -z $dirty ]] || return 2
+  apparmor_experiment=issue127_userns_v1
+}
+select_apparmor_experiment || { echo 'native AppArmor experiment selection refused' >&2; exit 2; }
+
 for tool in "$native_outer_engine" curl python3 timeout df du mktemp; do
   command -v "$tool" >/dev/null || { echo "missing native test tool: $tool" >&2; exit 1; }
 done
@@ -106,6 +125,9 @@ watchdog_pid=
 rootless_startup_us=
 rootless_startup_boot_ns=
 rootless_kernel_attempted=0
+apparmor_nonce=
+apparmor_attempted=0
+apparmor_native_completed=0
 native_success_summary=
 preserve_run_dir=0
 outer_container_id=
@@ -261,6 +283,7 @@ cleanup_network() {
 }
 cleanup() {
   status=$?
+  local original_status=$status
   trap - EXIT HUP INT TERM
   if [[ -n $watchdog_pid ]]; then
     kill "$watchdog_pid" 2>/dev/null || true
@@ -276,10 +299,25 @@ cleanup() {
     cleanup_refuse network container_unverified || true
     cleanup_refuse volume container_unverified || true
   fi
+  if (( ${apparmor_attempted:-0} == 1 )); then
+    # Daemon absence is re-authenticated independently of network/volume cleanup.
+    # Unknown load/create/absence never permits profile removal or custody loss.
+    if ! native_outer_bridge_command 30 apparmor cleanup "$lane" "$apparmor_nonce"; then
+      preserve_run_dir=1
+      if (( status == 0 )); then status=1; fi
+    fi
+  fi
   if (( preserve_run_dir != 0 )); then
     echo 'DOCKERLENS_NATIVE_CLEANUP: private presence evidence retained for review' >&2
   elif [[ $run_dir == "${TMPDIR:-/tmp}"/dockerlens-native.* && -d $run_dir ]]; then
     rm -rf -- "$run_dir" || status=1
+  fi
+  if [[ -n ${apparmor_experiment:-} ]]; then
+    if (( original_status != 0 )); then status=$original_status; fi
+    # Hard aggregate barrier, including native success + complete cleanup.
+    if (( status == 0 )); then status=1; fi
+    native_success_summary=
+    printf 'DOCKERLENS_NATIVE_APPARMOR_RESULT: outcome=unadmitted native_completed=%s\n' "${apparmor_native_completed:-0}" >&2
   fi
   if (( status != 0 )); then
     echo "native lane $lane failed; verify owned resources $container, $sidecar, $outer_network, and $volume" >&2
@@ -753,6 +791,12 @@ sidecar_failure_diagnostic() {
 }
 watchdog &
 watchdog_pid=$!
+
+if [[ -n ${apparmor_experiment:-} ]]; then
+  apparmor_nonce=$(python3 -c 'import secrets; print(secrets.token_hex(16))')
+  apparmor_attempted=1
+  native_outer_bridge_command 30 apparmor prepare "$lane" "$apparmor_nonce" "$container" "$run_id" "$image" || exit $?
+fi
 # Pull only the reviewed digest under the lane's time and free-space budget.
 # Prevent `run` from doing a second unbounded implicit pull.
 native_outer_command 180 pull "$image" >/dev/null
@@ -847,6 +891,11 @@ if [[ $native_outer_engine == docker ]]; then
   native_outer_prepare_data "$image" "$expected_mode" "$volume" "$volume_path" "$graph_root" ||
     sidecar_setup_failed volume_ownership
 fi
+apparmor_create_args=()
+if [[ -n ${apparmor_experiment:-} ]]; then
+  native_outer_bridge_command 30 apparmor load "$lane" "$apparmor_nonce" || exit $?
+  apparmor_create_args=("$apparmor_nonce")
+fi
 outer_attempted=1
 creation_status=0
 # Hold once immediately before actual create/start; failure cannot move this
@@ -861,7 +910,8 @@ if [[ $native_outer_engine == docker && $expected_mode == rootless ]]; then
 fi
 outer_container_id=$(native_outer_bridge_command 120 create-daemon "$container" "$run_id" \
   io.dockerlens.native-run "$outer_network" "$volume" "$socket_dir" /dockerlens-native \
-  "$lane" "$image" "$run_dir/diagnostics/daemon.log" 2>/dev/null) || creation_status=$?
+  "$lane" "$image" "$run_dir/diagnostics/daemon.log" "${apparmor_create_args[@]}" 2>/dev/null) || creation_status=$?
+if [[ -n ${apparmor_experiment:-} && $creation_status =~ ^(130|143)$ ]]; then exit "$creation_status"; fi
 (( creation_status == 0 )) || sidecar_setup_failed daemon_attach
 [[ $outer_container_id =~ ^[0-9a-f]{64}$ ]] || sidecar_setup_failed daemon_identity
 if [[ $native_outer_engine == docker ]]; then
@@ -960,6 +1010,15 @@ done
   diagnose_native_startup
   exit 1
 }
+if [[ -n ${apparmor_experiment:-} ]]; then
+  apparmor_label_status=0
+  native_outer_bridge_command 30 apparmor verify "$lane" "$apparmor_nonce" || apparmor_label_status=$?
+  if (( apparmor_label_status != 0 )); then
+    preserve_run_dir=1
+    exit "$apparmor_label_status"
+  fi
+fi
+
 if [[ $lane == debian11-rootless ]]; then
   # Linux mountinfo reports suid/dev by absence of nosuid/nodev. Check the
   # effective mount, not merely the requested Podman volume options.
@@ -1460,6 +1519,13 @@ fi
 "$(dirname "$0")/run-exact-native-test.sh" native_runtime_filesystem live_runtime_filesystem_matches_engine
 "$(dirname "$0")/run-exact-native-test.sh" native_tmpfs_effect live_tmpfs_effects_match_engine
 )
+
+if [[ -n ${apparmor_experiment:-} ]]; then
+  apparmor_native_completed=1
+  # EXIT still performs owned resource/profile cleanup; no normal lane receipt
+  # or native success summary is reachable by this experimental lane.
+  exit 0
+fi
 
 if [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]; then
   candidate_sha=$(git -C "$script_dir/.." rev-parse HEAD)

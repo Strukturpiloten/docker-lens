@@ -8,6 +8,18 @@ selects verified rootful local Docker in admitted hosted jobs while retaining
 local default Podman. This updates orchestration, not the four maintained inner
 images or this ADR's native evidence/admission obligation. Historical Podman source
 evidence below remains historical; it does not qualify the new Docker backend.
+The temporary issue127 userns experiment is an explicit, unadmitted exception
+only for upstream-rootless in the exact trusted-main native dispatcher. It may
+compile and add one run-owned named AppArmor userns profile after read-only
+host/parser/ABI checks, bind it to the unchanged privileged launch, and verify
+the creation-bound task's effective kernel label. Original-directory custody,
+durable intent and authenticated daemon absence govern removal; uncertainty
+retains evidence until disposable-runner teardown. No installation, ambient
+policy change, fallback, new native assertion or acceptance exemption is allowed.
+Even passing tests plus complete cleanup deliberately fail the job and cannot
+publish ordinary native evidence. See the bounded lifecycle and source
+provenance in [outer runtime](../native-outer-runtime.md#temporary-unadmitted-upstream-rootless-userns-experiment).
+
 Both use owned inner container/data-volume/socket identities in the existing
 shared host store; the host Docker daemon/socket is never the fixture itself.
 
@@ -24,7 +36,8 @@ without changing host policy. Only Debian 11 rootless uses suid,dev on its
 task-owned outer data-root volume, and the harness verifies the effective
 mount flags. Independent CLI probes isolated the need to this historical
 rootless runc's read-only named-volume remount under outer nosuid,nodev;
-other lanes retain their default data-volume and AppArmor options. This does not claim
+other lanes retain their default data-volume and AppArmor options outside the
+explicit unadmitted experiment above. This does not claim
 conformance under restrictive outer storage mounts or enforcing outer
 AppArmor. No guest APT provisioning occurs.
 

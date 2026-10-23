@@ -90,9 +90,58 @@ native_outer_bridge_command() {
     GITHUB_REPOSITORY GITHUB_WORKFLOW_REF ImageOS ImageVersion DOCKER_HOST DOCKER_CONTEXT \
     DOCKER_TLS_VERIFY DOCKER_CERT_PATH DOCKER_API_VERSION CONTAINER_HOST CONTAINER_CONNECTION \
     CONTAINER_SSHKEY PODMAN_CONNECTIONS_CONF; do context+=("$key=${!key-}"); done
+  # Preserve every ordinary caller's exact context contract. Only the fixed
+  # experimental argv shapes need these additional literal assignments; the
+  # root helper still validates and binds the complete hosted/run context.
+  local experiment_context=0
+  if [[ ${apparmor_experiment:-} == issue127_userns_v1 && $native_outer_engine == docker ]]; then
+    if [[ ${1:-} == apparmor && ${3:-} == upstream-rootless && ${4:-} =~ ^[0-9a-f]{32}$ ]]; then
+      case "${2:-}:$#" in prepare:7|load:4|verify:4|cleanup:4) experiment_context=1 ;; esac
+    elif [[ $# == 12 && $1 == create-daemon && $4 == io.dockerlens.native-run &&
+            $8 == /dockerlens-native && $9 == upstream-rootless && ${12} =~ ^[0-9a-f]{32}$ ]]; then
+      experiment_context=1
+    fi
+  fi
+  if (( experiment_context == 1 )); then
+    for key in GITHUB_JOB GITHUB_RUN_ID GITHUB_RUN_ATTEMPT DOCKERLENS_NATIVE_CANDIDATE_SHA; do
+      context+=("$key=${!key-}")
+    done
+  fi
   "${native_outer_privilege[@]}" timeout --signal=TERM --kill-after=2s "${seconds}s" \
     env "${context[@]}" bash "$native_outer_script_dir/native-outer-command.sh" \
       --engine "$native_outer_engine" --directory "$native_outer_directory" "$@"
+}
+
+native_outer_apparmor() {
+  # Only the fixed bridge invokes this under its original root-owned deadline.
+  local operation=$1 lane=$2 nonce=$3
+  shift 3
+  [[ $native_outer_engine == docker && $lane == upstream-rootless && $nonce =~ ^[0-9a-f]{32}$ ]] || return 2
+  local -a helper=(python3 -B "$native_outer_script_dir/native-runner-apparmor.py"
+    "$operation" "$native_outer_directory" "$lane" "$nonce" "$@")
+  # begin is used only in the creation function's command substitution. Remove
+  # that subshell so TERM cannot orphan the helper and disarm the hard owner.
+  if [[ $operation == begin ]]; then exec "${helper[@]}"; fi
+  "${helper[@]}"
+}
+
+native_outer_apparmor_wait_owner() {
+  # Experimental bridge cancellation never resumes create or lets its direct
+  # Bash exit cancel the original timeout's pending KILL. No new timer/group.
+  trap '' HUP INT TERM
+  while :; do sleep 1; done
+}
+
+native_outer_exact_container_query() {
+  local kind=$1 identity=$2
+  [[ $kind == id && $identity =~ ^[0-9a-f]{64}$ ||
+     $kind == name && $identity =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]] || return 2
+  native_outer_exact_query=(container ls -a --no-trunc --filter "$kind=$identity")
+  if [[ $kind == id ]]; then
+    native_outer_exact_query+=(--format "{{if eq .ID \"$identity\"}}present{{else}}other{{end}}")
+  else
+    native_outer_exact_query+=(--format "{{if eq .Names \"$identity\"}}present{{else}}other{{end}}")
+  fi
 }
 
 native_outer_preflight_failure() {
@@ -180,6 +229,10 @@ native_outer_presence() {
     if [[ $kind == container ]]; then query+=(-a); fi
     if [[ $kind != volume ]]; then query+=(--no-trunc); fi
     query+=(--filter "$filter" --format "$template")
+    if [[ $kind == container ]]; then
+      native_outer_exact_container_query "${filter%%=*}" "$identity" || return 2
+      query=("${native_outer_exact_query[@]}")
+    fi
   fi
   # Same privilege and existing finite child/reap contract as canonical cleanup.
   if [[ ${native_outer_cmd[0]} == sudo ]]; then
@@ -274,6 +327,15 @@ native_outer_create_daemon() {
     flags+=(--oom-score-adj=0 --security-opt apparmor=unconfined)
     start+=(--storage-driver=vfs)
   fi
+  if [[ -n ${context[apparmor_nonce]:-} ]]; then
+    [[ $native_outer_engine == docker && ${context[lane]} == upstream-rootless &&
+       ${context[owner_key]} == io.dockerlens.native-run && ${context[guest_dir]} == /dockerlens-native ]] || return 2
+    local profile
+    profile=$(native_outer_apparmor begin "${context[lane]}" "${context[apparmor_nonce]}" \
+      "${context[name]}" "${context[run]}" "${context[image]}") || return $?
+    [[ $profile =~ ^dockerlens-127-upstream-rootless-[1-9][0-9]{0,19}-[1-9][0-9]{0,19}-[0-9a-f]{32}$ ]] || return 2
+    flags+=(--security-opt "apparmor=$profile")
+  fi
   mount="${context[volume]}:$destination"
   if [[ $native_outer_engine == podman ]]; then
     mount+=:U
@@ -296,6 +358,11 @@ native_outer_create_daemon() {
   creation=$(python3 "$native_outer_script_dir/native-outer-observation.py" created-cid "$cidfile") || {
     if (( status != 0 )); then return "$status"; else return 2; fi
   }
+  if [[ -n ${context[apparmor_nonce]:-} ]]; then
+    local binding_status=0
+    native_outer_apparmor created "${context[lane]}" "${context[apparmor_nonce]}" "$creation" || binding_status=$?
+    if (( status == 0 && binding_status != 0 )); then status=$binding_status; fi
+  fi
   printf '%s\n' "$creation"
   return "$status"
 }

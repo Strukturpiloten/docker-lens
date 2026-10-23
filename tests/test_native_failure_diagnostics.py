@@ -70,6 +70,9 @@ class FailureDiagnosticsTests(unittest.TestCase):
                 + "native_outer_engine=docker\nexpected_mode=rootless\nmain_pid=$$\n"
                 + ("watchdog_pid=$$\n" if watchdog else "watchdog_pid=\n")
                 + "outer_container_id=" + "a" * 64 + "\nsidecar_ip=10.23.7.9\n"
+                # Unset Bash's ticking special variable before assigning the
+                # ordinary fixed fixture clock; startup cannot spend its budget.
+                + "unset SECONDS\n"
                 + f"SECONDS={1800 - remaining}\n"
                 + "trap 'exit 130' INT\ntrap 'exit 143' TERM\n")
         if invoke:
@@ -144,6 +147,24 @@ class FailureDiagnosticsTests(unittest.TestCase):
             result = self.shell(self.guest_http_body())
             self.assertEqual(result.returncode, status)
             self.assertNotIn("status=http_200", result.stderr)
+
+    def test_guest_http_fixed_fixture_clock_survives_delayed_native_failure(self):
+        start = SOURCE.index("internal_network_status=0\n")
+        end = SOURCE.index('"$(dirname "$0")/run-exact-native-test.sh" native_volume ', start)
+        wrapper = SOURCE[start:end]
+        fake_native = self.private / "delayed-fake-native-test"
+        # A real elapsed second exhausted the former special SECONDS clock's
+        # nine-second admission boundary before the fake client could be called.
+        self.tool(fake_native, "import time\ntime.sleep(1.1)\nraise SystemExit(17)\n")
+        self.client_reply("200")
+        body = self.guest_http_body(invoke=False)
+        body += wrapper.replace('"$(dirname "$0")/run-exact-native-test.sh"', repr(str(fake_native)))
+        body += "exit 0\n"
+        result = self.shell(body)
+        self.assertEqual(result.returncode, 17)
+        self.assertEqual(result.stdout, "")
+        self.assertTrue(self.trace.exists())
+        self.assertEqual(result.stderr, "DOCKERLENS_NATIVE_OUTER_GUEST_HTTP: status=http_200\n")
 
     def test_guest_http_child_cancellation_exits_cleanup_with_inherited_ignored_sigint(self):
         receipt = self.private / "guest-http-cleanup-status"

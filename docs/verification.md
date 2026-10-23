@@ -20,6 +20,22 @@ dispatcher policy is documented there; no actor or main-only gate is relaxed.
 Definitions and mocked controls do not establish Docker-backend compatibility.
 Fresh exact-candidate complete and four-lane gates remain required.
 
+The temporary [upstream-rootless userns experiment](native-outer-runtime.md#temporary-unadmitted-upstream-rootless-userns-experiment)
+is explicitly outside that acceptance path. Its hermetic controls exercise
+selection/custody, config-suppressed no-cache compile/add/remove, uncertain
+mutation/creation retention, effective-label bracketing and independent profile
+cleanup. Linux fake-client integration exercises the actual fixed bridge under
+its original process-group owner, including TERM-resistant descendants, early
+EOF, soft-deadline expiry and late begin output that must not resume creation.
+Exact listing-vector, malformed/duplicate state, closed receipt, malformed absence
+and closed failure-stage controls cover the experiment-only projection. They
+invoke no policy parser, Docker/Podman or native guest and establish no hosted
+prerequisite or compatibility fact. The live experimental job must finish
+non-success after cleanup even if all nineteen unchanged tests pass;
+ordinary native receipts, success summaries and aggregate acceptance are blocked.
+Its closed log result is not an uploaded lane artifact. Earlier native failures
+and cancellation remain failures; missing/uncertain cleanup remains retained.
+
 ## Hosted prerequisite diagnostic
 
 Failure-only native diagnostics also have bounded, synthetic regression coverage:

@@ -51,10 +51,26 @@ case $operation in
   binding) [[ $# == 5 ]] || refuse; native_outer_binding "$@" ;;
   daemon-binding) [[ $# == 5 ]] || refuse; native_outer_daemon_binding "$@" ;;
   remove) [[ $# == 4 ]] || refuse; native_outer_remove "$@" "$directory" ;;
+  apparmor-presence)
+    [[ $engine == docker && $# == 2 ]] || refuse
+    native_outer_exact_container_query "$@" || refuse
+    exec "${native_outer_cmd[@]}" "${native_outer_exact_query[@]}" ;;
+  apparmor)
+    [[ $engine == docker && $# -ge 3 && $2 == upstream-rootless && $3 =~ ^[0-9a-f]{32}$ ]] || refuse
+    case "$1:$#" in
+      prepare:6|load:3|verify:3|cleanup:3)
+        exec python3 -B "$script_dir/native-runner-apparmor.py" "$1" "$directory" "${@:2}" ;;
+      *) refuse ;;
+    esac ;;
   create-daemon)
-    [[ $# == 10 ]] || refuse
+    [[ $# == 10 || $# == 11 ]] || refuse
     declare -A held=([name]="$1" [run]="$2" [owner_key]="$3" [network]="$4" [volume]="$5"
       [socket_dir]="$6" [guest_dir]="$7" [lane]="$8" [image]="$9" [log_path]="${10}")
+    if [[ $# == 11 ]]; then
+      [[ ${11} =~ ^[0-9a-f]{32}$ ]] || refuse
+      held[apparmor_nonce]=${11}
+      trap native_outer_apparmor_wait_owner HUP INT TERM
+    fi
     native_outer_create_daemon held ;;
   prepare-data) [[ $# == 5 ]] || refuse; native_outer_prepare_data "$@" ;;
   check-mounts)

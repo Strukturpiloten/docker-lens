@@ -168,3 +168,24 @@ The canonical harness is consumed by `check.yml` main push,
 exact-main dispatch. All three inherit the same prerequisite without a
 workflow edit. The other five workspace repositories do not invoke this
 DockerLens native harness, so no cross-repository consumer changes are needed.
+
+The temporary issue127 AppArmor experiment adds no package, download, image,
+Action or workflow reference. Its **preinstalled parser 4.0.1 compatibility
+bound** is a reviewed command-semantics limit, not an operational install pin or
+support claim for other 4.0.x releases. The installed parser and ABI 4.0 hashes
+are recorded as observations, not publisher integrity. Their bytes follow the
+same mutable Ubuntu 24 runner; no stable repository-owned checksum is available.
+This is an explicit unavailable-integrity/manual-review exception, with refusal
+on missing or changed prerequisites, never installation or upgrade. The fixed
+policy is authored locally; referenced GPL-2.0 AppArmor and Apache-2.0 Moby
+sources are inspection-only and not redistributed. See [experiment provenance](native-outer-runtime.md#temporary-unadmitted-upstream-rootless-userns-experiment).
+
+Renovate no-change review: the five native image pins, their existing regex
+extraction path, Action/workflow SHAs, manager ownership, grouping and approval
+policy are unchanged. Historical source-version references and the parser's
+compatibility bound are not new automatically updatable pins. The three ordinary
+workflow consumers retain identical harness behavior except the exact
+DockerLens upstream-rootless manual-dispatch experiment. Main/release and the
+BoxFerry consumer deliberately cannot activate it, so there is no cross-repository
+rollout or completed compatibility claim. The source selector and helpers carry
+their own fake-only regression controls; no new Renovate manager is added.

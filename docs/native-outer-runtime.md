@@ -8,6 +8,113 @@ The same four digest-pinned **inner** Engines, BusyBox pin, nineteen mandatory
 exact tests, source receipts and admission rules remain unchanged. Synthetic
 controls and definitions do not qualify a native lane.
 
+## Temporary, unadmitted upstream-rootless userns experiment
+
+The reviewed source selector `issue127_userns_v1` applies only to
+`upstream-rootless` in DockerLens's exact trusted-main `native-validation.yml`
+`workflow_dispatch` native job, with a clean checkout matching the admitted
+candidate SHA, canonical GitHub-hosted Ubuntu 24/Linux context and selected outer
+Docker. Clean HEAD is checked by the original caller before privilege escalation;
+the root helper never invokes caller-configured Git. The environment guard is
+not authentication or a replacement for trusted dispatcher admission.
+Every helper operation requires the literal upstream-rootless lane and matches
+its root-owned state. The trusted exact source selector owns the canonical image
+choice; the helper binds that held pin and the actual guest, rather than
+independently resolving images or authenticating GitHub.
+It is not an environment-provided profile or path. Local Podman, main
+push, release and BoxFerry consumers do not activate it; a selected but invalid
+context refuses without fallback. This temporary exception does **not** qualify
+the outer backend, explain earlier EACCES observations, or authorize adoption.
+
+The helper reads AppArmor enablement, restricted unprivileged user namespaces,
+the kernel's `namespaces/mask` `userns_create` feature and policy v9 support. It
+requires the safely owned preinstalled parser's reviewed **4.0.1 compatibility
+bound** and ABI 4.0, recording actual executable/ABI/profile hashes. These are
+installed-byte observations, not publisher checksums or new installation pins.
+Missing, changed or unsupported prerequisites refuse; there is no package
+installation, sysctl write, service change, host-wide policy relaxation, canary,
+baseline retry or attribution milestone.
+
+One exclusive root-owned 0700 `/run` directory, root-owned 0600 finite files and
+a nonblocking lock hold the original private run directory's device/inode/owner,
+candidate, run/attempt, random nonce, exact daemon identity and lifecycle intent.
+Each operation rechecks original-directory custody. The fixed named policy uses
+ABI 4.0, `flags=(unconfined)` and only `userns,`; it has no executable attachment,
+wildcards or global/local includes. Compile-only runs precede one exclusive add;
+an existing name is never replaced. Every parser invocation, including version,
+uses `/dev/null` configuration, no cache reads/writes, compile-in-main jobs and
+fatal ABI/rule-downgrade/rule-not-enforced warnings. Remove receives the same
+complete held policy bytes. Nothing is written to `/etc/apparmor.d` or a cache.
+Custody also requires duplicate-free exact state schemas and types, closed
+load/create/label combinations, the derived run/attempt/nonce profile name and
+recomputed policy digest, exact candidate/lane/run identity, and bounded parser
+and ABI records. Malformed or unknown state cannot authorize a mutation or
+cleanup. Receipt keys, types, digest fields and outcome enums are validated
+before deleting custody leaves; root-owned file shape alone is insufficient.
+Standalone helper phases have a root-owned 30-second TERM/two-second KILL owner
+and a once-created 24-second soft capture deadline. Queries introduce no nested
+timer, session or process group. On cancellation or unknown descendant lifetime,
+the helper and experimental bridge keep the original hard owner alive through
+its KILL fallback, rather than treating a reaped immediate child as child-death
+proof. Standalone phases exec the helper; creation's begin substitution likewise
+execs it, and the experimental creation bridge cannot resume after cancellation.
+The read-only experimental presence projection shares the ordinary exact Docker
+listing argv but not its separate supervisor; normal cleanup behavior is unchanged.
+Creation intent and actual daemon binding remain inside the original
+120-second create bridge; they do not renew it. The original 30-minute lane
+watchdog and existing native resource budgets remain authoritative.
+
+Only this guest gets the explicit named security option. Its existing privileged
+launch, image, launcher, resource limits, native assertions and nineteen exact
+tests are unchanged. After readiness, normalized exact CID/name/run/image
+snapshots bracket a held `/proc` process directory, start ticks and the exact
+effective kernel label/mode. Missing, stale, reused, stacked or different labels
+refuse. Docker inspect's profile field and Moby's option handling alone are not
+effective-label proof.
+
+Task binding additionally requires the stable exact host cgroup-v2 line
+`0::/system.slice/docker-<full-held-CID>.scope`. This deliberately narrow
+Ubuntu/systemd-cgroup layout is an experiment prerequisite, not an already
+verified runner fact or generic Docker support. Another driver/layout refuses
+without fallback; inner Engine cgroup metadata is not outer evidence. This
+establishes only an actual owned task's label, not RootlessKit-specific or
+all-descendant causality.
+
+Load/create/unload intent is durable before mutation. Actual CID/name/run/image
+binding is saved before the later effective-label/cgroup guard; a guard refusal
+does not erase that known ownership. Unknown completion or
+creation identity is sticky: cleanup retains the owned policy and private
+custody evidence. A known completed load may be removed only if creation was
+never attempted or both exact recorded CID and name are proven absent. This is
+independent of later network/volume failures; those existing failures and their
+retention remain intact. Removal must read back exact policy absence. Only fixed
+owned leaves are deleted, never a recursive root-state sweep. Cancellation keeps
+the original failing status. SIGKILL/VM loss cannot guarantee cleanup; disposable
+runner destruction is the ultimate boundary, not a reported cleanup success.
+
+The experiment emits separate bounded `DOCKERLENS_NATIVE_APPARMOR_EXPERIMENT`
+and `DOCKERLENS_NATIVE_APPARMOR_RESULT` log records. No raw profile names, paths,
+labels or parser output are printed. Refusal logs identify only the operation
+and a fixed stage: admission, custody, kernel enablement, userns restriction,
+kernel features, parser version, compile, load, daemon binding, effective label,
+absence or unload. These labels reuse existing checks, not additional probes or
+stderr classification. Even nineteen passing native tests and
+complete cleanup terminate deliberately **non-success/unadmitted**. The standard
+lane receipt and success summary are unreachable; the installed workflow's
+success-only lane artifact upload therefore does not run. Logs are evidence of
+the experiment only, not compatibility, catalogue, aggregate or release evidence.
+
+The command contract was inspected, not executed or copied, in official
+[AppArmor v4.0.1 parser documentation](https://gitlab.com/apparmor/apparmor/-/raw/v4.0.1/parser/apparmor_parser.pod)
+and `parser_main.c` (GPL-2.0), the version's ABI 4.0 file, and the official
+[restricted-userns documentation](https://gitlab.com/apparmor/apparmor/-/wikis/unprivileged_userns_restriction).
+Moby v28.0.4's `daemon/oci_linux.go`, commit
+`6430e49a55babd9b8f4d08e70ecb2b68900770fe` (Apache-2.0), establishes that an
+explicit AppArmor option precedes the privileged default, not that a live task
+received it. This is the observed outer Engine version, not the pinned guest's
+29.8.1. Inspection used versioned raw-source/document reads only; no upstream
+source, binary or policy is vendored or redistributed.
+
 ## Isolation and rootful identity
 
 Failure-only rootless diagnostics do not constitute a repair or a compatibility
