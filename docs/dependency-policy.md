@@ -95,6 +95,38 @@ The readable tags and immutable manifest digests are both required. Their
 native entrypoints, package lists, and runtime provenance are owned by the
 published images. DockerLens does no runtime APT installation.
 
+The original verification above remains historical. On 2026-10-23, only the
+two operational Debian 11 digests were refreshed from containers#456/PR #457,
+source `d148838d2b1234f5a898ff2a6d4e7393a259d92c`, successful publication
+run `39919296714`, attempt 1. The [maintenance record](evidence/maintenance/2026-10-23-debian-11-images.json)
+binds each finalized release-result artifact and extracted JSON checksum to its
+index and amd64/arm64 manifest digests. Independent anonymous registry reads and
+primary raw-index SHA-256 checks matched those records without downloading image
+layers. The producer adds distro curl and a fixed `/usr/bin/curl --disable --version`
+construction probe. The exact guest curl package revision is not established by
+the release-result records; native execution must still verify executable behavior
+and the unchanged Debian Engine package guard. Publication and maintenance
+integrity do not establish DockerLens compatibility, network behavior or cleanup.
+
+The same publication's upstream images contain **29.8.2**, not 29.8.1. They are
+deliberately not substituted: the mandatory native target check resolves the
+actual Engine identity through the sealed reviewed catalogue, which admits only
+29.8.1 upstream. Its exact guards, historical proofs, guest diagnostic-message
+provenance and capabilities remain unchanged. Qualifying a new upstream release
+requires a separate reviewed source/admission plan, not a widened guard or
+relabelled historical evidence. The original two upstream pins and BusyBox pin
+therefore remain unchanged.
+
+All three native workflows consume the same canonical harness. The existing
+single native-image regex still extracts exactly five version/digest pairs and
+keeps image updates grouped with manual review; its paths and approval settings
+need no change. The focused maintenance regression binds the Debian operational
+pins to the new record. That dated record is immutable maintenance evidence, not
+a second operational pin source or native catalogue entry, and remains outside
+automatic update streams. BoxFerry's reviewed helper closure does not consume
+these image assignments; the other Lens products and website do not consume this
+harness, so their operational pins and Renovate configuration need no change.
+
 Both Debian images contain native docker.io
 20.10.5+dfsg1-1+deb11u2. The harness checks that exact installed revision
 and reports the Engine release separately. It is a historical Debian 11
