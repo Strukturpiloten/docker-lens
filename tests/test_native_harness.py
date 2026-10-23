@@ -11,6 +11,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -1739,6 +1740,35 @@ esac
                         self.assertFalse((state / "error_inspected-bridge").exists())
 
     def test_owned_resources_are_cleaned_after_early_failures(self) -> None:
+        self._check_owned_resources_are_cleaned_after_early_failures()
+
+    def test_cleanup_fixtures_ignore_inherited_native_candidate_context(self) -> None:
+        inherited = {
+            "PATH": os.environ["PATH"],
+            "GITHUB_ACTIONS": "true",
+            "RUNNER_ENVIRONMENT": "github-hosted",
+            "RUNNER_OS": "Linux",
+            "GITHUB_REF": "refs/heads/main",
+            "GITHUB_EVENT_NAME": "workflow_dispatch",
+            "GITHUB_REPOSITORY": "Strukturpiloten/docker-lens",
+            "GITHUB_WORKFLOW_REF": (
+                "Strukturpiloten/docker-lens/.github/workflows/"
+                "native-validation.yml@refs/heads/main"
+            ),
+            "GITHUB_JOB": "candidate",
+            "GITHUB_RUN_ID": "39879541371",
+            "GITHUB_RUN_ATTEMPT": "1",
+            "ImageOS": "ubuntu24",
+        }
+        with mock.patch.dict(os.environ, inherited, clear=True):
+            self._check_owned_resources_are_cleaned_after_early_failures((
+                ("upstream-rootless", "run"),
+                ("upstream-rootless", "volume_remains"),
+                ("upstream-rootless", "volume_inspect_partial"),
+                ("upstream-rootless", "network_remains"),
+            ))
+
+    def _check_owned_resources_are_cleaned_after_early_failures(self, cases=None) -> None:
         fake_podman = """#!/usr/bin/env bash
 set -eu
 state=$FAKE_NATIVE_STATE
@@ -1796,7 +1826,10 @@ case "$command" in
         if [[ $* == *Labels* ]]; then
           for name; do :; done
           printf '%s|local|%s|2026-10-11T00:00:00Z|%s\n' "$name" "$state" "${name#dl-native-data-}"
-          [[ $FAKE_NATIVE_FAULT == volume_inspect_partial ]] && exit 42
+          if [[ $FAKE_NATIVE_FAULT == volume_inspect_partial ]]; then
+            touch "$state/volume_inspect_partial_reached"
+            exit 42
+          fi
           true
         else echo "$state"; fi ;;
       rm)
@@ -1946,7 +1979,7 @@ logs)
   *) exit 4 ;;
 esac
 """
-        for lane, fault in (
+        for lane, fault in cases or (
             ("debian11-rootful", "volume"),
             ("debian11-rootful", "pull"),
             ("debian11-rootful", "network_create"),
@@ -2010,9 +2043,13 @@ esac
                            "&& [ \"$1\" = -c ]; then "
                            "echo private-canary; exit 87; fi\n"
                            f'exec "{sys.executable}" "$@"\n')
-                env = os.environ.copy()
-                env.update(PATH=f"{bin_dir}:{env['PATH']}",
-                           FAKE_NATIVE_STATE=str(state), FAKE_NATIVE_FAULT=fault, TMPDIR=str(root))
+                # This fake Podman fixture is local, not a native dispatch job.
+                env = {
+                    "PATH": f"{bin_dir}:{os.environ['PATH']}",
+                    "FAKE_NATIVE_STATE": str(state),
+                    "FAKE_NATIVE_FAULT": fault,
+                    "TMPDIR": str(root),
+                }
                 command = ["bash", str(ROOT / "scripts/native-conformance.sh"), lane]
                 if fault == "cancel_after_sidecar":
                     process = subprocess.Popen(
@@ -2036,6 +2073,11 @@ esac
                     if fault == "sidecar_inspect_hang":
                         self.assertLess(time.monotonic() - started, 18)
                 self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn("native AppArmor experiment selection refused", result.stderr)
+                if fault == "run":
+                    self.assertTrue((state / "ran").exists())
+                if fault == "volume_inspect_partial":
+                    self.assertTrue((state / "volume_inspect_partial_reached").exists())
                 if fault in ("unexpected_mount", "legacy_podman_json", "log_registration_id", "log_registration_digest", "log_registration_missing_digest", "log_registration_path"):
                     observed = json.loads((state / "registration-observed.json").read_text())
                     self.assertEqual(observed["status"], "registered" if fault in ("unexpected_mount", "legacy_podman_json") else "prepared")
