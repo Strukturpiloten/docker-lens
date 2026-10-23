@@ -27,15 +27,17 @@ select_outer_engine || {
   exit 1
 }
 
-# Published containers#260 manifest digests verified on 2026-09-28 (amd64 and arm64).
+# Upstream containers#260 digests retain the reviewed 2026-09-28 baseline.
 # renovate: datasource=docker depName=ghcr.io/strukturpiloten/docker-29-rootful
 UPSTREAM_ROOTFUL_IMAGE='ghcr.io/strukturpiloten/docker-29-rootful:v29.8.1@sha256:bc71d19fbcd6d84d1452f61e6c3cbac77b6acaba214d7eb830b79124d1a4d563'
 # renovate: datasource=docker depName=ghcr.io/strukturpiloten/docker-29-rootless
 UPSTREAM_ROOTLESS_IMAGE='ghcr.io/strukturpiloten/docker-29-rootless:v29.8.1@sha256:075f6b6e6f15960ebf3bca6496331ee6b0e32d96b7824cbac382ae5b296f0d7c'
+# Debian rebuilds: containers#456, publication 39919296714 (2026-10-23).
+# Registry/maintenance binding is not native qualification; see dependency-policy.md.
 # renovate: datasource=docker depName=ghcr.io/strukturpiloten/docker-debian-11-rootful
-DEBIAN_ROOTFUL_IMAGE='ghcr.io/strukturpiloten/docker-debian-11-rootful:v1.0.0@sha256:656ab906588fcf0acfc66e48ff22e1cd56003495ea43b7066f307db9c7f63124'
+DEBIAN_ROOTFUL_IMAGE='ghcr.io/strukturpiloten/docker-debian-11-rootful:v1.0.0@sha256:47faf9e0f13269b9fdbe6e1b167b62a3c02130b6f8d34d785c6234b2c4d02ed3'
 # renovate: datasource=docker depName=ghcr.io/strukturpiloten/docker-debian-11-rootless
-DEBIAN_ROOTLESS_IMAGE='ghcr.io/strukturpiloten/docker-debian-11-rootless:v1.0.0@sha256:44eadaa886f56d64a3b47fdcee6a812045e0faf6ca207501fd35d1118840f41f'
+DEBIAN_ROOTLESS_IMAGE='ghcr.io/strukturpiloten/docker-debian-11-rootless:v1.0.0@sha256:36a16241b6058d163d1ed90549a8ea0aff9e242be62d414e4e75d81629513e77'
 # renovate: datasource=docker depName=docker.io/library/busybox
 FIXTURE_IMAGE='docker.io/library/busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e'
 # The image's native Debian package revision is distinct from its Engine release.

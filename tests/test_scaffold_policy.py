@@ -107,6 +107,36 @@ class ScaffoldPolicyTests(unittest.TestCase):
             self.assertIn("if-no-files-found: error", workflow)
             self.assertIn("DOCKERLENS_NATIVE_CANDIDATE_SHA:", workflow)
 
+    def test_debian_image_refresh_is_bound_to_maintenance_not_native_admission(self) -> None:
+        record = json.loads((ROOT / "docs/evidence/maintenance/2026-10-23-debian-11-images.json").read_text())
+        self.assertEqual(record["purpose"], "publication-maintenance-only")
+        self.assertIs(record["native_admission"], False)
+        self.assertEqual(record["source_repository"], "Strukturpiloten/containers")
+        self.assertEqual(record["source_revision"], "d148838d2b1234f5a898ff2a6d4e7393a259d92c")
+        self.assertEqual((record["run_id"], record["run_attempt"]), ("39919296714", "1"))
+        self.assertEqual([image["lane"] for image in record["images"]],
+                         ["debian11-rootful", "debian11-rootless"])
+        source = (ROOT / "scripts/native-conformance.sh").read_text()
+        renovate = json.loads((ROOT / "renovate.json").read_text())
+        manager = renovate["customManagers"][1]
+        extractor = re.sub(r"\(\?<(\w+)>", r"(?P<\1>", manager["matchStrings"][0])
+        pins = list(re.finditer(extractor, source))
+        self.assertEqual(len(pins), 5)
+        self.assertEqual(len({pin.group("depName") for pin in pins}), 5)
+        for image in record["images"]:
+            with self.subTest(lane=image["lane"]):
+                matches = [pin for pin in pins if pin.group("depName") == image["image"]]
+                self.assertEqual(len(matches), 1)
+                self.assertEqual(matches[0].group("currentValue"), image["tag"])
+                self.assertEqual(matches[0].group("currentDigest"), image["index_digest"])
+                self.assertEqual(set(image["architecture_digests"]), {"amd64", "arm64"})
+                for digest in image["architecture_digests"].values():
+                    self.assertRegex(digest, r"^sha256:[0-9a-f]{64}$")
+                self.assertRegex(image["extracted_receipt_sha256"], r"^[0-9a-f]{64}$")
+                self.assertRegex(image["release_result_artifact_id"], r"^[1-9][0-9]*$")
+                self.assertEqual(image["release_result_artifact_name"],
+                                 image["image"].rsplit("/", 1)[1] + "-release-result")
+
     def test_scripts_have_distinct_scope(self) -> None:
         fast = (ROOT / "scripts/format-lint.sh").read_text()
         complete = (ROOT / "scripts/check-all.sh").read_text()
