@@ -1558,3 +1558,26 @@ evidence for a later catalog commit; each changed candidate and release still
 needs fresh complete checks and native validation. Never substitute the historical
 source SHA for the final candidate SHA or infer an API version from a release
 label. Public resolver and inert rendering tests cover the admitted records.
+
+## EXIT-trap cleanup command status
+
+`tests/test_native_cleanup_command_status.py` extracts the real cleanup wrapper,
+outer command owner and removal classifier, then calls only a fake client from
+a genuine EXIT trap. Direct and command-substitution controls cover original
+job statuses 0, 1 and 101 against client statuses 0, 7, 124, 130 and 143 for both
+Docker and the unchanged Podman path. They independently assert the client result,
+closed removal classification, original shell exit and exactly one client call.
+Timeout/cancellation numbers here are returned statuses, not elapsed timeouts or
+delivered signals; existing deadline and cancellation tests remain separate.
+
+An isolated run with actual Bash 5.2.21 reproduced the Docker branch's bare
+`return` selecting the pre-trap status instead of the preceding command status.
+The same baseline controls passed on actual Bash 5.3.20. Explicitly returning
+`"$?"` preserves the command result on both; a Bash 5.3-only run cannot demonstrate
+the original defect, and a compatibility setting is not a substitute for the
+actual older interpreter. The committed tests use host Bash without downloads
+or version-based skips; private runs can select an already-available interpreter
+without adding an operational dependency. These are local fake-client observations,
+not proof of the executed shell version or root cause of a historical hosted run,
+successful native cleanup, native acceptance, or changes to the pending runtime's
+qualification requirements.

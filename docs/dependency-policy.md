@@ -200,3 +200,14 @@ DockerLens upstream-rootless manual-dispatch experiment. Main/release and the
 BoxFerry consumer deliberately cannot activate it, so there is no cross-repository
 rollout or completed compatibility claim. The source selector and helpers carry
 their own fake-only regression controls; no new Renovate manager is added.
+
+The EXIT-trap cleanup-status correction changes one return expression and adds
+host-Bash/fake-client regression coverage, with no software installation, new
+dependency, download, binary fixture or operational pin. Separately observed
+Bash versions in the verification record are evidence, not supported-version
+pins or a new interpreter-selection policy. The five native-image extractions,
+single toolchain extraction, Cargo/lockfile and GitHub Actions ownership remain
+unchanged and are checked by the existing scaffold policy regression. No pin
+moves, duplicate manager, grouping, approval or automerge change is introduced;
+`renovate.json` needs no edit. Historical evidence and intentional fixtures are
+unchanged.

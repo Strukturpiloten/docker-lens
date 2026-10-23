@@ -144,7 +144,7 @@ unset NATIVE_LIFECYCLE_CLEANUP_OWNER
 cleanup_podman() {
   if [[ ${native_outer_engine:-podman} == docker ]]; then
     native_outer_command 8 "$@" 2>/dev/null
-    return
+    return "$?"
   fi
   # The deadline must share root privileges with the Podman client; an
   # unprivileged timeout cannot reliably terminate children behind sudo.
