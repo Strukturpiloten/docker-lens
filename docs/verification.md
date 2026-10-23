@@ -67,6 +67,26 @@ prove universal process disposal. A completed HTTP status is not an exact body,
 cause, route, cleanup or native-acceptance proof; all original complete/native
 gates and lane/job disposal obligations remain unchanged.
 
+The same existing reader/timeout owner now projects three pre-test captured
+inner Engine `/info` network reports, adding no request, exec, namespace entry or
+timer. Synthetic controls cover true/false/missing/null and wrong-type reports,
+duplicate/nested/nonfinite/malformed/over-cap JSON, private directory and regular
+file custody (including accepted 0644 inside 0700, refused links/FIFOs/writable
+files), caller ownership, read stability and protected-value non-disclosure.
+A complete missing-curl frame can still expose these captured reports; invalid
+snapshot data does not erase valid HTTP/curl status. Conversely, true snapshot
+fields cannot bypass original client failure, cancellation, watchdog, remaining
+budget or late BOOTTIME refusal. The two HTTP/curl log records keep their meaning;
+one separate closed `PRE_TEST_NETWORK_REPORT` record explicitly identifies old
+reported booleans, never current sysctls, routes/effects, cause or acceptance.
+Guard/owner refusal retains the original two unavailable records only, with no
+new network marker; unavailable snapshot fields are emitted only after the
+complete result passes all original guards.
+All nineteen native tests, exact guards and experimental non-acceptance remain
+unchanged. Failed campaign `39935157094` (rootless failure after six passing
+tests; Debian later guest curl HTTP 200 and upstream curl absent) establishes no
+cause; rootful nineteen-test success does not qualify these changed bytes.
+
 The separate [hosted prerequisite diagnostic](hosted-prerequisite-diagnostic.md)
 is a main-only no-input dispatch in Check. It checks out the dispatch's immutable
 SHA and collects only bounded package/helper/unit metadata and hashes, with no

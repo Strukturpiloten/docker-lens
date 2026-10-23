@@ -305,6 +305,31 @@ explicit child cancellation exits through the coordinator's existing EXIT
 cleanup owner. It does not depend on self-signalling SIGINT, which may be
 inherited as ignored from an asynchronous gate, and cannot resume via `|| true`.
 
+The same six-second reader also reads the existing pre-test inner Engine `/info`
+snapshot, without another Engine request, exec or namespace entry. Its separate
+`DOCKERLENS_NATIVE_PRE_TEST_NETWORK_REPORT` line fixes
+`source=captured_inner_engine_info` and projects only `IPv4Forwarding`,
+`BridgeNfIptables` and `BridgeNfIp6tables` as
+`reported_true|reported_false|unavailable`. These are old Engine reports, not
+current sysctl observations, route/effect evidence, an established failure cause
+or native acceptance. Missing and null fields stay unavailable; non-booleans
+never become false. A malformed snapshot makes all three reports unavailable
+without losing otherwise valid HTTP/curl observations.
+
+The reader opens only fixed `info.json` through a held, no-follow, caller-owned
+0700 directory. The nonblocking/no-follow file must be caller-owned, regular,
+single-link, non-group/other-writable and at most 64 KiB (0644 is permitted
+inside the private parent). File/path and directory metadata are rechecked
+across the bounded read. Duplicate keys anywhere, nonfinite values (including
+exponent overflow), non-object/malformed JSON and nesting beyond 32 are refused.
+Only a closed internal suffix reaches the shell; no raw fields, paths or warnings
+are emitted. The unchanged 65-byte guest frame, both pipeline statuses and every
+existing post-collection budget/watchdog/BOOTTIME guard still gate all reports.
+Reader timeout, death or cancellation cannot be downgraded into HTTP success;
+the shared owner gains no new or renewed timer.
+Failed admission, owner, deadline or result guards retain only the original two
+unavailable HTTP/curl records; the new network marker is omitted entirely.
+
 Check/main, trusted native dispatch and release validation all consume the same
 canonical nineteen-test harness and inherit this failure-only observation. No
 image, Action, tool or dependency pin/extraction path changes; the existing Cargo,

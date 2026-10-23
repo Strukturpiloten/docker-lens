@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import shlex
 import signal
 import subprocess
 import sys
@@ -79,16 +80,22 @@ class FailureDiagnosticsTests(unittest.TestCase):
 
     @staticmethod
     def guest_observation(status="unavailable", *, tool="unavailable", callable_status="unavailable",
-                          curl_exit="unavailable"):
-        return (f"DOCKERLENS_NATIVE_OUTER_GUEST_HTTP: status={status}\n"
-                f"DOCKERLENS_NATIVE_OUTER_GUEST_CURL: tool={tool} callable={callable_status} curl_exit={curl_exit}\n")
+                          curl_exit="unavailable", reports=None):
+        result = (f"DOCKERLENS_NATIVE_OUTER_GUEST_HTTP: status={status}\n"
+                  f"DOCKERLENS_NATIVE_OUTER_GUEST_CURL: tool={tool} callable={callable_status} curl_exit={curl_exit}\n")
+        if reports is None:
+            if tool == "unavailable":
+                return result
+            reports = ("unavailable",) * 3
+        return (result + "DOCKERLENS_NATIVE_PRE_TEST_NETWORK_REPORT: source=captured_inner_engine_info "
+                f"IPv4Forwarding={reports[0]} BridgeNfIptables={reports[1]} BridgeNfIp6tables={reports[2]}\n")
 
     @staticmethod
     def guest_argv():
         return ["exec", "a" * 64, "/bin/sh", "-c", GUEST_HTTP_SCRIPT,
                 "dockerlens-guest-http", "http://10.23.7.9:18084/"]
 
-    def guest_http_body(self, *, privileged=False, remaining=9, watchdog=True, invoke=True):
+    def guest_http_body(self, *, privileged=False, remaining=9, watchdog=True, invoke=True, info_dir=None):
         vector = [str(self.client)]
         if privileged:
             self.tool(self.tools / "sudo", "import os,sys\n"
@@ -105,9 +112,204 @@ class FailureDiagnosticsTests(unittest.TestCase):
                 + "unset SECONDS\n"
                 + f"SECONDS={1800 - remaining}\n"
                 + "trap 'exit 130' INT\ntrap 'exit 143' TERM\n")
+        if info_dir is not None:
+            body += f"run_dir={shlex.quote(str(info_dir))}\n"
         if invoke:
             body += "outer_guest_http_failure_diagnostic || true\nexit 17\n"
         return body
+
+    def info_fixture(self, raw=b"{}", mode=0o600):
+        directory = self.private / "captured-info"
+        directory.mkdir(mode=0o700, exist_ok=True)
+        path = directory / "info.json"
+        path.write_bytes(raw)
+        path.chmod(mode)
+        return directory
+
+    def assert_info_observation(self, directory, reports=("unavailable",) * 3):
+        self.guest_client_reply("200", stderr=CANARY)
+        result = self.shell(self.guest_http_body(info_dir=directory))
+        self.assertEqual((result.returncode, result.stdout), (17, ""))
+        self.assertEqual(result.stderr, self.guest_observation("http_200", tool="executable",
+                         callable_status="yes", curl_exit="success", reports=reports))
+        self.assertEqual(json.loads(self.trace.read_text()), self.guest_argv())
+        self.assertNotIn(CANARY, result.stdout + result.stderr)
+        self.assertNotIn(str(directory), result.stdout + result.stderr)
+
+    def test_captured_info_closed_reports_preserve_both_original_http_lines(self):
+        for mode in (0o600, 0o644):
+            for value, reports in (
+                ({"IPv4Forwarding": True, "BridgeNfIptables": False, "BridgeNfIp6tables": True,
+                  "protected": CANARY}, ("reported_true", "reported_false", "reported_true")),
+                ({"IPv4Forwarding": False, "BridgeNfIptables": True, "BridgeNfIp6tables": False},
+                 ("reported_false", "reported_true", "reported_false")),
+                ({"IPv4Forwarding": None, "BridgeNfIptables": False},
+                 ("unavailable", "reported_false", "unavailable")),
+                ({}, ("unavailable",) * 3),
+            ):
+                with self.subTest(mode=mode, reports=reports):
+                    self.assert_info_observation(self.info_fixture(json.dumps(value).encode(), mode), reports)
+
+    def test_bad_info_types_json_and_bounds_are_unavailable_without_losing_http(self):
+        raw_cases = [b"", b"{", b"[]", b"null", b"true", b"42", b"\xff",
+                     b'{"IPv4Forwarding":true,"IPv4Forwarding":false}',
+                     b'{"IPv4Forwarding":true,"ignored":{"x":1,"x":2}}',
+                     b'{"IPv4Forwarding":true,"ignored":NaN}',
+                     b'{"IPv4Forwarding":true,"ignored":[Infinity]}',
+                     b'{"IPv4Forwarding":true,"ignored":{"x":1e999}}',
+                     b'{"IPv4Forwarding":true,"ignored":' + b"[" * 33 + b"0" + b"]" * 33 + b"}",
+                     b'{"IPv4Forwarding":true,"protected":"' + CANARY.encode() + b'"}' + b" " * 65536]
+        for key in ("IPv4Forwarding", "BridgeNfIptables", "BridgeNfIp6tables"):
+            for value in (0, 1, "false", "true", [], {}, 0.0):
+                raw_cases.append(json.dumps({"IPv4Forwarding": True, key: value}).encode())
+        for raw in raw_cases:
+            with self.subTest(length=len(raw), prefix=raw[:48]):
+                self.assert_info_observation(self.info_fixture(raw))
+        raw = b'{"IPv4Forwarding":true}'
+        directory = self.info_fixture(raw + b" " * (65536 - len(raw)), mode=0o644)
+        self.assert_info_observation(directory, ("reported_true", "unavailable", "unavailable"))
+
+    def test_info_private_directory_regular_single_link_and_modes_are_mandatory(self):
+        directory = self.info_fixture(b'{"IPv4Forwarding":true}')
+        path = directory / "info.json"
+        path.unlink()
+        self.assert_info_observation(directory)
+        path.symlink_to(self.private / "missing-protected-canary")
+        self.assert_info_observation(directory)
+        path.unlink()
+        os.mkfifo(path, 0o600)
+        self.assert_info_observation(directory)
+        path.unlink()
+        path.mkdir(mode=0o700)
+        self.assert_info_observation(directory)
+        path.rmdir()
+        path.write_bytes(b'{"IPv4Forwarding":true}')
+        path.chmod(0o600)
+        linked = self.private / "linked-info"
+        os.link(path, linked)
+        self.assert_info_observation(directory)
+        linked.unlink()
+        for mode in (0o620, 0o602, 0o666):
+            path.chmod(mode)
+            self.assert_info_observation(directory)
+        path.chmod(0o600)
+        directory.chmod(0o755)
+        self.assert_info_observation(directory)
+        directory.chmod(0o700)
+        alias = self.private / "alias-info"
+        alias.symlink_to(directory, target_is_directory=True)
+        self.assert_info_observation(alias)
+
+    def test_missing_curl_still_permits_complete_frame_pre_test_reports(self):
+        directory = self.info_fixture(b'{"IPv4Forwarding":true,"BridgeNfIptables":false}')
+        for tool in ("absent", "not_executable"):
+            self.client_reply(f"DLHTTP1|{tool}||-\n", stderr=CANARY)
+            result = self.shell(self.guest_http_body(info_dir=directory))
+            self.assertEqual((result.returncode, result.stdout), (17, ""))
+            self.assertEqual(result.stderr, self.guest_observation(tool=tool, callable_status="no",
+                             curl_exit="not_called", reports=("reported_true", "reported_false", "unavailable")))
+            self.assertEqual(json.loads(self.trace.read_text()), self.guest_argv())
+
+    @staticmethod
+    def guest_reader():
+        return definition("outer_guest_http_failure_diagnostic").split("python3 -I -S -c '\n", 1)[1].split(
+            "\n' \"${run_dir:-}\"", 1)[0]
+
+    def test_info_fd_path_and_directory_stability_and_caller_ownership(self):
+        for mutation in ("file-replace", "file-write", "file-mode", "parent-replace", "parent-mode",
+                         "source-owner", "parent-owner"):
+            with self.subTest(mutation=mutation):
+                directory = self.private / mutation
+                directory.mkdir(mode=0o700)
+                path = directory / "info.json"
+                path.write_bytes(b'{"IPv4Forwarding":true}')
+                path.chmod(0o600)
+                # Deterministic synthetic race at the actual held-file read,
+                # never a concurrent writer or host ownership change.
+                prelude = ("import os,stat,sys\nfrom pathlib import Path\n"
+                           "original_read=os.read\noriginal_stat=os.fstat\nmutated=False\n"
+                           f"mutation={mutation!r}\n"
+                           "def changed_read(fd,count):\n"
+                           " global mutated\n value=original_read(fd,count)\n"
+                           " if fd != 0 and not mutated:\n"
+                           "  mutated=True\n  parent=Path(sys.argv[1]);path=parent/'info.json'\n"
+                           "  if mutation=='file-replace':\n"
+                           "   path.unlink();path.write_bytes(value);path.chmod(0o600)\n"
+                           "  elif mutation=='file-write': path.write_bytes(b' '*len(value))\n"
+                           "  elif mutation=='file-mode': path.chmod(0o644)\n"
+                           "  elif mutation=='parent-mode': parent.chmod(0o755)\n"
+                           "  elif mutation=='parent-replace':\n"
+                           "   parent.rename(parent.with_suffix('.held'));parent.mkdir(mode=0o700)\n"
+                           " return value\n"
+                           "def changed_stat(fd):\n"
+                           " value=original_stat(fd)\n"
+                           " if ((mutation=='source-owner' and stat.S_ISREG(value.st_mode)) or\n"
+                           "     (mutation=='parent-owner' and stat.S_ISDIR(value.st_mode))):\n"
+                           "  fields=list(value);fields[4]=os.geteuid()+1;return os.stat_result(fields)\n"
+                           " return value\n"
+                           "os.read=changed_read\nos.fstat=changed_stat\n")
+                result = subprocess.run([sys.executable, "-I", "-S", "-c", prelude + self.guest_reader(), str(directory)],
+                                        input="DLHTTP1|executable|200|0\n", text=True, capture_output=True, timeout=3)
+                self.assertEqual((result.returncode, result.stderr), (0, ""))
+                self.assertEqual(result.stdout, "http_200 tool=executable callable=yes curl_exit=success "
+                                 "DLINFO1|unavailable|unavailable|unavailable\n")
+                self.assertNotIn(CANARY, result.stdout + result.stderr)
+
+    def test_true_info_cannot_bypass_pipeline_cancellation_deadline_or_watchdog(self):
+        directory = self.info_fixture(b'{"IPv4Forwarding":true,"BridgeNfIptables":true,"BridgeNfIp6tables":true}')
+        for status in (1, 124, 125, 126, 127, 137, 130, 143):
+            self.guest_client_reply("200", status)
+            result = self.shell(self.guest_http_body(info_dir=directory))
+            cancelled = status in (130, 143)
+            self.assertEqual((result.returncode, result.stdout), (status if cancelled else 17, ""))
+            self.assertEqual(result.stderr, "" if cancelled else self.guest_observation())
+        self.guest_client_reply("200")
+        for options in ({"remaining": 8}, {"watchdog": False}):
+            self.trace.unlink(missing_ok=True)
+            result = self.shell(self.guest_http_body(info_dir=directory, **options))
+            self.assertEqual((result.returncode, result.stderr), (17, self.guest_observation()))
+            self.assertFalse(self.trace.exists())
+        body = self.guest_http_body(info_dir=directory, invoke=False)
+        body += ("read() { case $2 in started) printf -v started %s 100.00 ;; "
+                 "ended) printf -v ended %s 107.99 ;; esac; }\n"
+                 "outer_guest_http_failure_diagnostic || true\nexit 17\n")
+        result = self.shell(body)
+        self.assertEqual((result.returncode, result.stderr), (17, self.guest_observation()))
+
+    def test_reader_status_and_closed_suffix_are_checked_before_any_emission(self):
+        directory = self.info_fixture(b'{"IPv4Forwarding":true}')
+        valid = "http_200 tool=executable callable=yes curl_exit=success DLINFO1|true|true|true\n"
+        cases = [(code, valid) for code in (1, 124, 137, 130, 143)]
+        cases += [(0, raw) for raw in (valid.replace("|true\n", "|1\n"), valid + valid,
+                                      valid + CANARY, valid.replace("DLINFO1", "DLINFO2"))]
+        (self.tools / "timeout").unlink()
+        for code, raw in cases:
+            with self.subTest(code=code, raw=raw[:80]):
+                self.guest_client_reply("200")
+                self.tool(self.tools / "timeout", "import os,sys\n"
+                          "if sys.argv[1:5] == ['--signal=TERM','--kill-after=1s','6s','python3']:\n"
+                          " sys.stdin.buffer.read(65)\n"
+                          f" sys.stdout.write({raw!r});raise SystemExit({code})\n"
+                          "os.execv('/usr/bin/timeout',['timeout',*sys.argv[1:]])\n")
+                result = self.shell(self.guest_http_body(info_dir=directory))
+                cancelled = code in (130, 143)
+                self.assertEqual((result.returncode, result.stdout), (code if cancelled else 17, ""))
+                self.assertEqual(result.stderr, "" if cancelled else self.guest_observation())
+                self.assertNotIn(CANARY, result.stdout + result.stderr)
+
+    def test_existing_reader_owner_kills_stalled_info_without_http_success(self):
+        directory = self.info_fixture(b'{"IPv4Forwarding":true}')
+        self.guest_client_reply("200")
+        body = self.guest_http_body(info_dir=directory)
+        body = body.replace("import json\nimport math\n", "import signal,time\n"
+                            "signal.signal(signal.SIGTERM,signal.SIG_IGN)\nimport json\nimport math\n")
+        body = body.replace("part = os.read(source, 65537 - len(captured))",
+                            "time.sleep(60)\n            part = os.read(source, 65537 - len(captured))")
+        started = time.monotonic()
+        result = self.shell(body, timeout=10)
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (17, "", self.guest_observation()))
+        self.assertGreaterEqual(time.monotonic() - started, 6.5)
+        self.assertLess(time.monotonic() - started, 9)
 
     def test_guest_http_status_only_fixed_direct_client_and_unavailable_inputs(self):
         expected = self.guest_argv()

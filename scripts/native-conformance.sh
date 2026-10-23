@@ -1425,6 +1425,7 @@ DOCKERLENS_NATIVE_OUTER_GUEST_CURL: tool=unavailable callable=unavailable curl_e
     # One fixed guest shell checks availability and frames the same GET. Curl
     # streams directly into the existing bounded reader; no extra capture,
     # request, timer, session, or command supplied by the guest is admitted.
+    # The same reader owner also projects only three captured pre-test reports.
     native_outer_command 3 exec "$outer_container_id" /bin/sh -c '
 LC_ALL=C LANG=C
 export LC_ALL LANG
@@ -1442,8 +1443,12 @@ else
 fi
 ' dockerlens-guest-http "http://$sidecar_ip:18084/" 2>/dev/null |
       timeout --signal=TERM --kill-after=1s 6s python3 -I -S -c '
+import json
+import math
 import os
 import re
+import stat
+import sys
 raw = b""
 while len(raw) < 65:
     part = os.read(0, 65 - len(raw))
@@ -1474,8 +1479,82 @@ else:
             if http is None or http[:1] not in b"12345":
                 raise SystemExit(1)
             status = "http_200" if http == b"200" else "http_other"
-print(f"{status} tool={tool.decode()} callable={callable_status} curl_exit={category}")
-' 2>/dev/null
+def unavailable_info():
+    return ("unavailable",) * 3
+
+
+def identity(info):
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
+            info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def reject(*_args):
+    raise ValueError
+
+
+def unique(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError
+        result[key] = value
+    return result
+
+
+def info_reports(directory):
+    descriptors = []
+    try:
+        if not directory or not os.path.isabs(directory) or os.path.normpath(directory) != directory:
+            raise ValueError
+        parent = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        descriptors.append(parent)
+        before_parent = os.fstat(parent)
+        if stat.S_IMODE(before_parent.st_mode) != 0o700 or before_parent.st_uid != os.geteuid():
+            raise ValueError
+        source = os.open("info.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=parent)
+        descriptors.append(source)
+        before = os.fstat(source)
+        if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_uid != os.geteuid()
+                or before.st_mode & 0o022 or not 0 < before.st_size <= 65536):
+            raise ValueError
+        captured = b""
+        while len(captured) < 65537:
+            part = os.read(source, 65537 - len(captured))
+            if not part:
+                break
+            captured += part
+        if (len(captured) != before.st_size
+                or identity(before) != identity(os.fstat(source))
+                or identity(before) != identity(os.stat("info.json", dir_fd=parent, follow_symlinks=False))
+                or identity(before_parent) != identity(os.fstat(parent))
+                or identity(before_parent) != identity(os.stat(directory, follow_symlinks=False))):
+            raise ValueError
+        value = json.loads(captured.decode("utf-8"), object_pairs_hook=unique, parse_constant=reject)
+        if type(value) is not dict:
+            raise ValueError
+        pending = [(value, 0)]
+        while pending:
+            item, depth = pending.pop()
+            if depth > 32 or (type(item) is float and not math.isfinite(item)):
+                raise ValueError
+            if type(item) is dict:
+                pending.extend((child, depth + 1) for child in item.values())
+            elif type(item) is list:
+                pending.extend((child, depth + 1) for child in item)
+        fields = [value.get(key) for key in ("IPv4Forwarding", "BridgeNfIptables", "BridgeNfIp6tables")]
+        if any(item is not None and type(item) is not bool for item in fields):
+            raise ValueError
+        return tuple("unavailable" if item is None else "true" if item else "false" for item in fields)
+    except (OSError, ValueError, UnicodeError, RecursionError):
+        return unavailable_info()
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+reports = "|".join(info_reports(sys.argv[1]))
+print(f"{status} tool={tool.decode()} callable={callable_status} curl_exit={category} DLINFO1|{reports}")
+' "${run_dir:-}" 2>/dev/null
     command_statuses=("${PIPESTATUS[@]}")
     for command_status in "${command_statuses[@]}"; do
       case $command_status in 130 | 143) exit "$command_status" ;; esac
@@ -1492,9 +1571,15 @@ print(f"{status} tool={tool.decode()} callable={callable_status} curl_exit={cate
   if (( diagnostic_status != 0 || ended_cs < started_cs || ended_cs - started_cs >= 799 || SECONDS >= 1800 )) ||
       ! kill -0 "$watchdog_pid" 2>/dev/null; then
     echo "$unavailable" >&2
-  elif [[ $result =~ ^(http_200|http_other|unavailable)\ tool=(absent|not_executable|executable)\ callable=(yes|no)\ curl_exit=(not_called|unavailable|success|resolve_proxy|resolve_host|connect_failed|timeout|empty_reply|send_failed|receive_failed|other)$ ]]; then
+  elif [[ $result =~ ^((http_200|http_other|unavailable)\ tool=(absent|not_executable|executable)\ callable=(yes|no)\ curl_exit=(not_called|unavailable|success|resolve_proxy|resolve_host|connect_failed|timeout|empty_reply|send_failed|receive_failed|other))\ DLINFO1\|(true|false|unavailable)\|(true|false|unavailable)\|(true|false|unavailable)$ ]]; then
     printf 'DOCKERLENS_NATIVE_OUTER_GUEST_HTTP: status=%s\nDOCKERLENS_NATIVE_OUTER_GUEST_CURL: %s\n' \
-      "${result%% *}" "${result#* }" >&2
+      "${BASH_REMATCH[2]}" "${BASH_REMATCH[1]#* }" >&2
+    local ipv4_report=${BASH_REMATCH[6]} iptables_report=${BASH_REMATCH[7]} ip6tables_report=${BASH_REMATCH[8]}
+    [[ $ipv4_report == unavailable ]] || ipv4_report="reported_$ipv4_report"
+    [[ $iptables_report == unavailable ]] || iptables_report="reported_$iptables_report"
+    [[ $ip6tables_report == unavailable ]] || ip6tables_report="reported_$ip6tables_report"
+    printf 'DOCKERLENS_NATIVE_PRE_TEST_NETWORK_REPORT: source=captured_inner_engine_info IPv4Forwarding=%s BridgeNfIptables=%s BridgeNfIp6tables=%s\n' \
+      "$ipv4_report" "$iptables_report" "$ip6tables_report" >&2
   else
     echo "$unavailable" >&2
   fi

@@ -1,5 +1,16 @@
 # Dependency and pin policy
 
+The private pre-test `/info` projection reuses Python standard-library parsing
+inside the existing guest-HTTP reader and its existing timeout; it installs or
+queries nothing and adds no package, image, Action, tool or dependency pin.
+Verified Renovate no-change review: the existing native-image regex still owns
+exactly the same five version/digest pairs in `scripts/native-conformance.sh`,
+with `DockerLens native conformance images` grouping and automerge disabled.
+Its path/extraction, Cargo/lockfile, toolchain and GitHub Actions managers and
+consumers are unchanged, so no Renovate edit or duplicate manager is needed.
+The three native workflow consumers inherit only a closed diagnostic projection,
+not new acceptance or operational software. Historical evidence remains intact.
+
 The bounded guest HTTP and cleanup-inspection diagnostics add no software
 installation, dependency, image, Action or toolchain pin. Their Python/coreutils
 use stays within the existing preinstalled runner exception; guest curl remains
