@@ -73,6 +73,24 @@ state or flags. Campaign `39974464569` established only that all four native
 lanes refused host preflight before native invocations; neither that flag nor
 another predicate can be attributed as the first failure from those logs.
 
+Optional IPv4 address `metric` controls independently accept 0, 100 and
+UINT32_MAX, including DHCP-style metadata with `NO-CARRIER`, and refuse negative,
+overflow, boolean, string, null and floating-point values. Local/broad-prefix,
+peer-prefix/local `/32`, broadcast and `noprefixroute` overlaps still refuse;
+adjacent disjoint prefixes pass. Unknown address keys, including `proto` and
+`protocol`, remain unsupported. Route controls distinguish actual destination,
+gateway, preferred-source and multipath overlap from malformed/noncanonical
+schemas. Only an actual existing interval intersection in the corresponding
+parse phase selects `addresses_overlap` or `routes_overlap`; neither label
+promises later metadata validation. Generic parse refusal, cancellation and
+non-parse failures keep their original phases. Controls retain the fixed command
+and shared-deadline ledger, original owner and original exception identity after
+the hold, including diagnostic I/O failure behavior. The real fake-client
+GNU-timeout controls remain unchanged. Campaign `39982331551` passed offline but
+all four lanes refused at `addresses_parse` before any native test invocation;
+the first field/predicate and cause remain unknown. These source-backed changes
+still require fresh exact-final-candidate complete and native gates.
+
 The same existing `live_internal_network_blocks_external_egress` test now first
 requires an independent CLI-created client on the already CLI-created ordinary
 bridge to return exact sidecar `proof-egress`, before the original rendered

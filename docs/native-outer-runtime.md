@@ -53,10 +53,26 @@ formatter-coverage gap, not a demonstrated cause of campaign `39974464569`:
 all four lanes stopped at host preflight before native tests, and those logs
 identify no failed predicate.
 
+The optional IPv4 address `metric` is accepted only as an unsigned 32-bit JSON
+integer (not a boolean), matching the reviewed iproute2 v6.1.0 formatter. It is
+metadata, not a weight or exemption: local-prefix, peer-prefix, local `/32`,
+broadcast and `noprefixroute` checks are unchanged. Unknown address keys,
+including `proto` and `protocol`, still refuse. Campaign `39982331551` passed
+its exact-candidate offline gate but all four native lanes stopped at
+`addresses_parse`, with zero native test invocations. That phase does not
+identify the first bad field or predicate; this source-established schema gap
+is not a demonstrated cause and does not qualify a lane.
+
 On refusal, `DOCKERLENS_NATIVE_HOST_NETWORK_PREFLIGHT` adds only
 `phase=<closed enum> result=refused`. The helper's `PREFLIGHT_PHASES` defines that
 fixed operation/predicate vocabulary, including separate capture and parsing
-phases. Success emits no line. No exception, command output, status, address,
+phases. Only an existing interval check that actually intersects the reservation
+can select `addresses_overlap` or `routes_overlap`, and only while parsing that
+respective capture. These labels do not assert the rest of the document/schema
+was validated: interval checks can precede later metadata validation. Generic
+schema/parse refusals retain `addresses_parse` or `routes_parse`; command,
+cancellation and custody failures retain their original phase. Success emits
+no line. No exception, command output, status, address,
 ID, path or other native value is projected. The finite stderr line is flushed
 before an uncertain-child/cancellation hold awaits the original owner's KILL;
 unavailable stderr never replaces the original refusal or skips that hold.

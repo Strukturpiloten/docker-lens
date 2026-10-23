@@ -31,18 +31,22 @@ ROUTE_FLAGS = frozenset({"onlink", "linkdown", "pervasive"})
 LINK_KEYS = frozenset({"ifindex", "ifname", "flags", "mtu", "qdisc", "operstate", "group", "txqlen", "link_type", "address", "broadcast", "master", "link_index", "link_netnsid", "altnames", "addr_info"})
 LINK_FLAGS = frozenset({"LOOPBACK", "BROADCAST", "POINTOPOINT", "MULTICAST", "NOARP", "UP", "LOWER_UP", "NO-CARRIER", "DORMANT", "PROMISC", "ALLMULTI", "MASTER", "SLAVE", "NOTRAILERS", "DEBUG", "ECHO"})
 ADDRESS_FLAGS = frozenset({"secondary", "dynamic", "deprecated", "tentative", "dadfailed", "noprefixroute", "autojoin", "mngtmpaddr", "home", "permanent", "stable-privacy"})
-ADDRESS_KEYS = frozenset({"family", "local", "address", "peer", "prefixlen", "broadcast", "scope", "label", "valid_life_time", "preferred_life_time"}) | ADDRESS_FLAGS
+ADDRESS_KEYS = frozenset({"family", "local", "address", "peer", "prefixlen", "broadcast", "scope", "label", "metric", "valid_life_time", "preferred_life_time"}) | ADDRESS_FLAGS
 PREFLIGHT_PHASES = frozenset({
     "context", "admission", "privilege", "signal_setup", "ip_custody", "systemctl_custody",
     "capture_setup", "capture_files", "service_before", "peer_before", "process_handles", "identity_before",
-    "version_capture", "version_parse", "addresses_capture", "addresses_parse", "identity_addresses",
-    "routes_capture", "routes_parse", "identity_routes", "service_after", "peer_after", "peer_match",
+    "version_capture", "version_parse", "addresses_capture", "addresses_parse", "addresses_overlap", "identity_addresses",
+    "routes_capture", "routes_parse", "routes_overlap", "identity_routes", "service_after", "peer_after", "peer_match",
     "identity_after", "ip_recheck", "systemctl_recheck", "capture_cleanup", "complete", "unclassified",
 })
 
 
 class Refused(ValueError):
     """No native value or host path belongs in a public error."""
+
+
+class _ReservationOverlap(Refused):
+    """An existing interval check intersected; later schema may be unvalidated."""
 
 
 def need(condition):
@@ -113,7 +117,8 @@ def subnet(value):
 
 
 def clear(pool):
-    need(not pool.overlaps(RESERVATION))
+    if pool.overlaps(RESERVATION):
+        raise _ReservationOverlap("fixture topology unavailable")
 
 
 def host_addresses(raw):
@@ -167,6 +172,8 @@ def host_addresses(raw):
                     need(type(value) is bool)
                 elif key in {"scope", "label"}:
                     token(value)
+                elif key == "metric":
+                    integer(value)
                 elif key in {"valid_life_time", "preferred_life_time"}:
                     if value != "forever":
                         integer(value)
@@ -560,7 +567,9 @@ def preflight(run, candidate, peer_observer):
             "iproute2": {"path": ip[0], "sha256": ip[2], "version": tool_version,
                          "device": ip[1][0], "inode": ip[1][1]},
             "daemon": before, "namespace": {"device": namespace.st_dev, "inode": namespace.st_ino}}
-    except BaseException:
+    except BaseException as error:
+        if isinstance(error, _ReservationOverlap) and phase in {"addresses_parse", "routes_parse"}:
+            phase = {"addresses_parse": "addresses_overlap", "routes_parse": "routes_overlap"}[phase]
         preflight_refusal(phase)
         if launched:
             hold_original_owner()

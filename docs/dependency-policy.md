@@ -10,11 +10,16 @@ Ubuntu-24 unavailable-integrity/manual-review exception: no installation,
 download, package update, namespace entry or host network-policy edit is added.
 Unknown or changed custody/schema refuses before outer network mutation intent.
 
-The `NO-CARRIER` metadata coverage correction is backed by a read-only
-2026-10-23 review of iproute2 **v6.1.0**, not guessed runner output or a new tool
+The `NO-CARRIER` and optional IPv4 address `metric` metadata coverage corrections
+are backed by a read-only 2026-10-23 review of iproute2 **v6.1.0**, not guessed
+runner output or a new tool
 pin. The versioned [address formatter](https://raw.githubusercontent.com/iproute2/iproute2/v6.1.0/ip/ipaddress.c)
 emits the flag in its JSON flags array for an UP interface without RUNNING;
-the parser still checks every assigned prefix. Reviewed source SHA-256:
+the parser still checks every assigned prefix. Lines 1636–1638 of that version
+also emit optional IPv4 address `metric` with unsigned 32-bit `print_uint`;
+the parser accepts only an exact integer in that range, without changing any
+interval comparison. Address `proto`/`protocol` are not admitted. Reviewed source
+SHA-256:
 `35f8a8918cb92cc4ede5236cfbc8a85060970dd9df0f75aed2d35db4a46f8018`.
 The source header licenses that file GPL-2.0-or-later. The versioned
 [COPYING](https://raw.githubusercontent.com/iproute2/iproute2/v6.1.0/COPYING)
@@ -26,8 +31,11 @@ Both public GitHub raw resources were read using `curl --proto '=https'
 131072 bytes, in a private umask-077 temporary directory. They were not executed,
 copied/translated into implementation, or redistributed in the repository;
 only semantic provenance is retained. This observation does not prove the
-failed campaign's predicate or qualify a native lane. The closed failure-phase
-diagnostic adds no tool, dependency, command, timer or source-extraction path;
+failed campaigns' predicates or qualify a native lane. In particular, campaign
+`39982331551` reported `addresses_parse` in all four lanes, not its first bad
+field or cause. The overlap-only failure-phase distinction reflects an existing
+computed interval intersection, not validation of all remaining metadata. The
+closed failure-phase diagnostic adds no tool, dependency, command, timer or source-extraction path;
 all existing pins, Renovate ownership and manual-review exceptions below remain
 unchanged.
 

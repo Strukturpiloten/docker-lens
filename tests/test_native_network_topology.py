@@ -98,6 +98,58 @@ def broken_diagnostic_streams():
 
 
 class ParserTests(unittest.TestCase):
+    def test_ipv4_metric_has_exact_unsigned_32_bit_schema(self):
+        for metric in (0, 100, 2**32 - 1):
+            with self.subTest(metric=metric):
+                TOPO.host_addresses(raw(interface(metric=metric)))
+        dhcp = interface(metric=100, dynamic=True, noprefixroute=True)
+        dhcp[0].update(flags=["NO-CARRIER", "BROADCAST", "MULTICAST", "UP"], operstate="DOWN")
+        TOPO.host_addresses(raw(dhcp))
+        for metric in (-1, 2**32, True, False, "100", None, 100.0):
+            with self.subTest(metric=metric), self.assertRaises(TOPO.Refused) as caught:
+                TOPO.host_addresses(raw(interface(metric=metric)))
+            self.assertNotIsInstance(caught.exception, TOPO._ReservationOverlap)
+        for key in ("unknown-private-canary", "proto", "protocol"):
+            with self.subTest(key=key), self.assertRaises(TOPO.Refused) as caught:
+                TOPO.host_addresses(raw(interface(metric=100, **{key: "dhcp"})))
+            self.assertNotIsInstance(caught.exception, TOPO._ReservationOverlap)
+
+    def test_metric_does_not_exempt_any_existing_address_interval_check(self):
+        for value in (interface("10.0.0.1", 8, metric=100),
+                      interface("10.253.253.7", 24, metric=100),
+                      interface("10.0.0.1", 8, metric=100, noprefixroute=True),
+                      interface(metric=100, peer="10.253.253.8"),
+                      interface("10.253.253.8", 32, metric=100, peer="192.0.2.1"),
+                      interface(metric=100, address="10.253.253.8"),
+                      interface(metric=100, broadcast="10.253.253.255")):
+            with self.subTest(value=value), self.assertRaises(TOPO._ReservationOverlap) as caught:
+                TOPO.host_addresses(raw(value))
+            self.assertEqual(str(caught.exception), "fixture topology unavailable")
+        for local in ("10.253.252.1", "10.253.254.1"):
+            TOPO.host_addresses(raw(interface(local, metric=100)))
+        TOPO.host_addresses(raw(interface("10.1.2.3", 8, metric=100, peer="192.0.2.1")))
+        # The subtype reports the observed overlap, not later metadata validity.
+        with self.assertRaises(TOPO._ReservationOverlap):
+            TOPO.host_addresses(raw(interface("10.253.253.1", 24, metric=-1)))
+
+    def test_route_overlap_subtype_only_follows_computed_intersection(self):
+        for route in ({"dst": "10.253.253.0/24"}, {"dst": "10.0.0.0/8", "table": 253},
+                      {"dst": "10.253.253.9"}, {"dst": "default", "gateway": "10.253.253.1"},
+                      {"dst": "0.0.0.0/0", "prefsrc": "10.253.253.1"},
+                      {"dst": "192.0.2.0/24", "gateway": "10.253.253.1"},
+                      {"dst": "default", "nexthops": [{"gateway": "192.0.2.1"}, {"gateway": "10.253.253.1"}]}):
+            with self.subTest(route=route), self.assertRaises(TOPO._ReservationOverlap):
+                TOPO.host_routes(raw([route]))
+        for destination in ("10.253.252.0/24", "10.253.254.0/24"):
+            TOPO.host_routes(raw([{"dst": destination}]))
+        for route in ({"dst": "10.253.253.1/24"}, {"dst": "10.253.253.0/024"},
+                      {"dst": "not-an-address"}, {"dst": None}, {"dst": 100},
+                      {"dst": "default", "gateway": None}, {"dst": "default", "metric": True},
+                      {"dst": "10.253.253.0/24", "unknown": CANARY}):
+            with self.subTest(route=route), self.assertRaises((TOPO.Refused, ValueError, TypeError)) as caught:
+                TOPO.host_routes(raw([route]))
+            self.assertNotIsInstance(caught.exception, TOPO._ReservationOverlap)
+
     def test_inactive_up_no_carrier_is_metadata_not_an_address_exemption(self):
         inactive = {"ifindex": 2, "ifname": "docker0", "flags": ["NO-CARRIER", "BROADCAST", "MULTICAST", "UP"],
                     "mtu": 1500, "qdisc": "noqueue", "operstate": "DOWN", "group": "default", "link_type": "ether",
@@ -246,10 +298,11 @@ class ParserTests(unittest.TestCase):
 
 
 class PreflightTests(unittest.TestCase):
-    def sample(self, bad_route=False, peer_swap=False, dead=False, malformed=None, capture_failure=None, diagnostic_io_failure=False, diagnostic_override=None):
+    def sample(self, bad_route=False, peer_swap=False, dead=False, malformed=None, capture_failure=None, diagnostic_io_failure=False, diagnostic_override=None, observation=None, parser_failure=None):
         from native_outer_diagnostic_capture import CaptureOutcome
         import native_outer_diagnostic_capture as capture_module
         calls = []
+        holds = []
         peer = host_record()["daemon"]
         namespace = SimpleNamespace(st_dev=1, st_ino=9)
         root = SimpleNamespace(st_dev=1, st_ino=11)
@@ -265,16 +318,23 @@ class PreflightTests(unittest.TestCase):
                 super().flush()
         diagnostic = DiagnosticStream() if diagnostic_override is None else diagnostic_override
         stdout = io.StringIO()
-        expected_phase = ("routes_parse" if bad_route else "peer_match" if peer_swap else "identity_before" if dead else
+        expected_phase = ("routes_overlap" if bad_route else "peer_match" if peer_swap else "identity_before" if dead else
                           {"version": "version_parse", "addresses": "addresses_parse", "routes": "routes_parse"}.get(malformed[0]) if malformed else None)
+        if observation is not None:
+            expected_phase = observation[2]
+        if parser_failure is not None:
+            expected_phase = parser_failure[2]
         if capture_failure is not None:
             expected_phase = {"service": "service_before", "version": "version_capture", "addresses": "addresses_capture", "routes": "routes_capture"}[capture_failure[0]]
         def retain():
+            holds.append(True)
             # The production frontend must flush the finite line BEFORE it
             # waits for the original hard owner's KILL, even on cancellation.
             if diagnostic_override is None:
                 self.assertEqual(diagnostic.getvalue(), DIAGNOSTIC + expected_phase + " result=refused\n")
                 self.assertEqual(diagnostic.flushed, 1)
+            if parser_failure is not None:
+                return  # Expose the production bare raise after owner retention.
             raise Retained()
         class FakeCapture:
             def __init__(self, **kwargs):
@@ -289,6 +349,8 @@ class PreflightTests(unittest.TestCase):
                         raise capture_module.Cancelled(signal.SIGINT)
                     if capture_failure[1] == "late_eof":
                         raise TOPO.Refused(CANARY)
+                    if capture_failure[1] == "overlap":
+                        raise TOPO._ReservationOverlap("fixture topology unavailable")
                     return CaptureOutcome(b"", CANARY.encode(), 42, 0, len(CANARY))
                 if prefix == "service":
                     stdout = b"MainPID=5\nActiveState=active\nSubState=running\n"
@@ -300,6 +362,8 @@ class PreflightTests(unittest.TestCase):
                     stdout = raw([{"dst": "default", "gateway": "10.253.253.1" if bad_route else "192.0.2.1"}])
                 if malformed is not None and prefix == malformed[0]:
                     stdout = malformed[1]
+                if observation is not None and prefix == observation[0]:
+                    stdout = observation[1]
                 return CaptureOutcome(stdout, b"", 0, len(stdout), 0)
         def metadata(path, *args, **kwargs):
             text = str(path)
@@ -309,6 +373,7 @@ class PreflightTests(unittest.TestCase):
                 return root
             return original_stat(path, *args, **kwargs)
         peers = [peer, peer | ({"daemon_starttime": 12} if peer_swap else {})]
+        parse_addresses, parse_routes = TOPO.host_addresses, TOPO.host_routes
         with patch.dict(os.environ, HOSTED, clear=True), patch.object(TOPO.os, "geteuid", return_value=0), \
                 patch.object(TOPO, "trusted_tool", side_effect=lambda path, *args: (path, (1, 2), "f" * 64)), \
                 patch.object(capture_module, "CaptureContext", FakeCapture), \
@@ -319,9 +384,15 @@ class PreflightTests(unittest.TestCase):
                 patch.object(TOPO, "process_start", return_value=10), \
                 patch.object(TOPO.select, "select", return_value=([100] if dead else [], [], [])), \
                 patch.object(TOPO.signal, "signal"), \
+                patch.object(TOPO, "host_addresses", side_effect=parser_failure[1] if parser_failure and parser_failure[0] == "addresses" else parse_addresses), \
+                patch.object(TOPO, "host_routes", side_effect=parser_failure[1] if parser_failure and parser_failure[0] == "routes" else parse_routes), \
                 patch.object(TOPO, "hold_original_owner", side_effect=retain), \
                 patch.object(TOPO.time, "monotonic", return_value=100), redirect_stderr(diagnostic), redirect_stdout(stdout):
-            if bad_route or peer_swap or dead or malformed is not None or capture_failure is not None:
+            if parser_failure is not None:
+                with self.assertRaises(type(parser_failure[1])) as caught:
+                    TOPO.preflight("test", CANDIDATE, lambda *_: peers.pop(0))
+                self.assertIs(caught.exception, parser_failure[1])
+            elif bad_route or peer_swap or dead or malformed is not None or capture_failure is not None or observation is not None:
                 with self.assertRaises(Retained):
                     TOPO.preflight("test", CANDIDATE, lambda *_: peers.pop(0))
             else:
@@ -334,7 +405,38 @@ class PreflightTests(unittest.TestCase):
         self.assertNotIn("10.253.253.7", diagnostic.getvalue())
         self.assertEqual(stdout.getvalue(), "")
         self.assertEqual({deadline for _, deadline in calls}, {107})
+        self.assertEqual(len(holds), int(expected_phase is not None))
         return [argv for argv, _ in calls]
+
+    def test_only_actual_overlap_gets_closed_parse_overlap_phase(self):
+        for prefix, output, phase in (
+                ("addresses", raw(interface("10.0.0.1", 8, metric=100)), "addresses_overlap"),
+                ("addresses", raw(interface(metric=100, peer="10.253.253.8")), "addresses_overlap"),
+                ("addresses", raw(interface(metric=100, broadcast="10.253.253.255")), "addresses_overlap"),
+                ("routes", raw([{"dst": "10.253.253.0/24"}]), "routes_overlap"),
+                ("routes", raw([{"dst": "default", "prefsrc": "10.253.253.1"}]), "routes_overlap"),
+                ("routes", raw([{"dst": "default", "nexthops": [{"gateway": "10.253.253.1"}]}]), "routes_overlap"),
+                ("addresses", raw(interface(metric=None)), "addresses_parse"),
+                ("addresses", raw(interface(metric=100, proto="dhcp")), "addresses_parse"),
+                ("routes", raw([{"dst": "10.253.253.1/24"}]), "routes_parse"),
+                ("routes", raw([{"dst": "default", "unknown": CANARY}]), "routes_parse")):
+            with self.subTest(prefix=prefix, phase=phase):
+                calls = self.sample(observation=(prefix, output, phase))
+            self.assertEqual(len(calls), 3 if prefix == "addresses" else 4)
+
+    def test_parse_projection_preserves_original_exception_identity_after_hold(self):
+        from native_outer_diagnostic_capture import Cancelled
+        for prefix in ("addresses", "routes"):
+            for error, phase in ((TOPO._ReservationOverlap("fixture topology unavailable"), prefix + "_overlap"),
+                                 (TOPO.Refused(CANARY), prefix + "_parse"),
+                                 (Cancelled(signal.SIGINT), prefix + "_parse")):
+                with self.subTest(prefix=prefix, error=type(error)):
+                    self.sample(parser_failure=(prefix, error, phase))
+
+    def test_overlap_subtype_outside_parse_retains_capture_phase(self):
+        for prefix in ("service", "version", "addresses", "routes"):
+            with self.subTest(prefix=prefix):
+                self.sample(capture_failure=(prefix, "overlap"))
 
     def test_fixed_commands_share_original_deadline_and_bracket_peer(self):
         calls = self.sample()
@@ -406,12 +508,12 @@ class PreflightTests(unittest.TestCase):
         for name, diagnostic, wrote in broken_diagnostic_streams():
             with self.subTest(stream=name):
                 self.sample(bad_route=True, diagnostic_override=diagnostic)
-            self.assertEqual(diagnostic.getvalue(), DIAGNOSTIC + "routes_parse result=refused\n" if wrote else "")
+            self.assertEqual(diagnostic.getvalue(), DIAGNOSTIC + "routes_overlap result=refused\n" if wrote else "")
 
 
 class DiagnosticTests(unittest.TestCase):
     def test_phase_projection_is_closed_and_never_renders_a_near_miss_or_value(self):
-        for phase in ("routes_parse", "peer_match", "complete"):
+        for phase in ("addresses_parse", "addresses_overlap", "routes_parse", "routes_overlap", "peer_match", "complete"):
             output = io.StringIO()
             with redirect_stderr(output):
                 TOPO.preflight_refusal(phase)
