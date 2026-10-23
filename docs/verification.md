@@ -36,6 +36,33 @@ ordinary native receipts, success summaries and aggregate acceptance are blocked
 Its closed log result is not an uploaded lane artifact. Earlier native failures
 and cancellation remain failures; missing/uncertain cleanup remains retained.
 
+## Strict CLI-positive internal-network precontrol
+
+The same existing `live_internal_network_blocks_external_egress` test now first
+requires an independent CLI-created client on the already CLI-created ordinary
+bridge to return exact sidecar `proof-egress`, before the original rendered
+ordinary-bridge external probe. It uses the same image, run label, single-homed
+custody assertion, proxy-disabled two-second wget and six-second CLI owner.
+The mutable cleanup ledger registers the new name before create, and its existing
+budget charges all nine resources: 100 seconds of cleanup plus eight seconds for
+the next operation (108 required, 107 refused), within the original 180 seconds.
+Only an exact body-free run/API-bound GET inspect/404 name and the closed
+`network_internal_cli_control` stage are added. Structural, negative-admission,
+ownership, budget and fake-sanitizer tests do not establish native behavior;
+all old assertions, nineteen invocations, cleanup and experimental non-acceptance
+remain mandatory. No dependencies, pins, manager paths or native workflows change;
+the existing five-image Renovate extraction/group/manual-review rules still apply.
+
+Historical failed campaign `39942288063` had nineteen passing rootful tests and
+both rootless lanes failing the original rendered ordinary control. Its captured
+Debian reports were all true; upstream reported IPv4 forwarding true with bridge
+reports unavailable. It did not run this new independent CLI behavior control and
+establishes no cause. In a new run, CLI failure stops before that rendered-control
+probe, so it cannot show both controls failing. CLI success followed by rendered
+failure still does not establish renderer causality because daemon-selected IPAM
+differs. Fresh final-candidate complete and four-lane native gates remain required;
+no new native evidence is claimed.
+
 ## Hosted prerequisite diagnostic
 
 Failure-only guest HTTP controls also distinguish missing/non-executable tools,

@@ -207,6 +207,24 @@ Only diagnostic grammar/provenance was inspected: no upstream implementation
 was copied, translated, vendored or redistributed. Archive provenance is not
 fresh attestation of the failing image's bytes, or a compatibility claim.
 
+The existing all-four-lane internal-network test now requires a strict independent
+CLI-positive precontrol before its original rendered ordinary-bridge external
+probe. One fixed run-named client is registered in the existing cleanup ledger
+before CLI create, uses the same pinned fixture image/run label, and joins only
+the already CLI-created and inspected ordinary bridge. The existing create/start
+`sleep 180` pattern and single-homed/running/owner/canonical-ID inspect apply.
+Under the original six-second CLI owner, proxy-disabled direct sidecar IPv4 wget
+has the same two-second transfer limit and must return exact `proof-egress`.
+`network_internal_cli_control` identifies this distinct strict stage; failure
+stops before the rendered-control external probe and leaves its liability to the
+ordinary verified cleanup owner, never an optional collector or fail-soft path.
+Only that exact run-bound container's body-free GET inspect/404 path is added to
+the executor allowlist; no creation endpoint, listing, wildcard or other method
+is admitted. A CLI-pass/rendered-fail result is comparative evidence, not a
+renderer cause: the two networks receive independent daemon-selected IPAM.
+All nineteen native invocations and prior assertions remain mandatory, and no
+new passing native evidence exists for these changed bytes.
+
 Failed ordinary internal-proof wget commands classify their already-held bounded
 stderr as connection refusal, no route, timeout, HTTP error, or unknown. The
 probe, its oracle, endpoint, and six-second budget are unchanged. These
@@ -253,8 +271,9 @@ fixed lines; the original wget failure, assertions and exact native summary
 checks remain authoritative even when this optional collector fails.
 
 The optional read rechecks the original 180-second proof deadline **after**
-wget. Eight owned liabilities reserve 90 seconds for existing cleanup, so less
-than 98 seconds remaining skips the read before launch. Missing, expired or
+wget. Nine owned liabilities (four networks and five containers) now reserve
+100 seconds for existing cleanup, so less than 108 seconds remaining skips the
+read before launch. Missing, expired or
 malformed deadline evidence also skips it. There is no deadline renewal or
 cleanup-reserve reduction. The request has a six-second curl/TERM deadline,
 one-second kill allowance inside the eight-second operation reservation, and a
@@ -292,8 +311,9 @@ pipeline to complete within the conservative BOOTTIME interval of less than 799
 centiseconds, with the watchdog and lane budget still valid. Late or uncertain
 completion is unavailable; existing lane/job disposal obligations remain.
 The two seconds of lane margin are not a protected cleanup reserve. Rust's
-180-second invocation, 90-second cleanup reservation and default-bridge read's
-98-second admission are unchanged and are not borrowed or renewed here.
+180-second invocation and dynamic per-resource cleanup reservation are not
+borrowed or renewed here. With the strict CLI client, that reservation is now
+100 seconds and the optional default-bridge read requires 108 seconds.
 
 `DOCKERLENS_NATIVE_OUTER_GUEST_HTTP: status=http_200|http_other|unavailable`
 is retained. A separate `DOCKERLENS_NATIVE_OUTER_GUEST_CURL` record contains

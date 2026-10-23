@@ -2798,6 +2798,7 @@ fn allowed_request(
     let proof_internal_client = format!("dl-network-{run_id}-proof-internal-client");
     let proof_control_server = format!("dl-network-{run_id}-proof-control-server");
     let proof_control_client = format!("dl-network-{run_id}-proof-control-client");
+    let proof_cli_control_client = format!("dl-network-{run_id}-proof-cli-control-client");
     let path_allowed = match method {
         "GET" => {
             [
@@ -2828,6 +2829,7 @@ fn allowed_request(
                     proof_internal_client.as_str(),
                     proof_control_server.as_str(),
                     proof_control_client.as_str(),
+                    proof_cli_control_client.as_str(),
                 ]
                 .iter()
                 .any(|name| suffix == format!("containers/{name}/json"))
@@ -3369,6 +3371,65 @@ fn internal_proof_requests_are_exact_and_differ_only_by_internal_flag() {
         "fixture-image",
         None
     ));
+}
+
+#[test]
+fn internal_cli_control_inspect_admission_requires_exact_context_and_no_body() {
+    let path = "/v1.41/containers/dl-network-test-proof-cli-control-client/json";
+    assert!(allowed_request(
+        "GET",
+        path,
+        "1.41",
+        "test",
+        "fixture-image",
+        None
+    ));
+    for (method, api_version, run_id) in [
+        ("POST", "1.41", "test"),
+        ("DELETE", "1.41", "test"),
+        ("get", "1.41", "test"),
+        ("GET", "1.42", "test"),
+        ("GET", "1.41", "other"),
+    ] {
+        assert!(!allowed_request(
+            method,
+            path,
+            api_version,
+            run_id,
+            "fixture-image",
+            None
+        ));
+    }
+    for wrong_path in [
+        "/v1.41/containers/json",
+        "/v1.41/containers/dl-network-test-proof-cli-control-client",
+        "/v1.41/containers/dl-network-test-proof-cli-control-client-extra/json",
+        "/v1.41/containers/dl-network-other-proof-cli-control-client/json",
+        "/v1.42/containers/dl-network-test-proof-cli-control-client/json",
+        "/v1.41/containers/dl-network-test-proof-cli-control-client/json?all=true",
+        "/v1.41/containers/create?name=dl-network-test-proof-cli-control-client",
+    ] {
+        for method in ["GET", "POST", "DELETE"] {
+            assert!(!allowed_request(
+                method,
+                wrong_path,
+                "1.41",
+                "test",
+                "fixture-image",
+                None
+            ));
+        }
+    }
+    for body in [json!(null), json!({}), json!({"Name": "private-other"})] {
+        assert!(!allowed_request(
+            "GET",
+            path,
+            "1.41",
+            "test",
+            "fixture-image",
+            Some(&body)
+        ));
+    }
 }
 
 fn assert_invalid_topologies() {
@@ -4646,6 +4707,8 @@ fn live_internal_network_blocks_external_egress() {
     let control_server = format!("dl-network-{run_id}-proof-control-server");
     let control_client = format!("dl-network-{run_id}-proof-control-client");
 
+    let cli_control_client = format!("dl-network-{run_id}-proof-cli-control-client");
+
     // Independent CLI creates show the daemon's native interpretation of the
     // exact two matched settings before the inert bodies are sent to Engine.
     eprintln!("DOCKERLENS_NATIVE_CHECK: network_internal_oracle");
@@ -4870,6 +4933,46 @@ fn live_internal_network_blocks_external_egress() {
         assert_single_homed_running(&resources, client, network, &api_version);
     }
     let external_url = format!("http://{sidecar_ip}:18084/");
+    // Strict independent positive precontrol on the CLI-created ordinary
+    // bridge. A failure stops here, before the rendered-control probe.
+    eprintln!("DOCKERLENS_NATIVE_CHECK: network_internal_cli_control");
+    resources.containers.push(cli_control_client.clone());
+    proof_cli_ok(
+        &resources,
+        &[
+            "create",
+            "--name",
+            &cli_control_client,
+            "--label",
+            &owner,
+            "--network",
+            &cli_control,
+            &image,
+            "sh",
+            "-c",
+            "sleep 180",
+        ],
+    );
+    proof_cli_ok(&resources, &["start", &cli_control_client]);
+    assert_single_homed_running(&resources, &cli_control_client, &cli_control, &api_version);
+    let cli_control_response = proof_cli_ok(
+        &resources,
+        &[
+            "exec",
+            &cli_control_client,
+            "wget",
+            "-Y",
+            "off",
+            "-T",
+            "2",
+            "-qO-",
+            &external_url,
+        ],
+    );
+    assert_eq!(
+        cli_control_response, b"proof-egress",
+        "independent CLI ordinary bridge reaches task endpoint"
+    );
     eprintln!("DOCKERLENS_NATIVE_CHECK: network_internal_control");
     resources.subnet_diagnostics = Some(ProofSubnetContext {
         observations: subnet_diagnostics,
