@@ -77,6 +77,20 @@ native_outer_command() {
 }
 
 native_outer_helper() {
+  if [[ ${1:-} == network-preflight ]]; then
+    [[ $# == 3 && $2 =~ ^[A-Za-z0-9-]{1,64}$ && $3 =~ ^[0-9a-f]{40}$ ]] || return 2
+    native_outer_policy docker || return 2
+    local key
+    local -a context=()
+    for key in GITHUB_ACTIONS RUNNER_ENVIRONMENT RUNNER_OS GITHUB_REF GITHUB_EVENT_NAME \
+      GITHUB_REPOSITORY GITHUB_WORKFLOW_REF ImageOS ImageVersion DOCKER_HOST DOCKER_CONTEXT \
+      DOCKER_TLS_VERIFY DOCKER_CERT_PATH DOCKER_API_VERSION CONTAINER_HOST CONTAINER_CONNECTION \
+      CONTAINER_SSHKEY PODMAN_CONNECTIONS_CONF; do context+=("$key=${!key-}"); done
+    "${native_outer_privilege[@]}" timeout --signal=TERM --kill-after=2s 8s \
+      env "${context[@]}" "DOCKERLENS_NATIVE_CANDIDATE_SHA=${DOCKERLENS_NATIVE_CANDIDATE_SHA:-$3}" \
+      python3 "$native_outer_script_dir/native-outer-observation.py" "$@"
+    return "$?"
+  fi
   "${native_outer_privilege[@]}" timeout --signal=TERM --kill-after=2s 8s \
     python3 "$native_outer_script_dir/native-outer-observation.py" "$@"
 }

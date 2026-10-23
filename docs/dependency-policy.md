@@ -1,5 +1,34 @@
 # Dependency and pin policy
 
+The maintained hosted fixture allocation uses preinstalled Ubuntu-24 iproute2
+and systemctl only, at reviewed root-owned system paths. The single bounded
+preflight records the actual iproute2 version and installed executable SHA-256,
+device/inode and fresh daemon/netns observations. These installed-byte hashes
+are not authenticated publisher checksums or new immutable software pins. This
+is an explicit extension of the existing version-selected, mutable GitHub-hosted
+Ubuntu-24 unavailable-integrity/manual-review exception: no installation,
+download, package update, namespace entry or host network-policy edit is added.
+Unknown or changed custody/schema refuses before outer network mutation intent.
+
+The orchestration-owned `10.253.253.0/24` reservation is a reviewed allocation
+definition, not a dependency version or globally reserved range. Its canonical
+definition and all consumers are DockerLens's native-conformance coordinator,
+closed topology helper/private Rust guard, synthetic controls and runtime docs.
+The three canonical Check/native-validation/release-validation workflows already
+consume that coordinator. BoxFerry consumes a separately reviewed four-script
+outer-runtime closure; lazy fixed topology dispatch introduces no unconditional
+new import or reservation activation there. Its closure needs new-SHA review
+before consumer qualification. Other Lens products/website do not consume this
+harness; no completed cross-repository rollout is claimed.
+
+Verified no-change extraction review: all five existing version/digest image
+pairs remain in `scripts/native-conformance.sh`, uniquely owned by the native
+image regex manager with the same grouping/manual approvals and automerge off.
+No image/toolchain/package/Action pin, regex path, Cargo/lockfile manager,
+workflow consumer definition or historical evidence changes. No new manager or
+Renovate configuration edit is needed. Actual gates and fresh native evidence,
+not this definition or a recorded installed-tool hash, establish compatibility.
+
 The private pre-test `/info` projection reuses Python standard-library parsing
 inside the existing guest-HTTP reader and its existing timeout; it installs or
 queries nothing and adds no package, image, Action, tool or dependency pin.

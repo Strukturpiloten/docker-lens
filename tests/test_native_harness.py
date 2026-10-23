@@ -849,7 +849,10 @@ else exit 50; fi
             "\n}\nsidecar_setup_failed()", 1
         )[0]
         network = "dl-native-net-fixture"
-        valid = {network: {"IPAddress": "10.89.0.2"}}
+        valid = {network: {"IPAddress": "10.89.0.2", "NetworkID": "a" * 64, "IPPrefixLen": 24}}
+        pool = {"schema_version": 1, "kind": "test-only-outer-network-topology", "candidate": "c" * 40,
+                "run": "fixture", "backend": "podman", "network": {"id": "a" * 64, "name": network,
+                "driver": "bridge", "scope": None, "ipam_driver": "host-local", "ipv4_pools": ["10.89.0.0/24"]}}
         fixtures = (
             ('{"private-canary":', "json_shape", "0"),
             (json.dumps([]), "json_shape", "0"),
@@ -859,6 +862,9 @@ else exit 50; fi
             (json.dumps({network: {"IPAddress": "private-canary"}}), "ipv4_malformed", "0"),
             (json.dumps({network: {"IPAddress": 173604866}}), "ipv4_malformed", "0"),
             (json.dumps({network: {"IPAddress": "8.8.8.8"}}), "ipv4_nonprivate", "0"),
+            (json.dumps({network: valid[network] | {"NetworkID": "b" * 64}}), "network_pool", "0"),
+            (json.dumps({network: valid[network] | {"IPPrefixLen": 16}}), "network_pool", "0"),
+            (json.dumps({network: valid[network] | {"IPAddress": "10.90.0.2"}}), "network_pool", "0"),
             (json.dumps(valid), "inspect_failed", "42"),
             ("private-canary" * 300, "output_limit", "0"),
         )
@@ -877,6 +883,7 @@ else exit 50; fi
                 'native_outer_cmd=("${podman_cmd[@]}")\n'
                 f'native_outer_command() {{{command}\n}}\n'
                 'diagnose_native_startup() { :; }\n'
+                f'script_dir={str(ROOT / "scripts")!r}\nrun_id=fixture\nNATIVE_IDENTITY_CANDIDATE_SHA={"c" * 40}\n'
                 f'outer_network={network}\n'
                 f'validated_outer_ipv4() {{{helper}\n}}\n'
                 'validated_outer_ipv4 "$FAKE_ROLE" dl-native-fixture\n'
@@ -886,7 +893,8 @@ else exit 50; fi
                     with self.subTest(role=role, category=category, status=status):
                         env = {"PATH": directory}
                         env.update(FAKE_PODMAN=str(fake), FAKE_ROLE=role,
-                                   FAKE_NETWORKS=networks, FAKE_PODMAN_STATUS=status)
+                                   FAKE_NETWORKS=networks, FAKE_PODMAN_STATUS=status,
+                                   outer_network_projection=json.dumps(pool))
                         result = subprocess.run(
                             ["/bin/bash", "-c", script], env=env, capture_output=True,
                             text=True, timeout=15, check=False,
@@ -900,7 +908,8 @@ else exit 50; fi
                         self.assertNotIn("private-canary", result.stderr)
             env = {"PATH": directory}
             env.update(FAKE_PODMAN=str(fake), FAKE_ROLE="sidecar",
-                       FAKE_NETWORKS=json.dumps(valid), FAKE_PODMAN_STATUS="0")
+                       FAKE_NETWORKS=json.dumps(valid), FAKE_PODMAN_STATUS="0",
+                       outer_network_projection=json.dumps(pool))
             result = subprocess.run(
                 ["/bin/bash", "-c", script], env=env, capture_output=True,
                 text=True, timeout=15, check=False,
@@ -1555,6 +1564,7 @@ fi
         with tempfile.TemporaryDirectory() as temporary:
             env = os.environ.copy()
             env["TMPDIR"] = temporary
+            env["script_dir"] = str(ROOT / "scripts")
             result = subprocess.run(
                 ["bash", "-c", "set -euo pipefail\numask 077\n" + fixture
                  + "\nprintf '%s\\n' \"$run_dir\""],
@@ -1800,8 +1810,12 @@ case "$command" in
  [[ $FAKE_NATIVE_FAULT == network_create ]] && exit 42
  echo "$name" ;;
  inspect) for name; do :; done
- echo "$name" | sed 's/^dl-native-net-//'
- [[ $FAKE_NATIVE_FAULT == network_inspect_partial ]] && exit 42
+ if [[ $* == *'{{json .}}'* ]]; then
+  printf '{"id":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","name":"%s","driver":"bridge","labels":{"io.dockerlens.native-run":"%s"},"subnets":[{"subnet":"10.88.0.0/24","gateway":"10.88.0.1"}],"ipam_options":{"driver":"host-local"}}\n' "$name" "${name#dl-native-net-}"
+ else
+  echo "$name" | sed 's/^dl-native-net-//'
+  [[ $FAKE_NATIVE_FAULT == network_inspect_partial ]] && exit 42
+ fi
  exit 0 ;;
  rm) for name; do :; done
  read -r expected < "$state/expected-network"
@@ -1934,7 +1948,7 @@ logs)
  if [[ $name == dl-native-egress-* ]]; then ip=10.88.0.2; else ip=10.88.0.3; fi
  if [[ $name == dl-native-egress-* && $FAKE_NATIVE_FAULT == sidecar_running_empty_ip ]]; then ip=; fi
  if [[ $name == dl-native-egress-* && $FAKE_NATIVE_FAULT == sidecar_exited_empty_ip ]]; then ip=; fi
- printf '{"%s":{"IPAddress":"%s"}}\n' "$network_name" "$ip"
+ printf '{"%s":{"IPAddress":"%s","NetworkID":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","IPPrefixLen":24}}\n' "$network_name" "$ip"
  elif [[ $* == *State.Running* ]]; then
  if [[ $FAKE_NATIVE_FAULT == sidecar_state_unavailable ]]; then exit 42; fi
     if [[ $FAKE_NATIVE_FAULT == sidecar_exited_empty_ip ||

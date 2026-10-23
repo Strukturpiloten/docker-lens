@@ -1175,6 +1175,692 @@ struct DefaultBridgeContext {
 }
 
 const DEFAULT_BRIDGE_RESPONSE_CAP: usize = 64 * 1024;
+const TOPOLOGY_RESPONSE_CAP: usize = 1024 * 1024;
+
+fn exact_topology_keys(value: &Value, keys: &[&str]) -> bool {
+    value.as_object().is_some_and(|object| {
+        object.len() == keys.len() && keys.iter().all(|key| object.contains_key(*key))
+    })
+}
+
+fn bounded_topology_json(value: &Value) -> bool {
+    let mut pending = vec![(value, 0)];
+    let mut count = 0;
+    while let Some((value, depth)) = pending.pop() {
+        count += 1;
+        if count > 8192 || depth > 20 {
+            return false;
+        }
+        match value {
+            Value::Array(values) => pending.extend(values.iter().map(|value| (value, depth + 1))),
+            Value::Object(values) => {
+                pending.extend(values.values().map(|value| (value, depth + 1)))
+            }
+            _ => {}
+        }
+    }
+    true
+}
+
+#[derive(Clone, Copy)]
+struct TopologyPool {
+    address: IpAddr,
+    prefix: u8,
+}
+
+impl TopologyPool {
+    fn parse(text: &str) -> Option<Self> {
+        let (address, prefix) = text.split_once('/')?;
+        let address: IpAddr = address.parse().ok()?;
+        let prefix: u8 = prefix.parse().ok()?;
+        if format!("{address}/{prefix}") != text {
+            return None;
+        }
+        let pool = Self { address, prefix };
+        let canonical = match address {
+            IpAddr::V4(address) if prefix <= 32 => u32::from(address) & !pool.mask4() == 0,
+            IpAddr::V6(address) if prefix <= 128 => {
+                let mask = u128::MAX.checked_shl(128 - u32::from(prefix)).unwrap_or(0);
+                u128::from(address) & !mask == 0
+            }
+            _ => false,
+        };
+        canonical.then_some(pool)
+    }
+
+    fn mask4(self) -> u32 {
+        u32::MAX
+            .checked_shl(32 - u32::from(self.prefix))
+            .unwrap_or(0)
+    }
+
+    fn contains(self, address: IpAddr) -> bool {
+        match (self.address, address) {
+            (IpAddr::V4(pool), IpAddr::V4(address)) => {
+                u32::from(address) & self.mask4() == u32::from(pool)
+            }
+            (IpAddr::V6(pool), IpAddr::V6(address)) => {
+                let mask = u128::MAX
+                    .checked_shl(128 - u32::from(self.prefix))
+                    .unwrap_or(0);
+                u128::from(address) & mask == u128::from(pool)
+            }
+            _ => false,
+        }
+    }
+
+    fn overlaps(self, other: Self) -> bool {
+        self.contains(other.address) || other.contains(self.address)
+    }
+}
+
+fn topology_ipam(configs: &Value) -> Option<Vec<TopologyPool>> {
+    let configs = configs.as_array()?;
+    if configs.is_empty() || configs.len() > 64 {
+        return None;
+    }
+    let mut pools = Vec::new();
+    for config in configs {
+        let object = config.as_object()?;
+        if object.keys().any(|key| {
+            !["Subnet", "Gateway", "IPRange", "AuxiliaryAddresses"].contains(&key.as_str())
+        }) {
+            return None;
+        }
+        let pool = TopologyPool::parse(config.get("Subnet")?.as_str()?)?;
+        if let Some(gateway) = config.get("Gateway") {
+            let gateway = gateway.as_str()?;
+            if !gateway.is_empty() && !pool.contains(gateway.parse().ok()?) {
+                return None;
+            }
+        }
+        if let Some(range) = config.get("IPRange") {
+            let range = range.as_str()?;
+            if !range.is_empty() {
+                let range = TopologyPool::parse(range)?;
+                if range.prefix < pool.prefix || !pool.contains(range.address) {
+                    return None;
+                }
+            }
+        }
+        if let Some(auxiliary) = config.get("AuxiliaryAddresses") {
+            let auxiliary = auxiliary.as_object()?;
+            if auxiliary.len() > 256
+                || auxiliary.values().any(|address| {
+                    address
+                        .as_str()
+                        .and_then(|address| address.parse::<IpAddr>().ok())
+                        .is_none_or(|address| !pool.contains(address))
+                })
+            {
+                return None;
+            }
+        }
+        if pools.iter().any(|other| pool.overlaps(*other)) {
+            return None;
+        }
+        pools.push(pool);
+    }
+    pools
+        .iter()
+        .any(|pool| pool.address.is_ipv4())
+        .then_some(pools)
+}
+
+fn topology_record_pools(
+    value: &Value,
+    run: &str,
+    candidate: &str,
+    backend: &str,
+    daemon_id: &str,
+    sidecar_ip: Ipv4Addr,
+) -> Option<Vec<TopologyPool>> {
+    if !bounded_topology_json(value)
+        || !exact_topology_keys(
+            value,
+            &[
+                "schema_version",
+                "kind",
+                "candidate",
+                "run",
+                "backend",
+                "network",
+                "endpoints",
+            ],
+        )
+        || value["schema_version"].as_u64() != Some(1)
+        || value["kind"] != "test-only-outer-network-topology"
+        || value["candidate"] != candidate
+        || value["run"] != run
+        || value["backend"] != backend
+    {
+        return None;
+    }
+    let network = &value["network"];
+    let id = network.get("id")?.as_str()?;
+    if !exact_topology_keys(
+        network,
+        &["id", "name", "driver", "scope", "ipam_driver", "ipv4_pools"],
+    ) || canonical_inspected_container_id(&json!({"Id": id})).is_none()
+        || network["name"] != format!("dl-native-net-{run}")
+        || network["driver"] != "bridge"
+    {
+        return None;
+    }
+    match backend {
+        "docker" if network["scope"] == "local" && network["ipam_driver"] == "default" => {}
+        crate::native_outer_test_command::PODMAN_ENGINE
+            if network["scope"].is_null() && network["ipam_driver"] == "host-local" => {}
+        _ => return None,
+    }
+    let texts = network["ipv4_pools"].as_array()?;
+    if texts.is_empty() || texts.len() > 64 {
+        return None;
+    }
+    let pools: Vec<_> = texts
+        .iter()
+        .map(|value| TopologyPool::parse(value.as_str()?))
+        .collect::<Option<_>>()?;
+    if pools.iter().any(|pool| !pool.address.is_ipv4())
+        || pools
+            .iter()
+            .enumerate()
+            .any(|(index, pool)| pools[index + 1..].iter().any(|other| pool.overlaps(*other)))
+        || (backend == "docker" && texts != &vec![json!("10.253.253.0/24")])
+    {
+        return None;
+    }
+    let endpoints = &value["endpoints"];
+    if !exact_topology_keys(endpoints, &["daemon", "sidecar"]) {
+        return None;
+    }
+    for (role, name) in [
+        ("daemon", format!("dl-native-{run}")),
+        ("sidecar", format!("dl-native-egress-{run}")),
+    ] {
+        let endpoint = &endpoints[role];
+        let id = endpoint.get("id")?.as_str()?;
+        let address: Ipv4Addr = endpoint.get("ipv4")?.as_str()?.parse().ok()?;
+        if !exact_topology_keys(endpoint, &["id", "name", "ipv4"])
+            || canonical_inspected_container_id(&json!({"Id": id})).is_none()
+            || endpoint["name"] != name
+            || !pools.iter().any(|pool| pool.contains(address.into()))
+        {
+            return None;
+        }
+    }
+    if endpoints["daemon"]["id"] != daemon_id
+        || endpoints["daemon"]["id"] == endpoints["sidecar"]["id"]
+        || endpoints["daemon"]["ipv4"] == endpoints["sidecar"]["ipv4"]
+        || endpoints["sidecar"]["ipv4"] != sidecar_ip.to_string()
+    {
+        return None;
+    }
+    Some(pools)
+}
+
+fn read_topology_record(directory: &std::path::Path, run: &str) -> Option<Value> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    if directory.file_name()?.to_str()? != format!("dockerlens-native.{run}")
+        || fs::canonicalize(directory).ok()? != directory
+    {
+        return None;
+    }
+    let parent = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+        .open(directory)
+        .ok()?;
+    let parent_info = parent.metadata().ok()?;
+    if parent_info.mode() & 0o777 != 0o700
+        || parent_info.uid() != fs::metadata("/proc/self").ok()?.uid()
+    {
+        return None;
+    }
+    let anchored = PathBuf::from(format!(
+        "/proc/self/fd/{}/outer-network-topology-v1.json",
+        parent.as_raw_fd()
+    ));
+    let mut file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(&anchored)
+        .ok()?;
+    let before = file.metadata().ok()?;
+    let identity = |info: &fs::Metadata| {
+        (
+            info.dev(),
+            info.ino(),
+            info.uid(),
+            info.gid(),
+            info.mode(),
+            info.nlink(),
+            info.len(),
+            info.mtime(),
+            info.mtime_nsec(),
+            info.ctime(),
+            info.ctime_nsec(),
+        )
+    };
+    if !before.is_file()
+        || before.uid() != parent_info.uid()
+        || before.mode() & 0o777 != 0o600
+        || before.nlink() != 1
+        || before.len() > DEFAULT_BRIDGE_RESPONSE_CAP as u64
+    {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    (&mut file)
+        .take((DEFAULT_BRIDGE_RESPONSE_CAP + 1) as u64)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    let current_parent = fs::symlink_metadata(directory).ok()?;
+    if bytes.len() as u64 != before.len()
+        || identity(&before) != identity(&file.metadata().ok()?)
+        || identity(&before) != identity(&fs::symlink_metadata(&anchored).ok()?)
+        || (
+            parent_info.dev(),
+            parent_info.ino(),
+            parent_info.uid(),
+            parent_info.mode(),
+        ) != (
+            current_parent.dev(),
+            current_parent.ino(),
+            current_parent.uid(),
+            current_parent.mode(),
+        )
+    {
+        return None;
+    }
+    let UniqueDiagnosticJson(value) = serde_json::from_slice(&bytes).ok()?;
+    bounded_topology_json(&value).then_some(value)
+}
+
+fn retained_topology_names(run: &str) -> Vec<String> {
+    let mut names = vec![
+        "bridge".to_owned(),
+        format!("dl-{run}-net"),
+        format!("dl-target-{run}-net"),
+    ];
+    for suffix in [
+        "backend",
+        "edge",
+        "external",
+        "oracle",
+        "proof-internal",
+        "proof-control",
+        "proof-cli-internal",
+        "proof-cli-control",
+    ] {
+        names.push(format!("dl-network-{run}-{suffix}"));
+    }
+    names
+}
+
+fn inner_topology_disjoint(
+    networks: &Value,
+    run: &str,
+    held_ids: &[(String, String)],
+    outer: &[TopologyPool],
+) -> bool {
+    let Some(networks) = networks.as_array() else {
+        return false;
+    };
+    let expected = retained_topology_names(run);
+    if !bounded_topology_json(&Value::Array(networks.clone()))
+        || networks.len() != expected.len() + 2
+        || held_ids.len() != 5
+        || outer.is_empty()
+    {
+        return false;
+    }
+    let held_names: std::collections::HashSet<_> =
+        held_ids.iter().map(|(name, _)| name.as_str()).collect();
+    if held_names.len() != 5
+        || !held_names.contains(format!("dl-{run}-net").as_str())
+        || [
+            "proof-internal",
+            "proof-control",
+            "proof-cli-internal",
+            "proof-cli-control",
+        ]
+        .iter()
+        .any(|suffix| !held_names.contains(format!("dl-network-{run}-{suffix}").as_str()))
+    {
+        return false;
+    }
+    let held_values: std::collections::HashSet<_> =
+        held_ids.iter().map(|(_, id)| id.as_str()).collect();
+    if held_values.len() != 5
+        || held_values
+            .iter()
+            .any(|id| canonical_inspected_container_id(&json!({"Id": id})).is_none())
+    {
+        return false;
+    }
+    let mut ids = std::collections::HashSet::new();
+    let mut names = std::collections::HashSet::new();
+    for network in networks {
+        let Some(id) = canonical_inspected_container_id(network) else {
+            return false;
+        };
+        let Some(name) = network.get("Name").and_then(Value::as_str) else {
+            return false;
+        };
+        if !ids.insert(id)
+            || !names.insert(name)
+            || network["Scope"] != "local"
+            || network["IPAM"]["Driver"] != "default"
+        {
+            return false;
+        }
+        let builtin = matches!(
+            (name, network["Driver"].as_str()),
+            ("host", Some("host")) | ("none", Some("null"))
+        );
+        if builtin {
+            if !network["IPAM"]["Config"]
+                .as_array()
+                .is_some_and(Vec::is_empty)
+            {
+                return false;
+            }
+            continue;
+        }
+        if !expected.iter().any(|expected| expected == name)
+            || network["Driver"] != "bridge"
+            || held_ids
+                .iter()
+                .any(|(held_name, held_id)| held_name == name && held_id != id)
+        {
+            return false;
+        }
+        let Some(pools) = topology_ipam(&network["IPAM"]["Config"]) else {
+            return false;
+        };
+        if pools
+            .iter()
+            .filter(|pool| pool.address.is_ipv4())
+            .any(|pool| outer.iter().any(|other| pool.overlaps(*other)))
+        {
+            return false;
+        }
+    }
+    expected.iter().all(|name| names.contains(name.as_str()))
+        && names.contains("host")
+        && names.contains("none")
+        && held_ids.iter().all(|(name, _)| expected.contains(name))
+}
+
+fn read_inner_topology(context: &DefaultBridgeContext) -> Option<Value> {
+    // This fixed test-only read is deliberately outside the generic executor's
+    // allowlist and product Discovery API. Its caller owns the original budget.
+    let command = default_bridge_command(context);
+    // Rebuild the sole URL, retaining all reviewed timeout/socket restrictions.
+    let args: Vec<_> = command.get_args().map(|arg| arg.to_owned()).collect();
+    let mut command = Command::new("timeout");
+    command.args(&args[..args.len() - 1]).arg(format!(
+        "http://localhost/v{}.{}/networks",
+        context.api.major, context.api.minor
+    ));
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let mut child = command.spawn().ok()?;
+    let stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout
+            .take((TOPOLOGY_RESPONSE_CAP + 6) as u64)
+            .read_to_end(&mut bytes)
+            .ok()?;
+        (bytes.len() <= TOPOLOGY_RESPONSE_CAP + 5).then_some(bytes)
+    });
+    let status = child.wait();
+    let bytes = reader.join().ok()??;
+    if !status.ok()?.success() {
+        return None;
+    }
+    decode_inner_topology_response(&bytes)
+}
+
+fn decode_inner_topology_response(bytes: &[u8]) -> Option<Value> {
+    let body = bytes.strip_suffix(b"\n200")?;
+    if body.len() > TOPOLOGY_RESPONSE_CAP {
+        return None;
+    }
+    let UniqueDiagnosticJson(value) = serde_json::from_slice(body).ok()?;
+    bounded_topology_json(&value).then_some(value)
+}
+
+mod topology_tests {
+    use super::*;
+
+    fn fixture() -> (Value, Vec<(String, String)>, Vec<TopologyPool>) {
+        // Independent lifetime expectation: three deliberately removed test-6
+        // controls must NOT be required at this boundary.
+        let names = [
+            "bridge",
+            "dl-test-net",
+            "dl-target-test-net",
+            "dl-network-test-backend",
+            "dl-network-test-edge",
+            "dl-network-test-external",
+            "dl-network-test-oracle",
+            "dl-network-test-proof-internal",
+            "dl-network-test-proof-control",
+            "dl-network-test-proof-cli-internal",
+            "dl-network-test-proof-cli-control",
+        ];
+        let mut networks: Vec<_> = names.iter().enumerate().map(|(index, name)| json!({
+            "Id": format!("{:064x}", index + 1), "Name": name, "Driver": "bridge", "Scope": "local",
+            "IPAM": {"Driver": "default", "Config": [{"Subnet": format!("172.20.{index}.0/24")}]}
+        })).collect();
+        let held = [1, 7, 8, 9, 10]
+            .iter()
+            .map(|index| (names[*index].to_owned(), format!("{:064x}", index + 1)))
+            .collect();
+        for (name, driver, id) in [("host", "host", 12), ("none", "null", 13)] {
+            networks.push(json!({"Id": format!("{id:064x}"), "Name": name, "Driver": driver, "Scope": "local", "IPAM": {"Driver": "default", "Config": []}}));
+        }
+        (
+            json!(networks),
+            held,
+            vec![TopologyPool::parse("10.253.253.0/24").unwrap()],
+        )
+    }
+
+    fn record() -> Value {
+        json!({"schema_version": 1, "kind": "test-only-outer-network-topology", "candidate": "c".repeat(40), "run": "test", "backend": "docker",
+            "network": {"id": "a".repeat(64), "name": "dl-native-net-test", "driver": "bridge", "scope": "local", "ipam_driver": "default", "ipv4_pools": ["10.253.253.0/24"]},
+            "endpoints": {"daemon": {"id": "b".repeat(64), "name": "dl-native-test", "ipv4": "10.253.253.2"}, "sidecar": {"id": "d".repeat(64), "name": "dl-native-egress-test", "ipv4": "10.253.253.3"}}})
+    }
+
+    fn record_valid(value: &Value) -> bool {
+        topology_record_pools(
+            value,
+            "test",
+            &"c".repeat(40),
+            "docker",
+            &"b".repeat(64),
+            Ipv4Addr::new(10, 253, 253, 3),
+        )
+        .is_some()
+    }
+
+    #[test]
+    fn topology_exact_retained_set_and_mixed_family_are_required() {
+        let (mut networks, held, outer) = fixture();
+        assert_eq!(retained_topology_names("test").len(), 11);
+        assert!(inner_topology_disjoint(&networks, "test", &held, &outer));
+        networks[0]["IPAM"]["Config"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"Subnet": "fd00::/64", "Gateway": "fd00::1"}));
+        assert!(inner_topology_disjoint(&networks, "test", &held, &outer));
+        for index in 0..13 {
+            let mut partial = networks.clone();
+            partial.as_array_mut().unwrap().remove(index);
+            assert!(!inner_topology_disjoint(&partial, "test", &held, &outer));
+        }
+        for case in 0..9 {
+            let mut changed = networks.clone();
+            match case {
+                0 => changed[0]["Name"] = json!("unknown-network"),
+                1 => changed[0]["Driver"] = json!("overlay"),
+                2 => changed[0]["Id"] = changed[1]["Id"].clone(),
+                3 => changed[0]["Name"] = changed[1]["Name"].clone(),
+                4 => changed[11]["Driver"] = json!("bridge"),
+                5 => changed[12]["IPAM"]["Config"] = Value::Null,
+                6 => changed[0]["IPAM"]["Config"] = json!([]),
+                7 => changed[0]["IPAM"]["Driver"] = json!("other"),
+                _ => changed[0]["Scope"] = json!("swarm"),
+            }
+            assert!(
+                !inner_topology_disjoint(&changed, "test", &held, &outer),
+                "case {case}"
+            );
+        }
+    }
+
+    #[test]
+    fn topology_all_five_held_roles_and_canonical_distinct_ids_are_bound() {
+        let (networks, held, outer) = fixture();
+        for case in 0..5 {
+            let mut changed = held.clone();
+            match case {
+                0 => {
+                    changed.pop();
+                }
+                1 => changed[4] = changed[0].clone(),
+                2 => changed[4].0 = "dl-target-test-net".to_owned(),
+                3 => changed[4].1 = "f".repeat(64),
+                _ => changed[4].1 = "F".repeat(64),
+            }
+            assert!(!inner_topology_disjoint(
+                &networks, "test", &changed, &outer
+            ));
+        }
+        // Earlier IDs are intentionally snapshot/name-bound, not invented
+        // creation-bound evidence; valid alternate IDs for these roles pass.
+        let mut earlier = networks;
+        earlier[2]["Id"] = json!("e".repeat(64));
+        assert!(inner_topology_disjoint(&earlier, "test", &held, &outer));
+        assert!(!inner_topology_disjoint(&earlier, "test", &held, &[]));
+    }
+
+    #[test]
+    fn topology_whole_ipam_and_every_outer_interval_are_checked() {
+        let (networks, held, mut outer) = fixture();
+        outer.push(TopologyPool::parse("10.88.0.0/16").unwrap());
+        for configs in [
+            json!([{"Subnet": "10.253.253.0/24"}]),
+            json!([{"Subnet": "172.20.0.0/24"}, {"Subnet": "10.88.3.0/24"}]),
+            json!([{"Subnet": "172.20.0.0/24"}, {}]),
+            json!([{"Subnet": "172.20.0.0/24"}, {"Subnet": "broken"}]),
+            json!([{"Subnet": "fd00::/64"}]),
+            json!([{"Subnet": "172.20.0.1/24"}]),
+            json!([{"Subnet": "172.20.0.0/24", "Gateway": "192.0.2.1"}]),
+            json!([{"Subnet": "172.20.0.0/24", "IPRange": "172.21.0.0/24"}]),
+            json!([{"Subnet": "172.20.0.0/24", "AuxiliaryAddresses": {"x": "192.0.2.1"}}]),
+        ] {
+            let mut changed = networks.clone();
+            changed[0]["IPAM"]["Config"] = configs;
+            assert!(!inner_topology_disjoint(&changed, "test", &held, &outer));
+        }
+        for (left, right, overlap) in [
+            ("0.0.0.0/0", "10.253.253.0/24", true),
+            ("10.253.252.0/24", "10.253.253.0/24", false),
+            ("10.253.253.255/32", "10.253.253.0/24", true),
+            ("10.253.254.0/32", "10.253.253.0/24", false),
+        ] {
+            assert_eq!(
+                TopologyPool::parse(left)
+                    .unwrap()
+                    .overlaps(TopologyPool::parse(right).unwrap()),
+                overlap
+            );
+        }
+        assert!(proof_budget_sufficient(58, 4, 8));
+        assert!(!proof_budget_sufficient(57, 4, 8));
+    }
+
+    #[test]
+    fn topology_response_rejects_partial_duplicate_trailing_status_and_cap() {
+        let (networks, _, _) = fixture();
+        let mut bytes = serde_json::to_vec(&networks).unwrap();
+        bytes.extend_from_slice(b"\n200");
+        assert!(decode_inner_topology_response(&bytes).is_some());
+        for bytes in [
+            b"[]\n404".to_vec(),
+            b"[\n200".to_vec(),
+            b"[] {}\n200".to_vec(),
+            b"[{\"Id\":1,\"Id\":2}]\n200".to_vec(),
+            b"[{\"x\":{\"k\":1,\"\\u006b\":2}}]\n200".to_vec(),
+            [vec![b' '; TOPOLOGY_RESPONSE_CAP + 1], b"\n200".to_vec()].concat(),
+        ] {
+            assert!(decode_inner_topology_response(&bytes).is_none());
+        }
+    }
+
+    #[test]
+    fn topology_private_record_is_exact_candidate_run_backend_and_endpoint_bound() {
+        assert!(record_valid(&record()));
+        for case in 0..10 {
+            let mut value = record();
+            match case {
+                0 => value["candidate"] = json!("e".repeat(40)),
+                1 => value["run"] = json!("other"),
+                2 => value["backend"] = json!(crate::native_outer_test_command::PODMAN_ENGINE),
+                3 => value["network"]["id"] = json!("A".repeat(64)),
+                4 => value["network"]["name"] = json!("other"),
+                5 => value["network"]["ipv4_pools"] = json!(["192.0.2.0/24"]),
+                6 => value["endpoints"]["daemon"]["id"] = json!("f".repeat(64)),
+                7 => value["endpoints"]["sidecar"]["ipv4"] = json!("10.253.253.2"),
+                8 => value["endpoints"]["sidecar"]["name"] = json!("other"),
+                _ => value["private-canary"] = json!("unrecognized"),
+            }
+            assert!(!record_valid(&value), "case {case}");
+        }
+    }
+
+    #[test]
+    fn topology_private_read_rejects_symlinks_modes_hardlinks_and_duplicates() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let run = format!(
+            "topology-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let directory = std::env::temp_dir().join(format!("dockerlens-native.{run}"));
+        fs::create_dir(&directory).unwrap();
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+        let file = directory.join("outer-network-topology-v1.json");
+        fs::write(&file, b"{}").unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(read_topology_record(&directory, &run).is_some());
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(read_topology_record(&directory, &run).is_none());
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+        let alias = directory.join("alias");
+        fs::hard_link(&file, &alias).unwrap();
+        assert!(read_topology_record(&directory, &run).is_none());
+        fs::remove_file(&alias).unwrap();
+        fs::write(&file, b"{\"x\":1,\"x\":2}").unwrap();
+        assert!(read_topology_record(&directory, &run).is_none());
+        fs::remove_file(&file).unwrap();
+        symlink(&alias, &file).unwrap();
+        assert!(read_topology_record(&directory, &run).is_none());
+        fs::remove_file(&file).unwrap();
+        fs::remove_dir(&directory).unwrap();
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FixtureSubnetObservation {
@@ -5371,6 +6057,7 @@ fn live_internal_network_blocks_external_egress() {
     // Independent CLI creates show the daemon's native interpretation of the
     // exact two matched settings before the inert bodies are sent to Engine.
     eprintln!("DOCKERLENS_NATIVE_CHECK: network_internal_oracle");
+    let mut held_network_ids = Vec::new();
     for (name, is_internal) in [(&cli_control, false), (&cli_internal, true)] {
         let owner = format!("io.dockerlens.native-run={run_id}");
         let mut args = vec!["network", "create", "--driver", "bridge"];
@@ -5387,7 +6074,13 @@ fn live_internal_network_blocks_external_egress() {
             name,
         ]);
         resources.networks.push(name.clone());
-        proof_cli_ok(&resources, &args);
+        let created = proof_cli_ok(&resources, &args);
+        let id = std::str::from_utf8(&created)
+            .ok()
+            .and_then(|text| text.strip_suffix('\n'))
+            .filter(|id| canonical_inspected_container_id(&json!({"Id": id})).is_some())
+            .expect("CLI proof create returns canonical network identity");
+        held_network_ids.push((name.clone(), id.to_owned()));
     }
     let cli_internal_body = proof_inspect(
         &resources,
@@ -5450,6 +6143,8 @@ fn live_internal_network_blocks_external_egress() {
         &run_id,
         sidecar_ip,
     );
+    let source_network_id = required("NATIVE_NETWORK_ID");
+    held_network_ids.push((format!("dl-{run_id}-net"), source_network_id.clone()));
     let intent = TargetIntent::new(vec![
         TargetResource::Network(internal_proof_create(&internal, &run_id, true)),
         TargetResource::Network(internal_proof_create(&control, &run_id, false)),
@@ -5506,13 +6201,18 @@ fn live_internal_network_blocks_external_egress() {
             internal_proof_body(name, &run_id, is_internal)
         );
         resources.networks.push(name.clone());
-        let (status, _) = proof_api(
+        let (status, response) = proof_api(
             &resources,
             "POST",
             &format!("/v{api_version}/networks/create"),
             Some(&request["body"]),
         );
         assert_eq!(status, 201, "Engine accepts exact inert proof request");
+        let UniqueDiagnosticJson(created) =
+            serde_json::from_slice(&response).expect("private proof create JSON");
+        let id = canonical_inspected_container_id(&created)
+            .expect("proof create returns canonical network identity");
+        held_network_ids.push((name.clone(), id.to_owned()));
     }
     let mut subnet_diagnostics = SidecarSubnetDiagnostics::new();
     for (name, is_internal, cli_body) in [
@@ -5520,6 +6220,12 @@ fn live_internal_network_blocks_external_egress() {
         (&control, false, &cli_control_body),
     ] {
         let body = proof_inspect(&resources, &format!("/v{api_version}/networks/{name}"));
+        assert!(
+            held_network_ids
+                .iter()
+                .any(|(held_name, id)| held_name == name && body["Id"] == *id),
+            "proof inspect binds its creation identity"
+        );
         subnet_diagnostics.record(is_internal, sidecar_ip, &body);
         assert_eq!(body["Internal"], is_internal);
         assert_eq!(body["Driver"], "bridge");
@@ -5532,6 +6238,46 @@ fn live_internal_network_blocks_external_egress() {
             assert_eq!(body["Options"][option], cli_body["Options"][option]);
         }
     }
+
+    // Mandatory fixture isolation snapshot, while only four cleanup liabilities
+    // exist. This one read debits eight seconds of the ORIGINAL 180-second owner
+    // (58 required, 57 refused), before any peers or new network are created.
+    eprintln!("DOCKERLENS_NATIVE_CHECK: network_internal_topology");
+    resources.require_budget(8);
+    assert!(
+        captured_fixture_membership(
+            &capture,
+            &source_id,
+            Some(&source_network_id),
+            &run_id,
+            sidecar_ip
+        )
+        .is_some(),
+        "captured source fixture identity is available"
+    );
+    let directory = std::path::Path::new(&proof_path)
+        .parent()
+        .expect("private proof directory");
+    let topology =
+        read_topology_record(directory, &run_id).expect("private creation-bound outer topology");
+    let pools = topology_record_pools(
+        &topology,
+        &run_id,
+        &required("NATIVE_IDENTITY_CANDIDATE_SHA"),
+        &required("NATIVE_OUTER_ENGINE"),
+        &required("NATIVE_OUTER_CONTAINER_ID"),
+        sidecar_ip,
+    )
+    .expect("complete actual outer network pools and endpoints");
+    let networks = read_inner_topology(&DefaultBridgeContext {
+        api: facts.api_version.unwrap(),
+        socket: engine_socket.clone(),
+    })
+    .expect("complete bounded inner network snapshot");
+    assert!(
+        inner_topology_disjoint(&networks, &run_id, &held_network_ids, &pools),
+        "all retained inner bridge pools are disjoint from actual outer pools"
+    );
 
     // The external endpoint lives in a separate outer Podman namespace, so
     // packets from the inner bridge must traverse Docker's FORWARD path.

@@ -458,6 +458,11 @@ def main(argv):
         mode = {"docker-peer": "peer", "docker-info": "info", "runtime-receipt": "receipt"}.get(command, "other")
         if command == "docker-peer" and len(args) == 2:
             print(json.dumps(docker_peer(*args), sort_keys=True, separators=(",", ":")))
+        elif command == "network-preflight" and len(args) == 2:
+            # DockerLens native-conformance only: existing consumer closures do
+            # not import or acquire this new fixed host-observation authority.
+            from native_network_topology import encoded, preflight
+            print(encoded(preflight(*args, docker_peer)).decode(), end="")
         elif command == "prepare-data" and len(args) == 4:
             prepare_data(*args)
         elif command == "check-data" and len(args) == 4:

@@ -8,6 +8,95 @@ The same four digest-pinned **inner** Engines, BusyBox pin, nineteen mandatory
 exact tests, source receipts and admission rules remain unchanged. Synthetic
 controls and definitions do not qualify a native lane.
 
+## Maintained fixture allocation and mandatory topology guard
+
+Hosted Docker native-conformance alone reserves `10.253.253.0/24` for its
+run-owned outer bridge. This is a maintained orchestration choice, **not** a
+globally reserved or inherently conflict-free private range. Local Podman keeps
+automatic allocation. No inner daemon pool, native oracle, generated request,
+image or assertion is changed. Campaign `39957095090` failed: both rootful lanes
+passed nineteen tests, while both rootless lanes stopped at the independent
+CLI-positive wget with retained-fixture membership `true`. That establishes an
+address conflict, not its routing/NAT/timeout cause or AppArmor admission.
+
+Before network mutation intent, one root helper performs the hosted preflight
+inside the existing eight-second TERM/two-second KILL owner. One seven-second
+monotonic deadline covers system-tool custody, bounded SHA-256 and version,
+fresh service/socket/peer/root/PID/start-time authentication, held pidfd/root and
+network-namespace descriptors, observer/daemon netns equality, the fixed system
+`ip -j -4 address show` and `ip -j -4 route show table all`, and matching fresh
+authentication/tool/namespace checks afterward. No namespace is entered. Tools
+must be root-owned, executable and not group/world writable at reviewed system
+paths. The preinstalled Ubuntu-24 exception in [dependency policy](dependency-policy.md)
+applies; hashes describe installed bytes, not publisher integrity.
+
+The host parser in `scripts/native_network_topology.py` owns closed key, flag,
+route-type and nexthop allowlists. JSON must be complete, duplicate-free UTF-8,
+at most 64 KiB per stream, depth 20 and 8192 values; the capture source aggregate
+is 512 KiB. Assigned IPv4 prefixes count even with `noprefixroute`. For a peer
+address, check local `/32` and peer/prefix, never a synthesized local/prefix.
+All route tables count, including table 253. Only the default **destination**
+is exempt: its gateway, preferred source and every multipath gateway still
+count. Unknown keys/semantics, source-routing forms, `nhid`, `via`, `encap`,
+malformed/partial metadata or any reservation overlap refuse. Harmless supported
+routes need no gateway. Commands inherit the original timeout group; capture
+requires complete stdout/stderr EOF and child status. Cancellation or uncertain
+child/descendant completion discards private raw staging and retains that same
+hard owner through KILL, without a renewed timer, new session or retry.
+
+One explicit `bridge`/default-IPAM create then uses Docker's local allocator
+conflict refusal. It is not a transaction proving absence across all plugins,
+namespaces or side effects. Existing uncertain-create intent/cleanup remains
+authoritative; there is no fallback prefix or retry. Reuse one full network
+inspection for exact creation-ID/name/run binding and whole actual IPAM. Docker
+requires local scope, default IPAM and the reserved IPv4 pool. Podman projects
+its native complete `subnets`/host-local IPAM without changing allocation; its
+successful-name-create/run-label binding is not a Docker creation-reply-ID claim.
+Both endpoints must have the exact inspected network ID, matching prefix length,
+distinct creation IDs/IPv4s, and membership in an actual IPv4 pool. Valid complete
+mixed-family pools are accepted; partial or IPv6-only evidence refuses.
+
+The root helper emits bounded private JSON only. The ordinary coordinator
+exclusively publishes caller-owned 0600 `outer-network-preflight-v1.json` and
+`outer-network-topology-v1.json` in its held 0700 run directory: no overwrite,
+symlink following, public-readable chmod or unbound-path chown. The exact version-1
+topology schema binds kind, candidate SHA, run, backend, network ID/name/driver,
+reported scope/IPAM driver, canonical actual IPv4 pools and both endpoint
+ID/name/IPv4 triples. The preflight receipt binds the reservation, installed
+tool version/hash/identity, exact complete peer observation and namespace identity;
+it is audit evidence, never replay authority. Publication rechecks directory and
+named-file custody. Rust reads the topology through a held directory with
+no-follow, regular-file/single-link/owner/mode/size and before/after identity
+checks; both documents retain the same strict JSON limits.
+
+After all four current proof bridges are created/inspected and **before peers**,
+one mandatory fixed versioned inner-socket `GET /networks` validates every retained
+bridge against every actual outer IPv4 pool. This is private test-only authority,
+not a public discovery API or general executor-allowlist expansion. Its six-second
+request/one-second KILL and 1 MiB cap-plus-one read debit one eight-second operation
+against the original 180-second test: four liabilities require 58 seconds remaining,
+57 refuse. The later nine-liability cleanup reserve is unchanged.
+
+The exact set is eleven retained bridges: default/source, the retained test-5
+target, test-6 backend/edge/external/oracle, and four current proof networks.
+Test 6 deliberately removes all three option controls and checks their absence;
+created totals cannot substitute for retained membership. Exactly canonical
+`host`/host and `none`/null builtins with empty IPAM are the only exceptions.
+Missing/unknown networks, duplicate IDs/names, wrong drivers, incomplete IPAM,
+IPv6-only bridges, overlap or unavailable budget fail before peers. Complete
+mixed IPv4/IPv6 passes. Source/current-four IDs are held-bound; earlier target
+and test-6 IDs remain only exact-name/snapshot-bound, not invented creation proof.
+This snapshot proves neither future allocations nor routes, firewall, NAT,
+RootlessKit behavior, cleanup success or compatibility. No bridges are added
+later in this proof. All nineteen invocations, original assertions, endpoint
+canary and experimental non-acceptance remain mandatory.
+
+Activation is DockerLens-native-conformance-specific. Shared observation/runtime
+imports and `id|name|run` wire behavior stay unchanged for existing BoxFerry
+consumers. The three canonical native workflow consumers inherit the same script;
+BoxFerry's reviewed source closure must be re-reviewed at the new exact SHA before
+its consumer qualification. This does not claim a cross-repository rollout.
+
 ## Temporary, unadmitted upstream-rootless userns experiment
 
 The reviewed source selector `issue127_userns_v1` applies only to

@@ -555,10 +555,19 @@ class FailureDiagnosticsTests(unittest.TestCase):
             self.tool(self.tools / "sudo", "import json,os,sys\nfrom pathlib import Path\n"
                       "with Path(os.environ['SUDO_TRACE']).open('a') as trace: trace.write(json.dumps(sys.argv[1:])+'\\n')\n"
                       "assert sys.argv[1]=='-n'\nos.execvp(sys.argv[2],sys.argv[2:])\n")
+        pool = {"schema_version": 1, "kind": "test-only-outer-network-topology", "candidate": "c" * 40,
+                "run": "fixture", "backend": "podman", "network": {"id": "a" * 64, "name": "dl-native-net-fixture",
+                "driver": "bridge", "scope": None, "ipam_driver": "host-local", "ipv4_pools": ["10.89.0.0/24"]}}
+        docker = json.loads(json.dumps(pool))
+        docker["backend"] = "docker"
+        docker["network"].update(scope="local", ipam_driver="default", ipv4_pools=["10.253.253.0/24"])
         return ("set -euo pipefail\n" + definition("native_outer_command", RUNTIME)
                 + definition("validated_outer_ipv4")
                 + "native_outer_cmd=(" + " ".join(repr(item) for item in vector) + ")\n"
-                + 'outer_network=owned\npodman_cmd=("${native_outer_cmd[@]}")\n'
+                + 'outer_network=dl-native-net-fixture\npodman_cmd=("${native_outer_cmd[@]}")\n'
+                + f'script_dir={str(ROOT / "scripts")!r}\nrun_id=fixture\nNATIVE_IDENTITY_CANDIDATE_SHA={"c" * 40}\n'
+                + f'outer_network_projection={json.dumps(pool)!r}\n'
+                + f'if [[ ${{native_outer_engine:-podman}} == docker ]]; then outer_network_projection={json.dumps(docker)!r}; fi\n'
                 + 'diagnose_native_startup() { printf "held-state:%s held-profile:%s\\n" "$1" "${2:-unknown}" >&2; }\n'
                 + 'validated_outer_ipv4 "$1" exact-owned-name\n')
 
@@ -569,8 +578,9 @@ class FailureDiagnosticsTests(unittest.TestCase):
         for engine in ("docker", "podman"):
             query = ["inspect", "--format", (APPARMOR_PROJECTION if engine == "docker" else "") + projection,
                      "exact-owned-name"]
-            for address, expected in (("10.89.0.2", 0), ("", 1)):
-                self.client_reply(json.dumps({"owned": {"IPAddress": address}}) + "|true|running|0|false|false")
+            expected_address = "10.253.253.2" if engine == "docker" else "10.89.0.2"
+            for address, expected in ((expected_address, 0), ("", 1)):
+                self.client_reply(json.dumps({"dl-native-net-fixture": {"IPAddress": address, "NetworkID": "a" * 64, "IPPrefixLen": 24}}) + "|true|running|0|false|false")
                 sudo_trace = self.private / "sudo-trace"
                 sudo_trace.unlink(missing_ok=True)
                 result = self.shell(self.attachment_body(True), ["daemon"],
@@ -580,7 +590,7 @@ class FailureDiagnosticsTests(unittest.TestCase):
                 self.assertEqual(json.loads(sudo_trace.read_text()),
                                  ["-n", "timeout", "--signal=TERM", "--kill-after=2s", "10s",
                                   str(self.client), *prefix, *query])
-                self.assertEqual(result.stdout, "10.89.0.2\n" if expected == 0 else "")
+                self.assertEqual(result.stdout, expected_address + "\n" if expected == 0 else "")
                 self.assertEqual(result.stderr.count("held-state:"), expected)
 
     def test_docker_attachment_profiles_are_closed_optional_and_do_not_change_ip_or_state(self):
@@ -592,9 +602,9 @@ class FailureDiagnosticsTests(unittest.TestCase):
             ("inspect_reported_apparmor=null\n", "unknown"),
             ('inspect_reported_apparmor={"secret":"protected-canary"}\n', "unknown"),
         ):
-            for address, status in (("10.89.0.2", 0), ("", 1), ("127.0.0.1", 1)):
+            for address, status in (("10.253.253.2", 0), ("", 1), ("127.0.0.1", 1)):
                 with self.subTest(header=expected, address=address):
-                    self.client_reply(header + json.dumps({"owned": {"IPAddress": address}})
+                    self.client_reply(header + json.dumps({"dl-native-net-fixture": {"IPAddress": address, "NetworkID": "a" * 64, "IPPrefixLen": 24}})
                                       + "|false|exited|1|false|false")
                     result = self.shell(self.attachment_body(), ["daemon"],
                                         {"native_outer_engine": "docker"})
@@ -603,7 +613,7 @@ class FailureDiagnosticsTests(unittest.TestCase):
                     self.assertEqual(query[-4:-2], ["inspect", "--format"])
                     self.assertTrue(query[-2].startswith(APPARMOR_PROJECTION))
                     if status == 0:
-                        self.assertEqual((result.stdout, result.stderr), ("10.89.0.2\n", ""))
+                        self.assertEqual((result.stdout, result.stderr), ("10.253.253.2\n", ""))
                     else:
                         self.assertIn("held-state:running=false,status=exited,exit=nonzero,oom=false,error=false", result.stderr)
                         self.assertIn("held-profile:" + expected + "\n", result.stderr)
@@ -613,7 +623,7 @@ class FailureDiagnosticsTests(unittest.TestCase):
     def test_docker_profile_reaches_startup_failure_without_another_inspect_or_raw_value(self):
         for profile in ("unconfined", "docker_default", "other", "empty", "unknown", CANARY):
             expected = profile if profile != CANARY else "unknown"
-            reply = f"inspect_reported_apparmor={profile}\n" + '{"owned":{}}|false|exited|1|false|false'
+            reply = f"inspect_reported_apparmor={profile}\n" + '{"dl-native-net-fixture":{}}|false|exited|1|false|false'
             self.trace.unlink(missing_ok=True)
             self.tool(self.client, "import json,os,sys\nfrom pathlib import Path\n"
                       "with Path(os.environ['TRACE']).open('a') as trace: trace.write(json.dumps(sys.argv[1:])+'\\n')\n"
@@ -623,7 +633,8 @@ class FailureDiagnosticsTests(unittest.TestCase):
                     + definition("rootless_kernel_window_diagnostic")
                     + definition("diagnose_native_startup") + definition("validated_outer_ipv4")
                     + f"native_outer_cmd=({str(self.client)!r})\n"
-                    + "native_outer_engine=docker\nouter_network=owned\ncontainer=exact-owned-name\nlane=upstream-rootless\n"
+                    + "native_outer_engine=docker\nouter_network=dl-native-net-fixture\ncontainer=exact-owned-name\nlane=upstream-rootless\n"
+                    + f'script_dir={str(ROOT / "scripts")!r}\nrun_id=fixture\nNATIVE_IDENTITY_CANDIDATE_SHA={"c" * 40}\nouter_network_projection=\'{{}}\'\n'
                     + "validated_outer_ipv4 daemon exact-owned-name\n")
             result = self.shell(body)
             self.assertEqual(result.returncode, 1)
@@ -640,16 +651,20 @@ class FailureDiagnosticsTests(unittest.TestCase):
         state = "|true|running|0|false|false"
         for engine in ("docker", "podman"):
             for role in ("sidecar", "daemon"):
-                for networks, category in (({"owned": {"IPAddress": "10.89.0.2"}}, None),
-                                           ({"owned": {}}, "ipv4_missing"),
-                                           ({"owned": {"IPAddress": "127.0.0.1"}}, "ipv4_nonprivate"),
-                                           ({"owned": {}, "other": {}}, "network_extra")):
+                address = "10.253.253.2" if engine == "docker" else "10.89.0.2"
+                endpoint = {"IPAddress": address, "NetworkID": "a" * 64, "IPPrefixLen": 24}
+                for networks, category in (({"dl-native-net-fixture": endpoint}, None),
+                                           ({"dl-native-net-fixture": {}}, "ipv4_missing"),
+                                           ({"dl-native-net-fixture": {"IPAddress": "127.0.0.1"}}, "ipv4_nonprivate"),
+                                           ({"dl-native-net-fixture": {}, "other": {}}, "network_extra"),
+                                           ({"dl-native-net-fixture": endpoint | {"NetworkID": "f" * 64}}, "network_pool"),
+                                           ({"dl-native-net-fixture": endpoint | {"IPPrefixLen": 16}}, "network_pool")):
                     self.client_reply(json.dumps(networks) + state)
                     result = self.shell(self.attachment_body(), [role],
                                         {"CLIENT": str(self.client), "native_outer_engine": engine})
                     self.assertEqual(result.returncode, 0 if category is None else 1)
                     if category is None:
-                        self.assertEqual((result.stdout, result.stderr), ("10.89.0.2\n", ""))
+                        self.assertEqual((result.stdout, result.stderr), (address + "\n", ""))
                     else:
                         self.assertEqual(result.stdout, "")
                         self.assertIn(f"role={role} category={category}", result.stderr)
@@ -659,7 +674,7 @@ class FailureDiagnosticsTests(unittest.TestCase):
                         self.assertNotIn("10.89.0.2", result.stderr)
 
     def test_attachment_malformed_state_bound_and_command_status_remain_private(self):
-        self.client_reply('{"owned":{}}|secret|secret|secret|secret|secret')
+        self.client_reply('{"dl-native-net-fixture":{}}|secret|secret|secret|secret|secret')
         result = self.shell(self.attachment_body(), ["daemon"], {"CLIENT": str(self.client)})
         self.assertIn("running=unknown,status=unknown,exit=unknown,oom=unknown,error=unknown", result.stderr)
         self.assertNotIn("secret", result.stderr)

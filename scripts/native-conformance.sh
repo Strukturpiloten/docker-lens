@@ -101,6 +101,9 @@ python3 "$script_dir/native-bridge-prerequisite.py"
 # A random directory, two containers, network, and volume belong to this lane.
 run_dir=$(mktemp -d "${TMPDIR:-/tmp}/dockerlens-native.XXXXXXXX")
 run_id=${run_dir##*.}
+export NATIVE_IDENTITY_CANDIDATE_SHA
+NATIVE_IDENTITY_CANDIDATE_SHA=$(git -C "$script_dir/.." rev-parse HEAD)
+[[ $NATIVE_IDENTITY_CANDIDATE_SHA =~ ^[0-9a-f]{40}$ ]] || { echo 'native identity requires exact candidate SHA' >&2; exit 1; }
 container="dl-native-${run_id}"
 volume="dl-native-data-${run_id}"
 outer_network="dl-native-net-${run_id}"
@@ -661,6 +664,8 @@ validated_outer_ipv4() {
   }
   observation=$(printf '%s' "$attachment" | python3 -c '
 import ipaddress, json, sys
+sys.path.insert(0, sys.argv[5])
+import native_network_topology as topology
 
 raw = sys.stdin.read()
 profile = "unknown"
@@ -688,7 +693,7 @@ def fail(category):
     raise SystemExit(1)
 
 try:
-    networks = json.loads(raw)
+    networks = topology.document(raw.encode())
 except (ValueError, UnicodeError):
     fail("json_shape")
 if not isinstance(networks, dict):
@@ -711,8 +716,13 @@ except (ValueError, TypeError, AttributeError):
     fail("ipv4_malformed")
 if not address.is_private or address.is_loopback or address.is_link_local:
     fail("ipv4_nonprivate")
+try:
+    projected = topology.document(sys.argv[4].encode())
+    topology.attachment(networks, projected, sys.argv[6], sys.argv[7], sys.argv[3])
+except (ValueError, TypeError, KeyError, OverflowError, RecursionError):
+    fail("network_pool")
 print(address)
-' "$outer_network" "$role" "${native_outer_engine:-podman}") || result=$?
+' "$outer_network" "$role" "${native_outer_engine:-podman}" "$outer_network_projection" "$script_dir" "$run_id" "$NATIVE_IDENTITY_CANDIDATE_SHA") || result=$?
   if (( result != 0 )); then
     # Failure-only: reuse the held closed State; only the existing logs query
     # is added (10s + 2s kill fallback), inside the lane 30m watchdog.
@@ -823,9 +833,18 @@ fi
 # Prevent `run` from doing a second unbounded implicit pull.
 native_outer_command 180 pull "$image" >/dev/null
 native_outer_command 180 pull "$FIXTURE_IMAGE" >/dev/null 2>&1 || sidecar_setup_failed image_pull
+if [[ $native_outer_engine == docker ]]; then
+  # One aggregate host observation precedes mutation intent. This maintained
+  # reservation is not a promise about all plugins or future host routes.
+  host_network_preflight=$(native_outer_helper network-preflight "$run_id" "$NATIVE_IDENTITY_CANDIDATE_SHA") ||
+    sidecar_setup_failed host_network_preflight
+  printf '%s' "$host_network_preflight" | python3 "$script_dir/native_network_topology.py" \
+    publish-host "$run_id" "$NATIVE_IDENTITY_CANDIDATE_SHA" docker "$run_dir" || sidecar_setup_failed host_network_preflight
+  unset host_network_preflight
+fi
 network_attempted=1
 if [[ $native_outer_engine == docker ]]; then
-  outer_network_id=$(native_outer_command 30 network create --driver bridge \
+  outer_network_id=$(native_outer_command 30 network create --driver bridge --ipam-driver default --subnet 10.253.253.0/24 \
     --label "io.dockerlens.native-run=$run_id" "$outer_network" 2>/dev/null) || sidecar_setup_failed network_create
   [[ $outer_network_id =~ ^[0-9a-f]{64}$ ]] || sidecar_setup_failed network_identity
 else
@@ -833,10 +852,21 @@ else
     --label "io.dockerlens.native-run=$run_id" "$outer_network" >/dev/null 2>&1 || sidecar_setup_failed network_create
 fi
 network_created=1
+# Reuse one full inspection for identity and complete native pool projection.
+# Docker is bound to its create-reply ID; Podman retains successful name-create
+# plus exact run-label binding, never recovery after uncertain creation.
+network_identity=$outer_network_id
+if [[ $native_outer_engine == podman ]]; then network_identity=$outer_network; fi
+outer_network_snapshot=$(native_outer_observe network "$network_identity") || sidecar_setup_failed network_identity
 if [[ $native_outer_engine == docker ]]; then
-  native_outer_binding network "$outer_network_id" "$outer_network" io.dockerlens.native-run "$run_id" >/dev/null ||
+  printf '%s' "$outer_network_snapshot" | native_outer_helper binding network "$outer_network_id" "$outer_network" io.dockerlens.native-run "$run_id" >/dev/null ||
     sidecar_setup_failed network_identity
 fi
+projection_identity=$outer_network_id
+if [[ $native_outer_engine == podman ]]; then projection_identity=successful-name-create; fi
+outer_network_projection=$(printf '%s' "$outer_network_snapshot" | python3 "$script_dir/native_network_topology.py" \
+  network "$run_id" "$NATIVE_IDENTITY_CANDIDATE_SHA" "$native_outer_engine" "$projection_identity") || sidecar_setup_failed network_pool
+unset outer_network_snapshot network_identity projection_identity
 # Preserve only the creation reply privately; never recover a bound ID from a
 # reused name after a failed/uncertain run. No ambient enumeration or retry.
 (umask 077; set -o noclobber; : > "$run_dir/sidecar-create.id") || sidecar_setup_failed sidecar_identity
@@ -980,6 +1010,10 @@ daemon_ip=$(validated_outer_ipv4 daemon "$container") || exit 1
 [[ $sidecar_ip != "$daemon_ip" ]] || {
   sidecar_setup_failed address_collision
 }
+printf '%s' "$outer_network_projection" | python3 "$script_dir/native_network_topology.py" \
+  finalize "$run_id" "$NATIVE_IDENTITY_CANDIDATE_SHA" "$native_outer_engine" "$outer_container_id" "$sidecar_container_id" "$daemon_ip" "$sidecar_ip" |
+  python3 "$script_dir/native_network_topology.py" publish "$run_id" "$NATIVE_IDENTITY_CANDIDATE_SHA" "$native_outer_engine" "$run_dir" || sidecar_setup_failed network_pool
+unset outer_network_projection
 # JSON tags are stable even when Podman's Go field uses another spelling.
 # Keep this one existing query; optional metadata must not break template setup.
 outer_setup=$("${podman_cmd[@]}" inspect --format '{{json .}}' "$container")
@@ -1386,9 +1420,6 @@ export NATIVE_LIFECYCLE_PROOF_PATH="$run_dir/lifecycle-v1.json"
 export NATIVE_RUNTIME_FILESYSTEM_PROOF_PATH="$run_dir/runtime-filesystem-v1.json"
 export NATIVE_TMPFS_EFFECT_PROOF_PATH="$run_dir/tmpfs-effect-v1.json"
 export NATIVE_PORT_START_DIAGNOSTIC_PATH="$run_dir/diagnostics/port-start-window.json"
-export NATIVE_IDENTITY_CANDIDATE_SHA
-NATIVE_IDENTITY_CANDIDATE_SHA=$(git -C "$script_dir/.." rev-parse HEAD)
-[[ $NATIVE_IDENTITY_CANDIDATE_SHA =~ ^[0-9a-f]{40}$ ]] || { echo 'native identity requires exact candidate SHA' >&2; exit 1; }
 export NATIVE_PORT_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 export NATIVE_HEALTH_METADATA_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 export NATIVE_NETWORK_ATTACHMENT_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA

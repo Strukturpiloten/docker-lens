@@ -38,6 +38,29 @@ and cancellation remain failures; missing/uncertain cleanup remains retained.
 
 ## Strict CLI-positive internal-network precontrol
 
+The [maintained allocation/topology contract](native-outer-runtime.md) adds a
+hosted-Docker-only outer reservation with mandatory bounded host preflight and
+post-create pool/endpoint validation. Local Podman remains automatic. A mandatory
+single inner network snapshot, after four proof bridges but before peers,
+requires the exact eleven retained bridges plus canonical host/none exceptions;
+the three test-6 controls intentionally removed by original assertions do not
+belong in that set. Whole valid mixed-family IPAM passes; every inner IPv4 pool
+must be disjoint from every actual outer IPv4 pool. Four cleanup liabilities
+retain the original 58/57-second operation boundary and 180-second owner.
+
+`tests/test_native_network_topology.py` covers closed host/address/route schemas,
+point-to-point prefix semantics, default gateways/prefsrc/multipath/table 253,
+unknown forms, complete backend pool projection, private publication and exact
+receipt schemas. Fake-only real GNU-timeout/CaptureContext controls exercise
+TERM-resistant descendants, late EOF and inherited cancellation while retaining
+the original owner; their shortened synthetic timer proves no native behavior.
+Rust topology tests cover exact retained/held-role identity sets, mixed families,
+partial/malformed pools, second-pool overlap, strict response caps/status/duplicate
+JSON and private no-follow reads. Existing attachment fixtures supply complete
+mandatory context while retaining prior failure/privacy/timer/AppArmor assertions.
+These synthetic checks do not qualify a lane, identify a route cause, admit the
+temporary experiment or replace fresh final-candidate complete/native gates.
+
 The same existing `live_internal_network_blocks_external_egress` test now first
 requires an independent CLI-created client on the already CLI-created ordinary
 bridge to return exact sidecar `proof-egress`, before the original rendered
