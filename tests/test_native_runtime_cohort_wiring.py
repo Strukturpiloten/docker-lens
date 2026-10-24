@@ -227,8 +227,8 @@ class RuntimeCohortEvidenceTests(unittest.TestCase):
             self.assertEqual(record["tmpfs_effect_outcomes"], {
                 "admission": "unadmitted", "coverage": "explicit_1MiB_0700_and_2MiB_0750_rw_ro_only",
             })
-            self.assertEqual(len(record["capability_outcome"]), 30 if lane.startswith("debian11-") else 31)
-            self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 47 if lane.startswith("debian11-") else 49)
+            self.assertEqual(len(record["capability_outcome"]), 31 if lane.startswith("debian11-") else 32)
+            self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 48 if lane.startswith("debian11-") else 50)
             for forbidden in ("ContainerInit", "ReadOnlyRootfs", "TmpfsMount", "StopTimeout", "HealthStartInterval"):
                 self.assertNotIn(forbidden, record["capability_outcome"])
                 self.assertNotIn(forbidden, record["admitted_shapes"])

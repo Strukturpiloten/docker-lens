@@ -9,8 +9,11 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+import importlib.util
 
 import test_native_external_network_evidence as external
+from test_native_command_clear_projection import OUTCOME, expected_shapes
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = "native_command_clear"
@@ -372,7 +375,7 @@ class CommandClearEvidenceTests(unittest.TestCase):
     run_emit = external.ExternalNetworkEvidenceTests.run_emit
     emit = external.ExternalNetworkEvidenceTests.emit
 
-    def test_all_lanes_project_only_closed_unadmitted_outcome_and_unchanged_maps(self):
+    def test_all_lanes_project_only_guarded_raw_source_singleton_and_exact_baseline(self):
         for lane in ("debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless"):
             result, path = self.emit(lane)
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -380,16 +383,33 @@ class CommandClearEvidenceTests(unittest.TestCase):
             raw = path.read_text()
             record = json.loads(raw)
             self.assertEqual(record["command_clear_contract"], "command-clear-v1")
-            self.assertEqual(record["command_clear_outcomes"], {
-                "admission": "unadmitted", "outcome": "all_four_process_controls_verified"})
-            self.assertEqual(len(record["capability_outcome"]), 30 if lane.startswith("debian11-") else 31)
-            self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 47 if lane.startswith("debian11-") else 49)
-            for forbidden in ("ContainerHostname", "CommandClear", "EntrypointClear"):
+            self.assertEqual(record["command_clear_projection_contract"], "command-clear-native-source-v1")
+            self.assertEqual(record["command_clear_outcomes"], OUTCOME)
+            self.assertEqual(record["admitted_shapes"], expected_shapes(lane))
+            self.assertEqual(record["capability_outcome"], dict.fromkeys(expected_shapes(lane), "available"))
+            for forbidden in ("ContainerHostname", "EntrypointClear", "StopTimeout", "ShmSize"):
                 self.assertNotIn(forbidden, record["capability_outcome"])
                 self.assertNotIn(forbidden, record["admitted_shapes"])
             for private in ("process_argv", "dl-command-", "/dl-image-entrypoint", "image-command",
                             "daemon_uid", "f" * 64, SECRET):
                 self.assertNotIn(private, raw)
+
+    def test_emitter_requires_exact_ordered_two_shape_reader_return_before_publication(self):
+        spec = importlib.util.spec_from_file_location("command_clear_emitter_test", ROOT / "scripts/native-evidence.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        result, destination = self.emit()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        destination.unlink()
+        arguments = result.args[2:]
+        for returned in (("ClearCommand",), ("ClearEntrypoint", "ClearCommand"),
+                         ["ClearCommand", "ClearEntrypoint"], (), None):
+            with self.subTest(returned=returned), patch.object(module, "read_command_clear_proof", return_value=returned), \
+                    patch.dict(os.environ, {"NATIVE_OUTER_ENGINE": "podman", "NATIVE_FIXTURE_IMAGE": external.legacy.HEALTH_FIXTURE_IMAGE,
+                                            "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}):
+                with self.assertRaisesRegex(ValueError, "^invalid private command clear proof$"):
+                    module.emit(*[Path(item) for item in arguments[:13]], *arguments[13:])
+                self.assertFalse(destination.exists())
 
     def test_missing_either_proof_never_publishes_on_any_lane(self):
         for lane in ("debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless"):
@@ -401,7 +421,7 @@ class CommandClearEvidenceTests(unittest.TestCase):
                 self.assertEqual(result.stderr, "native evidence rejected\n")
 
     def test_independent_context_defaults_effect_types_and_private_custody_refuse(self):
-        for fault in ("candidate", "uid", "outer", "path", "missing_default", "empty_default", "partial",
+        for fault in ("candidate", "uid", "outer", "path", "missing_default", "missing_role", "reordered_controls", "empty_default", "partial",
                       "marker", "argv", "type", "cleanup", "unknown", "malformed", "duplicate", "mode", "hardlink", "symlink"):
             with self.subTest(fault=fault):
                 result, path = self.emit()
@@ -419,6 +439,10 @@ class CommandClearEvidenceTests(unittest.TestCase):
                     proof["context"]["outer"]["socket_source"] = "/foreign/socket"
                 elif fault == "missing_default":
                     proof["cases"].pop(0)
+                elif fault == "missing_role":
+                    proof["cases"][2]["containers"].pop()
+                elif fault == "reordered_controls":
+                    proof["cases"].reverse()
                 elif fault == "empty_default":
                     proof["derived_image"]["command"] = []
                 elif fault == "partial":

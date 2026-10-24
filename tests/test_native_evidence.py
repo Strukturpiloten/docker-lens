@@ -63,6 +63,7 @@ EXPECTED_RAW_SHAPES = {
     "BindRelabelPrivate": ["BindMountPrivateRelabelReadWrite", "BindMountPrivateRelabelReadOnly"],
     "NetworkExternalInternalExpectation": ["ExternalNetworkInternalFalse", "ExternalNetworkInternalTrue"],
     "StopSignal": ["StopSignal"],
+    "CommandClear": ["ClearCommand"],
 }
 EXPECTED_PORT_CAPABILITY_SHAPES = {
     "PortHostIpv4": ["FixedIpv4HostPort", "EphemeralIpv4HostPort"],
@@ -159,6 +160,16 @@ class NativeEvidenceTests(unittest.TestCase):
                           for item in defs["port_probes"]["prefixItems"]], PORT_SHAPES)
         self.assertFalse(defs["port_probes"]["items"])
         self.assertFalse(defs["native_port_probe_proof"]["additionalProperties"])
+        family = defs["command_clear_native_source_projection"]
+        outcomes = defs["command_clear_native_source_outcomes"]
+        self.assertFalse(family["additionalProperties"])
+        self.assertFalse(outcomes["additionalProperties"])
+        self.assertEqual(set(family["required"]), {"command_clear_contract", "command_clear_projection_contract",
+                                                  "command_clear_outcomes", "capability_outcome", "admitted_shapes"})
+        self.assertEqual(family["properties"]["command_clear_projection_contract"], {"const": "command-clear-native-source-v1"})
+        self.assertEqual(outcomes["properties"]["scope"], {"const": "explicit_exec_entrypoint_required"})
+        self.assertEqual(family["properties"]["admitted_shapes"]["properties"]["CommandClear"], {"const": ["ClearCommand"]})
+        self.assertNotIn("command_clear_projection_contract", schema["properties"])
         self.assertNotIn("identity_probes", schema["properties"])
         self.assertNotIn("identity_probes", schema["required"])
         self.assertEqual(set(defs), {"api_version", "identity_probes",
@@ -167,13 +178,15 @@ class NativeEvidenceTests(unittest.TestCase):
                                      "port_shape", "port_probe_entry", "port_probes",
                                      "native_port_probe_proof", "bind_relabel_capability_vocabulary",
                                      "bind_relabel_shape_vocabulary", "external_network_probes",
-                                     "external_network_projection"})
+                                     "external_network_projection", "command_clear_native_source_outcomes",
+                                     "command_clear_native_source_projection"})
         unchanged = copy.deepcopy(schema)
         for name in ("identity_probes", "identity_container_proof", "native_identity_proof",
                      "identity_container_v2", "identity_case_v2", "native_identity_proof_v2",
                      "port_shape", "port_probe_entry", "port_probes", "native_port_probe_proof",
                      "bind_relabel_capability_vocabulary", "bind_relabel_shape_vocabulary",
-                     "external_network_probes", "external_network_projection"):
+                     "external_network_probes", "external_network_projection",
+                     "command_clear_native_source_outcomes", "command_clear_native_source_projection"):
             del unchanged["$defs"][name]
         # Preserve the exact historical #74 root projection: later vocabulary
         # additions do not rewrite historical envelope bytes or admission.
@@ -531,7 +544,7 @@ class NativeEvidenceTests(unittest.TestCase):
         self.assertEqual(evidence["acquisition_api"], "1.49")
         self.assertEqual(evidence["rendering_api"], "1.56")
         self.assertEqual(evidence["runtime_components"], {"containerd": "2.3.5", "runc": "1.5.1"})
-        self.assertEqual(len(evidence["capability_outcome"]), 29)
+        self.assertEqual(len(evidence["capability_outcome"]), 30)
         self.assertEqual(set(evidence["capability_outcome"].values()), {"available"})
         self.assertEqual(evidence["admitted_shapes"], EXPECTED_FUTURE_RAW_SHAPES)
         self.assertEqual(evidence["source_probes"], SOURCE_PROBES)
@@ -648,8 +661,8 @@ class NativeEvidenceTests(unittest.TestCase):
             shape for shapes in evidence["admitted_shapes"].values() for shape in shapes))
 
     def test_prerequisite_raw_groups_are_exact_on_all_four_lane_identities(self) -> None:
-        self.assertEqual(len(EXPECTED_RAW_SHAPES), 24)
-        self.assertEqual(sum(map(len, EXPECTED_RAW_SHAPES.values())), 39)
+        self.assertEqual(len(EXPECTED_RAW_SHAPES), 25)
+        self.assertEqual(sum(map(len, EXPECTED_RAW_SHAPES.values())), 40)
         for family, release, api, minimum, package in (
             ("upstream", "29.8.1", "1.56", "1.44", ""),
             ("debian11", "20.10.5+dfsg1", "1.41", "1.12", "20.10.5+dfsg1-1+deb11u2"),

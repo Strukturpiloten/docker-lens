@@ -14,13 +14,24 @@ first causal stage/panic only; cleanup-unverified always fails.
 The unchanged nineteen-argument emitter independently validates both strict
 private proofs before output, requiring the complete ordered
 `('ClearCommand', 'ClearEntrypoint')` reader return. It adds only
-`command_clear_contract: command-clear-v1` and a fixed `command_clear_outcomes`
-observation marked `admission: unadmitted` with
-`outcome: all_four_process_controls_verified`. No hostname, argv, IDs, timestamps
-or private payloads are projected. CommandClear/EntrypointClear capabilities,
-raw shape maps, compiled catalogue selection and historical evidence remain
-unchanged. Calls 24–28 of the preserved recovery inventory remain pending; this
-source checkpoint does not complete #31 or qualify a native lane.
+`command_clear_contract: command-clear-v1`, identifying the unchanged private
+proof. [ADR 0036](decisions/0036-command-clear-native-source-projection.md) adds
+`command_clear_projection_contract: command-clear-native-source-v1`. Only under
+that discriminator, closed `command_clear_outcomes` identifies source admission
+`raw_source_only`, catalogue admission `unadmitted`, capability `CommandClear`,
+shapes `[ClearCommand]`, scope `explicit_exec_entrypoint_required`, and outcome
+`all_four_process_controls_verified`. Append exactly available CommandClear and
+its singleton to the complete baseline raw maps; EntrypointClear stays absent.
+The latter's case is a mandatory control, not a second grant. No hostname, argv,
+IDs, timestamps or private payloads are projected. Current sealed catalogue
+profiles still deny both clear capabilities; public intent/rendering is unchanged.
+
+Historical discriminator-absent `admission: unadmitted` keeps its observation-only
+meaning and cannot carry an injected raw grant. New raw-source metadata asserts
+neither catalogue authority nor completed independent review. Native26 run 40104150853,
+attempt 1 at 5fef54d supplies semantic prerequisites, not qualification of this
+changed emitter/provider-integrated head. Canonical calls 1–26 remain mandatory;
+PIDs27/nofile28 and milestone completion remain unresolved.
 
 Four ordered cases each require an independently authored Docker CLI oracle and
 a DockerLens-planned/rendered request applied only by the isolated native fixture:
@@ -38,6 +49,30 @@ does not claim the empty Cmd array causally differs from the omitted Cmd field
 when an explicit entrypoint already suppresses image CMD. Command clear with
 inherited/cleared entrypoint remains rejected by the existing intent contract.
 No empty-string Cmd substitution is introduced. Entrypoint clear is independent.
+Existing Exec argument semantics provide composition without a new scalar,
+executable lookup or shell rule. This singleton claims retained/accepted Cmd `[]`
+under the explicit Exec-entrypoint guard, not a new effect relative to omission.
+Case4 does not cover empty entrypoint with inherited image Cmd; EntrypointClear
+therefore remains withheld rather than narrowing its public intent contract.
+
+## Public projection validation
+
+`scripts/native_command_clear_projection.py` couples version, exact fields/types,
+scope/status and complete baseline-plus-singleton maps before output publication.
+Lane/identity context is independently bound by the existing caller/private
+reader; port outcomes come from the unchanged complete context-bound port reader.
+Only closed identity-v1/v2 and validated port contexts are supported, not arbitrary
+baseline maps or receipt-selected versions. Synthetic fully observed Debian port
+controls remain distinct from canonical expected-negative lanes. Tests compare
+independent full literal canonical maps on all four lanes.
+
+The additive disconnected raw subset in `native-evidence.schema.json` documents
+but does not alone validate acceptance. Reviewed-catalogue policy checks encountered
+family versions under its independently selected immutable cohort context; no
+current cohort selects the successor. Exact source/run/hash/file-set and
+raw-to-envelope equality checks remain mandatory. No historical bytes or sealed
+selection change. Final complete and fresh exact-candidate four-lane26 gates and
+independent review remain due at ADR 0019's trusted-harness/public-projection tier.
 
 ## Independent process oracle
 

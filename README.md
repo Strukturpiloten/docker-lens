@@ -16,8 +16,12 @@ lifecycle default/zero source producers as canonical invocations 20 and 21, then
 the [hostname source proof](docs/native-hostname-contract.md) as invocation 22 and
 [command/entrypoint-clear](docs/native-command-clear-contract.md) as invocation 23. The
 original nineteen, current fixture topology/diagnostics, pins, cleanup and
-maintained scoped AppArmor prerequisite remain mandatory. These are strict source-only
-observations, not raw capability or catalogue admission. The preserved 28-call
+maintained scoped AppArmor prerequisite remain mandatory. These remain source-only;
+[ADR 0036](docs/decisions/0036-command-clear-native-source-projection.md) adds only
+guarded CommandClear/[ClearCommand] to raw source maps, with versioned catalogue
+`unadmitted` status. EntrypointClear remains withheld and sealed catalogue profiles
+still deny both clear capabilities. Other observations grant no new raw capability.
+The preserved 28-call
 inventory remains pending reconciliation; twenty-three is not milestone completion.
 Historical evidence does not qualify this changed candidate.
 

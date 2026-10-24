@@ -3,6 +3,7 @@
 import hashlib
 import json
 import re
+import sys
 import unittest
 from copy import deepcopy
 from pathlib import Path
@@ -11,6 +12,8 @@ from test_native_evidence import SHAPES
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+from native_command_clear_projection import validate_command_clear_projection
 RUN = "https://github.com/Strukturpiloten/docker-lens/actions/runs/36451790131/attempts/1"
 CANDIDATE = "d51d7dbfda5ee6f8fefe92605afe8baea3dc504e"
 LANES = ("debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless")
@@ -558,6 +561,21 @@ def bind_cohorts(
             manifest = raw[record["native_manifest_sha256"]][1]
             identity = record["identity"]
             expected_admission = cohorts[cohort_key][lane][3]
+            command_family = any(type(key) is str and key.startswith("command_clear_") for key in manifest)
+            if command_family or "CommandClear" in manifest["capability_outcome"] or "CommandClear" in manifest["admitted_shapes"]:
+                # No selected immutable cohort admits the successor family. Do not
+                # let a receipt choose its own version, baseline or source authority.
+                if cohort_key != (STOP_SIGNAL_CANDIDATE, STOP_SIGNAL_RUN):
+                    raise ValueError("command clear projection has no selected cohort context")
+                expected_ports = [{"shape": shape, "outcome": "observed"} for shape in (
+                    "FixedIpv4HostPort", "EphemeralIpv4HostPort", "FixedIpv6HostPort", "EphemeralIpv6HostPort",
+                    "MultipleFixedPortBindings", "MultipleEphemeralPortBindings", "ExposedOnlyPort", "EphemeralHostPort")]
+                if lane.startswith("debian11-"):
+                    for entry in expected_ports[2:4]:
+                        entry.update(outcome="expected_negative", reason="nested_default_bridge_ipv6_runtime_binding_absent")
+                validate_command_clear_projection(
+                    manifest, expected_lane=lane, identity_version=2, port_outcomes=expected_ports,
+                    expected_projection_contract=None)
             if {"ContainerUser", "ContainerWorkdir"} & set(expected_admission):
                 if (manifest.get("identity_contract") != "container-identity-v1"
                         or manifest.get("identity_cases") != IDENTITY_CASES
@@ -658,6 +676,34 @@ def bind_stop_signal_source_provenance(metadata):
 
 
 class ReviewedCatalogTests(unittest.TestCase):
+    def test_new_command_clear_source_family_cannot_select_itself_into_historical_cohorts(self):
+        reviewed_original = hashed_json("reviewed")
+        native_original = hashed_json("native")
+        for lane in LANES:
+            for fault in ("new_marker_only", "legacy_raw_and_envelope_grant", "self_consistent_new_grant", "wrong_hash", "native26_source"):
+                reviewed, native = deepcopy(reviewed_original), deepcopy(native_original)
+                envelope = next(value for path, value in reviewed if path.stem == STOP_SIGNAL_REVIEWED[lane])
+                manifest = next(value for path, value in native if path.stem == STOP_SIGNAL_MANIFESTS[lane])
+                manifest.update(command_clear_contract="command-clear-v1", command_clear_outcomes={
+                    "admission": "unadmitted", "outcome": "all_four_process_controls_verified"})
+                if fault != "legacy_raw_and_envelope_grant":
+                    manifest["command_clear_projection_contract"] = "command-clear-native-source-v1"
+                    manifest["command_clear_outcomes"] = {
+                        "source_admission": "raw_source_only", "catalogue_admission": "unadmitted",
+                        "capability": "CommandClear", "shapes": ["ClearCommand"],
+                        "scope": "explicit_exec_entrypoint_required", "outcome": "all_four_process_controls_verified"}
+                if fault != "new_marker_only":
+                    manifest["capability_outcome"]["CommandClear"] = "available"
+                    manifest["admitted_shapes"]["CommandClear"] = ["ClearCommand"]
+                    envelope["capabilities"].append({"name": "CommandClear", "state": "available", "admitted_shapes": ["ClearCommand"]})
+                if fault == "wrong_hash":
+                    envelope["native_manifest_sha256"] = "0" * 64
+                elif fault == "native26_source":
+                    envelope["candidate_sha"] = manifest["candidate_sha"] = "5fef54d22b62b22304b963748fee45d5a18595c7"
+                    envelope["run_url"] = "https://github.com/Strukturpiloten/docker-lens/actions/runs/40104150853/attempts/1"
+                with self.subTest(lane=lane, fault=fault), self.assertRaises(ValueError):
+                    bind_cohorts(reviewed, native, COHORTS)
+
     def test_rust_record_tuples_pair_exact_lane_digest_and_file(self) -> None:
         source = (ROOT / "src/reviewed_catalog.rs").read_text(encoding="utf-8")
         section = source.split("const RECORDS:", 1)[1].split("pub(crate) fn records", 1)[0]

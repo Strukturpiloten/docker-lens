@@ -1,5 +1,33 @@
 # Verification
 
+## Guarded CommandClear source-projection candidate
+
+[ADR 0036](decisions/0036-command-clear-native-source-projection.md) adds only
+CommandClear/[ClearCommand] to complete existing raw maps after all four controls
+and the exact ordered private-reader return. Closed public version
+`command-clear-native-source-v1` separates `raw_source_only` from catalogue
+`unadmitted`, under the unchanged explicit Exec-entrypoint guard. EntrypointClear
+and adjacent families remain withheld; both clear capabilities still fail on
+sealed profiles. No private ABI, 19-argument emitter, 26-call order, native I/O,
+budget, cleanup, runtime or pin changes.
+
+Canonical controls compare independent literal full baseline-plus-singleton maps
+on all lanes, including Debian IPv6 negatives. Explicit identity-v1 and synthetic
+fully observed port contexts retain previous behavior. Executable validation
+rejects unknown/mixed versions, fields/types/status/scope, contradictory maps,
+partial/duplicate/wrong shapes and neighbors. Private proof/ordered-return controls
+require refusal before publication and no private-value leakage. Accepting policy
+rejects unselected new-family and legacy-grant injections; exact source/run/hash/
+file-set/raw-envelope equality remains mandatory. The disconnected raw subset
+does not change the reviewed-record root or replace accepting validation.
+
+Native26 run 40104150853/attempt 1 at 5fef54d supplies semantic prerequisites, not
+qualification of this changed projection/provider-integrated candidate. Original
+bytes stay unchanged. Final-edit complete and fresh exact-candidate four-lane26
+gates/review remain due; ADR 0019's trusted-harness/public-projection tier and
+ADR 0012's actual consumer obligations remain. No private-payload replay or
+application acceptance is claimed.
+
 ## Prepared nofile source, not canonical28
 
 The recovered [nofile contract](native-nofile-contract.md) has a registered
@@ -117,9 +145,10 @@ current selected prefix and pre-I/O Docker extra call/65,536-byte charge for eac
 of its two snapshots, within original limits. Invocation 23 is outside both owner
 token scopes and its strict inline twelve-fact reader always runs before the
 maintained profile finalization or optional emitter. Both reader consumers require the exact
-two-shape tuple. The emitter adds only a closed unadmitted command-clear outcome;
-capability/shape maps, catalogue, nineteen arguments and all current limits stay
-unchanged. No offline control establishes native effects or cleanup completion.
+two-shape tuple. That checkpoint's emitter added only an unadmitted outcome;
+ADR 0036 now adds the guarded raw-source singleton, not catalogue admission.
+The nineteen arguments and all current limits stay unchanged. No offline control
+establishes native effects or cleanup completion.
 
 The current minimum and pinned development compiler are Rust 1.98.1.
 `Cargo.toml` supplies the minimum for Clippy and `scripts/check-msrv.sh`;

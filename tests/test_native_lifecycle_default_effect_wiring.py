@@ -188,8 +188,8 @@ class DefaultEffectEvidenceTests(unittest.TestCase):
             self.assertEqual(record["lifecycle_outcomes"], {"admission": "unadmitted", "probes": [
                 "stop_timeout_effective", "health_start_interval_not_effective_on_selected_api" if lane.startswith("debian11-")
                 else "health_start_interval_effective"]})
-            self.assertEqual(len(record["capability_outcome"]), 30 if lane.startswith("debian11-") else 31)
-            self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 47 if lane.startswith("debian11-") else 49)
+            self.assertEqual(len(record["capability_outcome"]), 31 if lane.startswith("debian11-") else 32)
+            self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 48 if lane.startswith("debian11-") else 50)
             for capability in ("StopTimeout", "HealthStartInterval"):
                 self.assertNotIn(capability, record["capability_outcome"])
                 self.assertNotIn(capability, record["admitted_shapes"])

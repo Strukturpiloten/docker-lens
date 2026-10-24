@@ -147,6 +147,43 @@
     }
   },
   "$defs": {
+    "command_clear_native_source_outcomes": {
+      "description": "Raw source only under the explicit Exec-entrypoint guard; never catalogue admission or review completion.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_admission", "catalogue_admission", "capability", "shapes", "scope", "outcome"],
+      "properties": {
+        "source_admission": { "const": "raw_source_only" },
+        "catalogue_admission": { "const": "unadmitted" },
+        "capability": { "const": "CommandClear" },
+        "shapes": { "const": ["ClearCommand"] },
+        "scope": { "const": "explicit_exec_entrypoint_required" },
+        "outcome": { "const": "all_four_process_controls_verified" }
+      }
+    },
+    "command_clear_native_source_projection": {
+      "description": "Disconnected successor raw-manifest subset. The executable validator additionally binds the complete independently selected baseline maps and context. Historical unadmitted payloads keep their old meaning.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command_clear_contract", "command_clear_projection_contract", "command_clear_outcomes", "capability_outcome", "admitted_shapes"],
+      "properties": {
+        "command_clear_contract": { "const": "command-clear-v1" },
+        "command_clear_projection_contract": { "const": "command-clear-native-source-v1" },
+        "command_clear_outcomes": { "$ref": "#/$defs/command_clear_native_source_outcomes" },
+        "capability_outcome": {
+          "type": "object", "required": ["CommandClear"],
+          "properties": { "CommandClear": { "const": "available" } },
+          "additionalProperties": { "const": "available" },
+          "not": { "required": ["EntrypointClear"] }
+        },
+        "admitted_shapes": {
+          "type": "object", "required": ["CommandClear"],
+          "properties": { "CommandClear": { "const": ["ClearCommand"] } },
+          "additionalProperties": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+          "not": { "required": ["EntrypointClear"] }
+        }
+      }
+    },
     "external_network_probes": {
       "description": "Ordered public projection after complete private external-network proof; never sealed admission.",
       "type": "array",

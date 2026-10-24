@@ -248,8 +248,8 @@ class HostnameEvidenceTests(unittest.TestCase):
             self.assertEqual(record["hostname_outcomes"], {
                 "admission": "unadmitted", "outcome": "omitted_and_explicit_verified",
             })
-            self.assertEqual(len(record["capability_outcome"]), 30 if lane.startswith("debian11-") else 31)
-            self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 47 if lane.startswith("debian11-") else 49)
+            self.assertEqual(len(record["capability_outcome"]), 31 if lane.startswith("debian11-") else 32)
+            self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 48 if lane.startswith("debian11-") else 50)
             self.assertNotIn("ContainerHostname", record["capability_outcome"])
             self.assertNotIn("ContainerHostname", record["admitted_shapes"])
             for private in ("dl-host-", "dl-hostname-", "configured_hostname", "process_hostname",

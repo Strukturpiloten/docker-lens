@@ -28,6 +28,13 @@ barrier is superseded while its historical evidence keeps its original status.
 - [0019: Reviewed configured stop-signal cohort](0019-reviewed-stop-signal-cohort.md)
 - [0020: Observation-scoped cgroup and PIDs reports](0020-observation-scoped-cgroup-reports.md)
 - [0021: Unresolved rootless PIDs destination obligation](0021-rootless-pids-destination-obligation.md)
+- [0036: Guarded CommandClear raw-source projection](0036-command-clear-native-source-projection.md)
+
+Numbers 0022–0035 are reserved for preserved unpublished f406cb22 decisions,
+including 0035 Docker gated-entry custody; reservation adopts none of them.
+ADR 0036 versions only the current command-clear raw-source singleton. ADR 0019's
+compiled selection and ADR 0012's consumer gates remain; sealed profiles still
+deny both clear capabilities.
 
 ADRs 0020/0021 recover inert observation and destination-prerequisite contracts.
 They do not admit PIDs capabilities or authenticate delegation/enforcement.

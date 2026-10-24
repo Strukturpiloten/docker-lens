@@ -37,8 +37,8 @@ class SourceFamilyEvidenceTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(len(result.args) - 2, 19)
                     record = json.loads(path.read_text())
-                    self.assertEqual(len(record["capability_outcome"]), 30 if lane.startswith("debian11-") else 31)
-                    self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 47 if lane.startswith("debian11-") else 49)
+                    self.assertEqual(len(record["capability_outcome"]), 31 if lane.startswith("debian11-") else 32)
+                    self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 48 if lane.startswith("debian11-") else 50)
                     for family in FAMILIES:
                         self.assertEqual(record[family + "_contract"], family.replace("_", "-") + "-v1")
                         self.assertEqual(record[family + "_outcomes"]["admission"], "unadmitted")

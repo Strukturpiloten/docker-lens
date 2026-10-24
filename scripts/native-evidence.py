@@ -36,6 +36,9 @@ from native_hostname_proof import (
 from native_command_clear_proof import (
     CONTRACT as COMMAND_CLEAR_CONTRACT, FILENAME as COMMAND_CLEAR_FILENAME, read_command_clear_proof,
 )
+from native_command_clear_projection import (
+    PROJECTION_CONTRACT as COMMAND_CLEAR_PROJECTION_CONTRACT, validate_command_clear_projection,
+)
 from native_runtime_filesystem_proof import (
     CONTRACT as RUNTIME_FILESYSTEM_CONTRACT, FILENAME as RUNTIME_FILESYSTEM_FILENAME,
     read_runtime_filesystem_proof,
@@ -587,6 +590,9 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
     })
     proof_shapes["NetworkExternalInternalExpectation"] = external_network_probes
     proof_shapes["StopSignal"] = stop_signal_probes
+    # The full ordered reader tuple above covers all four controls, not two grants.
+    # Only the explicit-Exec-guarded complete CommandClear singleton is projected.
+    proof_shapes["CommandClear"] = ["ClearCommand"]
 
     record = {
         "schema_version": 1,
@@ -636,8 +642,11 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
             "admission": "unadmitted", "outcome": "omitted_and_explicit_verified",
         },
         "command_clear_contract": COMMAND_CLEAR_CONTRACT,
+        "command_clear_projection_contract": COMMAND_CLEAR_PROJECTION_CONTRACT,
         "command_clear_outcomes": {
-            "admission": "unadmitted", "outcome": "all_four_process_controls_verified",
+            "source_admission": "raw_source_only", "catalogue_admission": "unadmitted",
+            "capability": "CommandClear", "shapes": ["ClearCommand"],
+            "scope": "explicit_exec_entrypoint_required", "outcome": "all_four_process_controls_verified",
         },
         "shm_size_contract": SHM_SIZE_CONTRACT,
         "shm_size_outcomes": {
@@ -673,6 +682,9 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
     if parameterized_identity:
         record["identity_contract"] = IDENTITY_CONTRACT
         record["identity_cases"] = list(IDENTITY_CASES)
+    validate_command_clear_projection(
+        record, expected_lane=lane, identity_version=2 if parameterized_identity else 1,
+        port_outcomes=port_probes, expected_projection_contract=COMMAND_CLEAR_PROJECTION_CONTRACT)
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(record, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 

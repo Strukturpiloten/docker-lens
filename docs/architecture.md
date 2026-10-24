@@ -1,5 +1,20 @@
 # Architecture
 
+## Guarded CommandClear raw source, not catalogue admission
+
+[ADR 0036](decisions/0036-command-clear-native-source-projection.md) versions the
+command-clear public family as `command-clear-native-source-v1`. Only after the
+unchanged complete four-control proof/ordered reader return, append available
+CommandClear/[ClearCommand] to every existing raw group and require closed
+`raw_source_only` / catalogue `unadmitted` metadata with the explicit Exec-entrypoint
+guard. EntrypointClear remains only a control. An executable validator couples
+version/fields/scope and full baseline maps before publication; accepting catalogue
+policy rejects unselected family versions. Historical unadmitted payloads keep
+their old meaning. Sealed profiles still deny both clear capabilities. No public
+Rust/private ABI, 26-call order, native I/O or pin changes. Old native26 is a
+semantic prerequisite, not qualification of this changed emitter; complete and
+fresh exact-candidate four-lane26 gates/review remain required.
+
 The [nofile producer](native-nofile-contract.md) is separately registered as
 prepared test-only source. Its default-private-proof boundary remains16KiB;
 only the explicit nofile publisher/reader selects a bounded512KiB limit, with
@@ -62,8 +77,9 @@ The shared private Drop predicate preserves ordinary ownership when delegation
 is false. Current outer snapshots charge the selected backend before I/O under
 the existing timer/capture owner. Both unconditional inline validation and the
 nineteen-argument emitter independently require the complete two-shape private
-return. Only a closed unadmitted observation is projected; no raw map/catalogue
-or public API changes. This restores the first 23-call closure, not the full
+return. That recovery checkpoint emitted only an unadmitted observation; ADR 0036
+above now adds its guarded raw-source singleton, not catalogue/public API
+admission. This restores the first 23-call closure, not the full
 preserved 28-call inventory.
 
 Native test subprocesses share the canonical test-only
