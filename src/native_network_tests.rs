@@ -1639,10 +1639,9 @@ fn assess_inner_topology(
             ("host", Some("host")) | ("none", Some("null"))
         );
         if builtin {
-            if !network["IPAM"]["Config"]
-                .as_array()
-                .is_some_and(Vec::is_empty)
-            {
+            if !network["IPAM"].get("Config").is_some_and(|config| {
+                config.is_null() || config.as_array().is_some_and(Vec::is_empty)
+            }) {
                 return Err(InnerTopologyRefusal::BuiltinPools);
             }
             continue;
@@ -1800,7 +1799,7 @@ mod topology_tests {
                 2 => changed[0]["Id"] = changed[1]["Id"].clone(),
                 3 => changed[0]["Name"] = changed[1]["Name"].clone(),
                 4 => changed[11]["Driver"] = json!("bridge"),
-                5 => changed[12]["IPAM"]["Config"] = Value::Null,
+                5 => changed[12]["IPAM"]["Config"] = json!("invalid"),
                 6 => changed[0]["IPAM"]["Config"] = json!([]),
                 7 => changed[0]["IPAM"]["Driver"] = json!("other"),
                 _ => changed[0]["Scope"] = json!("swarm"),
@@ -1810,6 +1809,121 @@ mod topology_tests {
                 "case {case}"
             );
         }
+    }
+
+    #[test]
+    fn topology_both_builtin_configs_require_present_null_or_empty_array() {
+        let (networks, held, outer) = fixture();
+        for host_config in [Value::Null, json!([])] {
+            for none_config in [Value::Null, json!([])] {
+                let mut changed = networks.clone();
+                changed[11]["IPAM"]["Config"] = host_config.clone();
+                changed[12]["IPAM"]["Config"] = none_config;
+                assert!(assess_inner_topology(&changed, "test", &held, &outer).is_ok());
+                assert!(inner_topology_disjoint(&changed, "test", &held, &outer));
+            }
+        }
+        for index in [11, 12] {
+            let mut missing = networks.clone();
+            missing[index]["IPAM"]
+                .as_object_mut()
+                .unwrap()
+                .remove("Config");
+            assert!(
+                assess_inner_topology(&missing, "test", &held, &outer)
+                    == Err(InnerTopologyRefusal::BuiltinPools)
+            );
+            for config in [
+                json!([{}]),
+                json!([{"Subnet": "192.0.2.0/24"}]),
+                json!([{"Subnet": "fd00::/64"}]),
+                json!([null]),
+                json!("private-config-canary"),
+                json!(0),
+                json!(1.5),
+                json!(false),
+                json!(true),
+                json!({}),
+            ] {
+                let mut changed = networks.clone();
+                changed[index]["IPAM"]["Config"] = config;
+                assert!(
+                    assess_inner_topology(&changed, "test", &held, &outer)
+                        == Err(InnerTopologyRefusal::BuiltinPools)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn topology_builtin_null_does_not_relax_pairs_metadata_or_bridge_pools() {
+        let (networks, held, outer) = fixture();
+        for index in [11, 12] {
+            for (field, value, reason) in [
+                (
+                    "Name",
+                    json!("not-a-builtin"),
+                    InnerTopologyRefusal::BridgeMembership,
+                ),
+                (
+                    "Driver",
+                    json!("bridge"),
+                    InnerTopologyRefusal::BridgeMembership,
+                ),
+                ("Scope", json!("swarm"), InnerTopologyRefusal::Scope),
+                ("Id", json!("invalid"), InnerTopologyRefusal::NativeId),
+            ] {
+                let mut changed = networks.clone();
+                changed[index]["IPAM"]["Config"] = Value::Null;
+                changed[index][field] = value;
+                assert!(assess_inner_topology(&changed, "test", &held, &outer) == Err(reason));
+            }
+            let mut changed = networks.clone();
+            changed[index]["IPAM"]["Config"] = Value::Null;
+            changed[index]["IPAM"]["Driver"] = json!("other");
+            assert!(
+                assess_inner_topology(&changed, "test", &held, &outer)
+                    == Err(InnerTopologyRefusal::IpamDriver)
+            );
+            let mut changed = networks.clone();
+            changed[index]["IPAM"]["Config"] = Value::Null;
+            changed[index]["Driver"] = json!(if index == 11 { "null" } else { "host" });
+            assert!(
+                assess_inner_topology(&changed, "test", &held, &outer)
+                    == Err(InnerTopologyRefusal::BridgeMembership)
+            );
+        }
+        for index in 0..11 {
+            for config in [Value::Null, json!([]), json!([{}]), json!(false)] {
+                let mut changed = networks.clone();
+                changed[11]["IPAM"]["Config"] = Value::Null;
+                changed[12]["IPAM"]["Config"] = Value::Null;
+                changed[index]["IPAM"]["Config"] = config;
+                assert!(
+                    assess_inner_topology(&changed, "test", &held, &outer)
+                        == Err(InnerTopologyRefusal::BridgeIpam)
+                );
+            }
+            let mut changed = networks.clone();
+            changed[index]["IPAM"]
+                .as_object_mut()
+                .unwrap()
+                .remove("Config");
+            assert!(
+                assess_inner_topology(&changed, "test", &held, &outer)
+                    == Err(InnerTopologyRefusal::BridgeIpam)
+            );
+        }
+        // Earlier bridge failure still wins; a later builtin exception cannot
+        // mask actual overlap or change the original traversal order.
+        let mut changed = networks;
+        changed[0]["IPAM"]["Config"] = json!([{"Subnet": "10.253.253.0/24"}]);
+        changed[11]["IPAM"]["Config"] = Value::Null;
+        changed[12]["IPAM"]["Config"] = json!(false);
+        assert!(
+            assess_inner_topology(&changed, "test", &held, &outer)
+                == Err(InnerTopologyRefusal::Ipv4Overlap)
+        );
     }
 
     #[test]
@@ -1904,7 +2018,7 @@ mod topology_tests {
         binding[1]["Id"] = json!("e".repeat(64));
         binding[1]["IPAM"]["Config"] = Value::Null;
         check(&binding, &held, &outer, InnerTopologyRefusal::HeldBinding);
-        for pools in [Value::Null, json!([{}]), json!([{"Subnet": "fd00::/64"}])] {
+        for pools in [json!(false), json!([{}]), json!([{"Subnet": "fd00::/64"}])] {
             let mut changed = networks.clone();
             changed[11]["IPAM"]["Config"] = pools;
             check(&changed, &held, &outer, InnerTopologyRefusal::BuiltinPools);

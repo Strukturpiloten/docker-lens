@@ -1,5 +1,51 @@
 # Dependency and pin policy
 
+The test-only builtin no-pool Config correction is based on read-only Moby
+source review at tag `docker-v29.8.1`. Its annotated tag object is
+`b2d20c90a74af78b3f0f967db92292e4a603c03d`, peeled to commit
+`464cd50c3d9e92877d56940ea160de6fca7bea23`. The reference acquisition verified the
+tag and used `gh api repos/moby/moby/git/tags/b2d20c90a74af78b3f0f967db92292e4a603c03d`
+to read its commit target. These are source provenance records, not new software
+pins or evidence of the failed native Config value.
+
+| Versioned source reference | SHA-256 of reviewed bytes |
+| --- | --- |
+| [api/types/network/ipam.go](https://raw.githubusercontent.com/moby/moby/docker-v29.8.1/api/types/network/ipam.go) | `8b2451739fdb1c0eb84335e5c92d36069672cccdf9db0372e2911ea56c7e88c1` |
+| [api/types/network/network.go](https://raw.githubusercontent.com/moby/moby/docker-v29.8.1/api/types/network/network.go) | `35bdc4c30020bfec1e938e549d237c809f78d57508ba50b4a6a6fb8afea42dcd` |
+| [daemon/network.go](https://raw.githubusercontent.com/moby/moby/docker-v29.8.1/daemon/network.go) | `c76765bf29f1c52f199c88d09fa961dbafa6c1d5f972960f5cc10f928a30180a` |
+| [LICENSE](https://raw.githubusercontent.com/moby/moby/docker-v29.8.1/LICENSE) | `7c87873291f289713ac5df48b1f2010eb6963752bbd6b530416ab99fc37914a8` |
+
+The acquisition command was `curl --proto '=https' --tlsv1.2 --connect-timeout 10
+--max-time 30 --max-filesize <cap> --fail --silent --show-error <url> -o
+<private-file>`, using caps 65536 bytes for the two API files and LICENSE,
+262144 for daemon/network.go. Files remained in private task evidence; this
+change independently rechecked their SHA-256 values. The repository LICENSE is
+Apache-2.0. No source was copied, mechanically translated, executed or
+redistributed in DockerLens; the Rust schema decision and authored synthetic
+tests were implemented independently from the observed semantics.
+
+In that reference, `buildIPAMResources` at daemon/network.go:813 initializes
+a nil configuration slice and returns it without adding entries when neither
+family supplies pools; api/types/network/ipam.go:11 exposes Config without
+`omitempty`, and network.go:57 includes IPAM. A nil slice therefore has an
+explicit JSON-null representation, distinct from an empty array or an absent
+field. This establishes a legitimate no-pool serialization, not the shape,
+value, builtin or cause in failed campaign `40037061335`. Only the already
+validated host/host and none/null test-fixture exceptions admit present null;
+all bridge/IPAM validation, overlap checks and product capabilities are unchanged.
+
+Verified ownership/consumer no-change review: all five native-image version/digest
+pairs remain exclusively extracted from `scripts/native-conformance.sh` by the
+same regex manager, with `DockerLens native conformance images` grouping,
+manual review and automerge off. No software pin, dependency, extraction path,
+Cargo/lockfile, toolchain, Action or approval changes; no Renovate edit or new
+manager is needed. Check/native-validation/release-validation use the unchanged
+coordinator and wrapper. BoxFerry's outer-runtime closure and the other Lens and
+website consumers are unchanged; no rollout or consumer qualification is claimed.
+Historical failed campaigns and the unadmitted AppArmor boundary retain their
+status. Fresh complete/native gates and independent exact-candidate review are
+required after this edit.
+
 The inner-topology first-refusal diagnostic adds only a test-local closed Rust
 enum/static-byte projection and an exact failure-only sanitizer vocabulary.
 It adds no dependency, software/tool/Action/image pin, installation, query,

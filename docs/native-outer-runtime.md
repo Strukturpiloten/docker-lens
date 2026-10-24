@@ -116,7 +116,8 @@ The exact set is eleven retained bridges: default/source, the retained test-5
 target, test-6 backend/edge/external/oracle, and four current proof networks.
 Test 6 deliberately removes all three option controls and checks their absence;
 created totals cannot substitute for retained membership. Exactly canonical
-`host`/host and `none`/null builtins with empty IPAM are the only exceptions.
+`host`/host and `none`/null builtins with an explicitly present null or empty-array
+IPAM Config are the only exceptions. Missing Config is not an empty pool.
 Missing/unknown networks, duplicate IDs/names, wrong drivers, incomplete IPAM,
 IPv6-only bridges, overlap or unavailable budget fail before peers. Complete
 mixed IPv4/IPv6 passes. Source/current-four IDs are held-bound; earlier target
@@ -137,8 +138,9 @@ CLI-positive control and internal blocking probes. Their panic-time inner
 cleanup reported pass; the upstream-rootless experiment remains unadmitted.
 
 The existing inner-topology evaluation now carries a fixed, value-free
-`InnerTopologyRefusal` reason from its first rejected predicate. It preserves
-the original predicate order, exact acceptance, assertion and cleanup. Categories
+`InnerTopologyRefusal` reason from its first rejected predicate. The diagnostic
+alone preserves the original predicate order, acceptance, assertion and cleanup;
+the separate builtin schema correction below is explicit. Categories
 distinguish snapshot/set bounds, held roles/IDs, native identity/uniqueness,
 scope and IPAM driver, builtin empty pools, retained bridge membership/driver,
 held identity binding, complete bridge IPAM, actual IPv4 intersection and final
@@ -155,6 +157,28 @@ duplicate/conflicting, malformed and unrelated lines are suppressed. Success
 remains silent. The native process's original status and the wrapper's failure
 status are unchanged. There is no additional query, probe, native invocation,
 resource, retry, timer, session, allocation fallback or policy/pin change.
+
+Campaign `40037061335`, attempt 1, subsequently passed nineteen tests in each
+Debian lane. Both upstream lanes passed six tests and then reported the first
+closed refusal `builtin_pools` at the mandatory topology assertion. This selects
+the builtin-config predicate, not which builtin, Config shape or value failed.
+It proves neither overlap nor a connectivity, timing or AppArmor cause. These
+failed source-21 observations remain historical after the following edit.
+
+The versioned Moby serialization review establishes a separate schema fact:
+an IPAM configuration with no pool entries may serialize its Config as explicit
+JSON null. The [dependency policy](dependency-policy.md) records the exact
+reference bytes, version/tag/commit, acquisition command, license and no-copy
+boundary. The test-only guard therefore accepts present null as well as an
+empty array only after validating the exact host/host or none/null pair and
+the existing ID/name uniqueness, local scope and default IPAM driver. Missing
+Config, every nonempty array, scalar or object still refuses. All eleven bridges
+still require complete nonempty IPAM with IPv4 and retain whole-pool validation
+and every actual outer-pool intersection check. No other predicate, ordering,
+owner, query, deadline, native invocation or product capability changes. This
+source-supported correction does not attribute the failed campaign to null;
+fresh complete and exact-candidate native gates plus independent review remain
+required, and the upstream-rootless experiment remains unadmitted.
 
 Activation is DockerLens-native-conformance-specific. Shared observation/runtime
 imports and `id|name|run` wire behavior stay unchanged for existing BoxFerry

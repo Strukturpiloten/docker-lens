@@ -56,11 +56,31 @@ cleanup markers. Static checks retain original predicate order, one evaluation,
 static best-effort bytes and nineteen native invocations. Rust topology controls
 independently check first-refusal competing defects, schema versus actual
 overlap, mixed-family input, a second outer pool, containing `/0`, inside `/32`,
-adjacent/outside pools and failing-writer assertion/unwind preservation. No
-acceptance/schema, native query, timing, cleanup, AppArmor or pin is changed.
+adjacent/outside pools and failing-writer assertion/unwind preservation. The
+diagnostic itself changes no acceptance/schema, query, timing, cleanup, AppArmor
+or pin; the subsequent builtin-only correction is recorded separately below.
 These are synthetic checks, not native compatibility evidence or a diagnosis of
 the failed campaign; fresh exact-candidate gates and independent review remain
 necessary.
+
+Campaign `40037061335`, attempt 1, passed nineteen tests in both Debian lanes;
+both upstream lanes passed six before the first `builtin_pools` refusal. The
+closed reason identifies neither the builtin nor its Config shape/value and
+does not prove null, overlap, a connectivity failure or an AppArmor cause.
+Those source-21 results do not validate the subsequently changed source.
+
+The separately source-supported no-pool serialization correction accepts only
+an explicitly present null or empty-array Config for the already validated
+host/host and none/null builtins. Independent Rust cases cover all four null/[]
+permutations, missing versus null for both builtins, nonempty/scalar/object
+refusals, exact driver/name pairs, ID/scope/IPAM metadata and first-refusal
+ordering. Every retained bridge still rejects missing, null, empty or malformed
+IPAM, and actual overlap keeps its existing category. The Python predicate-order
+and scope controls recognize only this builtin exception; sanitizer privacy,
+failure status, cleanup and nineteen invocations are unchanged. The exact
+versioned source/license/provenance is in [dependency policy](dependency-policy.md).
+Synthetic controls and the reference review are not native compatibility
+evidence; fresh complete/native gates and independent review remain required.
 
 The [maintained allocation/topology contract](native-outer-runtime.md) adds a
 hosted-Docker-only outer reservation with mandatory bounded host preflight and

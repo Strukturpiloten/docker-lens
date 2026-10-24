@@ -116,8 +116,8 @@ class InnerTopologyDiagnosticTests(unittest.TestCase):
         self.assertNotIn(PREFIX, unselected.stderr)
 
     def test_original_predicates_and_short_circuit_order_are_retained(self):
-        # Original e40245d boolean predicates, in their evaluation order. Only
-        # splitting adjacent || operands into early returns is permitted here.
+        # Original e40245d predicate order, with one reviewed schema correction:
+        # exact builtins accept a present null or empty Config, never absence.
         original = (
             'networks.as_array()', 'retained_topology_names(run)',
             '!bounded_topology_json(&Value::Array(networks.clone()))',
@@ -131,7 +131,8 @@ class InnerTopologyDiagnosticTests(unittest.TestCase):
             '!ids.insert(id)', '!names.insert(name)', 'network["Scope"] != "local"',
             'network["IPAM"]["Driver"] != "default"',
             '(name, network["Driver"].as_str()), ("host", Some("host")) | ("none", Some("null"))',
-            '!network["IPAM"]["Config"].as_array().is_some_and(Vec::is_empty)',
+            '!network["IPAM"].get("Config").is_some_and(|config| {'
+            'config.is_null() || config.as_array().is_some_and(Vec::is_empty)})',
             '!expected.iter().any(|expected| expected == name)', 'network["Driver"] != "bridge"',
             'held_ids.iter().any(|(held_name, held_id)| held_name == name && held_id != id)',
             'topology_ipam(&network["IPAM"]["Config"])',
@@ -149,6 +150,22 @@ class InnerTopologyDiagnosticTests(unittest.TestCase):
         self.assertIn('assess_inner_topology(networks, run, held_ids, outer).is_ok()',
                       function("inner_topology_disjoint"))
         self.assertEqual(assessment.count(tokens('pool.overlaps(*other)')), 1)
+
+    def test_nullable_config_exception_is_only_inside_exact_builtin_branch(self):
+        assessment = function("assess_inner_topology")
+        builtin = assessment.split('if builtin {', 1)[1].split('continue;', 1)[0]
+        self.assertIn(tokens('!network["IPAM"].get("Config").is_some_and(|config| {'
+                             'config.is_null() || config.as_array().is_some_and(Vec::is_empty)})'),
+                      tokens(builtin))
+        self.assertIn('return Err(InnerTopologyRefusal::BuiltinPools);', builtin)
+        self.assertNotIn('network["IPAM"]["Config"]', builtin)
+        self.assertEqual(assessment.count('config.is_null()'), 1)
+        before, after = assessment.split('if builtin {', 1)
+        self.assertIn(tokens('matches!((name, network["Driver"].as_str()),'
+                             '("host", Some("host")) | ("none", Some("null")))'), tokens(before))
+        bridge = after.split('continue;', 1)[1]
+        self.assertIn('let Some(pools) = topology_ipam(&network["IPAM"]["Config"])', bridge)
+        self.assertNotIn('is_null()', bridge)
 
     def test_one_evaluation_best_effort_static_bytes_and_unchanged_owners(self):
         live = function("live_internal_network_blocks_external_egress")
