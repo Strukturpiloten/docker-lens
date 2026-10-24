@@ -112,8 +112,12 @@ Run `./scripts/format-lint.sh --fix`, then `./scripts/check-all.sh --check` afte
 The local gate covers formatting, Clippy, unit and documentation tests, policy tests, and docs.
 Main push and exact-candidate release validation separately require all four isolated native
 Engine lanes. PR workflows run the complete offline gate only; a green PR does not claim native
-evidence. The native harness uses bounded rootful outer Podman and rootful/rootless inner
-Docker; only genuine passing, independently reviewed lane evidence establishes compatibility.
+evidence. The native harness defaults locally to bounded rootful outer Podman;
+admitted hosted native jobs explicitly verify/select rootful local outer Docker.
+The four rootful/rootless inner Docker lanes are unchanged. Follow the canonical
+[test-only outer runtime seam](docs/native-outer-runtime.md); never probe local
+Docker or substitute its host daemon/socket for an owned inner fixture. Only
+genuine passing, independently reviewed lane evidence establishes compatibility.
 Never silently skip a required check or claim native compatibility from local tests or harness
 definitions alone.
 

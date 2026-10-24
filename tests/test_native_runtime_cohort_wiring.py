@@ -1,4 +1,4 @@
-"""Closed nineteen-test wiring and emitter controls; no real native calls."""
+"""Closed twenty-six-test recovery wiring; no real native calls."""
 
 import copy
 import json
@@ -41,6 +41,13 @@ EXPECTED_CALLS = [
     ("native_lifecycle", "live_lifecycle_matches_engine"),
     ("native_runtime_filesystem", "live_runtime_filesystem_matches_engine"),
     ("native_tmpfs_effect", "live_tmpfs_effects_match_engine"),
+    ("native_health_start_interval_boundary", "live_health_start_interval_boundary_matches_engine"),
+    ("native_lifecycle_default_effect", "live_lifecycle_default_effects_match_engine"),
+    ("native_hostname", "live_hostname_matches_engine"),
+    ("native_command_clear", "live_command_clear_matches_engine"),
+    ("native_shm_size", "live_shm_size_effects_match_engine"),
+    ("native_supplementary_groups", "live_supplementary_groups_match_engine"),
+    ("native_kernel_settings", "live_kernel_settings_match_engine"),
 ]
 
 
@@ -77,19 +84,19 @@ sys.exit(int(os.environ["STATUS"]))
             ended = time.time()
             return result, [json.loads(line) for line in calls.read_text().splitlines()], started, ended
 
-    def test_original_seventeen_plus_two_are_exact_and_owner_scope_is_only_three(self):
+    def test_original_nineteen_plus_recovered_two_have_exact_five_owner_scope(self):
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         calls = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source, re.M)
         self.assertEqual(calls, EXPECTED_CALLS)
         owner = source.index('(\n  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1\n')
         end = source.index('\n)\n', owner)
         scoped = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source[owner:end], re.M)
-        self.assertEqual(scoped, EXPECTED_CALLS[-3:])
-        self.assertEqual(source.count('export NATIVE_LIFECYCLE_CLEANUP_OWNER='), 1)
+        self.assertEqual(scoped, EXPECTED_CALLS[16:21])
+        self.assertEqual(source.count('export NATIVE_LIFECYCLE_CLEANUP_OWNER='), 5)
         self.assertLess(source.index('unset NATIVE_LIFECYCLE_CLEANUP_OWNER'), source.index('run-exact-native-test.sh" native_capture'))
         emission = source.index('python3 "$script_dir/native-evidence.py"')
         self.assertLess(end, emission)
-        protocol = source[emission:source.index('\nfi', emission)].replace('\\\n', ' ')
+        protocol = source[emission:source.index('\n  fi\n}', emission)].replace('\\\n', ' ')
         self.assertEqual(len(shlex.split(protocol)) - 2, 19)
         for prefix, filename in (("LIFECYCLE", "lifecycle-v1.json"),
                                  ("RUNTIME_FILESYSTEM", "runtime-filesystem-v1.json"),

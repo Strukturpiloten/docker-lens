@@ -482,10 +482,10 @@ impl IdentityRun {
             _ => panic!("closed Podman selector"),
         };
         let mut command = self.timer(cleanup, elevated);
+        command.args(crate::native_outer_test_command::prefix());
         command.args([
-            "podman",
             "exec",
-            &required("NATIVE_OUTER_CONTAINER"),
+            &required("NATIVE_OUTER_CONTAINER_ID"),
             "docker",
             "-H",
             "unix:///dockerlens-native/docker.sock",

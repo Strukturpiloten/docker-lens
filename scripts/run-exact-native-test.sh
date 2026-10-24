@@ -7,7 +7,7 @@ if [[ $# != 2 || ! $1 =~ ^[a-z_]+$ || ! $2 =~ ^[a-z_]+$ ]]; then
 fi
 target=$1
 test_name=$2
-if [[ $target == native_target || $target == native_volume || $target == native_network || $target == native_volume_label || $target == native_identity || $target == native_port || $target == native_health_metadata || $target == native_network_attachment || $target == native_bind_relabel || $target == native_external_network || $target == native_stop_signal || $target == native_lifecycle || $target == native_runtime_filesystem || $target == native_tmpfs_effect ]]; then
+if [[ $target == native_target || $target == native_volume || $target == native_network || $target == native_volume_label || $target == native_identity || $target == native_port || $target == native_health_metadata || $target == native_network_attachment || $target == native_bind_relabel || $target == native_external_network || $target == native_stop_signal || $target == native_lifecycle || $target == native_runtime_filesystem || $target == native_tmpfs_effect || $target == native_health_start_interval_boundary || $target == native_lifecycle_default_effect || $target == native_hostname || $target == native_command_clear || $target == native_shm_size || $target == native_supplementary_groups || $target == native_kernel_settings ]]; then
   # Native target tests need crate-private, test-only capability claims.
   # It is a library unit test; no public constructor is exposed for the harness.
   cargo_target=(--lib)
@@ -20,6 +20,20 @@ if [[ $target == native_target || $target == native_volume || $target == native_
     selected="native_health_metadata_tests::lifecycle::runtime_filesystem::$test_name"
   elif [[ $target == native_tmpfs_effect ]]; then
     selected="native_health_metadata_tests::lifecycle::tmpfs_effect::$test_name"
+  elif [[ $target == native_health_start_interval_boundary ]]; then
+    selected="native_health_metadata_tests::lifecycle::health_start_interval_boundary::$test_name"
+  elif [[ $target == native_lifecycle_default_effect ]]; then
+    selected="native_health_metadata_tests::lifecycle::default_effect::$test_name"
+  elif [[ $target == native_hostname ]]; then
+    selected="native_health_metadata_tests::lifecycle::hostname::$test_name"
+  elif [[ $target == native_command_clear ]]; then
+    selected="native_health_metadata_tests::command_clear::$test_name"
+  elif [[ $target == native_shm_size ]]; then
+    selected="native_health_metadata_tests::lifecycle::shm_size::$test_name"
+  elif [[ $target == native_supplementary_groups ]]; then
+    selected="native_health_metadata_tests::lifecycle::supplementary_groups::$test_name"
+  elif [[ $target == native_kernel_settings ]]; then
+    selected="native_health_metadata_tests::lifecycle::kernel_settings::$test_name"
   fi
 else
   cargo_target=(--test "$target")
@@ -42,7 +56,7 @@ run_status=0
 # Bind optional failure diagnostics to this invocation's existing hard timeout.
 # The native test reserves its own cleanup and reporting margin before this time.
 run_deadline_epoch=$(( $(date +%s) + 180 ))
-result=$(NATIVE_NETWORK_TEST_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_HEALTH_METADATA_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_STOP_SIGNAL_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_LIFECYCLE_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_RUNTIME_FILESYSTEM_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_TMPFS_EFFECT_DEADLINE_EPOCH=$run_deadline_epoch timeout 180 cargo test --locked "${cargo_target[@]}" -- --ignored --exact "$selected" 2>&1) || run_status=$?
+result=$(NATIVE_NETWORK_TEST_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_HEALTH_METADATA_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_STOP_SIGNAL_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_LIFECYCLE_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_RUNTIME_FILESYSTEM_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_TMPFS_EFFECT_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_HEALTH_START_INTERVAL_BOUNDARY_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_LIFECYCLE_DEFAULT_EFFECT_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_HOSTNAME_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_COMMAND_CLEAR_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_SHM_SIZE_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_SUPPLEMENTARY_GROUPS_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_KERNEL_SETTINGS_DEADLINE_EPOCH=$run_deadline_epoch timeout 180 cargo test --locked "${cargo_target[@]}" -- --ignored --exact "$selected" 2>&1) || run_status=$?
 # Only libtest's numeric summary is safe to print. Test and compiler output can
 # contain protected native values, socket payloads, or authored secrets.
 summary=$(grep -Eo '^test result: (ok|FAILED)\. [0-9]+ passed; [0-9]+ failed; [0-9]+ ignored; [0-9]+ measured; [0-9]+ filtered out;' <<<"$result" | tail -n 1 || true)
@@ -51,8 +65,16 @@ summary=$(grep -Eo '^test result: (ok|FAILED)\. [0-9]+ passed; [0-9]+ failed; [0
 marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: (capture_(input|decode|daemon|counts|image|ports|mounts|environment|command|privacy)|acquire_(input|oracle|socket|route|network|decode|mode|settings|replay)|target_(daemon_uid|mode|ports|mounts|settings|traffic(_probe)?|health_(create|start|wait)|shape_(network_attach|bind_rw|volume_ro(_created|_inspected|_started|_accessible|_write_(zero|one|other))?|restart)|uid_(probe_failed|shape|count)|rootless_uid_zero|rootful_uid_nonzero|start_(uidmap|userns|cgroup|network|mount|storage|runtime|permission|unclassified|timeout|exec))|read_only_(acquire|route|status|decode|daemon|mode|api))$' <<<"$result" | tail -n 1 || true)
 source_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: (source_(fixture_oracles|discovery|narrow_selectors|all_and_resource_roots|multiple_bindings|typed_oracle|network_membership)|membership_cleanup_unverified)$' <<<"$result" | tail -n 1 || true)
 if [[ -n $source_marker ]]; then marker=$source_marker; fi
-network_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: network_(identity|oracle(_((primary|alternate)_(create|inspect|assert)|external_(create|inspect)))?|render|apply|inspect|aliases|traffic|isolation(_(edge_fixture(_exited)?|edge_alias_missing|backend_alias_missing|edge_dns(_(output_limit|cli_(timeout|resolver|lookup|docker|exec|answer_present|unclassified)|answer_(missing|wrong_ip|malformed|inconsistent)|alias_missing|fixture_exited|readiness_exhausted))?|edge_http|local_dns|local_http|collision_dns|collision_http|foreign_route|cleanup_unverified))?|internal_(oracle|render|sidecar|peers|control|blocked|cleanup|topology)|external|negative|evidence)$' <<<"$result" | tail -n 1 || true)
+network_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: network_(identity|oracle(_((primary|alternate)_(create|inspect|assert)|external_(create|inspect)))?|render|apply|inspect|aliases|traffic|isolation(_(edge_fixture(_exited)?|edge_alias_missing|backend_alias_missing|edge_dns(_(output_limit|cli_(timeout|resolver|lookup|docker|exec|answer_present|unclassified)|answer_(missing|wrong_ip|malformed|inconsistent)|alias_missing|fixture_exited|readiness_exhausted))?|edge_http|local_dns|local_http|collision_dns|collision_http|foreign_route|cleanup_unverified))?|internal_(oracle|render|sidecar|peers|cli_control|control|blocked|cleanup|topology)|external|negative|evidence)$' <<<"$result" | tail -n 1 || true)
 if [[ -n $network_marker ]]; then marker=$network_marker; fi
+inner_topology_diag=
+if [[ $target == native_network && $test_name == live_internal_network_blocks_external_egress &&
+      $network_marker == 'DOCKERLENS_NATIVE_CHECK: network_internal_topology' ]]; then
+    inner_topology_diag=$(grep -Ex '^DOCKERLENS_NATIVE_INNER_TOPOLOGY: reason=(snapshot_array|snapshot_bounds|network_count|held_count|outer_pools|held_roles|held_ids|native_id|native_name|duplicate_id|duplicate_name|scope|ipam_driver|builtin_pools|bridge_membership|bridge_driver|held_binding|bridge_ipam|ipv4_overlap|retained_set)$' <<<"$result" || true)
+    # The original evaluation emits once. Duplicate/conflicting lines are not
+    # evidence; never concatenate them or project arbitrary native text.
+    if [[ $inner_topology_diag == *$'\n'* ]]; then inner_topology_diag=; fi
+fi
 volume_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: volume_(missing_precheck|seed|read_only|read_write|persistence|identity|cleanup_unverified)$' <<<"$result" | tail -n 1 || true)
 if [[ -n $volume_marker ]]; then marker=$volume_marker; fi
 dns_diag=$(grep -Eo '^DOCKERLENS_NATIVE_DNS_DIAG: peer=(ready|invalid|unavailable) resolver=(unrun|unavailable|embedded_(search|plain)|other_(search|plain)) default_a=(pass|fail|unrun) explicit_a=(pass|fail|unrun) dotted_a=(pass|fail|unrun) name_http=(pass|fail|unrun) ip_http=(pass|fail|unrun) edge_app=(pass|fail|unrun) cleanup=(pass|fail)$' <<<"$result" | tail -n 1 || true)
@@ -67,7 +89,7 @@ stop_signal_causal_marker=
 lifecycle_causal_marker=
 lifecycle_stage=
 lifecycle_handoff=
-if [[ $target == native_lifecycle || $target == native_runtime_filesystem || $target == native_tmpfs_effect ]]; then
+if [[ $target == native_lifecycle || $target == native_runtime_filesystem || $target == native_tmpfs_effect || $target == native_health_start_interval_boundary || $target == native_lifecycle_default_effect || $target == native_hostname || $target == native_shm_size || $target == native_supplementary_groups || $target == native_kernel_settings ]]; then
   if [[ $target == native_lifecycle ]]; then
     marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: lifecycle_(context|cleanup|cleanup_unverified|evidence)$' <<<"$result" | tail -n 1 || true)
     lifecycle_causal_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: lifecycle_(context|cleanup|cleanup_unverified|evidence)$' <<<"$result" | awk '/^DOCKERLENS_NATIVE_CHECK: lifecycle_cleanup(_unverified)?$/ { exit } { last=$0 } END { if (last != "") print last }' || true)
@@ -85,6 +107,27 @@ if [[ $target == native_runtime_filesystem ]]; then
   runtime_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: runtime_filesystem_(context|omitted|false|true|cleanup|evidence)$' <<<"$result" | tail -n 1 || true)
   if [[ -n $runtime_marker ]]; then marker=$runtime_marker; fi
   lifecycle_causal_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: runtime_filesystem_(context|omitted|false|true|cleanup|evidence)$' <<<"$result" | awk '/^DOCKERLENS_NATIVE_CHECK: runtime_filesystem_cleanup$/ { exit } { last=$0 } END { if (last != "") print last }' || true)
+fi
+if [[ $target == native_health_start_interval_boundary ]]; then
+  boundary_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: health_start_interval_boundary_(context|configuration|cleanup|evidence)$' <<<"$result" | tail -n 1 || true)
+  if [[ -n $boundary_marker ]]; then marker=$boundary_marker; fi
+  lifecycle_causal_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: health_start_interval_boundary_(context|configuration|cleanup|evidence)$' <<<"$result" | awk '/^DOCKERLENS_NATIVE_CHECK: health_start_interval_boundary_cleanup$/ { exit } { last=$0 } END { if (last != "") print last }' || true)
+fi
+if [[ $target == native_hostname ]]; then
+  hostname_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: hostname_(context|effects|cleanup|evidence)$' <<<"$result" | tail -n 1 || true)
+  if [[ -n $hostname_marker && $marker != 'DOCKERLENS_NATIVE_CHECK: lifecycle_cleanup_unverified' ]]; then marker=$hostname_marker; fi
+  lifecycle_causal_marker=$(awk '/^thread .* panicked at / || /^DOCKERLENS_NATIVE_CHECK: hostname_cleanup$/ { exit } /^DOCKERLENS_NATIVE_CHECK: hostname_(context|effects|evidence)$/ { last=$0 } END { if (last != "") print last }' <<<"$result")
+fi
+if [[ $target == native_shm_size ]]; then
+  shm_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: shm_size_(context|seed|effects|capture|cleanup|proof)$' <<<"$result" | tail -n 1 || true)
+  if [[ -n $shm_marker && $marker != 'DOCKERLENS_NATIVE_CHECK: lifecycle_cleanup_unverified' ]]; then marker=$shm_marker; fi
+  lifecycle_causal_marker=$(awk '/^thread .* panicked at / || /^DOCKERLENS_NATIVE_CHECK: shm_size_cleanup$/ { exit } /^DOCKERLENS_NATIVE_CHECK: shm_size_(context|seed|effects|capture|proof)$/ { last=$0 } END { if (last != "") print last }' <<<"$result")
+fi
+if [[ $target == native_supplementary_groups || $target == native_kernel_settings ]]; then
+  family=${target#native_}
+  family_marker=$(grep -Eo "^DOCKERLENS_NATIVE_CHECK: ${family}_(context|effects|capture|cleanup|proof)$" <<<"$result" | tail -n 1 || true)
+  if [[ -n $family_marker && $marker != 'DOCKERLENS_NATIVE_CHECK: lifecycle_cleanup_unverified' ]]; then marker=$family_marker; fi
+  lifecycle_causal_marker=$(awk -v family="$family" '/^thread .* panicked at / { exit } $0 == "DOCKERLENS_NATIVE_CHECK: " family "_cleanup" { exit } $0 ~ "^DOCKERLENS_NATIVE_CHECK: " family "_(context|effects|capture|proof)$" { last=$0 } END { if (last != "") print last }' <<<"$result")
 fi
 stop_signal_stage=
 stop_signal_lifecycle=
@@ -170,17 +213,43 @@ error_category=$(grep -Eo '^DOCKERLENS_NATIVE_ERROR: (endpoint|cancelled|deadlin
 selection_error=$(grep -Eo '^DOCKERLENS_NATIVE_ERROR: selection$' <<<"$result" | tail -n 1 || true)
 if [[ -n $selection_error ]]; then error_category=$selection_error; fi
 network_cli_diag=$(grep -Eo '^DOCKERLENS_NATIVE_NETWORK_CLI_DIAG: exit=(timeout|other) category=(bridge_filter|icc_configuration|firewall_disabled|firewall|permission|address_pool|invalid_label|invalid_option|unknown)$' <<<"$result" | tail -n 1 || true)
+wget_diag=$(grep -Eo '^DOCKERLENS_NATIVE_WGET_DIAG: category=(connection_refused|no_route|timeout|http_error|unknown)$' <<<"$result" | tail -n 1 || true)
+control_subnet_diag=$(grep -Eo '^DOCKERLENS_NATIVE_CONTROL_SUBNET_DIAG: sidecar_on_control_subnet=(true|false|unknown)$' <<<"$result" | tail -n 1 || true)
+internal_subnet_diag=$(grep -Eo '^(DOCKERLENS_NATIVE_INTERNAL_SUBNET_DIAG: sidecar_on_internal_subnet=(true|false|unknown)|DOCKERLENS_NATIVE_FIXTURE_SUBNET_DIAG: sidecar_on_fixture_subnet=((true|false)|unknown reason=unavailable))$' <<<"$result" | tail -n 1 || true)
+default_bridge_subnet_diag=$(grep -Eo '^DOCKERLENS_NATIVE_DEFAULT_BRIDGE_SUBNET_DIAG: sidecar_on_default_bridge_subnet=((true|false)|unknown reason=(unavailable|budget_exhausted))$' <<<"$result" | tail -n 1 || true)
 internal_cleanup=$(grep -Eo '^DOCKERLENS_NATIVE_CLEANUP: internal_proof=(pass|fail)$' <<<"$result" | tail -n 1 || true)
 # A panic's selected test source and numeric location identify an assertion
 # without disclosing its message, compared values, or an absolute build path.
 panic_site=
+if [[ $target == native_command_clear ]]; then
+  command_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: command_clear_(context|derive|cleanup|cleanup_unverified|evidence)$' <<<"$result" | tail -n 1 || true)
+  if [[ -n $command_marker ]]; then marker=$command_marker; fi
+  lifecycle_causal_marker=$(awk '/^thread .* panicked at / || /^DOCKERLENS_NATIVE_CHECK: command_clear_cleanup(_unverified)?$/ { exit } /^DOCKERLENS_NATIVE_CHECK: command_clear_(context|derive|evidence)$/ { last=$0 } END { if (last != "") print last }' <<<"$result")
+  lifecycle_stage=$(awk '/^thread .* panicked at / || /^DOCKERLENS_NATIVE_CHECK: command_clear_cleanup(_unverified)?$/ { exit } /^DOCKERLENS_NATIVE_COMMAND_CLEAR_STAGE: case=(image_defaults|entrypoint_inherit|command_clear|entrypoint_clear) role=(oracle|rendered) stage=(create|effect)$/ { last=$0 } END { if (last != "") print last }' <<<"$result")
+  if grep -Eq '^DOCKERLENS_NATIVE_CHECK: command_clear_cleanup_unverified$' <<<"$result" ||
+      grep -Fxq 'DOCKERLENS_NATIVE_CHECK: lifecycle_cleanup_unverified' <<<"$result" ||
+      grep -Fxq 'DOCKERLENS_NATIVE_LIFECYCLE_CLEANUP: owner=native_conformance_outer_v1 scope=outer_container_and_data_volume state=required' <<<"$result"; then
+    if (( run_status == 0 )); then run_status=1; fi
+  fi
+fi
 case $target in
-  native_lifecycle | native_runtime_filesystem | native_tmpfs_effect)
+  native_command_clear)
+    panic_site=$(awk '/^thread .* panicked at / { print; exit }' <<<"$result" | sed -nE \
+      "s/^thread '${selected}'( \\([0-9]{1,10}\\))? panicked at src\\/(native_command_clear_tests|native_health_metadata_tests)\\.rs:([1-9][0-9]{0,5}):([1-9][0-9]{0,3}):$/DOCKERLENS_NATIVE_PANIC: source=\\2 line=\\3 column=\\4/p")
+    if [[ -z $panic_site ]]; then panic_site='DOCKERLENS_NATIVE_PANIC: source=native_command_clear_tests location=unavailable'; fi
+    ;;
+  native_lifecycle | native_runtime_filesystem | native_tmpfs_effect | native_health_start_interval_boundary | native_lifecycle_default_effect | native_hostname | native_shm_size | native_supplementary_groups | native_kernel_settings)
     # The first panic is primary even when later bounded cleanup also fails.
     # Never project arbitrary panic payloads, paths, native IDs or timestamps.
     lifecycle_source=native_lifecycle_tests
     if [[ $target == native_runtime_filesystem ]]; then lifecycle_source=native_runtime_filesystem_tests; fi
     if [[ $target == native_tmpfs_effect ]]; then lifecycle_source=native_tmpfs_effect_tests; fi
+    if [[ $target == native_health_start_interval_boundary ]]; then lifecycle_source=native_health_start_interval_boundary_tests; fi
+    if [[ $target == native_lifecycle_default_effect ]]; then lifecycle_source=native_lifecycle_default_effect_tests; fi
+    if [[ $target == native_hostname ]]; then lifecycle_source=native_hostname_tests; fi
+    if [[ $target == native_shm_size ]]; then lifecycle_source=native_shm_size_tests; fi
+    if [[ $target == native_supplementary_groups ]]; then lifecycle_source=native_supplementary_groups_tests; fi
+    if [[ $target == native_kernel_settings ]]; then lifecycle_source=native_kernel_settings_tests; fi
     panic_site=$(awk '/^thread .* panicked at / { print; exit }' <<<"$result" | sed -nE \
       "s/^thread '${selected}'( \([0-9]{1,10}\))? panicked at src\/(${lifecycle_source}|native_lifecycle_tests|native_health_metadata_tests)\.rs:([1-9][0-9]{0,5}):([1-9][0-9]{0,3}):$/DOCKERLENS_NATIVE_PANIC: source=\2 line=\3 column=\4/p")
     if [[ -z $panic_site ]]; then panic_site="DOCKERLENS_NATIVE_PANIC: source=$lifecycle_source location=unavailable"; fi
@@ -261,7 +330,12 @@ if (( run_status != 0 )); then
   if [[ -n $reason_marker ]]; then echo "$reason_marker" >&2; fi
   if [[ -n $error_category ]]; then echo "$error_category" >&2; fi
   if [[ -n $network_cli_diag ]]; then echo "$network_cli_diag" >&2; fi
+  if [[ -n $wget_diag ]]; then echo "$wget_diag" >&2; fi
+  if [[ -n $control_subnet_diag ]]; then echo "$control_subnet_diag" >&2; fi
+  if [[ -n $internal_subnet_diag ]]; then echo "$internal_subnet_diag" >&2; fi
+  if [[ -n $default_bridge_subnet_diag ]]; then echo "$default_bridge_subnet_diag" >&2; fi
   if [[ -n $internal_cleanup ]]; then echo "$internal_cleanup" >&2; fi
+    if [[ -n $inner_topology_diag ]]; then echo "$inner_topology_diag" >&2; fi
   if [[ -n $panic_site ]]; then echo "$panic_site" >&2; fi
   if [[ -n $summary ]]; then
     echo "$summary" >&2

@@ -8,6 +8,16 @@ import stat
 import sys
 from pathlib import Path
 
+from native_source_accounting import outer_snapshot_cost
+from native_shm_size_proof import (
+    CONTRACT as SHM_SIZE_CONTRACT, FILENAME as SHM_SIZE_FILENAME, read_shm_size_proof,
+)
+from native_supplementary_groups_proof import (
+    CONTRACT as SUPPLEMENTARY_GROUPS_CONTRACT, FILENAME as SUPPLEMENTARY_GROUPS_FILENAME, read_supplementary_groups_proof,
+)
+from native_kernel_settings_proof import (
+    CONTRACT as KERNEL_SETTINGS_CONTRACT, FILENAME as KERNEL_SETTINGS_FILENAME, read_kernel_settings_proof,
+)
 from native_identity_proof import CASES as IDENTITY_CASES, CONTRACT as IDENTITY_CONTRACT, validate_identity_v2
 from native_health_metadata_proof import CONTRACT as HEALTH_METADATA_CONTRACT, read_health_metadata_proof
 from native_stop_signal_proof import (
@@ -16,6 +26,16 @@ from native_stop_signal_proof import (
 from native_lifecycle_proof import (
     CONTRACT as LIFECYCLE_CONTRACT, FILENAME as LIFECYCLE_FILENAME, read_lifecycle_proof,
 )
+from native_lifecycle_default_effect_proof import (
+    CONTRACT as LIFECYCLE_DEFAULT_EFFECT_CONTRACT, FILENAME as LIFECYCLE_DEFAULT_EFFECT_FILENAME,
+    read_lifecycle_default_effect_proof,
+)
+from native_hostname_proof import (
+    CONTRACT as HOSTNAME_CONTRACT, FILENAME as HOSTNAME_FILENAME, read_hostname_proof,
+)
+from native_command_clear_proof import (
+    CONTRACT as COMMAND_CLEAR_CONTRACT, FILENAME as COMMAND_CLEAR_FILENAME, read_command_clear_proof,
+)
 from native_runtime_filesystem_proof import (
     CONTRACT as RUNTIME_FILESYSTEM_CONTRACT, FILENAME as RUNTIME_FILESYSTEM_FILENAME,
     read_runtime_filesystem_proof,
@@ -23,6 +43,11 @@ from native_runtime_filesystem_proof import (
 from native_tmpfs_effect_proof import (
     CONTRACT as TMPFS_EFFECT_CONTRACT, FILENAME as TMPFS_EFFECT_FILENAME,
     read_proof as read_tmpfs_effect_proof, validate as validate_tmpfs_effect_proof,
+)
+from native_health_start_interval_boundary_proof import (
+    CONTRACT as HEALTH_START_INTERVAL_BOUNDARY_CONTRACT,
+    FILENAME as HEALTH_START_INTERVAL_BOUNDARY_FILENAME,
+    read_health_start_interval_boundary_proof,
 )
 from native_network_attachment_proof import CONTRACT as NETWORK_ATTACHMENT_CONTRACT, read_network_attachment_proof
 from native_bind_relabel_proof import CONTRACT as BIND_RELABEL_CONTRACT, read_bind_relabel_proof
@@ -503,6 +528,24 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         capture_dir / RUNTIME_FILESYSTEM_FILENAME, capture_dir, external_context)
     tmpfs_effect = validate_tmpfs_effect_proof(
         read_tmpfs_effect_proof(capture_dir / TMPFS_EFFECT_FILENAME), external_context)
+    health_boundary = read_health_start_interval_boundary_proof(
+        capture_dir / HEALTH_START_INTERVAL_BOUNDARY_FILENAME, capture_dir, external_context)
+    lifecycle_default_effect_outcomes = list(read_lifecycle_default_effect_proof(
+        capture_dir / LIFECYCLE_DEFAULT_EFFECT_FILENAME, capture_dir, external_context))
+    read_hostname_proof(capture_dir / HOSTNAME_FILENAME, capture_dir, external_context)
+    if read_command_clear_proof(
+            capture_dir / COMMAND_CLEAR_FILENAME, capture_dir, external_context) != ("ClearCommand", "ClearEntrypoint"):
+        raise ValueError("invalid private command clear proof")
+
+    # Separately bound canonical selection, never inferred from private proof data.
+    outer_backend = os.environ.get("NATIVE_OUTER_ENGINE")
+    outer_snapshot_cost(outer_backend)
+    read_shm_size_proof(
+        capture_dir / SHM_SIZE_FILENAME, capture_dir, external_context, outer_backend=outer_backend)
+    read_supplementary_groups_proof(
+        capture_dir / SUPPLEMENTARY_GROUPS_FILENAME, capture_dir, external_context, outer_backend=outer_backend)
+    read_kernel_settings_proof(
+        capture_dir / KERNEL_SETTINGS_FILENAME, capture_dir, external_context, outer_backend=outer_backend)
 
     # Only these closed mappings follow the complete, validated native proof
     # files above. They extend raw lane evidence, never the reviewed catalogue.
@@ -584,6 +627,33 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         # capability nor shape enters capability_outcome/admitted_shapes.
         "lifecycle_contract": LIFECYCLE_CONTRACT,
         "lifecycle_outcomes": {"admission": "unadmitted", "probes": lifecycle_outcomes},
+        "lifecycle_default_effect_contract": LIFECYCLE_DEFAULT_EFFECT_CONTRACT,
+        "lifecycle_default_effect_outcomes": {
+            "admission": "unadmitted", "probes": lifecycle_default_effect_outcomes,
+        },
+        "hostname_contract": HOSTNAME_CONTRACT,
+        "hostname_outcomes": {
+            "admission": "unadmitted", "outcome": "omitted_and_explicit_verified",
+        },
+        "command_clear_contract": COMMAND_CLEAR_CONTRACT,
+        "command_clear_outcomes": {
+            "admission": "unadmitted", "outcome": "all_four_process_controls_verified",
+        },
+        "shm_size_contract": SHM_SIZE_CONTRACT,
+        "shm_size_outcomes": {
+            "admission": "unadmitted", "scope": "explicit_1MiB_2MiB_with_observed_omission_only",
+            "outcome": "tmpfs_effect_and_ipc_isolation_verified",
+        },
+        "supplementary_groups_contract": SUPPLEMENTARY_GROUPS_CONTRACT,
+        "supplementary_groups_outcomes": {
+            "admission": "unadmitted", "scope": "numeric_nonroot_omitted_one_pair_dac_only",
+            "outcome": "kernel_groups_and_dac_verified",
+        },
+        "kernel_settings_contract": KERNEL_SETTINGS_CONTRACT,
+        "kernel_settings_outcomes": {
+            "admission": "unadmitted", "scope": "diagonal_omitted_false0_true1_only",
+            "outcome": "pid1_and_bound_child_kernel_effects_verified",
+        },
         "runtime_filesystem_contract": RUNTIME_FILESYSTEM_CONTRACT,
         "runtime_filesystem_outcomes": {
             "admission": "unadmitted", "init_effect_scope": "pid1_indirection_only",
@@ -593,6 +663,11 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         "tmpfs_effect_contract": TMPFS_EFFECT_CONTRACT,
         "tmpfs_effect_outcomes": {
             "admission": "unadmitted", "coverage": tmpfs_effect["coverage"],
+        },
+        "health_start_interval_boundary_contract": HEALTH_START_INTERVAL_BOUNDARY_CONTRACT,
+        "health_start_interval_boundary_outcomes": {
+            "admission": "unadmitted", "scope": "created_configuration_only",
+            "probes": health_boundary["outcomes"],
         },
     }
     if parameterized_identity:

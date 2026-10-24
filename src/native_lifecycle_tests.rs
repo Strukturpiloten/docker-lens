@@ -2,11 +2,116 @@
 
 use super::*;
 
+#[path = "native_lifecycle_default_effect_tests.rs"]
+mod default_effect;
+
 #[path = "native_runtime_filesystem_tests.rs"]
 mod runtime_filesystem;
 
 #[path = "native_tmpfs_effect_tests.rs"]
 mod tmpfs_effect;
+
+#[path = "native_health_start_interval_boundary_tests.rs"]
+mod health_start_interval_boundary;
+
+#[path = "native_hostname_tests.rs"]
+mod hostname;
+#[path = "native_kernel_settings_tests.rs"]
+mod kernel_settings;
+#[path = "native_shm_size_tests.rs"]
+mod shm_size;
+#[path = "native_supplementary_groups_tests.rs"]
+mod supplementary_groups;
+// Prepared only: canonical invocation 28 must remain behind unresolved PIDs27.
+#[path = "native_nofile_tests.rs"]
+mod nofile;
+
+// Only new source families require this strict, separately supplied selector.
+// Actual snapshot charges remain owned by the existing shared I/O helper.
+#[derive(Clone, Copy)]
+enum SourceOuterBackend {
+    Podman,
+    Docker,
+}
+
+impl SourceOuterBackend {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "podman" => Some(Self::Podman),
+            "docker" => Some(Self::Docker),
+            _ => None,
+        }
+    }
+
+    fn snapshot_extra_calls(self) -> usize {
+        match self {
+            Self::Podman => 0,
+            Self::Docker => 1,
+        }
+    }
+
+    fn snapshot_extra_bytes(self) -> usize {
+        match self {
+            Self::Podman => 0,
+            Self::Docker => 65_536,
+        }
+    }
+
+    // The initial snapshot has already been charged. Only its pending peer is
+    // added here, alongside the unchanged two/three ordinary read envelopes.
+    fn final_snapshot_room(self, calls: usize, bytes: usize, ordinary_calls: usize) -> bool {
+        matches!(ordinary_calls, 2 | 3)
+            && calls
+                .checked_add(ordinary_calls + self.snapshot_extra_calls())
+                .is_some_and(|total| total <= MAX_CALLS - CLEANUP_CALLS)
+            && bytes
+                .checked_add(ordinary_calls * (65_550 + 8192) + self.snapshot_extra_bytes())
+                .is_some_and(|total| total <= MAX_BYTES - CLEANUP_BYTES)
+    }
+}
+
+fn source_outer_backend() -> SourceOuterBackend {
+    SourceOuterBackend::parse(&required("NATIVE_OUTER_ENGINE"))
+        .unwrap_or_else(|| panic!("closed source accounting backend"))
+}
+
+#[test]
+fn source_backend_accounting_is_closed_and_does_not_charge_io() {
+    let podman = SourceOuterBackend::parse("podman").unwrap();
+    let docker = SourceOuterBackend::parse("docker").unwrap();
+    assert_eq!(
+        (podman.snapshot_extra_calls(), podman.snapshot_extra_bytes()),
+        (0, 0)
+    );
+    assert_eq!(
+        (docker.snapshot_extra_calls(), docker.snapshot_extra_bytes()),
+        (1, 65_536)
+    );
+    for value in ["", "Docker", "podman ", "docker\n", "unknown", "rootless"] {
+        assert!(SourceOuterBackend::parse(value).is_none());
+    }
+}
+
+#[test]
+fn source_pending_final_snapshot_reserves_one_backend_extra_with_checked_boundaries() {
+    // Independent literal capacities: 300 ordinary calls and 2 MiB ordinary
+    // bytes. These counters already include the initial snapshot and batch.
+    for (backend, normal_calls, calls, bytes) in [
+        (SourceOuterBackend::Podman, 2, 298, 1_949_668),
+        (SourceOuterBackend::Docker, 2, 297, 1_884_132),
+        (SourceOuterBackend::Podman, 3, 297, 1_875_926),
+        (SourceOuterBackend::Docker, 3, 296, 1_810_390),
+    ] {
+        assert!(backend.final_snapshot_room(calls, bytes, normal_calls));
+        assert!(!backend.final_snapshot_room(calls + 1, bytes, normal_calls));
+        assert!(!backend.final_snapshot_room(calls, bytes + 1, normal_calls));
+        assert!(!backend.final_snapshot_room(usize::MAX, bytes, normal_calls));
+        assert!(!backend.final_snapshot_room(calls, usize::MAX, normal_calls));
+    }
+    for normal_calls in [0, 1, 4, usize::MAX] {
+        assert!(!SourceOuterBackend::Docker.final_snapshot_room(0, 0, normal_calls));
+    }
+}
 
 const CONTRACT: &str = "lifecycle-v1";
 const FILENAME: &str = "lifecycle-v1.json";
@@ -124,8 +229,10 @@ fn outer_context(run: &HealthRun) -> Value {
         "1" => true,
         _ => panic!("closed privilege selector"),
     };
+    run.charge_outer_snapshot(false);
     let mut command = run.timer(false, elevated);
-    command.args(["podman", "inspect", "--format", "{{json .}}", &id]);
+    command.args(crate::native_outer_test_command::prefix());
+    command.args(["inspect", "--format", "{{json .}}", &id]);
     let value: Value = serde_json::from_slice(&run.capture(&mut command, None, false))
         .unwrap_or_else(|_| panic!("private outer JSON"));
     let mounts = value["Mounts"]

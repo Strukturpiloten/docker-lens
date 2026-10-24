@@ -2,6 +2,52 @@
 
 ## Unreleased
 
+- Prepare the preserved nofile producer, strict reader and custody controls as
+  registered test-only source. Keep default private proofs at16KiB and allow
+  only the explicit bounded nofile path up to512KiB. Do not invoke canonical28
+  before unresolved PIDs27, emit a public nofile result or admit a capability.
+
+- Recover preserved ShmSize, numeric supplementary-group DAC and diagonal
+  kernel-setting proofs as mandatory calls 24–26 with separate owner scopes,
+  strict post-call/emitter readers and selected-backend accounting. Preserve
+  existing first 23 calls, #125 API, maintained profile policy and original
+  resource/deadline/cleanup bounds. Add only closed unadmitted observations;
+  PIDs/nofile, fresh native qualification and milestone completion remain due.
+
+- Recover observation-scoped PIDs/cgroup reports and the inert finite-rootless-PIDs
+  destination obligation. Complete artifacts retain schema-4 prerequisites;
+  pure destination assessment remains delegation/enforcement-unverified.
+  Preserve existing capability gates, request bytes and schema 1/2/3 output when
+  the new obligation is absent. No native or catalogue admission is implied.
+
+- Maintain the scoped per-job GitHub-runner AppArmor userns profile for the owned
+  outer-Docker upstream-rootless fixture in the three existing native workflows.
+  Require exact task label/custody and proven profile removal after the complete
+  native sequence before ordinary evidence and success; failures and cancellation
+  remain failures. Preserve local-host policy, other lanes, budgets and historical
+  experimental evidence. Fresh candidate validation remains required; no
+  cgroup/PIDs authority, capability admission or release is claimed.
+
+- Recover command/entrypoint-clear as mandatory invocation 23 after hostname's
+  strict reader, outside both lifecycle cleanup-token scopes. Retain nonempty
+  image defaults, four paired process effects and dedicated once-only cleanup;
+  reuse selected-backend snapshot charging and original limits. Require the
+  complete private proof in the harness and emitter, projecting only a closed
+  unadmitted observation. No raw capability, catalogue or product API changes;
+  calls 24–28 and fresh qualification remain pending.
+- Recover the committed hostname producer and strict private reader as mandatory
+  invocation 22, with independent harness/emitter validation and a separate
+  one-child cleanup-owner scope. Preserve all first 21 requirements, budgets,
+  backend accounting and experimental non-acceptance. Only a closed unadmitted
+  observation is emitted; no hostname capability, raw shape-map or catalogue
+  admission is added. Calls 24–28 and fresh qualification remain pending.
+- Recover the preserved health-interval configuration boundary and lifecycle
+  default/zero effects as mandatory calls 20 and 21, with strict private proof
+  validation and closed unadmitted observations. Preserve the original nineteen,
+  current topology/diagnostics/pins/cleanup and experimental non-acceptance.
+  The full preserved 28-call inventory and exact-candidate qualification remain
+  pending; this stage adds no raw capability or catalogue admission.
+
 - Raise the minimum supported Rust version from 1.85.0 to 1.98.1, matching the
   pinned development toolchain. Consumers must upgrade Rust before building.
 - Select ADR 0019's authenticated configured stop-signal source cohort for

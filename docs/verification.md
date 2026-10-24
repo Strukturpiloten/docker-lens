@@ -1,5 +1,126 @@
 # Verification
 
+## Prepared nofile source, not canonical28
+
+The recovered [nofile contract](native-nofile-contract.md) has a registered
+ignored producer and pure custody/accounting controls, but no canonical wrapper
+invocation, mandatory emitter reader or public observation. The current native
+coordinator still requires26 calls. Never use this source preparation to run28
+around unresolved strict PIDs27. Default private-proof bounds remain16KiB; the
+explicit nofile publisher/reader alone may select at most512KiB, independently
+retaining the64KiB metadata bound, exclusive publication, stable no-follow reads
+and held-directory custody. Both source accounting and byte-boundary controls
+require final integrated Rust/full gates; they are not native effect evidence.
+
+## Current source-only calls 24–26 recovery
+
+The current mandatory source sequence has 26 exact invocations. Preserved
+`shm-size-v1`, `supplementary-groups-v1` and `kernel-settings-v1` follow the
+unchanged first 23, each in a separate one-child owner scope and each followed
+immediately by its strict private reader, even without evidence emission. Five
+owner scopes retain the original five-child block, hostname alone and the three
+new children. Command-clear stays outside all scopes. The maintained profile
+policy, AppArmor acceptance boundaries and #125 public contract are unchanged.
+
+Paired producer/reader/backend controls require exact Podman Debian/upstream
+ordinary calls 75/74 for Shm/groups and 71/70 for kernel; Docker is 77/76 and
+73/72. Pending-final preflight reserves one extra Docker call/65,536 bytes;
+the final two-snapshot ledger includes two extras and 131,072 bytes. Ordinary
+byte floors are 524,289 Podman / 655,361 Docker with unchanged 2-MiB upper bound.
+Missing or unknown backend refuses; the proof cannot select its own accounting.
+The shared actual snapshot charge owner is unchanged. Pure Rust boundary tests
+exercise checked pending reserves; Python literal controls exercise both
+backends, all lanes, custody, malformed/partial proofs, exact wrapper selection,
+private diagnostics and unchanged capability maps. Kernel controls retain full
+body accounting, two exact owned reads before deletion, unknown-ID refusal and
+the strict successful cleanup ceiling. These are synthetic controls, not native
+qualification or proof of real timing/body-size fit. Main owns final integrated
+complete gates and fresh exact-candidate four-lane native qualification.
+
+PIDs27/nofile28, extra authority/broker machinery and new capability admission
+remain outside this recovery. The preceding 23-call checkpoint descriptions
+below preserve their historical scope and do not qualify the changed source.
+
+## Recovered destination-PIDs contract
+
+The separate [#125 contract](destination-pids-prerequisite.md) restores scoped
+PIDs/cgroup reports, explicit-destination pure assessment and unresolved schema-4
+obligations from preserved committed source. Independent source review is not
+compilation or native qualification. Its controls cover report availability,
+origin, scope, exact lexical classification, privacy, destination/API failures,
+finite/absent/unlimited/rootful behavior, capability refusal, prerequisite order
+and literal legacy artifact bytes. Test-local facts do not change reviewed
+profiles; compatible metadata still proves neither delegation nor enforcement.
+Final integrated complete gates, downstream struct-literal/schema-reader checks
+and separate native authority/effect evidence remain required.
+
+## Bounded #31 source recovery: first twenty-three invocations
+
+The current coordinator requires twenty-three exact ignored invocations. It keeps
+the original nineteen in order and restores the existing
+`health-start-interval-boundary-v1` and `lifecycle-default-effects-v1` closures as
+calls 20 and 21. These include their independent request/effect/legacy-negative
+oracles, strict private readers, original deadlines/resource caps, registered
+identity ledgers and authenticated cleanup/terminal handoff. Only closed
+unadmitted observations enter the manifest; raw capabilities and the compiled
+catalogue remain unchanged. No duplicate producer or new image/tool is added.
+
+Recovery uses preserved committed source: boundary `f73fd928...`, default/zero
+effects `ed445233...`, and the exact original-run-bound absence allowance
+`14827e26...`, retained in the historical `cead64a...` 21-call closure and later
+`f406cb22...` 28-call checkout. Hostname is recovered from that committed source
+as call 22, followed by preserved command-clear as call 23. The unrelated
+transport/broker, catalogue and calls 24–28 are not
+imported. Historical run `39121741122`
+informs recovery but cannot qualify the changed source. Source22's topology,
+closed diagnostics, current pins and cleanup-status fixes are preserved. The
+maintained scoped runner-profile policy below supersedes only the experimental
+non-acceptance barrier; native observations remain capability-unadmitted.
+The complete 28-call inventory remains pending; this
+stage does not complete #31 or authorize admission/release.
+
+The four recovered proof/wiring Python modules independently cover configuration
+versus scheduling effects, exact Debian CLI refusal, null/missing/type semantics,
+actual zero/default effects, strict context/custody, original budgets, privacy
+and cleanup failure propagation. Existing emitter fixtures now supply both
+mandatory private proofs; missing/partial/stale proofs refuse the manifest.
+Rust controls exercise the same composed run-bound absence predicate as the
+real request path, including rejection of GET bodies. Fresh final-edit complete
+and exact-candidate native gates plus independent review remain required.
+
+The [hostname contract](native-hostname-contract.md) requires both omitted and
+explicit CLI/rendered requests, ID-derived default hostname, configured and
+actual process readback, unchanged borrowed image/outer identity and verified
+cleanup. The first five-child owner scope remains at positions 16–20; a separate
+one-child scope owns call 22. Its strict reader always runs immediately, before
+maintained profile finalization and optional emitter. The emitter independently
+revalidates the fixed private child with its existing nineteen arguments and
+adds only a closed `hostname_contract`/`hostname_outcomes` observation marked
+unadmitted. No ContainerHostname capability, raw shape-map or catalogue admission
+is added. Missing, malformed, stale, cross-context or failed-effect proof refuses
+publication. The original 180-second deadline, 400 calls/4 MiB aggregate and
+16 KiB private proof cap remain unchanged, including selected-backend snapshot
+charging. Offline proof/custody/wrapper/emitter controls are not native evidence.
+
+Earlier checkpoint descriptions below retain their historical cohort counts;
+the current required invocation ledger is the twenty-six-call definition at the top.
+
+The [command-clear contract](native-command-clear-contract.md) retains both
+nonempty image defaults and four independent CLI/rendered cases, including the
+entrypoint-only control. Actual PID1 marker and complete NUL cmdline bytes are
+required alongside configured vectors and native running state. Dedicated
+cleanup remains attempted-before-work and once-only, with verified cleanup
+required before proof publication. A private pure Drop guard preserves ordinary
+health cleanup when delegation is false; its four-state inert controls disarm
+before assertions and never invoke cleanup. The outer snapshot alone adopts the
+current selected prefix and pre-I/O Docker extra call/65,536-byte charge for each
+of its two snapshots, within original limits. Invocation 23 is outside both owner
+token scopes and its strict inline twelve-fact reader always runs before the
+maintained profile finalization or optional emitter. Both reader consumers require the exact
+two-shape tuple. The emitter adds only a closed unadmitted command-clear outcome;
+capability/shape maps, catalogue, nineteen arguments and all current limits stay
+unchanged. No offline control establishes native effects or cleanup completion.
+
 The current minimum and pinned development compiler are Rust 1.98.1.
 `Cargo.toml` supplies the minimum for Clippy and `scripts/check-msrv.sh`;
 `rust-toolchain.toml` selects the same compiler for normal Cargo commands.
@@ -7,7 +128,241 @@ The scaffold policy tests check alignment and MSRV failure propagation through
 the shared local, PR/main, native-dispatch, and release offline gate. Earlier
 verification records below retain the Rust versions used at those checkpoints.
 
+## Explicit hosted outer Docker backend
+
+The [canonical test-only outer runtime](native-outer-runtime.md) keeps local default
+Podman and explicitly selects Docker in the three admitted hosted native workflows.
+It verifies local rootful daemon/service/listener identity (including systemd
+activation), private CLI configuration, actual versions and owned inner resources.
+Docker-specific listing, data ownership, logging and removal are not Podman prefix
+substitutions. Four image pins/inner modes, all required tests, source/candidate
+admission, budgets and cleanup boundaries remain unchanged. The narrow legacy-main
+dispatcher policy is documented there; no actor or main-only gate is relaxed.
+Definitions and mocked controls do not establish Docker-backend compatibility.
+Fresh exact-candidate complete and four-lane gates remain required.
+
+The maintained [GitHub-runner userns prerequisite](native-outer-runtime.md#maintained-github-runner-upstream-rootless-userns-prerequisite)
+applies only to the owned upstream-rootless fixture in the three exact admitted
+hosted native contexts. Its hermetic controls exercise
+selection/custody, config-suppressed no-cache compile/add/remove, uncertain
+mutation/creation retention, effective-label bracketing and independent profile
+cleanup. Linux fake-client integration exercises the actual fixed bridge under
+its original process-group owner, including TERM-resistant descendants, early
+EOF, soft-deadline expiry and late begin output that must not resume creation.
+Exact listing-vector, malformed/duplicate state, closed receipt, malformed absence
+and closed failure-stage controls cover this profile projection. They
+invoke no policy parser, Docker/Podman or native guest and establish no hosted
+prerequisite or compatibility fact. Positive controls require the complete exact
+native sequence and verified-label/removed-profile cleanup record before ordinary
+receipt publication and success. Negative controls preserve native failure and
+cancellation and block acceptance for missing completion, invalid/incomplete
+receipts, retained custody, resource/profile cleanup or publication failure.
+Main push, trusted-main PR dispatch and standalone exact-main release dispatch
+retain their existing event/ref/actor/candidate guards; no reusable-workflow or
+untrusted PR context is added. Fresh integrated complete and native gates remain
+required; neither these controls nor policy adoption proves native compatibility,
+cgroup/PIDs authority or product capability admission.
+
+Publication controls also exercise the original aggregate cutoff after storage
+sampling stops: declining remaining allowances, expired starts, late zero,
+hanging Git identity/status commands and a TERM-resistant fake Python publisher.
+The final success path independently refuses an expired cutoff. These are
+hermetic process/deadline controls, not native or hosted profile evidence.
+
+Historical experiment records below retain their original non-acceptance status.
+Campaign `40083118218` passed four nineteen-test sequences with effective-label
+verification and profile removal, but upstream-rootless deliberately failed its
+former experimental terminal barrier. That evidence does not qualify this changed
+maintained candidate; no fresh ordinary native acceptance is claimed here.
+
+## Strict CLI-positive internal-network precontrol
+
+Campaign `39988715765`, attempt 1, is failed evidence: both Debian lanes passed
+nineteen tests; both upstream lanes passed six and stopped at the mandatory
+topology assertion at original `src/native_network_tests.rs:6277`. The first
+rejected predicate is unavailable in its closed logs. The stage does not prove
+overlap, CLI egress failure, rendered traffic behavior, timeout or AppArmor
+causality; the later positive controls and blocking probes were not reached.
+Panic-time internal cleanup reported pass. The upstream-rootless AppArmor
+experiment remains unadmitted, and no ordinary acceptance or release claim follows.
+
+The diagnostic-only first-refusal projection is checked by
+`tests/test_native_inner_topology_diagnostic.py`: isolated fake-cargo controls
+exercise every independent closed reason, malformed/CR/ANSI/prefix/suffix and
+protected canaries, duplicate/conflicting lines, exact test/stage failure-only
+scope, zero-selected refusal, original status-101 reporting/wrapper-status-1 and
+cleanup markers. Static checks retain original predicate order, one evaluation,
+static best-effort bytes and nineteen native invocations. Rust topology controls
+independently check first-refusal competing defects, schema versus actual
+overlap, mixed-family input, a second outer pool, containing `/0`, inside `/32`,
+adjacent/outside pools and failing-writer assertion/unwind preservation. The
+diagnostic itself changes no acceptance/schema, query, timing, cleanup, AppArmor
+or pin; the subsequent builtin-only correction is recorded separately below.
+These are synthetic checks, not native compatibility evidence or a diagnosis of
+the failed campaign; fresh exact-candidate gates and independent review remain
+necessary.
+
+Campaign `40037061335`, attempt 1, passed nineteen tests in both Debian lanes;
+both upstream lanes passed six before the first `builtin_pools` refusal. The
+closed reason identifies neither the builtin nor its Config shape/value and
+does not prove null, overlap, a connectivity failure or an AppArmor cause.
+Those source-21 results do not validate the subsequently changed source.
+
+The separately source-supported no-pool serialization correction accepts only
+an explicitly present null or empty-array Config for the already validated
+host/host and none/null builtins. Independent Rust cases cover all four null/[]
+permutations, missing versus null for both builtins, nonempty/scalar/object
+refusals, exact driver/name pairs, ID/scope/IPAM metadata and first-refusal
+ordering. Every retained bridge still rejects missing, null, empty or malformed
+IPAM, and actual overlap keeps its existing category. The Python predicate-order
+and scope controls recognize only this builtin exception; sanitizer privacy,
+failure status, cleanup and nineteen invocations are unchanged. The exact
+versioned source/license/provenance is in [dependency policy](dependency-policy.md).
+Synthetic controls and the reference review are not native compatibility
+evidence; fresh complete/native gates and independent review remain required.
+
+The [maintained allocation/topology contract](native-outer-runtime.md) adds a
+hosted-Docker-only outer reservation with mandatory bounded host preflight and
+post-create pool/endpoint validation. Local Podman remains automatic. A mandatory
+single inner network snapshot, after four proof bridges but before peers,
+requires the exact eleven retained bridges plus canonical host/none exceptions;
+the three test-6 controls intentionally removed by original assertions do not
+belong in that set. Whole valid mixed-family IPAM passes; every inner IPv4 pool
+must be disjoint from every actual outer IPv4 pool. Four cleanup liabilities
+retain the original 58/57-second operation boundary and 180-second owner.
+
+`tests/test_native_network_topology.py` covers closed host/address/route schemas,
+point-to-point prefix semantics, default gateways/prefsrc/multipath/table 253,
+unknown forms, complete backend pool projection, private publication and exact
+receipt schemas. Fake-only real GNU-timeout/CaptureContext controls exercise
+TERM-resistant descendants, late EOF and inherited cancellation while retaining
+the original owner; their shortened synthetic timer proves no native behavior.
+Rust topology tests cover exact retained/held-role identity sets, mixed families,
+partial/malformed pools, second-pool overlap, strict response caps/status/duplicate
+JSON and private no-follow reads. Existing attachment fixtures supply complete
+mandatory context while retaining prior failure/privacy/timer/AppArmor assertions.
+These synthetic checks do not qualify a lane, identify a route cause, admit the
+temporary experiment or replace fresh final-candidate complete/native gates.
+
+Host-preflight refusal diagnostics have independent fixed-phase/privacy controls:
+success stays silent, malformed captures and cancellation retain their original
+refusal/owner, and stderr failure cannot suppress the hold or divert a line to
+stdout. Real fake-client GNU-timeout controls check the line is flushed before
+the existing KILL fallback, including resistant descendants and late EOF. The
+source-established `NO-CARRIER` formatter flag additionally has an independent
+inactive-UP positive fixture and colliding-prefix/`noprefixroute`, unknown-flag
+and duplicate-flag negatives. No interface's addresses are skipped because of
+state or flags. Campaign `39974464569` established only that all four native
+lanes refused host preflight before native invocations; neither that flag nor
+another predicate can be attributed as the first failure from those logs.
+
+Optional IPv4 address `metric` controls independently accept 0, 100 and
+UINT32_MAX, including DHCP-style metadata with `NO-CARRIER`, and refuse negative,
+overflow, boolean, string, null and floating-point values. Local/broad-prefix,
+peer-prefix/local `/32`, broadcast and `noprefixroute` overlaps still refuse;
+adjacent disjoint prefixes pass. Unknown address keys, including `proto` and
+`protocol`, remain unsupported. Route controls distinguish actual destination,
+gateway, preferred-source and multipath overlap from malformed/noncanonical
+schemas. Only an actual existing interval intersection in the corresponding
+parse phase selects `addresses_overlap` or `routes_overlap`; neither label
+promises later metadata validation. Generic parse refusal, cancellation and
+non-parse failures keep their original phases. Controls retain the fixed command
+and shared-deadline ledger, original owner and original exception identity after
+the hold, including diagnostic I/O failure behavior. The real fake-client
+GNU-timeout controls remain unchanged. Campaign `39982331551` passed offline but
+all four lanes refused at `addresses_parse` before any native test invocation;
+the first field/predicate and cause remain unknown. These source-backed changes
+still require fresh exact-final-candidate complete and native gates.
+
+The same existing `live_internal_network_blocks_external_egress` test now first
+requires an independent CLI-created client on the already CLI-created ordinary
+bridge to return exact sidecar `proof-egress`, before the original rendered
+ordinary-bridge external probe. It uses the same image, run label, single-homed
+custody assertion, proxy-disabled two-second wget and six-second CLI owner.
+The mutable cleanup ledger registers the new name before create, and its existing
+budget charges all nine resources: 100 seconds of cleanup plus eight seconds for
+the next operation (108 required, 107 refused), within the original 180 seconds.
+Only an exact body-free run/API-bound GET inspect/404 name and the closed
+`network_internal_cli_control` stage are added. Structural, negative-admission,
+ownership, budget and fake-sanitizer tests do not establish native behavior;
+all old assertions, nineteen invocations, cleanup and experimental non-acceptance
+remain mandatory. No dependencies, pins, manager paths or native workflows change;
+the existing five-image Renovate extraction/group/manual-review rules still apply.
+
+Historical failed campaign `39942288063` had nineteen passing rootful tests and
+both rootless lanes failing the original rendered ordinary control. Its captured
+Debian reports were all true; upstream reported IPv4 forwarding true with bridge
+reports unavailable. It did not run this new independent CLI behavior control and
+establishes no cause. In a new run, CLI failure stops before that rendered-control
+probe, so it cannot show both controls failing. CLI success followed by rendered
+failure still does not establish renderer causality because daemon-selected IPAM
+differs. Fresh final-candidate complete and four-lane native gates remain required;
+no new native evidence is claimed.
+
+The earlier CLI-positive failure also has a capture-only retained-fixture subnet
+observation, documented in [the runtime contract](native-outer-runtime.md).
+Pure Rust tests cover canonical identity, exact selection/root and attachment,
+coherent actual request APIs (including 1.49 rather than advertised 1.56), the
+stopped-container missing/empty-ID name fallback with matching metadata,
+failure-only exact argv, strict whole-IPAM boundaries, unavailable evidence,
+recursive duplicate keys and incomplete/trailing bodies. Hermetic
+`tests/test_native_fixture_subnet.py` controls run the actual closed sanitizer
+with fake cargo only, checking privacy, near misses, original failure/stage and
+cleanup markers, success suppression and unchanged acquisition bounds. These
+tests do not establish overlap in a native lane, routing cause or compatibility;
+fresh complete and four-lane native gates remain required. No new capture,
+native invocation, runtime resource, dependency, pin or Renovate path is added.
+
 ## Hosted prerequisite diagnostic
+
+Failure-only guest HTTP controls also distinguish missing/non-executable tools,
+loader failure and closed curl-exit categories from HTTP status using one bounded
+frame under the original owner. The fixed cleanup-inspection frontend has
+independent fake controls for canonical query vectors, real nonzero/signal
+statuses, both stream counts, malformed/overflow/partial capture, private cleanup
+and cancellation. Actual GNU-timeout tests use only fake clients and verify the
+original eight-second TERM/two-second KILL ownership with resistant clients;
+they launch no native daemon or host-policy change. Legacy kernel-window and
+AppArmor capture consumers retain their separate regression coverage. These
+synthetic results never establish hosted executable availability, a networking
+cause, successful native cleanup or compatibility.
+
+Failure-only native diagnostics also have bounded, synthetic regression coverage:
+the [kernel window](native-rootless-kernel-window.md) and the owned inner Engine's
+[default-bridge subnet observation](native-outer-runtime.md) preserve original
+failures, fixed budgets and cleanup. Neither diagnostic establishes a cause or
+replaces fresh exact-candidate four-lane validation.
+The coordinator's optional post-failure guest HTTP-status observation additionally
+has synthetic fixed-argv, status/cap, lane-budget, BOOTTIME, cancellation and
+direct-client EOF controls. It preserves the original failed test status and
+bypasses original cancellation. Explicit child cancellation exits through the
+existing EXIT cleanup owner even when SIGINT was inherited as ignored from an
+asynchronous gate; synthetic controls verify its cleanup receipt and no resumed
+test progression. Its timer envelopes reuse the admitted direct
+client's privilege boundary: they do not bound pre-timer sudo/PAM startup or
+prove universal process disposal. A completed HTTP status is not an exact body,
+cause, route, cleanup or native-acceptance proof; all original complete/native
+gates and lane/job disposal obligations remain unchanged.
+
+The same existing reader/timeout owner now projects three pre-test captured
+inner Engine `/info` network reports, adding no request, exec, namespace entry or
+timer. Synthetic controls cover true/false/missing/null and wrong-type reports,
+duplicate/nested/nonfinite/malformed/over-cap JSON, private directory and regular
+file custody (including accepted 0644 inside 0700, refused links/FIFOs/writable
+files), caller ownership, read stability and protected-value non-disclosure.
+A complete missing-curl frame can still expose these captured reports; invalid
+snapshot data does not erase valid HTTP/curl status. Conversely, true snapshot
+fields cannot bypass original client failure, cancellation, watchdog, remaining
+budget or late BOOTTIME refusal. The two HTTP/curl log records keep their meaning;
+one separate closed `PRE_TEST_NETWORK_REPORT` record explicitly identifies old
+reported booleans, never current sysctls, routes/effects, cause or acceptance.
+Guard/owner refusal retains the original two unavailable records only, with no
+new network marker; unavailable snapshot fields are emitted only after the
+complete result passes all original guards.
+All nineteen native tests, exact guards and experimental non-acceptance remain
+unchanged. Failed campaign `39935157094` (rootless failure after six passing
+tests; Debian later guest curl HTTP 200 and upstream curl absent) establishes no
+cause; rootful nineteen-test success does not qualify these changed bytes.
 
 The separate [hosted prerequisite diagnostic](hosted-prerequisite-diagnostic.md)
 is a main-only no-input dispatch in Check. It checks out the dispatch's immutable
@@ -26,8 +381,9 @@ definitions/fake controls alone establish no hosted prerequisite facts.
 
 ## Mandatory unadmitted runtime-cohort source observations
 
-The canonical harness requires nineteen exact ignored invocations, retaining the
-original first seventeen in order and adding the separate eighteenth
+The retained runtime-cohort foundation supplied nineteen exact invocations before
+the two source-recovery additions described above. It retains the
+original first seventeen in order and adds the separate eighteenth
 `native_health_metadata_tests::lifecycle::runtime_filesystem::live_runtime_filesystem_matches_engine`
 and nineteenth
 `native_health_metadata_tests::lifecycle::tmpfs_effect::live_tmpfs_effects_match_engine`.
@@ -115,7 +471,7 @@ generic version support and cannot close the larger required-contract issue.
 
 The wrapper retains its nineteen-argument emitter protocol and original
 180-second invocation deadline, exposes only fixed lifecycle diagnostics, and
-preserves the first observation failure. Only the three lifecycle-family invocations
+preserves the first observation failure. Only the five lifecycle-family invocations
 receive the canonical outer-cleanup owner token. An uncertain inner cleanup requests
 outer teardown and fails; its marker never proves completed teardown. The EXIT
 owner now binds outer/sidecar creation IDs, rechecks ID/name/run ownership, removes
@@ -723,7 +1079,7 @@ readiness/product evidence; a separate removal control requires positive
 exact-full-ID CLI inventory, successful native `rm`, successful empty exact-ID
 re-inventory, and fresh server version/API facts.
 
-Run one lane with ./scripts/native-conformance.sh <lane> on Linux with
+Run one lane with ./scripts/native-conformance.sh <lane> locally on Linux with
 rootful Podman through passwordless sudo, at least 8 GiB free, and access
 to the pinned GHCR and BusyBox manifests. The script caps the nested daemon
 at 4 GiB storage, 4 GiB memory, two CPUs and 512 processes. It bounds the
@@ -755,11 +1111,12 @@ remain unchanged: adopting a revised harness source separately requires an expli
 consumer contract or a new independently verified producer build and receipt, not a
 hash-only refresh.
 
-Every image declares a Docker data-root VOLUME. The harness disables
-automatic image volumes and mounts exactly one task-labeled named volume at
+Every image declares a Docker data-root VOLUME. Podman disables automatic image
+volumes; Docker validates and overrides the sole declared data volume. Both mount
+exactly one task-labeled named volume at
 the declared data root. It checks the mounted volume after launch; an
 unexpected anonymous or extra volume fails the lane. A watchdog checks the
-owned volume and Podman storage every five seconds. It retries failed `du` or
+owned volume and selected outer storage every five seconds. It retries failed `du` or
 `df` measurements at most twice, one second apart, to tolerate disappearing
 overlay paths during traversal. Both measurements still run on each attempt,
 and any measured volume above 4 GiB, free space below 2 GiB, or elapsed time
@@ -836,7 +1193,10 @@ current `main`. Its aggregate gate fails on any failed, skipped, or cancelled
 job. There is no publication or deployment job. The four native lanes run on
 main push and exact-candidate release validation, not on any PR. PRs run the
 complete offline gate and their aggregate explicitly reports offline-only
-evidence. Before marking the #13 harness PR ready, use the trusted-main
+evidence. The existing `check-gate` aggregate emits the stable `Required CI`
+check context on PR and main events. Its `always()` aggregate still requires
+offline success plus the expected PR-native skip or main-native success; failed,
+cancelled or unexpected skipped results refuse. Before marking the #13 harness PR ready, use the trusted-main
 validation-only dispatcher below to run all four native lanes against its
 exact reviewed draft head; passing PR CI alone is not native compatibility
 evidence. The main-push and release native gates remain mandatory after merge.
@@ -1496,3 +1856,26 @@ evidence for a later catalog commit; each changed candidate and release still
 needs fresh complete checks and native validation. Never substitute the historical
 source SHA for the final candidate SHA or infer an API version from a release
 label. Public resolver and inert rendering tests cover the admitted records.
+
+## EXIT-trap cleanup command status
+
+`tests/test_native_cleanup_command_status.py` extracts the real cleanup wrapper,
+outer command owner and removal classifier, then calls only a fake client from
+a genuine EXIT trap. Direct and command-substitution controls cover original
+job statuses 0, 1 and 101 against client statuses 0, 7, 124, 130 and 143 for both
+Docker and the unchanged Podman path. They independently assert the client result,
+closed removal classification, original shell exit and exactly one client call.
+Timeout/cancellation numbers here are returned statuses, not elapsed timeouts or
+delivered signals; existing deadline and cancellation tests remain separate.
+
+An isolated run with actual Bash 5.2.21 reproduced the Docker branch's bare
+`return` selecting the pre-trap status instead of the preceding command status.
+The same baseline controls passed on actual Bash 5.3.20. Explicitly returning
+`"$?"` preserves the command result on both; a Bash 5.3-only run cannot demonstrate
+the original defect, and a compatibility setting is not a substitute for the
+actual older interpreter. The committed tests use host Bash without downloads
+or version-based skips; private runs can select an already-available interpreter
+without adding an operational dependency. These are local fake-client observations,
+not proof of the executed shell version or root cause of a historical hosted run,
+successful native cleanup, native acceptance, or changes to the pending runtime's
+qualification requirements.

@@ -69,6 +69,10 @@ pub struct OperationGraph<'a> {
 
 /// The validated source of capability claims used for this inert graph.
 /// Offline targets never acquire an observation ID.
+/// Neither context establishes destination cgroup delegation or enforcement.
+/// Finite rootless PIDs output carries a separate unresolved destination
+/// prerequisite. Observed contexts bind an explicitly selected destination;
+/// profile contexts never invent a destination observation identity.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PlanningContext {
     Observed(CapabilityScope),

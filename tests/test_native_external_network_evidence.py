@@ -45,7 +45,7 @@ class ExternalNetworkEvidenceTests(unittest.TestCase):
     def rerun(self, result, destination):
         lane = destination.stem
         output = subprocess.run(result.args, capture_output=True, text=True, check=False, timeout=5,
-                                env={**os.environ, "NATIVE_FIXTURE_IMAGE": legacy.HEALTH_FIXTURE_IMAGE,
+                                env={**os.environ, "NATIVE_OUTER_ENGINE": "podman", "NATIVE_FIXTURE_IMAGE": legacy.HEALTH_FIXTURE_IMAGE,
                                      "NATIVE_OUTER_CONTAINER_ID": "f" * 64,
                                      "NATIVE_BIND_RELABEL_DAEMON_UID": "1000" if lane.endswith("-rootless") else "0"})
         self.assertNotEqual(output.returncode, 0)

@@ -11,6 +11,34 @@ source records are available for inert rendering. Each changed candidate and
 release must pass fresh complete and four-lane native gates before a
 compatibility claim.
 
+The bounded #31 recovery restores the preserved health-interval boundary and
+lifecycle default/zero source producers as canonical invocations 20 and 21, then
+the [hostname source proof](docs/native-hostname-contract.md) as invocation 22 and
+[command/entrypoint-clear](docs/native-command-clear-contract.md) as invocation 23. The
+original nineteen, current fixture topology/diagnostics, pins, cleanup and
+maintained scoped AppArmor prerequisite remain mandatory. These are strict source-only
+observations, not raw capability or catalogue admission. The preserved 28-call
+inventory remains pending reconciliation; twenty-three is not milestone completion.
+Historical evidence does not qualify this changed candidate.
+
+The next recovered source-only closure adds
+[ShmSize](docs/native-shm-size-contract.md),
+[numeric supplementary groups](docs/native-supplementary-groups-contract.md) and
+[diagonal kernel settings](docs/native-kernel-settings-contract.md) as mandatory
+calls 24–26. Each has a separate one-child owner scope and immediate strict
+reader, including without public emission. Backend accounting is independently
+bound to canonical Podman/Docker selection; original limits and the maintained
+profile policy remain unchanged. The current source sequence is 26 calls in
+five owner scopes, not the preceding 23-call checkpoint. Only unadmitted
+observations are added; PIDs27/nofile28, native qualification and milestone
+completion remain pending.
+
+The preserved [nofile proof](docs/native-nofile-contract.md) is registered as
+prepared test-only source, with its scoped private-proof bounds and custody
+controls. It is not a canonical invocation or emitter requirement: unresolved
+PIDs27 must precede eventual nofile28. An ignored test definition is not native
+execution, full28 completion or capability admission.
+
 The planned native work is tracked in [DockerLens #3](https://github.com/Strukturpiloten/docker-lens/issues/3).
 Typed networks, protected runtime settings and conditional bind-source review
 are available as inert data. The candidate selects the independently reviewed
@@ -35,7 +63,7 @@ representations retain their existing behavior.
 
 This is candidate pre-merge rehearsal admission. Production merge, main
 admission and release remain blocked until fresh exact-final-candidate complete
-and four-lane sixteen-test native gates, fresh independently reviewed volume-only
+and four-lane twenty-six-test native gates, fresh independently reviewed volume-only
 consumer rehearsals of all six actual authored fixtures under
 [ADR 0012](docs/decisions/0012-candidate-volume-label-admission.md), and reviewed
 BoxFerry consumers of the actual Nextcloud/Supabase binds and desired external
@@ -53,6 +81,14 @@ Debian 11 Docker Engine support is bounded by exact reviewed native evidence; De
 Compose compatibility and Swarm mode are separate discussion topics.
 
 ## Contract boundaries
+
+The recovered [finite rootless PIDs destination contract](docs/destination-pids-prerequisite.md)
+retains observation-scoped PIDs/cgroup metadata and an unresolved typed destination
+obligation. Metadata compatibility never proves controller delegation or enforcement.
+Existing PIDs capability gates and reviewed profiles remain unchanged. Where an
+admitted finite rootless setting requires that obligation, complete output uses
+schema 4; other schema 1/2/3 output and request bytes remain unchanged. Downstream
+schema support and fresh integrated verification remain required.
 
 - A caller supplies an absolute Unix-socket endpoint and bounded selector. No
   daemon is discovered. Cancellation is checked between bounded I/O polls.
@@ -107,3 +143,16 @@ evidence for live #10 acquisition and #12 target
 request conformance is required before any compatibility claim. See
 [architecture](docs/architecture.md) and
 [verification](docs/verification.md).
+
+The [test-only outer runtime](docs/native-outer-runtime.md) defaults locally to
+rootful Podman; admitted hosted native jobs explicitly select verified local
+rootful Docker. Both orchestrate owned inner fixtures in the existing shared host
+store, never use the host daemon as the test subject or mount its socket into a
+guest. There is no runtime fallback. This backend still needs fresh exact-candidate
+four-lane qualification; mocked controls are not native evidence.
+
+Hosted outer-Docker upstream-rootless uses a maintained, per-job
+[userns profile prerequisite](docs/native-outer-runtime.md#maintained-github-runner-upstream-rootless-userns-prerequisite)
+with exact owned-task label and removal checks before ordinary lane acceptance.
+Local hosts retain their existing policy; this prerequisite grants no cgroup/PIDs
+authority, product capability or release admission.

@@ -86,9 +86,11 @@ class ScaffoldPolicyTests(unittest.TestCase):
         )
         self.assertTrue(all(re.fullmatch(r"sha256:[0-9a-f]{64}", pin.group("currentDigest")) for pin in pins))
         self.assertIn("DEBIAN_DOCKER_PACKAGE='20.10.5+dfsg1-1+deb11u2'", native_script)
-        self.assertIn("--image-volume=ignore", native_script)
-        self.assertIn("--oom-score-adj=0", native_script)
-        self.assertIn("start=(/usr/local/bin/start-dockerd", native_script)
+        outer_runtime = (ROOT / "scripts/native-outer-runtime.sh").read_text()
+        self.assertIn("--image-volume=ignore", outer_runtime)
+        self.assertIn("--oom-score-adj=0", outer_runtime)
+        self.assertIn("start=(/usr/local/bin/start-dockerd", outer_runtime)
+        self.assertIn("native_outer_bridge_command 120 create-daemon", native_script)
         self.assertNotIn("apt-get", native_script)
         self.assertNotIn("native-apt-install.sh", native_script)
         self.assertNotIn("native-debian-snapshot.sh", native_script)
@@ -104,6 +106,36 @@ class ScaffoldPolicyTests(unittest.TestCase):
             self.assertIn("name: dockerlens-native-${{ matrix.lane }}", workflow)
             self.assertIn("if-no-files-found: error", workflow)
             self.assertIn("DOCKERLENS_NATIVE_CANDIDATE_SHA:", workflow)
+
+    def test_debian_image_refresh_is_bound_to_maintenance_not_native_admission(self) -> None:
+        record = json.loads((ROOT / "docs/evidence/maintenance/2026-10-23-debian-11-images.json").read_text())
+        self.assertEqual(record["purpose"], "publication-maintenance-only")
+        self.assertIs(record["native_admission"], False)
+        self.assertEqual(record["source_repository"], "Strukturpiloten/containers")
+        self.assertEqual(record["source_revision"], "d148838d2b1234f5a898ff2a6d4e7393a259d92c")
+        self.assertEqual((record["run_id"], record["run_attempt"]), ("39919296714", "1"))
+        self.assertEqual([image["lane"] for image in record["images"]],
+                         ["debian11-rootful", "debian11-rootless"])
+        source = (ROOT / "scripts/native-conformance.sh").read_text()
+        renovate = json.loads((ROOT / "renovate.json").read_text())
+        manager = renovate["customManagers"][1]
+        extractor = re.sub(r"\(\?<(\w+)>", r"(?P<\1>", manager["matchStrings"][0])
+        pins = list(re.finditer(extractor, source))
+        self.assertEqual(len(pins), 5)
+        self.assertEqual(len({pin.group("depName") for pin in pins}), 5)
+        for image in record["images"]:
+            with self.subTest(lane=image["lane"]):
+                matches = [pin for pin in pins if pin.group("depName") == image["image"]]
+                self.assertEqual(len(matches), 1)
+                self.assertEqual(matches[0].group("currentValue"), image["tag"])
+                self.assertEqual(matches[0].group("currentDigest"), image["index_digest"])
+                self.assertEqual(set(image["architecture_digests"]), {"amd64", "arm64"})
+                for digest in image["architecture_digests"].values():
+                    self.assertRegex(digest, r"^sha256:[0-9a-f]{64}$")
+                self.assertRegex(image["extracted_receipt_sha256"], r"^[0-9a-f]{64}$")
+                self.assertRegex(image["release_result_artifact_id"], r"^[1-9][0-9]*$")
+                self.assertEqual(image["release_result_artifact_name"],
+                                 image["image"].rsplit("/", 1)[1] + "-release-result")
 
     def test_scripts_have_distinct_scope(self) -> None:
         fast = (ROOT / "scripts/format-lint.sh").read_text()
@@ -303,26 +335,42 @@ class ScaffoldPolicyTests(unittest.TestCase):
 
     def test_pr_gate_is_offline_only_and_main_requires_native(self) -> None:
         check = (ROOT / ".github/workflows/check.yml").read_text()
-        gate = check.split("  check-gate:\n", 1)[1].split("        run: |\n", 1)[1]
+        self.assertEqual(check.count("  check-gate:\n"), 1)
+        aggregate = check.split("  check-gate:\n", 1)[1]
+        header = aggregate.split("    steps:\n", 1)[0]
+        self.assertEqual(re.findall(r"^    name: (.+)$", header, re.MULTILINE), ["Required CI"])
+        self.assertEqual(check.count("    name: Required CI\n"), 1)
+        self.assertIn("    if: always() && !(github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')\n    needs: [scaffold, native-conformance]\n", header)
+        self.assertNotIn("continue-on-error:", aggregate)
+        gate = aggregate.split("        run: |\n", 1)[1]
         script = textwrap.dedent(gate)
         for scenario, event, ref, native, should_pass in (
             ("fork code", "pull_request", "refs/pull/1/merge", "skipped", True),
             ("same-repo code", "pull_request", "refs/pull/2/merge", "skipped", True),
             ("fork prose", "pull_request", "refs/pull/3/merge", "skipped", True),
             ("PR claimed native", "pull_request", "refs/pull/4/merge", "success", False),
+            ("PR failed native", "pull_request", "refs/pull/4/merge", "failure", False),
+            ("PR cancelled native", "pull_request", "refs/pull/4/merge", "cancelled", False),
             ("main native", "push", "refs/heads/main", "success", True),
             ("main skipped", "push", "refs/heads/main", "skipped", False),
+            ("main failed native", "push", "refs/heads/main", "failure", False),
+            ("main cancelled native", "push", "refs/heads/main", "cancelled", False),
             ("unknown push", "push", "refs/heads/other", "skipped", False),
+            ("non-main native success", "push", "refs/heads/other", "success", False),
+            ("unexpected dispatch", "workflow_dispatch", "refs/heads/main", "success", False),
+            ("untrusted PR event", "pull_request_target", "refs/heads/main", "success", False),
             ("non-main diagnostic", "workflow_dispatch", "refs/heads/feature", "skipped", False),
         ):
-            with self.subTest(scenario=scenario):
-                env = dict(os.environ, EVENT_NAME=event, EVENT_REF=ref,
-                           SCAFFOLD_RESULT="success", NATIVE_RESULT=native)
-                result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", script], env=env,
-                                        capture_output=True, text=True, check=False)
-                self.assertEqual(result.returncode == 0, should_pass)
-                if event == "pull_request" and should_pass:
-                    self.assertIn("offline-only", result.stdout)
+            for scaffold in ("success", "failure", "cancelled", "skipped"):
+                with self.subTest(scenario=scenario, scaffold=scaffold):
+                    env = dict(os.environ, EVENT_NAME=event, EVENT_REF=ref,
+                               SCAFFOLD_RESULT=scaffold, NATIVE_RESULT=native)
+                    result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", script], env=env,
+                                            capture_output=True, text=True, check=False)
+                    admitted = should_pass and scaffold == "success"
+                    self.assertEqual(result.returncode == 0, admitted)
+                    if event == "pull_request" and admitted:
+                        self.assertIn("offline-only", result.stdout)
 
     def test_manual_native_dispatch_is_trusted_exact_head_and_validation_only(self) -> None:
         workflow = (ROOT / ".github/workflows/native-validation.yml").read_text()
