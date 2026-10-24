@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- Maintain the scoped per-job GitHub-runner AppArmor userns profile for the owned
+  outer-Docker upstream-rootless fixture in the three existing native workflows.
+  Require exact task label/custody and proven profile removal after the complete
+  native sequence before ordinary evidence and success; failures and cancellation
+  remain failures. Preserve local-host policy, other lanes, budgets and historical
+  experimental evidence. Fresh candidate validation remains required; no
+  cgroup/PIDs authority, capability admission or release is claimed.
+
+- Recover command/entrypoint-clear as mandatory invocation 23 after hostname's
+  strict reader, outside both lifecycle cleanup-token scopes. Retain nonempty
+  image defaults, four paired process effects and dedicated once-only cleanup;
+  reuse selected-backend snapshot charging and original limits. Require the
+  complete private proof in the harness and emitter, projecting only a closed
+  unadmitted observation. No raw capability, catalogue or product API changes;
+  calls 24–28 and fresh qualification remain pending.
+- Recover the committed hostname producer and strict private reader as mandatory
+  invocation 22, with independent harness/emitter validation and a separate
+  one-child cleanup-owner scope. Preserve all first 21 requirements, budgets,
+  backend accounting and experimental non-acceptance. Only a closed unadmitted
+  observation is emitted; no hostname capability, raw shape-map or catalogue
+  admission is added. Calls 24–28 and fresh qualification remain pending.
 - Recover the preserved health-interval configuration boundary and lifecycle
   default/zero effects as mandatory calls 20 and 21, with strict private proof
   validation and closed unadmitted observations. Preserve the original nineteen,

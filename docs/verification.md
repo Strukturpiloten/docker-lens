@@ -1,8 +1,8 @@
 # Verification
 
-## First bounded #31 source recovery
+## Bounded #31 source recovery: first twenty-three invocations
 
-The current coordinator requires twenty-one exact ignored invocations. It keeps
+The current coordinator requires twenty-three exact ignored invocations. It keeps
 the original nineteen in order and restores the existing
 `health-start-interval-boundary-v1` and `lifecycle-default-effects-v1` closures as
 calls 20 and 21. These include their independent request/effect/legacy-negative
@@ -14,11 +14,15 @@ catalogue remain unchanged. No duplicate producer or new image/tool is added.
 Recovery uses preserved committed source: boundary `f73fd928...`, default/zero
 effects `ed445233...`, and the exact original-run-bound absence allowance
 `14827e26...`, retained in the historical `cead64a...` 21-call closure and later
-`f406cb22...` 28-call checkout. The later unrelated transport/broker, catalogue
-and additional-family changes are not imported. Historical run `39121741122`
+`f406cb22...` 28-call checkout. Hostname is recovered from that committed source
+as call 22, followed by preserved command-clear as call 23. The unrelated
+transport/broker, catalogue and calls 24–28 are not
+imported. Historical run `39121741122`
 informs recovery but cannot qualify the changed source. Source22's topology,
-closed diagnostics, current pins, cleanup-status fixes and unadmitted AppArmor
-experiment are preserved. The complete 28-call inventory remains pending; this
+closed diagnostics, current pins and cleanup-status fixes are preserved. The
+maintained scoped runner-profile policy below supersedes only the experimental
+non-acceptance barrier; native observations remain capability-unadmitted.
+The complete 28-call inventory remains pending; this
 stage does not complete #31 or authorize admission/release.
 
 The four recovered proof/wiring Python modules independently cover configuration
@@ -29,8 +33,39 @@ mandatory private proofs; missing/partial/stale proofs refuse the manifest.
 Rust controls exercise the same composed run-bound absence predicate as the
 real request path, including rejection of GET bodies. Fresh final-edit complete
 and exact-candidate native gates plus independent review remain required.
+
+The [hostname contract](native-hostname-contract.md) requires both omitted and
+explicit CLI/rendered requests, ID-derived default hostname, configured and
+actual process readback, unchanged borrowed image/outer identity and verified
+cleanup. The first five-child owner scope remains at positions 16–20; a separate
+one-child scope owns call 22. Its strict reader always runs immediately, before
+maintained profile finalization and optional emitter. The emitter independently
+revalidates the fixed private child with its existing nineteen arguments and
+adds only a closed `hostname_contract`/`hostname_outcomes` observation marked
+unadmitted. No ContainerHostname capability, raw shape-map or catalogue admission
+is added. Missing, malformed, stale, cross-context or failed-effect proof refuses
+publication. The original 180-second deadline, 400 calls/4 MiB aggregate and
+16 KiB private proof cap remain unchanged, including selected-backend snapshot
+charging. Offline proof/custody/wrapper/emitter controls are not native evidence.
+
 Earlier checkpoint descriptions below retain their historical cohort counts;
-the current required invocation ledger is the twenty-one-call definition above.
+the current required invocation ledger is the twenty-three-call definition above.
+
+The [command-clear contract](native-command-clear-contract.md) retains both
+nonempty image defaults and four independent CLI/rendered cases, including the
+entrypoint-only control. Actual PID1 marker and complete NUL cmdline bytes are
+required alongside configured vectors and native running state. Dedicated
+cleanup remains attempted-before-work and once-only, with verified cleanup
+required before proof publication. A private pure Drop guard preserves ordinary
+health cleanup when delegation is false; its four-state inert controls disarm
+before assertions and never invoke cleanup. The outer snapshot alone adopts the
+current selected prefix and pre-I/O Docker extra call/65,536-byte charge for each
+of its two snapshots, within original limits. Invocation 23 is outside both owner
+token scopes and its strict inline twelve-fact reader always runs before the
+maintained profile finalization or optional emitter. Both reader consumers require the exact
+two-shape tuple. The emitter adds only a closed unadmitted command-clear outcome;
+capability/shape maps, catalogue, nineteen arguments and all current limits stay
+unchanged. No offline control establishes native effects or cleanup completion.
 
 The current minimum and pinned development compiler are Rust 1.98.1.
 `Cargo.toml` supplies the minimum for Clippy and `scripts/check-msrv.sh`;
@@ -52,21 +87,39 @@ dispatcher policy is documented there; no actor or main-only gate is relaxed.
 Definitions and mocked controls do not establish Docker-backend compatibility.
 Fresh exact-candidate complete and four-lane gates remain required.
 
-The temporary [upstream-rootless userns experiment](native-outer-runtime.md#temporary-unadmitted-upstream-rootless-userns-experiment)
-is explicitly outside that acceptance path. Its hermetic controls exercise
+The maintained [GitHub-runner userns prerequisite](native-outer-runtime.md#maintained-github-runner-upstream-rootless-userns-prerequisite)
+applies only to the owned upstream-rootless fixture in the three exact admitted
+hosted native contexts. Its hermetic controls exercise
 selection/custody, config-suppressed no-cache compile/add/remove, uncertain
 mutation/creation retention, effective-label bracketing and independent profile
 cleanup. Linux fake-client integration exercises the actual fixed bridge under
 its original process-group owner, including TERM-resistant descendants, early
 EOF, soft-deadline expiry and late begin output that must not resume creation.
 Exact listing-vector, malformed/duplicate state, closed receipt, malformed absence
-and closed failure-stage controls cover the experiment-only projection. They
+and closed failure-stage controls cover this profile projection. They
 invoke no policy parser, Docker/Podman or native guest and establish no hosted
-prerequisite or compatibility fact. The live experimental job must finish
-non-success after cleanup even if all required tests pass;
-ordinary native receipts, success summaries and aggregate acceptance are blocked.
-Its closed log result is not an uploaded lane artifact. Earlier native failures
-and cancellation remain failures; missing/uncertain cleanup remains retained.
+prerequisite or compatibility fact. Positive controls require the complete exact
+native sequence and verified-label/removed-profile cleanup record before ordinary
+receipt publication and success. Negative controls preserve native failure and
+cancellation and block acceptance for missing completion, invalid/incomplete
+receipts, retained custody, resource/profile cleanup or publication failure.
+Main push, trusted-main PR dispatch and standalone exact-main release dispatch
+retain their existing event/ref/actor/candidate guards; no reusable-workflow or
+untrusted PR context is added. Fresh integrated complete and native gates remain
+required; neither these controls nor policy adoption proves native compatibility,
+cgroup/PIDs authority or product capability admission.
+
+Publication controls also exercise the original aggregate cutoff after storage
+sampling stops: declining remaining allowances, expired starts, late zero,
+hanging Git identity/status commands and a TERM-resistant fake Python publisher.
+The final success path independently refuses an expired cutoff. These are
+hermetic process/deadline controls, not native or hosted profile evidence.
+
+Historical experiment records below retain their original non-acceptance status.
+Campaign `40083118218` passed four nineteen-test sequences with effective-label
+verification and profile removal, but upstream-rootless deliberately failed its
+former experimental terminal barrier. That evidence does not qualify this changed
+maintained candidate; no fresh ordinary native acceptance is claimed here.
 
 ## Strict CLI-positive internal-network precontrol
 

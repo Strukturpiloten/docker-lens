@@ -20,6 +20,12 @@ from native_lifecycle_default_effect_proof import (
     CONTRACT as LIFECYCLE_DEFAULT_EFFECT_CONTRACT, FILENAME as LIFECYCLE_DEFAULT_EFFECT_FILENAME,
     read_lifecycle_default_effect_proof,
 )
+from native_hostname_proof import (
+    CONTRACT as HOSTNAME_CONTRACT, FILENAME as HOSTNAME_FILENAME, read_hostname_proof,
+)
+from native_command_clear_proof import (
+    CONTRACT as COMMAND_CLEAR_CONTRACT, FILENAME as COMMAND_CLEAR_FILENAME, read_command_clear_proof,
+)
 from native_runtime_filesystem_proof import (
     CONTRACT as RUNTIME_FILESYSTEM_CONTRACT, FILENAME as RUNTIME_FILESYSTEM_FILENAME,
     read_runtime_filesystem_proof,
@@ -516,6 +522,10 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         capture_dir / HEALTH_START_INTERVAL_BOUNDARY_FILENAME, capture_dir, external_context)
     lifecycle_default_effect_outcomes = list(read_lifecycle_default_effect_proof(
         capture_dir / LIFECYCLE_DEFAULT_EFFECT_FILENAME, capture_dir, external_context))
+    read_hostname_proof(capture_dir / HOSTNAME_FILENAME, capture_dir, external_context)
+    if read_command_clear_proof(
+            capture_dir / COMMAND_CLEAR_FILENAME, capture_dir, external_context) != ("ClearCommand", "ClearEntrypoint"):
+        raise ValueError("invalid private command clear proof")
 
     # Only these closed mappings follow the complete, validated native proof
     # files above. They extend raw lane evidence, never the reviewed catalogue.
@@ -600,6 +610,14 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         "lifecycle_default_effect_contract": LIFECYCLE_DEFAULT_EFFECT_CONTRACT,
         "lifecycle_default_effect_outcomes": {
             "admission": "unadmitted", "probes": lifecycle_default_effect_outcomes,
+        },
+        "hostname_contract": HOSTNAME_CONTRACT,
+        "hostname_outcomes": {
+            "admission": "unadmitted", "outcome": "omitted_and_explicit_verified",
+        },
+        "command_clear_contract": COMMAND_CLEAR_CONTRACT,
+        "command_clear_outcomes": {
+            "admission": "unadmitted", "outcome": "all_four_process_controls_verified",
         },
         "runtime_filesystem_contract": RUNTIME_FILESYSTEM_CONTRACT,
         "runtime_filesystem_outcomes": {

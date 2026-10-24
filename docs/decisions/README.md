@@ -2,6 +2,11 @@
 
 Durable native boundaries and evidence/admission contracts:
 
+ADR 0004 now maintains the narrowly scoped GitHub-runner upstream-rootless
+userns profile prerequisite. Proven native completion and profile cleanup may
+produce ordinary evidence; the former experiment's deliberate non-success
+barrier is superseded while its historical evidence keeps its original status.
+
 - [0001: Native boundaries](0001-native-boundaries.md)
 - [0002: Capture and offline target profiles](0002-capture-and-offline-target-profiles.md)
 - [0003: Inert standalone targets](0003-inert-standalone-targets.md)

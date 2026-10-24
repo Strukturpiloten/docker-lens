@@ -601,6 +601,24 @@ fn allowlist_fixture(lane: &str) -> HealthRun {
         bytes: Cell::new(0),
         facts: None,
         cleaned: true,
+        cleanup_delegated: false,
+    }
+}
+
+#[test]
+fn health_drop_cleanup_ownership_guard_is_hermetic_for_all_states() {
+    for cleaned in [false, true] {
+        for delegated in [false, true] {
+            let mut run = allowlist_fixture("upstream-rootful");
+            run.cleaned = cleaned;
+            run.cleanup_delegated = delegated;
+            let required = run.owns_drop_cleanup();
+            // Disarm before assertions so even a failed control cannot contact a runtime.
+            run.cleaned = true;
+            assert_eq!(required, !cleaned && !delegated);
+            assert_eq!(run.calls.get(), 0);
+            assert_eq!(run.bytes.get(), 0);
+        }
     }
 }
 

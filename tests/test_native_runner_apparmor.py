@@ -1,4 +1,4 @@
-"""Hermetic experiment controls: no parser, runtime, /run, or policy operations."""
+"""Hermetic profile controls: no parser, runtime, /run, or policy operations."""
 
 import contextlib
 import ctypes
@@ -51,13 +51,45 @@ def private_run():
 
 
 class AdmissionTests(unittest.TestCase):
+    def test_existing_workflow_consumers_keep_admission_and_success_only_artifacts(self):
+        for name in ("check", "native-validation", "release-validation"):
+            workflow = (ROOT / f".github/workflows/{name}.yml").read_text()
+            native = workflow.split("  native-conformance:\n", 1)[1].split("  native-gate:\n", 1)[0]
+            native = native.split("\n  check-gate:", 1)[0].split("\n  release-gate:", 1)[0]
+            self.assertIn("DOCKERLENS_OUTER_ENGINE: docker", native)
+            self.assertIn("DOCKERLENS_NATIVE_CANDIDATE_SHA:", native)
+            self.assertIn("./scripts/native-conformance.sh", native)
+            self.assertIn("if-no-files-found: error", native)
+            self.assertNotIn("continue-on-error", native)
+            self.assertNotIn("if: always()", native.split("actions/upload-artifact", 1)[1])
+            self.assertIn('test "$NATIVE_RESULT" = success', workflow)
+            if name == "check":
+                self.assertIn("if: github.event_name == 'push' && github.ref == 'refs/heads/main'", native)
+                self.assertIn("${{ github.sha }}", native)
+            elif name == "native-validation":
+                self.assertLess(native.index("ref: main"), native.index("scripts/native-dispatch-admission.py"))
+                self.assertLess(native.index("scripts/native-dispatch-admission.py"),
+                                native.index("ref: ${{ inputs.expected_sha }}"))
+                self.assertEqual(workflow.count("run: python3 scripts/native-dispatch-admission.py"), 3)
+            else:
+                self.assertNotIn("workflow_call:", workflow)
+                self.assertIn('test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"', native)
+                self.assertIn('test "$(git rev-parse origin/main)" = "$EXPECTED_SHA"', native)
+
     def test_receipt_schema_and_all_projected_values_are_closed(self):
-        receipt = {"schema": 1, "experiment": "issue127_userns_v1", "outcome": "unadmitted",
+        receipt = {"schema": 1, "prerequisite": "github_runner_userns_v1", "outcome": "incomplete",
                    "candidate": "d" * 40, "label": "unverified", "profile_sha256": "a" * 64,
                    "parser_sha256": "b" * 64, "abi_sha256": "c" * 64,
                    "parser_version": "4.0.1", "cleanup": "removed"}
         APP.validate_receipt(receipt, "d" * 40)
+        with self.assertRaises(APP.Refused):
+            APP.validate_receipt(receipt, "d" * 40, require_verified=True)
+        accepted = receipt | {"label": "verified", "outcome": "verified"}
+        APP.validate_receipt(accepted, "d" * 40, require_verified=True)
+        record = "DOCKERLENS_NATIVE_APPARMOR_PROFILE: " + json.dumps(accepted)
+        APP.validate_cleanup_record(record, "d" * 40)
         wrong = [None, [], receipt | {"unknown": "private"}, receipt | {"schema": True},
+                 receipt | {"outcome": "verified"}, accepted | {"outcome": "incomplete"},
                  receipt | {"label": "verified", "cleanup": "not_loaded"},
                  receipt | {"parser_version": "unverified"}, receipt | {"candidate": "e" * 40}]
         for key in receipt:
@@ -66,28 +98,54 @@ class AdmissionTests(unittest.TestCase):
         for value in wrong:
             with self.subTest(value=value), self.assertRaises(APP.Refused):
                 APP.validate_receipt(value, "d" * 40)
+        for raw in (record + "extra", record.replace('"schema": 1', '"schema":1,"schema":1'),
+                    "DOCKERLENS_NATIVE_APPARMOR_EXPERIMENT: " + json.dumps(accepted),
+                    "DOCKERLENS_NATIVE_APPARMOR_PROFILE: " + json.dumps(receipt), "x" * 8193):
+            with self.subTest(raw=raw), self.assertRaises((APP.Refused, ValueError)):
+                APP.validate_cleanup_record(raw, "d" * 40)
+        with self.assertRaises(APP.Refused):
+            APP.validate_cleanup_record(record, "e" * 40)
+
+    def test_read_only_receipt_validation_needs_no_runner_or_privileged_io(self):
+        accepted = {"schema": 1, "prerequisite": "github_runner_userns_v1", "outcome": "verified",
+                    "candidate": "d" * 40, "label": "verified", "profile_sha256": "a" * 64,
+                    "parser_sha256": "b" * 64, "abi_sha256": "c" * 64,
+                    "parser_version": "4.0.1", "cleanup": "removed"}
+        record = "DOCKERLENS_NATIVE_APPARMOR_PROFILE: " + json.dumps(accepted)
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(APP, "RunnerProfile") as profile, \
+                mock.patch.object(APP.sys, "stdin", io.StringIO(record)):
+            self.assertEqual(APP.main(["validate-receipt", "d" * 40]), 0)
+            profile.assert_not_called()
 
     def test_failure_stage_output_is_closed_and_does_not_echo_evidence(self):
         for stage in (*sorted(APP.STAGES), "private/path\nraw parser diagnostic"):
             with self.subTest(stage=stage):
-                experiment = mock.Mock(stage=stage)
-                experiment.prepare.side_effect = APP.Refused("private/raw evidence")
+                profile = mock.Mock(stage=stage)
+                profile.prepare.side_effect = APP.Refused("private/raw evidence")
                 output = io.StringIO()
-                with mock.patch.object(APP, "Experiment", return_value=experiment), contextlib.redirect_stderr(output):
+                with mock.patch.object(APP, "RunnerProfile", return_value=profile), contextlib.redirect_stderr(output):
                     self.assertEqual(APP.main(["prepare", "directory", "upstream-rootless", NONCE, "name", "run", PIN]), 2)
                 expected = stage if stage in APP.STAGES else "admission"
-                self.assertEqual(output.getvalue(), "DOCKERLENS_NATIVE_APPARMOR_EXPERIMENT: "
-                                 f"operation=prepare stage={expected} outcome=unadmitted cleanup=retained\n")
+                self.assertEqual(output.getvalue(), "DOCKERLENS_NATIVE_APPARMOR_PROFILE: "
+                                 f"operation=prepare stage={expected} outcome=refused cleanup=retained\n")
 
     def test_completed_query_rejects_stderr_and_nonzero_without_echo(self):
         with private_run() as run, mock.patch.object(APP, "OWNER", os.geteuid()):
-            experiment = APP.Experiment(run, "upstream-rootless", NONCE, HOSTED, APP.Cancellation())
+            profile = APP.RunnerProfile(run, "upstream-rootless", NONCE, HOSTED, APP.Cancellation())
             for code in ("import sys; sys.stderr.write('private evidence')", "raise SystemExit(42)"):
                 with self.subTest(code=code), self.assertRaises(APP.Refused):
-                    experiment.query((sys.executable, "-c", code))
+                    profile.query((sys.executable, "-c", code))
 
     def test_exact_context_and_every_forbidden_selection_refuse_before_io(self):
         self.assertTrue(APP.admitted(HOSTED))
+        for workflow, event in (("check", "push"), ("native-validation", "workflow_dispatch"),
+                                ("release-validation", "workflow_dispatch")):
+            context = HOSTED | {"GITHUB_WORKFLOW_REF": f"Strukturpiloten/docker-lens/.github/workflows/{workflow}.yml@refs/heads/main",
+                                "GITHUB_EVENT_NAME": event}
+            self.assertTrue(APP.admitted(context))
+            for forbidden in ("pull_request", "pull_request_target", "workflow_call", "schedule",
+                              "workflow_dispatch" if event == "push" else "push"):
+                self.assertFalse(APP.admitted(context | {"GITHUB_EVENT_NAME": forbidden}))
         for key in HOSTED:
             with self.subTest(key=key):
                 self.assertFalse(APP.admitted(HOSTED | {key: "wrong"}))
@@ -100,7 +158,7 @@ class AdmissionTests(unittest.TestCase):
         with mock.patch.object(APP, "OWNER", os.geteuid()):
             for lane in ("debian11-rootless", "upstream-rootful", "debian11-rootful", ""):
                 with self.assertRaises(APP.Refused):
-                    APP.Experiment("/tmp/dockerlens-native.abcdefgh", lane, NONCE, HOSTED, APP.Cancellation())
+                    APP.RunnerProfile("/tmp/dockerlens-native.abcdefgh", lane, NONCE, HOSTED, APP.Cancellation())
 
     def test_fixed_profile_has_no_attachment_includes_or_other_rules(self):
         name = "dockerlens-127-upstream-rootless-127-1-" + NONCE
@@ -115,8 +173,8 @@ class AdmissionTests(unittest.TestCase):
                 mock.patch.object(APP, "OWNER", os.geteuid()), \
                 mock.patch.dict(os.environ, {"APPARMOR_CONFIG": "/private/ambient"}), \
                 mock.patch.object(APP.CaptureContext, "capture", return_value=b"") as capture:
-            experiment = APP.Experiment(run, "upstream-rootless", NONCE, HOSTED, APP.Cancellation())
-            experiment.query((str(APP.PARSER), *APP.COMMON, "--version"))
+            profile = APP.RunnerProfile(run, "upstream-rootless", NONCE, HOSTED, APP.Cancellation())
+            profile.query((str(APP.PARSER), *APP.COMMON, "--version"))
             command = capture.call_args.args[0]
             files = capture.call_args.args[1]
             self.assertEqual(command, (str(APP.PARSER), *APP.COMMON, "--version"))
@@ -133,13 +191,13 @@ class AdmissionTests(unittest.TestCase):
             git.chmod(0o700)
             env = HOSTED | {"PATH": temporary, "MOCK_HEAD": "d" * 40, "MOCK_DIRTY": ""}
             body = ("set -euo pipefail\n" + definition("native_outer_policy", RUNTIME)
-                    + definition("select_apparmor_experiment")
+                    + definition("select_apparmor_profile")
                     + "\nlane=$1; native_outer_engine=$2; script_dir=/reviewed/scripts\n"
-                    + "select_apparmor_experiment; printf '%s' \"$apparmor_experiment\"\n")
+                    + "select_apparmor_profile; printf '%s' \"$apparmor_profile\"\n")
             def invoke(lane="upstream-rootless", engine="docker", changes=None):
                 return subprocess.run(["/bin/bash", "-c", body, "test", lane, engine],
                                       env=env | (changes or {}), capture_output=True, timeout=3)
-            self.assertEqual(invoke().stdout, b"issue127_userns_v1")
+            self.assertEqual(invoke().stdout, b"github_runner_userns_v1")
             for lane in ("debian11-rootless", "upstream-rootful", "debian11-rootful"):
                 self.assertEqual(invoke(lane=lane).stdout, b"")
             for changes in ({"MOCK_DIRTY": " M source"}, {"MOCK_HEAD": "e" * 40},
@@ -147,8 +205,15 @@ class AdmissionTests(unittest.TestCase):
                             {"RUNNER_ENVIRONMENT": "self-hosted"}, {"DOCKER_HOST": "tcp://remote"}):
                 self.assertEqual(invoke(changes=changes).returncode, 2)
             self.assertEqual(invoke(engine="podman").returncode, 2)
-            for workflow in ("check", "release-validation"):
-                self.assertEqual(invoke(changes={"GITHUB_WORKFLOW_REF": f"Strukturpiloten/docker-lens/.github/workflows/{workflow}.yml@refs/heads/main"}).stdout, b"")
+            for workflow, event in (("check", "push"), ("release-validation", "workflow_dispatch")):
+                changes = {"GITHUB_WORKFLOW_REF": f"Strukturpiloten/docker-lens/.github/workflows/{workflow}.yml@refs/heads/main",
+                           "GITHUB_EVENT_NAME": event}
+                self.assertEqual(invoke(changes=changes).stdout, b"github_runner_userns_v1")
+                for wrong in ({"GITHUB_REF": "refs/pull/128/merge"}, {"GITHUB_JOB": "candidate"},
+                              {"GITHUB_REPOSITORY": "fork/docker-lens"}, {"MOCK_HEAD": "e" * 40},
+                              {"MOCK_DIRTY": " M source"}, {"DOCKERLENS_NATIVE_CANDIDATE_SHA": ""},
+                              {"GITHUB_EVENT_NAME": "pull_request"}, {"RUNNER_ENVIRONMENT": "self-hosted"}):
+                    self.assertEqual(invoke(changes=changes | wrong).returncode, 2)
 
 
 class LifecycleTests(unittest.TestCase):
@@ -164,7 +229,7 @@ class LifecycleTests(unittest.TestCase):
         self.stack.enter_context(mock.patch.object(APP, "trusted_file", return_value={
             "sha256": "f" * 64, "identity": [1, 2, os.geteuid()], "size": 10, "mtime_ns": 1, "ctime_ns": 1}))
         self.read = self.stack.enter_context(mock.patch.object(APP, "read_path", side_effect=self.fake_read))
-        self.query = self.stack.enter_context(mock.patch.object(APP.Experiment, "query", autospec=True, side_effect=self.fake_query))
+        self.query = self.stack.enter_context(mock.patch.object(APP.RunnerProfile, "query", autospec=True, side_effect=self.fake_query))
         self.profile_loaded = False
         self.parser_failure = None
         self.version = b"AppArmor parser version 4.0.1\nCopyright test\n"
@@ -172,7 +237,7 @@ class LifecycleTests(unittest.TestCase):
         self.absence = True
         self.commands = []
         self.snapshot_override = None
-        self.experiment = APP.Experiment(self.run.name, "upstream-rootless", NONCE, HOSTED, APP.Cancellation())
+        self.profile = APP.RunnerProfile(self.run.name, "upstream-rootless", NONCE, HOSTED, APP.Cancellation())
         self.run_id = Path(self.run.name).name.rsplit(".", 1)[1]
         self.name = "dl-native-" + self.run_id
 
@@ -192,7 +257,7 @@ class LifecycleTests(unittest.TestCase):
             return b"yes\n"
         raise AssertionError(path)
 
-    def fake_query(self, _experiment, argv, *, statuses=(0,)):
+    def fake_query(self, _profile, argv, *, statuses=(0,)):
         self.commands.append(tuple(argv))
         if argv[0] == str(APP.PARSER):
             self.assertEqual(argv[1:1 + len(APP.COMMON)], APP.COMMON)
@@ -201,7 +266,7 @@ class LifecycleTests(unittest.TestCase):
                 raise APP.Refused("completion_unknown")
             if operation == "--version":
                 return self.version
-            self.assertEqual(Path(argv[-1]).read_bytes(), APP.profile_bytes(self.experiment.state["profile"]))
+            self.assertEqual(Path(argv[-1]).read_bytes(), APP.profile_bytes(self.profile.state["profile"]))
             if operation == "--add":
                 self.assertFalse(self.profile_loaded)
                 self.assertEqual(self.state()["load"], "intent")
@@ -228,28 +293,28 @@ class LifecycleTests(unittest.TestCase):
         raise AssertionError(argv)
 
     def state(self):
-        return json.loads((self.experiment.path / "state.json").read_text())
+        return json.loads((self.profile.path / "state.json").read_text())
 
     def prepare(self):
-        self.experiment.prepare(self.name, self.run_id, PIN)
+        self.profile.prepare(self.name, self.run_id, PIN)
 
     def start(self):
         self.prepare()
-        self.experiment.load()
-        name = self.experiment.begin(self.name, self.run_id, PIN)
+        self.profile.load()
+        name = self.profile.begin(self.name, self.run_id, PIN)
         self.assertEqual(name, self.state()["profile"])
-        self.experiment.created(CID)
+        self.profile.created(CID)
 
     def test_fixed_parser_argv_and_full_profile_lifecycle(self):
         self.start()
-        receipt = self.experiment.cleanup()
+        receipt = self.profile.cleanup()
         self.assertEqual((receipt["outcome"], receipt["cleanup"], receipt["label"]),
-                         ("unadmitted", "removed", "unverified"))
+                         ("incomplete", "removed", "unverified"))
         self.assertFalse(self.profile_loaded)
         parser = [argv for argv in self.commands if argv[0] == str(APP.PARSER)]
         self.assertEqual([argv[1 + len(APP.COMMON)] for argv in parser],
                          ["--version", "--skip-kernel-load", "--add", "--remove"])
-        self.assertEqual(list(self.experiment.path.iterdir()), [])
+        self.assertEqual(list(self.profile.path.iterdir()), [])
         for forbidden in ("--replace", "--reload", "--purge-cache", "--write-cache", "--readimpliesX", "--namespace"):
             self.assertNotIn(forbidden, repr(parser))
 
@@ -262,16 +327,16 @@ class LifecycleTests(unittest.TestCase):
                 with self.assertRaises((APP.Refused, OSError)):
                     self.prepare()
                 self.assertEqual(self.state()["load"], "never")
-                self.experiment.cleanup()
-                self.experiment.path.rmdir()
+                self.profile.cleanup()
+                self.profile.path.rmdir()
         self.assertFalse(any("--add" in argv or "--remove" in argv for argv in self.commands))
 
     def test_compile_failure_never_loads_and_can_discard_only_unmutated_state(self):
         self.parser_failure = "--skip-kernel-load"
         with self.assertRaises(APP.Refused):
             self.prepare()
-        self.assertEqual(self.experiment.stage, "compile")
-        self.assertEqual(self.experiment.cleanup()["cleanup"], "not_loaded")
+        self.assertEqual(self.profile.stage, "compile")
+        self.assertEqual(self.profile.cleanup()["cleanup"], "not_loaded")
 
     def test_prerequisite_refusal_has_only_the_expected_fixed_stage(self):
         for path, stage in (("/sys/module/apparmor/parameters/enabled", "kernel_enabled"),
@@ -282,32 +347,32 @@ class LifecycleTests(unittest.TestCase):
                 self.missing_feature = Path(path)
                 with self.assertRaises(FileNotFoundError):
                     self.prepare()
-                self.assertEqual(self.experiment.stage, stage)
+                self.assertEqual(self.profile.stage, stage)
                 self.assertEqual(self.state()["load"], "never")
-                self.experiment.cleanup()
-                self.experiment.path.rmdir()
+                self.profile.cleanup()
+                self.profile.path.rmdir()
 
     def test_absence_accepts_only_complete_exact_negative_rows_for_both_id_and_name(self):
         self.start()
         for raw in (b"", b"other\n", b"other\nother\n"):
-            with self.subTest(raw=raw), mock.patch.object(self.experiment, "bridge", return_value=raw) as bridge:
-                self.experiment.absent()
+            with self.subTest(raw=raw), mock.patch.object(self.profile, "bridge", return_value=raw) as bridge:
+                self.profile.absent()
                 self.assertEqual(bridge.call_args_list, [mock.call("apparmor-presence", "id", CID),
                                                         mock.call("apparmor-presence", "name", self.name)])
         for raw in (b"present\n", b"present\npresent\n", b"other\npresent\n", b"other", b"other\r\n",
                     b"other\npartial", b"\n", b"absent\n", b"private evidence\n"):
-            with self.subTest(raw=raw), mock.patch.object(self.experiment, "bridge", return_value=raw), self.assertRaises(APP.Refused):
-                self.experiment.absent()
-        with mock.patch.object(self.experiment, "bridge", side_effect=APP.Refused("command_failed")), self.assertRaises(APP.Refused):
-            self.experiment.absent()
-        self.assertEqual(self.experiment.stage, "absence")
+            with self.subTest(raw=raw), mock.patch.object(self.profile, "bridge", return_value=raw), self.assertRaises(APP.Refused):
+                self.profile.absent()
+        with mock.patch.object(self.profile, "bridge", side_effect=APP.Refused("command_failed")), self.assertRaises(APP.Refused):
+            self.profile.absent()
+        self.assertEqual(self.profile.stage, "absence")
 
     def test_name_collision_between_compile_and_load_never_removes_existing_profile(self):
         self.prepare()
         self.profile_loaded = True
         with self.assertRaises(APP.Refused):
-            self.experiment.load()
-        self.assertEqual(self.experiment.cleanup()["cleanup"], "not_loaded")
+            self.profile.load()
+        self.assertEqual(self.profile.cleanup()["cleanup"], "not_loaded")
         self.assertTrue(self.profile_loaded)
         self.assertFalse(any("--add" in argv or "--remove" in argv for argv in self.commands))
 
@@ -315,25 +380,25 @@ class LifecycleTests(unittest.TestCase):
         self.prepare()
         self.parser_failure = "--add"
         with self.assertRaises(APP.Refused):
-            self.experiment.load()
+            self.profile.load()
         self.assertEqual(self.state()["load"], "intent")
         with self.assertRaises(APP.Refused):
-            self.experiment.cleanup()
-        self.assertTrue((self.experiment.path / "profile").exists())
+            self.profile.cleanup()
+        self.assertTrue((self.profile.path / "profile").exists())
         self.assertFalse(any("--remove" in argv for argv in self.commands))
 
     def test_created_never_attempted_allows_loaded_profile_removal(self):
         self.prepare()
-        self.experiment.load()
-        self.assertEqual(self.experiment.cleanup()["cleanup"], "removed")
+        self.profile.load()
+        self.assertEqual(self.profile.cleanup()["cleanup"], "removed")
         self.assertFalse(any("apparmor-presence" in argv for argv in self.commands))
 
     def test_creation_intent_without_recorded_cid_refuses_unload(self):
         self.prepare()
-        self.experiment.load()
-        self.experiment.begin(self.name, self.run_id, PIN)
+        self.profile.load()
+        self.profile.begin(self.name, self.run_id, PIN)
         with self.assertRaises(APP.Refused):
-            self.experiment.cleanup()
+            self.profile.cleanup()
         self.assertTrue(self.profile_loaded)
         self.assertEqual(self.state()["create"], "intent")
 
@@ -341,36 +406,36 @@ class LifecycleTests(unittest.TestCase):
         self.start()
         self.absence = False
         with self.assertRaises(APP.Refused):
-            self.experiment.cleanup()
+            self.profile.cleanup()
         self.assertEqual(self.state()["load"], "loaded")
         self.absence = True
         self.parser_failure = "--remove"
         with self.assertRaises(APP.Refused):
-            self.experiment.cleanup()
+            self.profile.cleanup()
         self.assertEqual(self.state()["load"], "unload_intent")
         self.parser_failure = None
         with self.assertRaises(APP.Refused):
-            self.experiment.cleanup()
+            self.profile.cleanup()
 
     def test_actual_creation_binding_is_saved_before_later_label_refusal(self):
         self.start()
         self.assertEqual(self.state()["create"], "recorded")
-        with mock.patch.object(APP.Experiment, "snapshot", side_effect=APP.Refused("label_unavailable")):
+        with mock.patch.object(APP.RunnerProfile, "snapshot", side_effect=APP.Refused("label_unavailable")):
             with self.assertRaises(APP.Refused):
-                self.experiment.verify()
+                self.profile.verify()
         self.assertEqual(self.state()["create"], "recorded")
-        self.assertEqual(self.experiment.cleanup()["cleanup"], "removed")
+        self.assertEqual(self.profile.cleanup()["cleanup"], "removed")
 
     def test_unbound_actual_creation_never_becomes_known_from_cid_alone(self):
         self.prepare()
-        self.experiment.load()
-        self.experiment.begin(self.name, self.run_id, PIN)
+        self.profile.load()
+        self.profile.begin(self.name, self.run_id, PIN)
         self.snapshot_override = {"Name": "foreign"}
         with self.assertRaises(ValueError):
-            self.experiment.created(CID)
+            self.profile.created(CID)
         self.assertEqual(self.state()["create"], "intent")
         with self.assertRaises(APP.Refused):
-            self.experiment.cleanup()
+            self.profile.cleanup()
 
     def test_run_directory_replacement_and_original_identity_mismatch_refuse(self):
         self.prepare()
@@ -381,51 +446,51 @@ class LifecycleTests(unittest.TestCase):
         original.mkdir(mode=0o700)
         self.addCleanup(original.rmdir)
         with self.assertRaises(APP.Refused):
-            self.experiment.load()
+            self.profile.load()
         self.assertFalse(self.profile_loaded)
 
     def test_symlink_hardlink_mode_and_nonce_directory_reuse_refuse(self):
         self.prepare()
         with self.assertRaises(FileExistsError):
             self.prepare()
-        profile = self.experiment.path / "profile"
+        profile = self.profile.path / "profile"
         content = profile.read_bytes()
         profile.chmod(0o644)
         with self.assertRaises(APP.Refused):
-            self.experiment.load()
+            self.profile.load()
         profile.chmod(0o600)
-        extra = self.experiment.path / "extra"
+        extra = self.profile.path / "extra"
         os.link(profile, extra)
         with self.assertRaises(APP.Refused):
-            self.experiment.load()
+            self.profile.load()
         extra.unlink()
         profile.unlink()
         extra.write_bytes(content)
         profile.symlink_to(extra)
         with self.assertRaises(OSError):
-            self.experiment.load()
+            self.profile.load()
 
     def test_state_custody_and_candidate_rebinding_refuse_without_policy_contact(self):
         self.prepare()
         for key, wrong in (("candidate", "e" * 40), ("run_identity", [0, 1, 2]), ("attempt", "2"), ("lane", "debian11-rootless")):
             with self.subTest(key=key):
                 state = self.state()
-                path = self.experiment.path / "state.json"
+                path = self.profile.path / "state.json"
                 path.write_text(json.dumps(state | {key: wrong}))
                 with self.assertRaises(APP.Refused):
-                    self.experiment.load()
+                    self.profile.load()
                 path.write_text(json.dumps(state))
         self.assertFalse(self.profile_loaded)
-        state = self.experiment.path / "state.json"
-        alias = self.experiment.path / "alias"
+        state = self.profile.path / "state.json"
+        alias = self.profile.path / "alias"
         os.link(state, alias)
         with self.assertRaises(APP.Refused):
-            self.experiment.load()
+            self.profile.load()
 
     def test_malformed_state_never_authorizes_any_lifecycle_operation_or_receipt(self):
         self.prepare()
         original = self.state()
-        path = self.experiment.path / "state.json"
+        path = self.profile.path / "state.json"
         values = [None, [], original | {"unknown": "private"}, original | {"schema": True},
                   original | {"schema": 1.0}, original | {"load": "arbitrary"},
                   original | {"create": "recorded", "cid": CID},
@@ -454,23 +519,23 @@ class LifecycleTests(unittest.TestCase):
             path.write_text(raw)
             for operation, args in operations:
                 with self.subTest(index=index, operation=operation), self.assertRaises((APP.Refused, ValueError)):
-                    getattr(self.experiment, operation)(*args)
+                    getattr(self.profile, operation)(*args)
                 self.assertEqual(path.read_text(), raw)
                 self.assertEqual((len(self.commands), self.read.call_count), (commands, policy_reads))
         path.write_text(json.dumps(original))
-        self.experiment.load()
+        self.profile.load()
         self.assertTrue(self.profile_loaded)
 
-    def test_cancellation_before_parser_mutation_stays_unadmitted(self):
+    def test_cancellation_before_parser_mutation_refuses_acceptance(self):
         self.prepare()
         # Cancellation at the actual parser transport edge, not a fake signal
         # to a real child. Intent was saved before entering this edge.
-        with mock.patch.object(APP.Experiment, "parser", side_effect=APP.Cancelled(15)):
+        with mock.patch.object(APP.RunnerProfile, "parser", side_effect=APP.Cancelled(15)):
             with self.assertRaises(APP.Cancelled):
-                self.experiment.load()
+                self.profile.load()
         self.assertEqual(self.state()["load"], "intent")
         with self.assertRaises(APP.Refused):
-            self.experiment.cleanup()
+            self.profile.cleanup()
 
     def test_effective_label_is_exact_and_creation_bound_with_pid_start_brackets(self):
         self.start()
@@ -482,40 +547,48 @@ class LifecycleTests(unittest.TestCase):
             return os.dup(process) if path == "/proc/1234" else real_open(path, flags, *args, **kwargs)
         try:
             with mock.patch.object(APP.os, "open", side_effect=fake_open), \
-                    mock.patch.object(APP.Experiment, "snapshot", return_value=(1234, "started")) as snapshot, \
+                    mock.patch.object(APP.RunnerProfile, "snapshot", return_value=(1234, "started")) as snapshot, \
                     mock.patch.object(APP, "process_ticks", return_value=99) as ticks, \
                     mock.patch.object(APP, "process_read", return_value=f"0::/system.slice/docker-{CID}.scope\n".encode()) as cgroup, \
                     mock.patch.object(APP, "process_label", return_value=expected) as label:
-                self.experiment.verify()
+                self.profile.verify()
                 self.assertEqual(self.state()["label"], "verified")
                 self.assertEqual((snapshot.call_count, ticks.call_count, label.call_count), (2, 2, 2))
                 for wrong in (b"unconfined\n", expected.replace(b"unconfined", b"enforce"), expected + b"stacked", b""):
                     label.return_value = wrong
                     with self.assertRaises(APP.Refused):
-                        self.experiment.verify()
+                        self.profile.verify()
                 label.return_value = expected
                 ticks.side_effect = [99, 100]
                 with self.assertRaises(APP.Refused):
-                    self.experiment.verify()
+                    self.profile.verify()
                 ticks.side_effect = None
                 snapshot.side_effect = [(1234, "started"), (1234, "restarted")]
                 with self.assertRaises(APP.Refused):
-                    self.experiment.verify()
+                    self.profile.verify()
                 snapshot.side_effect = None
                 for wrong in (b"0::/system.slice/other.scope\n", f"0::/docker/{CID}\n".encode(),
                               f"0::/system.slice/docker-{CID}.scope/child\n".encode()):
                     cgroup.return_value = wrong
                     with self.assertRaises(APP.Refused):
-                        self.experiment.verify()
+                        self.profile.verify()
                 cgroup.side_effect = [f"0::/system.slice/docker-{CID}.scope\n".encode(), b"changed\n"]
                 with self.assertRaises(APP.Refused):
-                    self.experiment.verify()
+                    self.profile.verify()
+                cgroup.side_effect = None
+                cgroup.return_value = f"0::/system.slice/docker-{CID}.scope\n".encode()
+                self.profile.verify()
+            receipt = self.profile.cleanup()
+            APP.validate_receipt(receipt, HOSTED["DOCKERLENS_NATIVE_CANDIDATE_SHA"], require_verified=True)
+            self.assertEqual((receipt["outcome"], receipt["label"], receipt["cleanup"]),
+                             ("verified", "verified", "removed"))
+            self.assertFalse(self.profile_loaded)
         finally:
             os.close(process)
 
 
 class ShellCreationTests(unittest.TestCase):
-    def test_only_exact_selected_experimental_calls_extend_explicit_context(self):
+    def test_only_exact_selected_profile_calls_extend_explicit_context(self):
         base = ("GITHUB_ACTIONS", "RUNNER_ENVIRONMENT", "RUNNER_OS", "GITHUB_REF", "GITHUB_EVENT_NAME",
                 "GITHUB_REPOSITORY", "GITHUB_WORKFLOW_REF", "ImageOS", "ImageVersion", "DOCKER_HOST",
                 "DOCKER_CONTEXT", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH", "DOCKER_API_VERSION",
@@ -523,12 +596,12 @@ class ShellCreationTests(unittest.TestCase):
         extra = ("GITHUB_JOB", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "DOCKERLENS_NATIVE_CANDIDATE_SHA")
         directory = "/tmp/dockerlens-native.abcdefgh"
         body = ("set -euo pipefail\n" + definition("native_outer_bridge_command", RUNTIME)
-                + "\nnative_outer_engine=$1; native_outer_directory=$2; apparmor_experiment=$3; shift 3\n"
+                + "\nnative_outer_engine=$1; native_outer_directory=$2; apparmor_profile=$3; shift 3\n"
                 + "native_outer_privilege=(); native_outer_script_dir=/reviewed/scripts\n"
                 + "timeout() { printf '%s\\0' \"$@\"; }\n"
                 + "native_outer_bridge_command 30 \"$@\"\n")
 
-        def check(args, extended=False, engine="docker", flag="issue127_userns_v1"):
+        def check(args, extended=False, engine="docker", flag="github_runner_userns_v1"):
             # Capture explicit assignments only. Existing ambient inheritance is
             # unchanged; this fake does not claim to sanitize an environment.
             result = subprocess.run(["/bin/bash", "-c", body, "test", engine, directory, flag, *args],
@@ -551,7 +624,7 @@ class ShellCreationTests(unittest.TestCase):
                 check(args, extended=True)
                 check(args, engine="podman")
                 check(args, flag="")
-                check(args, flag="issue127_userns_v2")
+                check(args, flag="github_runner_userns_v2")
                 check(args + ["extra"])
                 check(args[:-1])
                 if args[0] == "create-daemon":
@@ -693,15 +766,15 @@ app.OWNER=os.geteuid(); app.SCRIPTS=Path(__file__).parent
 app.ENV={{"PATH":str(run/"bin"),"LANG":"C","LC_ALL":"C"}}
 cancellation=app.Cancellation()
 for number in (signal.SIGHUP,signal.SIGINT,signal.SIGTERM): signal.signal(number,cancellation.request)
-experiment=app.Experiment(directory,lane,nonce,os.environ,cancellation)
+profile=app.RunnerProfile(directory,lane,nonce,os.environ,cancellation)
 if mode == "late-begin":
     signal.signal(signal.SIGTERM, lambda *_: None)
     (run/"frontend-ready").write_text(str(os.getpid()))
     while not (run/"release").exists(): time.sleep(.01)
     print("dockerlens-127-upstream-rootless-127-1-"+nonce, flush=True)
     raise SystemExit(0)
-if mode == "soft-deadline": experiment.deadline=time.monotonic()+.15
-experiment.bridge("apparmor-presence", "id", {CID!r})
+if mode == "soft-deadline": profile.deadline=time.monotonic()+.15
+profile.bridge("apparmor-presence", "id", {CID!r})
 raise SystemExit("unexpected fake query completion")
 '''
         (scripts / "native-runner-apparmor.py").write_text(frontend)
@@ -794,51 +867,191 @@ while True: time.sleep(1)
                     pass
 
 
+class PublicationBudgetTests(unittest.TestCase):
+    def run_wrapper(self, body):
+        return subprocess.run(["/bin/bash", "-c", "set -euo pipefail\n"
+                               + definition("native_publication_command") + body],
+                              env={"PATH": "/unavailable"}, capture_output=True, text=True, timeout=3)
+
+    def test_every_phase_recomputes_remaining_original_budget(self):
+        result = self.run_wrapper("\nSECONDS=1700\n"
+                                  + "timeout() { printf '%s\\n' \"$3\"; SECONDS=$((SECONDS + 11)); }\n"
+                                  + "native_publication_command first\n"
+                                  + "native_publication_command second\n"
+                                  + "native_publication_command third\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ["97s", "86s", "75s"])
+
+    def test_expired_budget_never_starts_child_and_late_zero_is_refused(self):
+        for elapsed in (1797, 1799, 1800, 1801):
+            with self.subTest(elapsed=elapsed):
+                result = self.run_wrapper(f"\nSECONDS={elapsed}\n"
+                                          + "timeout() { printf 'FORBIDDEN CHILD'; }\n"
+                                          + "native_publication_command child\n")
+                self.assertEqual((result.returncode, result.stdout), (124, ""))
+        result = self.run_wrapper("\nSECONDS=1790\n"
+                                  + "timeout() { SECONDS=1800; return 0; }\n"
+                                  + "native_publication_command child\n")
+        self.assertEqual(result.returncode, 124)
+
+    def test_child_failure_and_cancellation_cannot_become_success(self):
+        for status in (17, 124, 130, 137, 143):
+            with self.subTest(status=status):
+                result = self.run_wrapper("\nSECONDS=1700\n"
+                                          + f"timeout() {{ return {status}; }}\n"
+                                          + "native_publication_command child\n")
+                self.assertEqual(result.returncode, status)
+
+    def test_real_publication_git_and_python_hangs_are_bounded_by_original_cutoff(self):
+        with tempfile.TemporaryDirectory(prefix="dl-fake-publication-") as temporary:
+            tools = Path(temporary)
+            (tools / "timeout").symlink_to("/usr/bin/timeout")
+            git = tools / "git"
+            git.write_text("#!/bin/sh\ncase \" $* \" in\n"
+                           + "*' rev-parse '*) phase=head;; *' status '*) phase=status;; *) exit 9;; esac\n"
+                           + "printf '%s\\n' \"$phase\" >>\"$TRACE\"\n"
+                           + "if [ \"$HANG\" = \"$phase\" ]; then /bin/sleep 20; fi\n"
+                           + "if [ \"$phase\" = head ]; then printf '%s\\n' \"$CANDIDATE\"; fi\n")
+            git.chmod(0o700)
+            publisher = tools / "python3"
+            publisher.write_text("#!/bin/sh\nprintf 'publisher\\n' >>\"$TRACE\"\n"
+                                 + "if [ \"$HANG\" = publisher ]; then trap '' TERM; /bin/sleep 20; fi\n"
+                                 + "printf 'ordinary-receipt-published\\n'\n")
+            publisher.chmod(0o700)
+            values = {"script_dir": "/reviewed/scripts", "run_dir": "/private/run", "lane": "upstream-rootless",
+                      "image": PIN, "expected_mode": "rootless", "installed_docker_package": "", "run_id": "run",
+                      "DOCKERLENS_NATIVE_EVIDENCE_DIR": "/private/evidence",
+                      "DOCKERLENS_NATIVE_CANDIDATE_SHA": "d" * 40}
+            for key in ("NATIVE_SHAPES_PATH", "NATIVE_SOURCE_PROBES_PATH", "NATIVE_NETWORK_PROBES_PATH",
+                        "NATIVE_VOLUME_PROBES_PATH", "NATIVE_VOLUME_LABEL_PROBES_PATH", "NATIVE_IDENTITY_PROBES_PATH",
+                        "NATIVE_PORT_PROBES_PATH", "NATIVE_HEALTH_METADATA_PROOF_PATH",
+                        "NATIVE_NETWORK_ATTACHMENT_PROOF_PATH", "NATIVE_BIND_RELABEL_PROOF_PATH"):
+                values[key] = "/private/proof"
+            body = ("set -euo pipefail\n" + definition("native_publication_command")
+                    + definition("publish_native_evidence")
+                    + "\n" + "\n".join(key + "=" + shlex.quote(value) for key, value in values.items())
+                    + "\nSECONDS=1796\npublish_native_evidence\nprintf 'PUBLICATION ACCEPTED\\n'\n")
+            for phase, expected in (("none", ["head", "status", "publisher"]),
+                                    ("head", ["head"]), ("status", ["head", "status"]),
+                                    ("publisher", ["head", "status", "publisher"])):
+                trace = tools / (phase + ".trace")
+                with self.subTest(phase=phase):
+                    started = time.monotonic()
+                    result = subprocess.run(["/bin/bash", "-c", body],
+                                            env={"PATH": temporary, "HANG": phase, "TRACE": str(trace),
+                                                 "CANDIDATE": "d" * 40},
+                                            capture_output=True, text=True, timeout=7)
+                    self.assertLess(time.monotonic() - started, 5)
+                    self.assertEqual(trace.read_text().splitlines(), expected)
+                    if phase == "none":
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertIn("PUBLICATION ACCEPTED", result.stdout)
+                    else:
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertNotIn("ordinary-receipt-published", result.stdout)
+                        self.assertNotIn("PUBLICATION ACCEPTED", result.stdout)
+
+
 class ShellFinalizationTests(unittest.TestCase):
-    def cleanup(self, original=0, helper=0, network=0, containers=0):
+    def cleanup(self, original=0, helper=0, network=0, containers=0, completed=1,
+                retained=0, receipt=None, publisher=0, elapsed=0, publisher_elapsed=None):
+        if receipt is None:
+            receipt = {"schema": 1, "prerequisite": "github_runner_userns_v1", "outcome": "verified",
+                       "candidate": HOSTED["DOCKERLENS_NATIVE_CANDIDATE_SHA"], "label": "verified",
+                       "profile_sha256": "a" * 64, "parser_sha256": "b" * 64,
+                       "abi_sha256": "c" * 64, "parser_version": "4.0.1", "cleanup": "removed"}
+        record = receipt if isinstance(receipt, str) else (
+            "DOCKERLENS_NATIVE_APPARMOR_PROFILE: " + json.dumps(receipt))
         with tempfile.TemporaryDirectory(prefix="dl-fake-cleanup-") as temporary:
-            # Extract only the existing EXIT owner. PATH cannot resolve engines,
-            # parser, sudo, or any external cleanup implementation.
-            body = ("set -euo pipefail\n" + definition("cleanup") + "\n"
+            (Path(temporary) / "timeout").symlink_to("/usr/bin/timeout")
+            (Path(temporary) / "python3").symlink_to(sys.executable)
+            # Only the existing EXIT owner and real read-only receipt validator.
+            # PATH cannot resolve a runtime, parser, sudo or cleanup executable.
+            body = ("set -euo pipefail\n" + definition("native_publication_command")
+                    + definition("cleanup") + "\n" + f"SECONDS={elapsed}\n"
                     + "watchdog_pid=; container=daemon; sidecar=sidecar; outer_network=network; volume=volume\n"
                     + "outer_container_id=; sidecar_container_id=; outer_attempted=0; sidecar_attempted=0\n"
-                    + "apparmor_experiment=issue127_userns_v1; apparmor_attempted=1; apparmor_nonce=" + NONCE + "\n"
-                    + "apparmor_native_completed=1; native_success_summary='FORBIDDEN SUCCESS'; lane=upstream-rootless\n"
-                    + "preserve_run_dir=1; run_dir=" + shlex.quote(temporary) + "\n"
-                    + f"cleanup_container() {{ return {containers}; }}\n"
-                    + f"cleanup_network() {{ return {network}; }}\ncleanup_volume() {{ return 0; }}\n"
+                    + "apparmor_profile=github_runner_userns_v1; apparmor_attempted=1; apparmor_nonce=" + NONCE + "\n"
+                    + f"apparmor_native_completed={completed}; native_success_summary='ORDINARY SUCCESS'; lane=upstream-rootless\n"
+                    + f"preserve_run_dir={retained}; run_dir=" + shlex.quote(temporary) + "\n"
+                    + "script_dir=" + shlex.quote(str(ROOT / "scripts")) + "\n"
+                    + "DOCKERLENS_NATIVE_CANDIDATE_SHA=" + HOSTED["DOCKERLENS_NATIVE_CANDIDATE_SHA"] + "\n"
+                    + f"cleanup_container() {{ printf 'container-cleanup-called\\n'; return {containers}; }}\n"
+                    + f"cleanup_network() {{ printf 'network-cleanup-called\\n'; return {network}; }}\n"
+                    + "cleanup_volume() { printf 'volume-cleanup-called\\n'; return 0; }\n"
                     + "cleanup_refuse() { status=1; preserve_run_dir=1; return 1; }\n"
-                    + f"native_outer_bridge_command() {{ printf 'profile-cleanup-called\\n'; return {helper}; }}\n"
+                    + f"native_outer_bridge_command() {{ printf '%s\\n' {shlex.quote(record)}; "
+                    + f"printf 'profile-cleanup-called\\n' >&2; return {helper}; }}\n"
+                    + "publish_native_evidence() { printf 'ordinary-receipt-published\\n'; "
+                    + (f"SECONDS={publisher_elapsed}; " if publisher_elapsed is not None else "")
+                    + f"return {publisher}; }}\n"
                     + f"trap cleanup EXIT\nexit {original}\n")
             return subprocess.run(["/bin/bash", "-c", body], env={"PATH": temporary},
                                   capture_output=True, text=True, timeout=3)
 
-    def test_experiment_never_succeeds_and_preserves_native_and_cancel_failure(self):
+    def test_native_success_and_verified_profile_cleanup_allow_ordinary_receipt(self):
+        result = self.cleanup()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("outcome=verified native_completed=1", result.stderr)
+        self.assertEqual(result.stdout.count("container-cleanup-called"), 2)
+        for marker in ("container-cleanup-called", "network-cleanup-called", "volume-cleanup-called"):
+            self.assertLess(result.stdout.index(marker), result.stdout.index("APPARMOR_PROFILE:"))
+        self.assertLess(result.stdout.index("APPARMOR_PROFILE:"), result.stdout.index("ordinary-receipt-published"))
+        self.assertLess(result.stdout.index("ordinary-receipt-published"), result.stdout.index("ORDINARY SUCCESS"))
+
+    def test_native_failure_cancellation_cleanup_failure_and_retention_never_publish(self):
         for original in (0, 17, 130, 143):
-            for helper in (0, 2):
-                result = self.cleanup(original=original, helper=helper, network=1)
-                self.assertEqual(result.returncode, original or 1)
-                self.assertIn("outcome=unadmitted", result.stderr)
-                self.assertNotIn("FORBIDDEN SUCCESS", result.stdout)
-                self.assertIn("profile-cleanup-called", result.stdout)
+            for failure in ({"helper": 2}, {"network": 1}, {"containers": 1},
+                            {"completed": 0}, {"retained": 1}):
+                with self.subTest(original=original, failure=failure):
+                    result = self.cleanup(original=original, **failure)
+                    self.assertEqual(result.returncode, original or 1, result.stderr)
+                    self.assertIn("outcome=refused", result.stderr)
+                    self.assertNotIn("ordinary-receipt-published", result.stdout)
+                    self.assertNotIn("ORDINARY SUCCESS", result.stdout)
+                    self.assertIn("profile-cleanup-called", result.stderr)
+        result = self.cleanup(publisher=9)
+        self.assertEqual(result.returncode, 9)
+        self.assertNotIn("ORDINARY SUCCESS", result.stdout)
 
-    def test_cleanup_still_checks_profile_when_guest_cleanup_was_unknown(self):
-        result = self.cleanup(containers=1, helper=2)
+    def test_unproved_or_malformed_cleanup_receipt_cannot_publish(self):
+        base = {"schema": 1, "prerequisite": "github_runner_userns_v1", "outcome": "verified",
+                "candidate": HOSTED["DOCKERLENS_NATIVE_CANDIDATE_SHA"], "label": "verified",
+                "profile_sha256": "a" * 64, "parser_sha256": "b" * 64,
+                "abi_sha256": "c" * 64, "parser_version": "4.0.1", "cleanup": "removed"}
+        for receipt in ("", "profile-cleanup-called", "DOCKERLENS_NATIVE_APPARMOR_PROFILE: {}",
+                        'DOCKERLENS_NATIVE_APPARMOR_PROFILE: {"schema":1,"schema":1}',
+                        base | {"label": "unverified", "outcome": "incomplete"},
+                        base | {"cleanup": "not_loaded", "label": "unverified", "outcome": "incomplete"},
+                        base | {"candidate": "e" * 40}, base | {"profile_sha256": ""}):
+            with self.subTest(receipt=receipt):
+                result = self.cleanup(receipt=receipt)
+                self.assertEqual(result.returncode, 1)
+                self.assertNotIn("ordinary-receipt-published", result.stdout)
+                self.assertNotIn("ORDINARY SUCCESS", result.stdout)
+
+    def test_expired_original_budget_cannot_validate_or_publish_after_cleanup(self):
+        result = self.cleanup(elapsed=1800)
         self.assertEqual(result.returncode, 1)
-        self.assertIn("profile-cleanup-called", result.stdout)
+        self.assertIn("profile-cleanup-called", result.stderr)
+        self.assertNotIn("ordinary-receipt-published", result.stdout)
+        self.assertNotIn("ORDINARY SUCCESS", result.stdout)
 
-    def test_standard_receipt_block_is_unreachable_after_experiment_native_checks(self):
-        barrier = SOURCE.index("  apparmor_native_completed=1")
-        receipt = SOURCE.index('if [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]')
-        self.assertIn("exit 0", SOURCE[barrier:receipt])
+    def test_exact_native_sequence_and_launch_remain_mandatory(self):
         self.assertLess(SOURCE.index('30 apparmor verify "$lane" "$apparmor_nonce"'), SOURCE.index('/run-exact-native-test.sh"'))
-        self.assertEqual(SOURCE.count('/run-exact-native-test.sh"'), 21)
+        self.assertLess(SOURCE.rindex('/run-exact-native-test.sh"'), SOURCE.index("  apparmor_native_completed=1"))
+        self.assertEqual(SOURCE.count('/run-exact-native-test.sh"'), 23)
         self.assertIn('--privileged --pids-limit=512 --memory=4g', RUNTIME)
         self.assertIn('start=(/usr/local/bin/start-dockerd', RUNTIME)
         helper = (ROOT / "scripts/native-runner-apparmor.py").read_text()
         self.assertNotIn('"/usr/bin/git"', helper)
         self.assertNotIn("safe.directory", helper)
 
+    def test_late_zero_publisher_cannot_emit_ordinary_success(self):
+        result = self.cleanup(publisher_elapsed=1800)
+        self.assertEqual(result.returncode, 124)
+        self.assertIn("outcome=refused", result.stderr)
+        self.assertNotIn("ORDINARY SUCCESS", result.stdout)
 
 if __name__ == "__main__":
     unittest.main()

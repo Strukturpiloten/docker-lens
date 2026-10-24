@@ -10,8 +10,28 @@ constructed harness context and emit closed unadmitted observations only; no
 capability map, catalogue, product API or pin changes. The Debian parser-refused
 name has one original-run/lane/API/invocation-bound, body-free read-only absence
 allowance, never a mutation slot or generic request expansion. The current
-topology, diagnostics, deadlines and experimental non-acceptance remain intact.
-This restores the first 21-call closure, not the full preserved 28-call inventory.
+topology, diagnostics and deadlines remain intact. The scoped runner-profile
+policy below supersedes only the experimental non-acceptance barrier; native
+observations remain capability-unadmitted.
+The recovered [hostname producer](native-hostname-contract.md) follows as call 22
+under a separate one-child cleanup-owner scope, preserving the original five-child
+block. Its strict private reader always runs immediately, including without an
+evidence destination. The emitter independently revalidates the fixed private
+proof and adds only a closed unadmitted observation, retaining its nineteen-argument
+ABI. No ContainerHostname capability or raw shape-map group is admitted. This
+restores the hostname portion of the source closure.
+
+The preserved [command/entrypoint-clear proof](native-command-clear-contract.md)
+follows as invocation 23 after the hostname reader, outside both lifecycle token
+scopes. Its dedicated cleanup owner delegates the health-specific destructor
+without claiming success, and retains once-only attempted/verified cleanup.
+The shared private Drop predicate preserves ordinary ownership when delegation
+is false. Current outer snapshots charge the selected backend before I/O under
+the existing timer/capture owner. Both unconditional inline validation and the
+nineteen-argument emitter independently require the complete two-shape private
+return. Only a closed unadmitted observation is projected; no raw map/catalogue
+or public API changes. This restores the first 23-call closure, not the full
+preserved 28-call inventory.
 
 Native test subprocesses share the canonical test-only
 [outer command boundary](native-outer-runtime.md), including Rust's cfg(test)-only
@@ -25,6 +45,13 @@ local default rootful Podman, explicitly selected verified rootful Docker only i
 admitted hosted jobs. It introduces no product executor/API and changes none of
 the capture/decoder/target boundaries. The shared host store, exact inner fixture
 ownership and fresh complete/native qualification obligations remain.
+
+Hosted outer-Docker upstream-rootless additionally requires the maintained
+[per-job userns profile](native-outer-runtime.md#maintained-github-runner-upstream-rootless-userns-prerequisite)
+in the three exact admitted native workflows. Exact owned-task kernel-label,
+custody and profile-removal proof precede ordinary receipt publication; missing
+proof fails the lane and aggregate. This adds no local-host policy, cgroup/PIDs
+authority, product capability or release admission.
 
 ## Data flow
 
@@ -171,7 +198,7 @@ and historical evidence remain unchanged. ADR 0018 selects authenticated source
 run `37788762974` at Debian 29/46 and upstream 30/48 for candidate rehearsal;
 ADR 0019 retains those groups and adds only the StopSignal singleton.
 Definitions or offline controls grant no native compatibility. Fresh
-authenticated exact-final-candidate twenty-one-test four-lane execution,
+authenticated exact-final-candidate twenty-three-test four-lane execution,
 independent review and the separate ADR 0012/0016/0018/0019 consumer gates remain
 required before ready/merge. No source run qualifies a changed candidate.
 

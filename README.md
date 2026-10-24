@@ -11,12 +11,14 @@ source records are available for inert rendering. Each changed candidate and
 release must pass fresh complete and four-lane native gates before a
 compatibility claim.
 
-The first #31 recovery stage restores the preserved health-interval boundary and
-lifecycle default/zero source producers as canonical invocations 20 and 21. The
+The bounded #31 recovery restores the preserved health-interval boundary and
+lifecycle default/zero source producers as canonical invocations 20 and 21, then
+the [hostname source proof](docs/native-hostname-contract.md) as invocation 22 and
+[command/entrypoint-clear](docs/native-command-clear-contract.md) as invocation 23. The
 original nineteen, current fixture topology/diagnostics, pins, cleanup and
-unadmitted AppArmor boundary remain mandatory. These are strict source-only
+maintained scoped AppArmor prerequisite remain mandatory. These are strict source-only
 observations, not raw capability or catalogue admission. The preserved 28-call
-inventory remains pending reconciliation; twenty-one is not milestone completion.
+inventory remains pending reconciliation; twenty-three is not milestone completion.
 Historical evidence does not qualify this changed candidate.
 
 The planned native work is tracked in [DockerLens #3](https://github.com/Strukturpiloten/docker-lens/issues/3).
@@ -43,7 +45,7 @@ representations retain their existing behavior.
 
 This is candidate pre-merge rehearsal admission. Production merge, main
 admission and release remain blocked until fresh exact-final-candidate complete
-and four-lane twenty-one-test native gates, fresh independently reviewed volume-only
+and four-lane twenty-three-test native gates, fresh independently reviewed volume-only
 consumer rehearsals of all six actual authored fixtures under
 [ADR 0012](docs/decisions/0012-candidate-volume-label-admission.md), and reviewed
 BoxFerry consumers of the actual Nextcloud/Supabase binds and desired external
@@ -122,3 +124,9 @@ rootful Docker. Both orchestrate owned inner fixtures in the existing shared hos
 store, never use the host daemon as the test subject or mount its socket into a
 guest. There is no runtime fallback. This backend still needs fresh exact-candidate
 four-lane qualification; mocked controls are not native evidence.
+
+Hosted outer-Docker upstream-rootless uses a maintained, per-job
+[userns profile prerequisite](docs/native-outer-runtime.md#maintained-github-runner-upstream-rootless-userns-prerequisite)
+with exact owned-task label and removal checks before ordinary lane acceptance.
+Local hosts retain their existing policy; this prerequisite grants no cgroup/PIDs
+authority, product capability or release admission.

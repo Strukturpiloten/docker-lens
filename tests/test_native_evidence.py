@@ -17,6 +17,8 @@ from test_native_external_network_proof import fixture as external_network_fixtu
 from test_native_stop_signal_proof import fixture as stop_signal_fixture
 from test_native_lifecycle_proof import fixture as lifecycle_fixture
 from test_native_lifecycle_default_effect_proof import fixture as lifecycle_default_effect_fixture
+from test_native_hostname_proof import fixture as hostname_fixture
+from test_native_command_clear_proof import fixture as command_clear_fixture
 from test_native_runtime_filesystem_proof import fixture as runtime_filesystem_fixture
 from test_native_tmpfs_effect_proof import fixture as tmpfs_effect_fixture
 from test_native_health_start_interval_boundary_proof import fixture as health_boundary_fixture
@@ -348,6 +350,10 @@ class NativeEvidenceTests(unittest.TestCase):
                  health_boundary_missing: bool = False,
                  lifecycle_default_effect: object = None,
                  lifecycle_default_effect_missing: bool = False,
+                 hostname: object = None,
+                 hostname_missing: bool = False,
+                 command_clear: object = None,
+                 command_clear_missing: bool = False,
                  port_proof_override: object = None) -> tuple[subprocess.CompletedProcess[str], Path]:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -370,6 +376,8 @@ class NativeEvidenceTests(unittest.TestCase):
         tmpfs_effect_path = root / "tmpfs-effect-v1.json"
         health_boundary_path = root / "health-start-interval-boundary-v1.json"
         lifecycle_default_effect_path = root / "lifecycle-default-effects-v1.json"
+        hostname_path = root / "hostname-v1.json"
+        command_clear_path = root / "command-clear-v1.json"
         destination = root / "out" / f"{lane}.json"
         version_path.write_text(json.dumps(version), encoding="utf-8")
         shapes_path.write_text(json.dumps(SHAPES if shapes is None else shapes), encoding="utf-8")
@@ -463,6 +471,20 @@ class NativeEvidenceTests(unittest.TestCase):
         if not lifecycle_default_effect_missing:
             lifecycle_default_effect_path.write_text(json.dumps(defaults if lifecycle_default_effect is None else lifecycle_default_effect), encoding="utf-8")
             lifecycle_default_effect_path.chmod(0o600)
+        host = hostname_fixture(lane)
+        host["context"].update(external["context"])
+        for case in host["cases"]:
+            for record in case["containers"]:
+                record["image"] = HEALTH_FIXTURE_IMAGE
+        if not hostname_missing:
+            hostname_path.write_text(json.dumps(host if hostname is None else hostname), encoding="utf-8")
+            hostname_path.chmod(0o600)
+        command = command_clear_fixture(lane)
+        command["context"].update(external["context"])
+        command["seed"]["image"] = HEALTH_FIXTURE_IMAGE
+        if not command_clear_missing:
+            command_clear_path.write_text(json.dumps(command if command_clear is None else command_clear), encoding="utf-8")
+            command_clear_path.chmod(0o600)
         result = subprocess.run(
             ["python3", str(SCRIPT), str(version_path), str(shapes_path), str(source_path),
              str(network_path), str(volume_path), str(volume_label_path), str(identity_path),

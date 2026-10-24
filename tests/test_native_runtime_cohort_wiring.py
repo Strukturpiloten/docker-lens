@@ -1,4 +1,4 @@
-"""Closed twenty-one-test recovery wiring; no real native calls."""
+"""Closed twenty-three-test recovery wiring; no real native calls."""
 
 import copy
 import json
@@ -43,6 +43,8 @@ EXPECTED_CALLS = [
     ("native_tmpfs_effect", "live_tmpfs_effects_match_engine"),
     ("native_health_start_interval_boundary", "live_health_start_interval_boundary_matches_engine"),
     ("native_lifecycle_default_effect", "live_lifecycle_default_effects_match_engine"),
+    ("native_hostname", "live_hostname_matches_engine"),
+    ("native_command_clear", "live_command_clear_matches_engine"),
 ]
 
 
@@ -86,12 +88,12 @@ sys.exit(int(os.environ["STATUS"]))
         owner = source.index('(\n  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1\n')
         end = source.index('\n)\n', owner)
         scoped = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source[owner:end], re.M)
-        self.assertEqual(scoped, EXPECTED_CALLS[-5:])
-        self.assertEqual(source.count('export NATIVE_LIFECYCLE_CLEANUP_OWNER='), 1)
+        self.assertEqual(scoped, EXPECTED_CALLS[16:21])
+        self.assertEqual(source.count('export NATIVE_LIFECYCLE_CLEANUP_OWNER='), 2)
         self.assertLess(source.index('unset NATIVE_LIFECYCLE_CLEANUP_OWNER'), source.index('run-exact-native-test.sh" native_capture'))
         emission = source.index('python3 "$script_dir/native-evidence.py"')
         self.assertLess(end, emission)
-        protocol = source[emission:source.index('\nfi', emission)].replace('\\\n', ' ')
+        protocol = source[emission:source.index('\n  fi\n}', emission)].replace('\\\n', ' ')
         self.assertEqual(len(shlex.split(protocol)) - 2, 19)
         for prefix, filename in (("LIFECYCLE", "lifecycle-v1.json"),
                                  ("RUNTIME_FILESYSTEM", "runtime-filesystem-v1.json"),

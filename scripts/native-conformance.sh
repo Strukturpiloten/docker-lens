@@ -58,13 +58,20 @@ case "$lane" in
   *) usage ;;
 esac
 
-select_apparmor_experiment() {
+select_apparmor_profile() {
   # Fixed reviewed source selector, not an environment-provided policy/path.
-  # The installed trusted dispatcher predates this deliberately unadmitted run.
-  apparmor_experiment=
-  [[ $lane == upstream-rootless &&
-     ${GITHUB_WORKFLOW_REF:-} == Strukturpiloten/docker-lens/.github/workflows/native-validation.yml@refs/heads/main ]] || return 0
-  [[ $native_outer_engine == docker && ${GITHUB_EVENT_NAME:-} == workflow_dispatch &&
+  # The installed trusted dispatcher supplies the same exact-head admission.
+  apparmor_profile=
+  [[ $lane == upstream-rootless ]] || return 0
+  case ${GITHUB_WORKFLOW_REF:-} in
+    Strukturpiloten/docker-lens/.github/workflows/check.yml@refs/heads/main)
+      [[ ${GITHUB_EVENT_NAME:-} == push ]] || return 2 ;;
+    Strukturpiloten/docker-lens/.github/workflows/native-validation.yml@refs/heads/main | \
+    Strukturpiloten/docker-lens/.github/workflows/release-validation.yml@refs/heads/main)
+      [[ ${GITHUB_EVENT_NAME:-} == workflow_dispatch ]] || return 2 ;;
+    *) return 0 ;;
+  esac
+  [[ $native_outer_engine == docker &&
      ${GITHUB_JOB:-} == native-conformance && ${GITHUB_REPOSITORY:-} == Strukturpiloten/docker-lens &&
      ${GITHUB_RUN_ID:-} =~ ^[1-9][0-9]{0,19}$ && ${GITHUB_RUN_ATTEMPT:-} =~ ^[1-9][0-9]{0,19}$ &&
      ${DOCKERLENS_NATIVE_CANDIDATE_SHA:-} =~ ^[0-9a-f]{40}$ ]] || return 2
@@ -73,9 +80,9 @@ select_apparmor_experiment() {
   head=$(timeout --signal=TERM --kill-after=2s 8s git -C "$script_dir/.." rev-parse HEAD) || return 2
   dirty=$(timeout --signal=TERM --kill-after=2s 8s git -C "$script_dir/.." status --porcelain --untracked-files=all) || return 2
   [[ $head == "$DOCKERLENS_NATIVE_CANDIDATE_SHA" && -z $dirty ]] || return 2
-  apparmor_experiment=issue127_userns_v1
+  apparmor_profile=github_runner_userns_v1
 }
-select_apparmor_experiment || { echo 'native AppArmor experiment selection refused' >&2; exit 2; }
+select_apparmor_profile || { echo 'native AppArmor prerequisite selection refused' >&2; exit 2; }
 
 for tool in "$native_outer_engine" curl python3 timeout df du mktemp; do
   command -v "$tool" >/dev/null || { echo "missing native test tool: $tool" >&2; exit 1; }
@@ -144,7 +151,7 @@ volume_attempted=0
 network_attempted=0
 network_created=0
 outer_network_id=
-# This authority belongs only to the five canonical lifecycle-family invocations below.
+# Authority belongs only to the original five-child scope and separate hostname child below.
 unset NATIVE_LIFECYCLE_CLEANUP_OWNER
 cleanup_podman() {
   if [[ ${native_outer_engine:-podman} == docker ]]; then
@@ -306,9 +313,22 @@ cleanup_network() {
     (( state == 1 )) || { cleanup_refuse network readback_unknown; return 1; }
   fi
 }
+native_publication_command() {
+  # Cleanup stops storage sampling before removing its volume. Publication still
+  # shares the original absolute lane cutoff; reserve the two-second KILL
+  # fallback plus one second for the original SECONDS clock's quantization.
+  local remaining=$((1800 - SECONDS - 3)) command_status=0
+  (( remaining > 0 )) || return 124
+  timeout --signal=TERM --kill-after=2s "${remaining}s" "$@" || command_status=$?
+  (( command_status == 0 )) || return "$command_status"
+  # A delayed/late zero status can never turn an expired lane into acceptance.
+  (( SECONDS < 1800 )) || return 124
+}
+
 cleanup() {
   status=$?
   local original_status=$status
+  local apparmor_cleanup_record= apparmor_verified=0
   trap - EXIT HUP INT TERM
   if [[ -n $watchdog_pid ]]; then
     kill "$watchdog_pid" 2>/dev/null || true
@@ -327,9 +347,28 @@ cleanup() {
   if (( ${apparmor_attempted:-0} == 1 )); then
     # Daemon absence is re-authenticated independently of network/volume cleanup.
     # Unknown load/create/absence never permits profile removal or custody loss.
-    if ! native_outer_bridge_command 30 apparmor cleanup "$lane" "$apparmor_nonce"; then
+    if apparmor_cleanup_record=$(native_outer_bridge_command 30 apparmor cleanup "$lane" "$apparmor_nonce"); then
+      printf '%s\n' "$apparmor_cleanup_record"
+      if native_publication_command python3 -B "$script_dir/native-runner-apparmor.py" validate-receipt \
+          "${DOCKERLENS_NATIVE_CANDIDATE_SHA:-}" <<<"$apparmor_cleanup_record"; then
+        apparmor_verified=1
+      elif (( status == 0 )); then
+        status=1
+      fi
+    else
       preserve_run_dir=1
       if (( status == 0 )); then status=1; fi
+    fi
+  fi
+  if [[ -n ${apparmor_profile:-} ]]; then
+    if (( original_status != 0 )); then status=$original_status; fi
+    if (( ${apparmor_native_completed:-0} != 1 || apparmor_verified != 1 || preserve_run_dir != 0 )); then
+      if (( status == 0 )); then status=1; fi
+    fi
+    # Publish only after the exact native sequence, owned resource cleanup and
+    # effective-label/profile-removal receipt have all completed successfully.
+    if (( status == 0 )); then
+      publish_native_evidence || status=$?
     fi
   fi
   if (( preserve_run_dir != 0 )); then
@@ -337,12 +376,13 @@ cleanup() {
   elif [[ $run_dir == "${TMPDIR:-/tmp}"/dockerlens-native.* && -d $run_dir ]]; then
     rm -rf -- "$run_dir" || status=1
   fi
-  if [[ -n ${apparmor_experiment:-} ]]; then
+  if [[ -n ${apparmor_profile:-} ]]; then
     if (( original_status != 0 )); then status=$original_status; fi
-    # Hard aggregate barrier, including native success + complete cleanup.
-    if (( status == 0 )); then status=1; fi
-    native_success_summary=
-    printf 'DOCKERLENS_NATIVE_APPARMOR_RESULT: outcome=unadmitted native_completed=%s\n' "${apparmor_native_completed:-0}" >&2
+    # A later cleanup step cannot turn an expired lane into ordinary success.
+    if (( status == 0 && SECONDS >= 1800 )); then status=124; fi
+    if (( status != 0 )); then native_success_summary=; fi
+    printf 'DOCKERLENS_NATIVE_APPARMOR_RESULT: outcome=%s native_completed=%s\n' \
+      "$([[ $status == 0 ]] && echo verified || echo refused)" "${apparmor_native_completed:-0}" >&2
   fi
   if (( status != 0 )); then
     echo "native lane $lane failed; verify owned resources $container, $sidecar, $outer_network, and $volume" >&2
@@ -824,7 +864,7 @@ sidecar_failure_diagnostic() {
 watchdog &
 watchdog_pid=$!
 
-if [[ -n ${apparmor_experiment:-} ]]; then
+if [[ -n ${apparmor_profile:-} ]]; then
   apparmor_nonce=$(python3 -c 'import secrets; print(secrets.token_hex(16))')
   apparmor_attempted=1
   native_outer_bridge_command 30 apparmor prepare "$lane" "$apparmor_nonce" "$container" "$run_id" "$image" || exit $?
@@ -944,7 +984,7 @@ if [[ $native_outer_engine == docker ]]; then
     sidecar_setup_failed volume_ownership
 fi
 apparmor_create_args=()
-if [[ -n ${apparmor_experiment:-} ]]; then
+if [[ -n ${apparmor_profile:-} ]]; then
   native_outer_bridge_command 30 apparmor load "$lane" "$apparmor_nonce" || exit $?
   apparmor_create_args=("$apparmor_nonce")
 fi
@@ -963,7 +1003,7 @@ fi
 outer_container_id=$(native_outer_bridge_command 120 create-daemon "$container" "$run_id" \
   io.dockerlens.native-run "$outer_network" "$volume" "$socket_dir" /dockerlens-native \
   "$lane" "$image" "$run_dir/diagnostics/daemon.log" "${apparmor_create_args[@]}" 2>/dev/null) || creation_status=$?
-if [[ -n ${apparmor_experiment:-} && $creation_status =~ ^(130|143)$ ]]; then exit "$creation_status"; fi
+if [[ -n ${apparmor_profile:-} && $creation_status =~ ^(130|143)$ ]]; then exit "$creation_status"; fi
 (( creation_status == 0 )) || sidecar_setup_failed daemon_attach
 [[ $outer_container_id =~ ^[0-9a-f]{64}$ ]] || sidecar_setup_failed daemon_identity
 if [[ $native_outer_engine == docker ]]; then
@@ -1066,7 +1106,7 @@ done
   diagnose_native_startup
   exit 1
 }
-if [[ -n ${apparmor_experiment:-} ]]; then
+if [[ -n ${apparmor_profile:-} ]]; then
   apparmor_label_status=0
   native_outer_bridge_command 30 apparmor verify "$lane" "$apparmor_nonce" || apparmor_label_status=$?
   if (( apparmor_label_status != 0 )); then
@@ -1421,6 +1461,8 @@ export NATIVE_RUNTIME_FILESYSTEM_PROOF_PATH="$run_dir/runtime-filesystem-v1.json
 export NATIVE_TMPFS_EFFECT_PROOF_PATH="$run_dir/tmpfs-effect-v1.json"
 export NATIVE_HEALTH_START_INTERVAL_BOUNDARY_PROOF_PATH="$run_dir/health-start-interval-boundary-v1.json"
 export NATIVE_LIFECYCLE_DEFAULT_EFFECT_PROOF_PATH="$run_dir/lifecycle-default-effects-v1.json"
+export NATIVE_HOSTNAME_PROOF_PATH="$run_dir/hostname-v1.json"
+export NATIVE_COMMAND_CLEAR_PROOF_PATH="$run_dir/command-clear-v1.json"
 export NATIVE_PORT_START_DIAGNOSTIC_PATH="$run_dir/diagnostics/port-start-window.json"
 export NATIVE_PORT_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 export NATIVE_HEALTH_METADATA_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
@@ -1433,6 +1475,8 @@ export NATIVE_RUNTIME_FILESYSTEM_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 export NATIVE_TMPFS_EFFECT_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 export NATIVE_HEALTH_START_INTERVAL_BOUNDARY_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 export NATIVE_LIFECYCLE_DEFAULT_EFFECT_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
+export NATIVE_HOSTNAME_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
+export NATIVE_COMMAND_CLEAR_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 if [[ $EUID == 0 ]]; then export NATIVE_PODMAN_USE_SUDO=0; else export NATIVE_PODMAN_USE_SUDO=1; fi
 export NATIVE_OUTER_ENGINE="$native_outer_engine" NATIVE_OUTER_RUN_DIRECTORY="$run_dir"
 
@@ -1705,26 +1749,75 @@ fi
 "$(dirname "$0")/run-exact-native-test.sh" native_lifecycle_default_effect live_lifecycle_default_effects_match_engine
 )
 
-if [[ -n ${apparmor_experiment:-} ]]; then
-  apparmor_native_completed=1
-  # EXIT still performs owned resource/profile cleanup; no normal lane receipt
-  # or native success summary is reachable by this experimental lane.
-  exit 0
-fi
+(
+  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1
+"$(dirname "$0")/run-exact-native-test.sh" native_hostname live_hostname_matches_engine
+)
+# Validate this fixed private proof even when public evidence is not requested.
+# All expected facts are independently supplied by the canonical harness.
+python3 "$script_dir/native_hostname_proof.py" "$run_dir" "$NATIVE_HOSTNAME_CANDIDATE_SHA" "$run_id" \
+  "$lane" "$server_version" "$api_version" "$expected_mode" "$installed_docker_package" \
+  "$NATIVE_FIXTURE_IMAGE" "$image" "$NATIVE_OUTER_CONTAINER_ID" "$NATIVE_BIND_RELABEL_DAEMON_UID"
 
-if [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]; then
-  candidate_sha=$(git -C "$script_dir/.." rev-parse HEAD)
-  [[ $candidate_sha =~ ^[0-9a-f]{40}$ && ${DOCKERLENS_NATIVE_CANDIDATE_SHA:-} == "$candidate_sha" ]] || {
-    echo 'native evidence candidate SHA does not match reviewed checkout' >&2
-    exit 1
-  }
-  [[ -z $(git -C "$script_dir/.." status --porcelain --untracked-files=all) ]] || {
-    echo 'native evidence requires a clean candidate checkout' >&2
-    exit 1
-  }
-  python3 "$script_dir/native-evidence.py" "$run_dir/version.json" "$NATIVE_SHAPES_PATH" "$NATIVE_SOURCE_PROBES_PATH" "$NATIVE_NETWORK_PROBES_PATH" "$NATIVE_VOLUME_PROBES_PATH" "$NATIVE_VOLUME_LABEL_PROBES_PATH" "$NATIVE_IDENTITY_PROBES_PATH" "$NATIVE_PORT_PROBES_PATH" "$NATIVE_HEALTH_METADATA_PROOF_PATH" "$NATIVE_NETWORK_ATTACHMENT_PROOF_PATH" "$NATIVE_BIND_RELABEL_PROOF_PATH" "$run_dir" \
-    "$DOCKERLENS_NATIVE_EVIDENCE_DIR/$lane.json" "$lane" "$image" "$expected_mode" \
-    "$installed_docker_package" "$candidate_sha" "$run_id"
+"$(dirname "$0")/run-exact-native-test.sh" native_command_clear live_command_clear_matches_engine
+# Mandatory private validation also applies when no public evidence is requested.
+python3 - "$script_dir" "$run_dir" "$NATIVE_COMMAND_CLEAR_CANDIDATE_SHA" "$run_id" \
+  "$lane" "$server_version" "$api_version" "$expected_mode" "$installed_docker_package" \
+  "$NATIVE_FIXTURE_IMAGE" "$image" "$NATIVE_OUTER_CONTAINER_ID" "$NATIVE_BIND_RELABEL_DAEMON_UID" <<'COMMAND_CLEAR_PROOF'
+import re
+import sys
+from pathlib import Path
+
+try:
+    sys.path.insert(0, sys.argv[1])
+    from native_command_clear_proof import read_command_clear_proof
+
+    (directory, candidate, run, lane, engine, api, mode, package,
+     fixture, outer_image, outer_id, uid) = sys.argv[2:]
+    if re.fullmatch(r"0|[1-9][0-9]{0,9}", uid) is None:
+        raise ValueError()
+    context = {
+        "candidate_sha": candidate, "run_id": run, "lane": lane,
+        "engine_release": engine, "rendering_api": api,
+        "acquisition_api": "1.41" if lane.startswith("debian11-") else "1.49",
+        "mode": mode, "docker_package": package, "fixture_image": fixture,
+        "daemon_uid": int(uid), "outer": {
+            "id": outer_id, "name": f"dl-native-{run}", "owner": run,
+            "image": outer_image, "data_volume": f"dl-native-data-{run}",
+            "socket_source": str(Path(directory) / "socket"), "privileged": True,
+            "memory_bytes": 4294967296, "cpu_quota": 200000,
+            "cpu_period": 100000, "pids_limit": 512,
+        },
+    }
+    if read_command_clear_proof(Path(directory) / "command-clear-v1.json", Path(directory), context) != ("ClearCommand", "ClearEntrypoint"):
+        raise ValueError()
+except (OSError, ValueError, TypeError, KeyError, OverflowError, RecursionError, AttributeError, ImportError):
+    raise SystemExit("native command-clear proof rejected") from None
+COMMAND_CLEAR_PROOF
+
+publish_native_evidence() {
+  local candidate_sha dirty
+  if [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]; then
+    candidate_sha=$(native_publication_command git -C "$script_dir/.." rev-parse HEAD) || return $?
+    [[ $candidate_sha =~ ^[0-9a-f]{40}$ && ${DOCKERLENS_NATIVE_CANDIDATE_SHA:-} == "$candidate_sha" ]] || {
+      echo 'native evidence candidate SHA does not match reviewed checkout' >&2
+      return 1
+    }
+    dirty=$(native_publication_command git -C "$script_dir/.." status --porcelain --untracked-files=all) || return $?
+    [[ -z $dirty ]] || {
+      echo 'native evidence requires a clean candidate checkout' >&2
+      return 1
+    }
+    native_publication_command python3 "$script_dir/native-evidence.py" "$run_dir/version.json" "$NATIVE_SHAPES_PATH" "$NATIVE_SOURCE_PROBES_PATH" "$NATIVE_NETWORK_PROBES_PATH" "$NATIVE_VOLUME_PROBES_PATH" "$NATIVE_VOLUME_LABEL_PROBES_PATH" "$NATIVE_IDENTITY_PROBES_PATH" "$NATIVE_PORT_PROBES_PATH" "$NATIVE_HEALTH_METADATA_PROOF_PATH" "$NATIVE_NETWORK_ATTACHMENT_PROOF_PATH" "$NATIVE_BIND_RELABEL_PROOF_PATH" "$run_dir" \
+      "$DOCKERLENS_NATIVE_EVIDENCE_DIR/$lane.json" "$lane" "$image" "$expected_mode" \
+      "$installed_docker_package" "$candidate_sha" "$run_id"
+  fi
+}
+
+if [[ -n ${apparmor_profile:-} ]]; then
+  apparmor_native_completed=1
+else
+  publish_native_evidence
 fi
 
 native_success_summary="native conformance passed: $lane; Engine $server_version; API $api_version; mode $expected_mode; inner cgroup $inner_cgroup; outer $("${podman_cmd[@]}" --version); kernel $(uname -r); privileged $privileged; nested storage ${used_kib} KiB"

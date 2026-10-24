@@ -8,17 +8,25 @@ selects verified rootful local Docker in admitted hosted jobs while retaining
 local default Podman. This updates orchestration, not the four maintained inner
 images or this ADR's native evidence/admission obligation. Historical Podman source
 evidence below remains historical; it does not qualify the new Docker backend.
-The temporary issue127 userns experiment is an explicit, unadmitted exception
-only for upstream-rootless in the exact trusted-main native dispatcher. It may
+The maintained GitHub-runner userns prerequisite applies only to the owned
+upstream-rootless fixture under hosted outer Docker in the exact main-push,
+trusted-main native-dispatch and standalone exact-main release-validation jobs.
+It may
 compile and add one run-owned named AppArmor userns profile after read-only
 host/parser/ABI checks, bind it to the unchanged privileged launch, and verify
 the creation-bound task's effective kernel label. Original-directory custody,
 durable intent and authenticated daemon absence govern removal; uncertainty
 retains evidence until disposable-runner teardown. No installation, ambient
 policy change, fallback, new native assertion or acceptance exemption is allowed.
-Even passing tests plus complete cleanup deliberately fail the job and cannot
-publish ordinary native evidence. See the bounded lifecycle and source
-provenance in [outer runtime](../native-outer-runtime.md#temporary-unadmitted-upstream-rootless-userns-experiment).
+The complete mandatory native sequence, owned resource cleanup, and a validated
+verified-label/removed-profile receipt now permit ordinary evidence and job
+success. Missing or uncertain prerequisites still fail the lane and aggregate.
+This supersedes only the former issue127 experiment's mandatory non-success
+barrier and dispatcher-only scope. Earlier experimental and failed-run evidence
+retains its original status; it does not qualify the maintained successor.
+Local host restrictions, cgroup/PIDs authority, product capability admission and
+release obligations are unchanged. See the bounded lifecycle and source
+provenance in [outer runtime](../native-outer-runtime.md#maintained-github-runner-upstream-rootless-userns-prerequisite).
 
 Both use owned inner container/data-volume/socket identities in the existing
 shared host store; the host Docker daemon/socket is never the fixture itself.
@@ -37,7 +45,7 @@ task-owned outer data-root volume, and the harness verifies the effective
 mount flags. Independent CLI probes isolated the need to this historical
 rootless runc's read-only named-volume remount under outer nosuid,nodev;
 other lanes retain their default data-volume and AppArmor options outside the
-explicit unadmitted experiment above. This does not claim
+explicit maintained prerequisite above. This does not claim
 conformance under restrictive outer storage mounts or enforcing outer
 AppArmor. No guest APT provisioning occurs.
 

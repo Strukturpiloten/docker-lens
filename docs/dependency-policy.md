@@ -1,8 +1,8 @@
 # Dependency and pin policy
 
-The bounded #31 recovery reuses the committed health-interval boundary and
-lifecycle default/zero producer/reader/contracts and their recorded oracle
-provenance; it copies no external oracle implementation. No software dependency,
+The bounded #31 recovery reuses the committed health-interval boundary,
+lifecycle default/zero, hostname and command-clear producer/reader/contracts and their recorded
+oracle provenance; it copies no external oracle implementation. No software dependency,
 image, package, Action, toolchain pin, provisioning or host-policy change is
 introduced. All five canonical native-image version/digest extractions remain
 solely in `scripts/native-conformance.sh`, with existing grouping/manual review,
@@ -10,7 +10,7 @@ automerge off and unchanged Renovate managers/paths/defaults. No new manager or
 Renovate edit is needed. The strict private reader default caps remain unchanged.
 
 Check/native-validation/release-validation consume the same coordinator and
-inherit its two recovered invocations; its nineteen positional emitter arguments
+inherit its four recovered invocations; its nineteen positional emitter arguments
 remain unchanged. Other Lens/website harnesses do not consume these producers.
 BoxFerry's separately reviewed native-source/outer-runtime closure still requires
 new-SHA review and consumer qualification before use; none is claimed here.
@@ -366,7 +366,7 @@ exact-main dispatch. All three inherit the same prerequisite without a
 workflow edit. The other five workspace repositories do not invoke this
 DockerLens native harness, so no cross-repository consumer changes are needed.
 
-The temporary issue127 AppArmor experiment adds no package, download, image,
+The maintained GitHub-runner AppArmor prerequisite adds no package, download, image,
 Action or workflow reference. Its **preinstalled parser 4.0.1 compatibility
 bound** is a reviewed command-semantics limit, not an operational install pin or
 support claim for other 4.0.x releases. The installed parser and ABI 4.0 hashes
@@ -375,16 +375,19 @@ same mutable Ubuntu 24 runner; no stable repository-owned checksum is available.
 This is an explicit unavailable-integrity/manual-review exception, with refusal
 on missing or changed prerequisites, never installation or upgrade. The fixed
 policy is authored locally; referenced GPL-2.0 AppArmor and Apache-2.0 Moby
-sources are inspection-only and not redistributed. See [experiment provenance](native-outer-runtime.md#temporary-unadmitted-upstream-rootless-userns-experiment).
+sources are inspection-only and not redistributed. See [profile provenance](native-outer-runtime.md#maintained-github-runner-upstream-rootless-userns-prerequisite).
 
 Renovate no-change review: the five native image pins, their existing regex
 extraction path, Action/workflow SHAs, manager ownership, grouping and approval
 policy are unchanged. Historical source-version references and the parser's
-compatibility bound are not new automatically updatable pins. The three ordinary
-workflow consumers retain identical harness behavior except the exact
-DockerLens upstream-rootless manual-dispatch experiment. Main/release and the
-BoxFerry consumer deliberately cannot activate it, so there is no cross-repository
-rollout or completed compatibility claim. The source selector and helpers carry
+compatibility bound are not new automatically updatable pins. The three existing
+Check/native-validation/release-validation workflows already invoke the canonical
+coordinator with selected Docker, exact candidate evidence and success-only
+artifact upload. They inherit the same maintained hosted upstream-rootless
+prerequisite without changing workflow definitions or their admission guards.
+The release workflow is standalone workflow_dispatch, not workflow_call.
+BoxFerry and other lanes do not activate this profile; no cross-repository rollout
+or completed compatibility claim follows. The source selector and helpers carry
 their own fake-only regression controls; no new Renovate manager is added.
 
 The EXIT-trap cleanup-status correction changes one return expression and adds

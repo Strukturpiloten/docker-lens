@@ -1,4 +1,4 @@
-"""Issue 127's deliberately unadmitted, disposable-runner-only userns experiment.
+"""Maintained, disposable-GitHub-runner-only userns prerequisite.
 
 No generic provisioning interface: one profile, one creation-bound guest, finite
 root-owned transient state, and no recovery from uncertain policy mutations.
@@ -45,7 +45,7 @@ STAGES = frozenset({"admission", "custody", "kernel_enabled", "userns_restrictio
 STATE_KEYS = frozenset({"schema", "lane", "nonce", "profile", "directory", "run_identity",
                         "candidate", "workflow_run", "attempt", "name", "run", "image", "load",
                         "create", "label", "cid", "parser", "abi", "profile_sha256"})
-RECEIPT_KEYS = frozenset({"schema", "experiment", "outcome", "candidate", "label", "profile_sha256",
+RECEIPT_KEYS = frozenset({"schema", "prerequisite", "outcome", "candidate", "label", "profile_sha256",
                           "parser_sha256", "abi_sha256", "parser_version", "cleanup"})
 
 
@@ -67,10 +67,16 @@ def need(condition):
 def admitted(environment):
     expected = {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted",
                 "RUNNER_OS": "Linux", "GITHUB_REF": "refs/heads/main",
-                "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_JOB": "native-conformance",
-                "GITHUB_REPOSITORY": "Strukturpiloten/docker-lens", "ImageOS": "ubuntu24",
-                "GITHUB_WORKFLOW_REF": "Strukturpiloten/docker-lens/.github/workflows/native-validation.yml@refs/heads/main"}
+                "GITHUB_JOB": "native-conformance",
+                "GITHUB_REPOSITORY": "Strukturpiloten/docker-lens", "ImageOS": "ubuntu24"}
+    workflows = {
+        "Strukturpiloten/docker-lens/.github/workflows/check.yml@refs/heads/main": "push",
+        "Strukturpiloten/docker-lens/.github/workflows/native-validation.yml@refs/heads/main": "workflow_dispatch",
+        "Strukturpiloten/docker-lens/.github/workflows/release-validation.yml@refs/heads/main": "workflow_dispatch",
+    }
     return (all(environment.get(key) == value for key, value in expected.items())
+            and environment.get("GITHUB_WORKFLOW_REF") in workflows
+            and environment.get("GITHUB_EVENT_NAME") == workflows.get(environment.get("GITHUB_WORKFLOW_REF"))
             and not any(environment.get(key) for key in SELECTORS)
             and re.fullmatch(r"[0-9]{8}\.[0-9]+\.[0-9]+", environment.get("ImageVersion", "")) is not None
             and re.fullmatch(r"[0-9a-f]{40}", environment.get("DOCKERLENS_NATIVE_CANDIDATE_SHA", "")) is not None
@@ -103,11 +109,12 @@ def file_record(value):
          and all(type(value[key]) is int and value[key] >= 0 for key in ("mtime_ns", "ctime_ns")))
 
 
-def validate_receipt(value, candidate):
+def validate_receipt(value, candidate, *, require_verified=False):
     need(type(value) is dict and set(value) == RECEIPT_KEYS
          and type(value["schema"]) is int and value["schema"] == 1
          and all(type(value[key]) is str for key in RECEIPT_KEYS - {"schema"})
-         and value["experiment"] == "issue127_userns_v1" and value["outcome"] == "unadmitted"
+         and value["prerequisite"] == "github_runner_userns_v1"
+         and value["outcome"] in ("verified", "incomplete")
          and value["candidate"] == candidate and re.fullmatch(r"[0-9a-f]{40}", candidate) is not None
          and value["label"] in ("verified", "unverified")
          and value["parser_version"] in ("4.0.1", "unverified")
@@ -115,6 +122,17 @@ def validate_receipt(value, candidate):
          and all(digest(value[key]) for key in ("profile_sha256", "parser_sha256", "abi_sha256")))
     need((value["cleanup"] != "not_loaded" or value["label"] == "unverified")
          and (value["cleanup"] != "removed" or value["parser_version"] == "4.0.1"))
+    verified = value["label"] == "verified" and value["cleanup"] == "removed"
+    need((value["outcome"] == "verified") == verified)
+    need(not require_verified or verified)
+
+
+def validate_cleanup_record(raw, candidate):
+    """Ordinary acceptance requires the exact closed, completed prerequisite."""
+    prefix = "DOCKERLENS_NATIVE_APPARMOR_PROFILE: "
+    need(type(raw) is str and len(raw) <= 8192 and raw.startswith(prefix))
+    value = json.loads(raw[len(prefix):], object_pairs_hook=unique_object)
+    validate_receipt(value, candidate, require_verified=True)
 
 
 def read_fd(descriptor, limit):
@@ -170,7 +188,7 @@ def loaded(name):
     return bool(matches)
 
 
-class Experiment:
+class RunnerProfile:
     def __init__(self, directory, lane, nonce, environment, cancellation):
         self.stage = "admission"
         need(admitted(environment) and os.geteuid() == OWNER and lane == "upstream-rootless"
@@ -465,7 +483,9 @@ class Experiment:
                 need(not loaded(self.state["profile"]))
                 self.state["load"] = "removed"
                 self.save()
-            receipt = {"schema": 1, "experiment": "issue127_userns_v1", "outcome": "unadmitted",
+            verified = self.state["label"] == "verified" and phase == "loaded"
+            receipt = {"schema": 1, "prerequisite": "github_runner_userns_v1",
+                       "outcome": "verified" if verified else "incomplete",
                        "candidate": self.state["candidate"], "label": self.state["label"],
                        "profile_sha256": self.state["profile_sha256"], "parser_sha256": self.state["parser"]["sha256"],
                        "abi_sha256": self.state["abi"]["sha256"], "parser_version": self.state.get("parser_version", "unverified"),
@@ -504,29 +524,36 @@ def process_label(process):
 def main(argv):
     operation = argv[0] if argv and argv[0] in {"prepare", "load", "begin", "created", "verify", "cleanup"} else "invalid"
     cancellation = Cancellation()
-    experiment = None
+    profile = None
     for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
         signal.signal(signum, cancellation.request)
     try:
+        # Read-only validation in the original, unprivileged coordinator. This
+        # grants no profile/runtime operation and consumes no ambient context.
+        if argv and argv[0] == "validate-receipt":
+            need(len(argv) == 2)
+            validate_cleanup_record(sys.stdin.read(8193), argv[1])
+            cancellation.check()
+            return 0
         need(len(argv) >= 4 and operation != "invalid")
-        experiment = Experiment(argv[1], argv[2], argv[3], os.environ, cancellation)
+        profile = RunnerProfile(argv[1], argv[2], argv[3], os.environ, cancellation)
         args = argv[4:]
         need(len(args) == {"prepare": 3, "begin": 3, "created": 1}.get(operation, 0))
-        result = getattr(experiment, operation)(*args)
+        result = getattr(profile, operation)(*args)
         cancellation.check()
         if operation == "cleanup":
-            os.rmdir(experiment.path)
-            print("DOCKERLENS_NATIVE_APPARMOR_EXPERIMENT: " + json.dumps(result, sort_keys=True, separators=(",", ":")))
+            os.rmdir(profile.path)
+            print("DOCKERLENS_NATIVE_APPARMOR_PROFILE: " + json.dumps(result, sort_keys=True, separators=(",", ":")))
         elif operation == "begin":
             print(result)
         return 0
     except Cancelled as error:
         return 128 + error.signum
     except (Refused, OSError, ValueError, KeyError, UnicodeError, TypeError, OverflowError, RecursionError):
-        stage = getattr(experiment, "stage", "admission")
+        stage = getattr(profile, "stage", "admission")
         if stage not in STAGES:
             stage = "admission"
-        print(f"DOCKERLENS_NATIVE_APPARMOR_EXPERIMENT: operation={operation} stage={stage} outcome=unadmitted cleanup=retained", file=sys.stderr)
+        print(f"DOCKERLENS_NATIVE_APPARMOR_PROFILE: operation={operation} stage={stage} outcome=refused cleanup=retained", file=sys.stderr)
         return 2
 
 

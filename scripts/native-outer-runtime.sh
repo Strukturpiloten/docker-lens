@@ -105,18 +105,18 @@ native_outer_bridge_command() {
     DOCKER_TLS_VERIFY DOCKER_CERT_PATH DOCKER_API_VERSION CONTAINER_HOST CONTAINER_CONNECTION \
     CONTAINER_SSHKEY PODMAN_CONNECTIONS_CONF; do context+=("$key=${!key-}"); done
   # Preserve every ordinary caller's exact context contract. Only the fixed
-  # experimental argv shapes need these additional literal assignments; the
+  # profile argv shapes need these additional literal assignments; the
   # root helper still validates and binds the complete hosted/run context.
-  local experiment_context=0
-  if [[ ${apparmor_experiment:-} == issue127_userns_v1 && $native_outer_engine == docker ]]; then
+  local profile_context=0
+  if [[ ${apparmor_profile:-} == github_runner_userns_v1 && $native_outer_engine == docker ]]; then
     if [[ ${1:-} == apparmor && ${3:-} == upstream-rootless && ${4:-} =~ ^[0-9a-f]{32}$ ]]; then
-      case "${2:-}:$#" in prepare:7|load:4|verify:4|cleanup:4) experiment_context=1 ;; esac
+      case "${2:-}:$#" in prepare:7|load:4|verify:4|cleanup:4) profile_context=1 ;; esac
     elif [[ $# == 12 && $1 == create-daemon && $4 == io.dockerlens.native-run &&
             $8 == /dockerlens-native && $9 == upstream-rootless && ${12} =~ ^[0-9a-f]{32}$ ]]; then
-      experiment_context=1
+      profile_context=1
     fi
   fi
-  if (( experiment_context == 1 )); then
+  if (( profile_context == 1 )); then
     for key in GITHUB_JOB GITHUB_RUN_ID GITHUB_RUN_ATTEMPT DOCKERLENS_NATIVE_CANDIDATE_SHA; do
       context+=("$key=${!key-}")
     done
@@ -140,7 +140,7 @@ native_outer_apparmor() {
 }
 
 native_outer_apparmor_wait_owner() {
-  # Experimental bridge cancellation never resumes create or lets its direct
+  # Profile bridge cancellation never resumes create or lets its direct
   # Bash exit cancel the original timeout's pending KILL. No new timer/group.
   trap '' HUP INT TERM
   while :; do sleep 1; done

@@ -187,7 +187,7 @@ class InnerTopologyDiagnosticTests(unittest.TestCase):
         coordinator = (ROOT / "scripts/native-conformance.sh").read_text()
         invocations = re.findall(r'^\s*"\$\(dirname "\$0"\)/run-exact-native-test.sh" ',
                                  coordinator, re.MULTILINE)
-        self.assertEqual(len(invocations), 21)
+        self.assertEqual(len(invocations), 23)
         self.assertIn('resources.require_budget(8);', live)
         self.assertIn('NATIVE_NETWORK_TEST_DEADLINE_EPOCH', SOURCE)
 

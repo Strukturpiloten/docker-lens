@@ -4,9 +4,15 @@
 Local execution defaults to rootful Podman. Empty/unknown values, remote selectors,
 wrong daemon identity and unavailable selected tools refuse; no probe-based or
 failure-driven fallback exists. Hosted native jobs explicitly select Docker.
-The same four digest-pinned **inner** Engines, BusyBox pin, nineteen mandatory
-exact tests, source receipts and admission rules remain unchanged. Synthetic
+The same four digest-pinned **inner** Engines and BusyBox pin remain. The current
+coordinator requires twenty-three exact tests; source receipts and admission
+rules remain unchanged. Synthetic
 controls and definitions do not qualify a native lane.
+
+The [maintained GitHub-runner userns prerequisite](#maintained-github-runner-upstream-rootless-userns-prerequisite)
+requires exact owned-task label and per-job profile-removal evidence for hosted
+outer-Docker upstream-rootless only. Earlier experimental campaign references
+below retain their historical non-acceptance status.
 
 ## Maintained fixture allocation and mandatory topology guard
 
@@ -186,23 +192,28 @@ consumers. The three canonical native workflow consumers inherit the same script
 BoxFerry's reviewed source closure must be re-reviewed at the new exact SHA before
 its consumer qualification. This does not claim a cross-repository rollout.
 
-## Temporary, unadmitted upstream-rootless userns experiment
+## Maintained GitHub-runner upstream-rootless userns prerequisite
 
-The reviewed source selector `issue127_userns_v1` applies only to
-`upstream-rootless` in DockerLens's exact trusted-main `native-validation.yml`
-`workflow_dispatch` native job, with a clean checkout matching the admitted
-candidate SHA, canonical GitHub-hosted Ubuntu 24/Linux context and selected outer
-Docker. Clean HEAD is checked by the original caller before privilege escalation;
-the root helper never invokes caller-configured Git. The environment guard is
-not authentication or a replacement for trusted dispatcher admission.
-Every helper operation requires the literal upstream-rootless lane and matches
-its root-owned state. The trusted exact source selector owns the canonical image
-choice; the helper binds that held pin and the actual guest, rather than
-independently resolving images or authenticating GitHub.
-It is not an environment-provided profile or path. Local Podman, main
-push, release and BoxFerry consumers do not activate it; a selected but invalid
-context refuses without fallback. This temporary exception does **not** qualify
-the outer backend, explain earlier EACCES observations, or authorize adoption.
+The maintained source selector `github_runner_userns_v1` applies only to the
+owned `upstream-rootless` fixture with explicitly selected outer Docker in
+DockerLens's exact GitHub-hosted Ubuntu 24/Linux native job. The closed contexts
+are `check.yml` main `push`, `native-validation.yml` trusted-main
+`workflow_dispatch`, and `release-validation.yml` exact-main
+`workflow_dispatch`, all with job ID `native-conformance`. The release workflow
+is standalone; no `workflow_call` context is admitted. A clean checkout must
+match the supplied exact candidate SHA. The original caller checks clean HEAD
+before privilege escalation; the root helper never invokes caller-configured
+Git. Existing workflow actor/ref/exact-head admission remains authoritative:
+the environment guard prevents accidents and does not authenticate a caller.
+
+Every privileged helper phase requires the literal upstream-rootless lane and
+matches its root-owned state. The trusted exact source selector owns the
+canonical image choice; the helper binds that held pin and actual guest.
+No environment-provided profile or path is accepted. Local Podman, local Docker,
+self-hosted runners, other lanes and BoxFerry consumers cannot activate it;
+selected but invalid contexts refuse without fallback. This maintained
+prerequisite does not explain earlier EACCES observations or itself qualify
+native compatibility, cgroup/PIDs authority or product capability admission.
 
 The helper reads AppArmor enablement, restricted unprivileged user namespaces,
 the kernel's `namespaces/mask` `userns_create` feature and policy v9 support. It
@@ -232,11 +243,11 @@ before deleting custody leaves; root-owned file shape alone is insufficient.
 Standalone helper phases have a root-owned 30-second TERM/two-second KILL owner
 and a once-created 24-second soft capture deadline. Queries introduce no nested
 timer, session or process group. On cancellation or unknown descendant lifetime,
-the helper and experimental bridge keep the original hard owner alive through
+the helper and profile bridge keep the original hard owner alive through
 its KILL fallback, rather than treating a reaped immediate child as child-death
 proof. Standalone phases exec the helper; creation's begin substitution likewise
-execs it, and the experimental creation bridge cannot resume after cancellation.
-The read-only experimental presence projection shares the ordinary exact Docker
+execs it, and the profile creation bridge cannot resume after cancellation.
+The read-only profile presence projection shares the ordinary exact Docker
 listing argv but not its separate supervisor; normal cleanup behavior is unchanged.
 Creation intent and actual daemon binding remain inside the original
 120-second create bridge; they do not renew it. The original 30-minute lane
@@ -252,7 +263,7 @@ effective-label proof.
 
 Task binding additionally requires the stable exact host cgroup-v2 line
 `0::/system.slice/docker-<full-held-CID>.scope`. This deliberately narrow
-Ubuntu/systemd-cgroup layout is an experiment prerequisite, not an already
+Ubuntu/systemd-cgroup layout is a maintained prerequisite, not an already
 verified runner fact or generic Docker support. Another driver/layout refuses
 without fallback; inner Engine cgroup metadata is not outer evidence. This
 establishes only an actual owned task's label, not RootlessKit-specific or
@@ -270,17 +281,39 @@ owned leaves are deleted, never a recursive root-state sweep. Cancellation keeps
 the original failing status. SIGKILL/VM loss cannot guarantee cleanup; disposable
 runner destruction is the ultimate boundary, not a reported cleanup success.
 
-The experiment emits separate bounded `DOCKERLENS_NATIVE_APPARMOR_EXPERIMENT`
-and `DOCKERLENS_NATIVE_APPARMOR_RESULT` log records. No raw profile names, paths,
-labels or parser output are printed. Refusal logs identify only the operation
-and a fixed stage: admission, custody, kernel enablement, userns restriction,
+The helper emits bounded `DOCKERLENS_NATIVE_APPARMOR_PROFILE` records and the
+coordinator emits `DOCKERLENS_NATIVE_APPARMOR_RESULT`. No raw profile names,
+paths, labels or parser output are printed. Refusal logs identify only a fixed
+operation/stage: admission, custody, kernel enablement, userns restriction,
 kernel features, parser version, compile, load, daemon binding, effective label,
-absence or unload. These labels reuse existing checks, not additional probes or
-stderr classification. Even nineteen passing native tests and
-complete cleanup terminate deliberately **non-success/unadmitted**. The standard
-lane receipt and success summary are unreachable; the installed workflow's
-success-only lane artifact upload therefore does not run. Logs are evidence of
-the experiment only, not compatibility, catalogue, aggregate or release evidence.
+absence or unload. The closed cleanup record distinguishes a verified label
+with proven removal from incomplete prerequisites; its exact schema, candidate,
+digests and outcome must validate before ordinary acceptance.
+
+Ordinary native receipt publication is deferred until the complete mandatory
+native sequence, all owned resource cleanup and the verified-label/removed-profile
+record succeed. Only then may the normal receipt, success summary and workflow
+aggregate succeed. A missing label/load/custody/removal proof, malformed record,
+native failure, cancellation, retained evidence or receipt-publication failure
+still fails the lane and aggregate. Successful profile setup is not native
+success. No capability catalogue or release is admitted by this policy change.
+
+Cleanup stops the storage watchdog before deleting its sampled volume. Receipt
+validation, Git identity/status checks and the Python emitter still share the
+original absolute 1800-second lane cutoff: each phase recomputes the remaining
+allowance and reserves the existing two-second KILL fallback plus one clock
+quantization second. Expired starts, command failure, cancellation and late zero
+status refuse acceptance; finalization checks the cutoff again before success.
+There is no fresh or renewable post-cleanup publication budget.
+
+The earlier `issue127_userns_v1` experiment deliberately exited nonzero even
+after nineteen passing tests and proven profile removal. Its
+`DOCKERLENS_NATIVE_APPARMOR_EXPERIMENT` records and all earlier failed campaigns
+remain immutable historical evidence under that former policy. Campaign
+`40083118218` passed all four historical nineteen-test sequences but deliberately
+left upstream-rootless unadmitted; it is not fresh ordinary acceptance of this
+maintained successor. Earlier references to experimental non-acceptance in this
+document describe those checkpoints, not the current maintained policy.
 
 The command contract was inspected, not executed or copied, in official
 [AppArmor v4.0.1 parser documentation](https://gitlab.com/apparmor/apparmor/-/raw/v4.0.1/parser/apparmor_parser.pod)
