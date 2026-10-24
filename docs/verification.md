@@ -698,6 +698,19 @@ effects. Five run-owned resources are cleaned before the other role starts;
 whole-test time/request/byte limits reserve cleanup capacity and require two
 verified ID/name absence rounds before exclusive private proof publication.
 
+Failure-only attachment diagnostics now latch the first closed work boundary
+separately from the first cleanup boundary (role/terminal/Drop and static slot/
+operation). Existing caught failures, later cleanup and generic markers cannot
+replace those records; cleanup-only failure does not invent a work cause. The
+exact wrapper rejects malformed/unknown/suffixed/duplicate records and exports
+only the closed family for the exact failed test, preserving legacy markers and
+numeric status. Pure Rust and fake-Cargo controls check first-cause retention,
+privacy and unrelated/success-path suppression. The first internal cause of
+failed run 40113370193 remains unknown; no assertion, expected effect, cleanup
+attempt, resource/stream/time limit, native I/O, proof ABI, emitter order, pin or
+capability changes. Final complete gates and fresh exact-candidate native review
+remain required; diagnostic tests are not a fix or qualification claim.
+
 Advertised/rendered API and actual acquisition request API remain distinct:
 upstream 1.56 versus 1.49, Debian 1.41 for both. The decoder and actual capture
 exchanges must agree with the exact acquisition expectation, not merely each

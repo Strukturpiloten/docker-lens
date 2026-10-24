@@ -151,8 +151,29 @@ fi
 network_attachment_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: network_attachment_(context|oracle|rendered|cleanup|cleanup_unverified|evidence)$' <<<"$result" | tail -n 1 || true)
 if [[ -n $network_attachment_marker ]]; then marker=$network_attachment_marker; fi
 network_attachment_causal_marker=
+network_attachment_diagnostics=
 if [[ $target == native_network_attachment ]]; then
   network_attachment_causal_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: network_attachment_(context|oracle|rendered|cleanup|cleanup_unverified|evidence)$' <<<"$result" | awk '/^DOCKERLENS_NATIVE_CHECK: network_attachment_cleanup(_unverified)?$/ { exit } { last=$0 } END { if (last != "") print last }' || true)
+fi
+if [[ $target == native_network_attachment && $test_name == live_network_attachments_match_engine ]]; then
+  # These are invocation-wide first-failure latches, not progress markers.
+  # Validate the whole family before projection: even identical duplicates,
+  # unknown tokens or private suffixes invalidate it rather than selecting last.
+  network_attachment_diagnostics=$(awk '
+    /DOCKERLENS_NATIVE_ATTACHMENT_/ {
+      if ($0 ~ /^DOCKERLENS_NATIVE_ATTACHMENT_WORK: role=context stage=(outer_context|engine_version|package|client_version|engine_info|client_info|daemon_mode|acquisition)$/ ||
+          $0 ~ /^DOCKERLENS_NATIVE_ATTACHMENT_WORK: role=(oracle|rendered) stage=(request_plan|primary_network_create|secondary_network_create|network_labels|server_create|server_start|primary_readback|secondary_connect|connected_readback|primary_peer_create|primary_peer_start|secondary_peer_create|secondary_peer_start|topology_readback|(primary|secondary)_(peer_ownership|resolver|unique_dns|shared_dns|unique_http|shared_http|direct_http)|final_readback|role_record|outer_readback)$/) {
+        work_count++; work=$0
+      } else if ($0 ~ /^DOCKERLENS_NATIVE_ATTACHMENT_CLEANUP: origin=(role|terminal|drop) role=(context|oracle|rendered) operation=(outer_ownership|inspect|status|ownership|delete|name_absence|id_absence) slot=(none|primary_network|secondary_network|server|primary_peer|secondary_peer)$/) {
+        cleanup_count++; cleanup=$0
+      } else invalid=1
+    }
+    END {
+      if (invalid || work_count > 1 || cleanup_count > 1) exit
+      if (work_count == 1) print work
+      if (cleanup_count == 1) print cleanup
+    }
+  ' <<<"$result")
 fi
 bind_relabel_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: bind_relabel_(context|oracle|rendered|cleanup|cleanup_unverified|evidence)$' <<<"$result" | tail -n 1 || true)
 if [[ -n $bind_relabel_marker ]]; then marker=$bind_relabel_marker; fi
@@ -322,6 +343,7 @@ if (( run_status != 0 )); then
   if [[ -n $stop_signal_stage ]]; then echo "$stop_signal_stage" >&2; fi
   if [[ -n $stop_signal_lifecycle ]]; then echo "$stop_signal_lifecycle" >&2; fi
   if [[ -n $network_attachment_causal_marker && $network_attachment_causal_marker != "$marker" ]]; then echo "$network_attachment_causal_marker" >&2; fi
+  if [[ -n $network_attachment_diagnostics ]]; then printf '%s\n' "$network_attachment_diagnostics" >&2; fi
   if [[ -n $bind_relabel_causal_marker && $bind_relabel_causal_marker != "$marker" ]]; then echo "$bind_relabel_causal_marker" >&2; fi
   if [[ -n $external_network_causal_marker && $external_network_causal_marker != "$marker" ]]; then echo "$external_network_causal_marker" >&2; fi
   if [[ -n $port_diagnostics ]]; then printf '%s' "$port_diagnostics" >&2; fi

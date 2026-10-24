@@ -173,6 +173,46 @@ for every known name and every known ID. No timeout or unavailable socket is
 absence. Uncertainty remains sticky and blocks proof publication; best-effort
 drop cleanup is not completion evidence.
 
+## Failure-only diagnostic latches
+
+The producer separately retains the first failure in its existing caught work
+phase and the first caught cleanup failure for the whole invocation. Work sites
+have only closed `context`/`oracle`/`rendered` roles and fixed operation stages:
+context checks/acquisition, request planning, create/start/connect, topology and
+label/alias readback, each side's resolver/unique/shared DNS and HTTP controls,
+direct HTTP, final readback and role-record construction. A stage identifies the
+active check boundary, not a proven timeout, DNS, transport or ownership cause.
+Failures before construction or outside the existing caught work phase retain
+their existing failure behavior; the latches do not claim exhaustive panic diagnosis.
+
+Cleanup has an independent first-failure record with closed origin
+`role`/`terminal`/`drop`, resource role, slot kind and operation
+`outer_ownership`/`inspect`/`status`/`ownership`/`delete`/`name_absence`/`id_absence`.
+Each original caught failure is recorded before another attempt can replace its
+location. Role cleanup suspends the work site: a cleanup-only refusal must not
+be reported as failure of the preceding DNS, HTTP or topology check. Terminal
+cleanup, caught panics and Drop cannot overwrite either first record. Diagnostic
+write refusal is ignored after latching and cannot prevent existing cleanup.
+
+At most one `DOCKERLENS_NATIVE_ATTACHMENT_WORK` and one
+`DOCKERLENS_NATIVE_ATTACHMENT_CLEANUP` record are emitted, using static tokens
+only. No panic payload, source path, argv, environment, body, identifier, resource
+name or observed value is formatted or inspected for diagnosis. No global panic
+hook is installed. Generic context/oracle/rendered/cleanup markers remain intact.
+The exact-test wrapper projects the two records separately only for this exact
+failed ignored test. It validates the entire anchored family before output;
+unknown, malformed, suffixed, duplicate or conflicting records invalidate that
+family rather than selecting a later cause. Generic markers and the numeric
+libtest summary remain compatible, and diagnostics cannot convert failure to
+success or appear on the successful path.
+
+Run `40113370193`/attempt 1 established an oracle-role failure, which includes
+role cleanup, plus unverified cleanup. Its original internal cause remains
+unknown. These diagnostics neither fix that unknown cause nor relax assertions,
+expected vectors, ownership/absence checks, mutation uncertainty, resource
+topology, cleanup attempts, work/cleanup/stream/time limits, proof publication,
+schemas, capability admission or runtime qualification obligations.
+
 ## Integration and validation ownership
 
 The primary has integrated the Rust module, exact runner, canonical harness
@@ -184,6 +224,12 @@ implemented definitions and synthetic controls are not runtime evidence.
 Focused pure controls are the Rust DNS, independent literal-wire, and cleanup
 reserve/collision tests in the owning module, plus
 `python3 -m unittest discover -s tests -p 'test_native_network_attachment_proof.py'`.
+Pure first-failure controls additionally cover caught cleanup panics, Drop and
+later attempts, cleanup-only failure, fixed role/effect classification and
+diagnostic-write refusal. `test_native_network_attachment_wiring.py` uses fake
+Cargo only to verify first work plus secondary cleanup, every cleanup category,
+legacy markers, exact-test/success suppression, malformed/duplicate refusal,
+numeric failure preservation and private canaries. These are not native evidence.
 The primary must run the canonical complete gates after its final integration
 edit and independently review fresh exact-candidate four-lane native evidence,
 archive/manifest bindings, native test success, and cleanup. No source control,
