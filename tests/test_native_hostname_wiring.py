@@ -61,7 +61,7 @@ else:
     def test_twenty_second_registration_preserves_existing_protocol_and_private_reader(self):
         harness = (ROOT / "scripts/native-conformance.sh").read_text()
         calls = native_calls(harness)
-        self.assertEqual(len(calls), 23)
+        self.assertEqual(len(calls), 26)
         self.assertEqual(calls[21], (TARGET, TEST))
         self.assertEqual(calls.count((TARGET, TEST)), 1)
         owner_marker = '(\n  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1\n'
@@ -72,7 +72,7 @@ else:
         owner = harness.index(owner_marker, original_end)
         end = harness.index('\n)\n', owner)
         self.assertEqual(native_calls(harness[owner:end]), [(TARGET, TEST)])
-        self.assertEqual(harness.count(owner_marker), 2)
+        self.assertEqual(harness.count(owner_marker), 5)
         reader = harness.index('python3 "$script_dir/native_hostname_proof.py"')
         emitter = harness.index('python3 "$script_dir/native-evidence.py"')
         self.assertLess(end, reader)
@@ -305,7 +305,7 @@ class HostnameEvidenceTests(unittest.TestCase):
                     proof_path.rename(moved)
                     proof_path.symlink_to(moved)
                 output = subprocess.run(result.args, capture_output=True, text=True, check=False, timeout=5,
-                    env={**os.environ, "NATIVE_FIXTURE_IMAGE": external.legacy.HEALTH_FIXTURE_IMAGE,
+                    env={**os.environ, "NATIVE_OUTER_ENGINE": "podman", "NATIVE_FIXTURE_IMAGE": external.legacy.HEALTH_FIXTURE_IMAGE,
                          "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"})
                 self.assertNotEqual(output.returncode, 0)
                 self.assertFalse(path.exists())

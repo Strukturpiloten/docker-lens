@@ -1596,6 +1596,44 @@ impl HealthRun {
     }
 }
 
+const PRIVATE_PROOF_LIMIT: usize = 16 * 1024;
+const MAX_PRIVATE_PROOF_LIMIT: usize = 512 * 1024;
+
+fn private_proof_bytes(proof: &Value, max_bytes: usize) -> Vec<u8> {
+    assert!(
+        (1..=MAX_PRIVATE_PROOF_LIMIT).contains(&max_bytes),
+        "reviewed private proof bound"
+    );
+    let bytes = serde_json::to_vec(proof).unwrap_or_else(|_| panic!("private proof encoding"));
+    assert!(
+        !bytes.is_empty() && bytes.len() <= max_bytes,
+        "bounded private proof"
+    );
+    bytes
+}
+
+#[test]
+fn private_proof_payload_limits_preserve_default_and_reject_overflow() {
+    for bound in [PRIVATE_PROOF_LIMIT, MAX_PRIVATE_PROOF_LIMIT] {
+        let exact = json!("x".repeat(bound - 2));
+        assert_eq!(private_proof_bytes(&exact, bound).len(), bound);
+        let oversized = json!("x".repeat(bound - 1));
+        assert!(std::panic::catch_unwind(|| private_proof_bytes(&oversized, bound)).is_err());
+    }
+    let old_overflow = json!("x".repeat(PRIVATE_PROOF_LIMIT - 1));
+    assert!(
+        std::panic::catch_unwind(|| private_proof_bytes(&old_overflow, PRIVATE_PROOF_LIMIT))
+            .is_err()
+    );
+    for bound in [0, MAX_PRIVATE_PROOF_LIMIT + 1, usize::MAX] {
+        assert!(std::panic::catch_unwind(|| private_proof_bytes(&json!({}), bound)).is_err());
+    }
+    for value in [json!("é"), json!("\n")] {
+        assert_eq!(private_proof_bytes(&value, 4).len(), 4);
+        assert!(std::panic::catch_unwind(|| private_proof_bytes(&value, 3)).is_err());
+    }
+}
+
 struct ProofTarget {
     directory: PathBuf,
     path: PathBuf,
@@ -1663,12 +1701,12 @@ impl ProofTarget {
     }
 
     fn publish(&self, proof: &Value) {
+        self.publish_bounded(proof, PRIVATE_PROOF_LIMIT);
+    }
+
+    fn publish_bounded(&self, proof: &Value, max_bytes: usize) {
         self.check();
-        let bytes = serde_json::to_vec(proof).unwrap_or_else(|_| panic!("private proof encoding"));
-        assert!(
-            !bytes.is_empty() && bytes.len() <= 16384,
-            "bounded private proof"
-        );
+        let bytes = private_proof_bytes(proof, max_bytes);
         let relative = PathBuf::from(format!(
             "/proc/self/fd/{}/{}",
             std::os::fd::AsRawFd::as_raw_fd(&self.held),

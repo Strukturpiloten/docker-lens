@@ -45,6 +45,9 @@ class NativeHarnessTests(unittest.TestCase):
             ("native_lifecycle_default_effect", "live_lifecycle_default_effects_match_engine"),
             ("native_hostname", "live_hostname_matches_engine"),
             ("native_command_clear", "live_command_clear_matches_engine"),
+            ("native_shm_size", "live_shm_size_effects_match_engine"),
+            ("native_supplementary_groups", "live_supplementary_groups_match_engine"),
+            ("native_kernel_settings", "live_kernel_settings_match_engine"),
         ])
         self.assertLess(source.index('native_port live_port_publications_match_engine'),
                         source.index('python3 "$script_dir/native-evidence.py"'))

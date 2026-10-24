@@ -1,5 +1,34 @@
 # Dependency and pin policy
 
+The prepared nofile source reuses the same Rust/Python and pinned borrowed
+fixture image, with no new package, tool, workflow or pin. The scoped private
+proof-size parameter is not a software version and adds no Renovate extraction
+location. Existing native-image, Cargo, toolchain and Action manager ownership,
+grouping and approvals remain unchanged. No canonical nofile consumer is added;
+Check/native/release definitions still share the26-call coordinator, while
+BoxFerry must independently qualify the final library/source closure.
+
+## Calls 24–26 source recovery: unchanged operational pins
+
+The recovered ShmSize, supplementary-groups and kernel-settings tests use only
+existing Rust/Python, pinned fixture images, canonical wrappers and transport.
+The pure `native_source_accounting.py` helper serves three private readers and
+the existing emitter, plus the separately prepared nofile reader; its Rust counterpart calculates test-only costs/reserves
+without runtime I/O. Kernel cleanup reuses the bounded native HTTP helper.
+No Cargo declaration/lockfile, toolchain, image, downloaded tool, Action/workflow
+or Renovate extraction path changes. Existing manager ownership, grouping and
+approvals remain authoritative; no duplicate manager or integrity exception is
+added. Hermetic fixture/fake-client controls do not establish native admission.
+
+The #125 inert destination-contract recovery adds no dependency, tool, image,
+Action, workflow reference or operational pin. Existing five native-image
+version/digest pairs and their canonical coordinator extraction path, grouping,
+manual approvals and manager ownership are unchanged; no Renovate manager edit
+or duplicate owner is needed. Artifact schema 4 is a data contract, not an
+automatically updated software pin. BoxFerry must separately validate public
+report-field construction and closed schema-4 consumption; no completed
+cross-repository rollout or native qualification is claimed here.
+
 The bounded #31 recovery reuses the committed health-interval boundary,
 lifecycle default/zero, hostname and command-clear producer/reader/contracts and their recorded
 oracle provenance; it copies no external oracle implementation. No software dependency,

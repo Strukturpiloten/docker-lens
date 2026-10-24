@@ -1040,7 +1040,7 @@ class ShellFinalizationTests(unittest.TestCase):
     def test_exact_native_sequence_and_launch_remain_mandatory(self):
         self.assertLess(SOURCE.index('30 apparmor verify "$lane" "$apparmor_nonce"'), SOURCE.index('/run-exact-native-test.sh"'))
         self.assertLess(SOURCE.rindex('/run-exact-native-test.sh"'), SOURCE.index("  apparmor_native_completed=1"))
-        self.assertEqual(SOURCE.count('/run-exact-native-test.sh"'), 23)
+        self.assertEqual(SOURCE.count('/run-exact-native-test.sh"'), 26)
         self.assertIn('--privileged --pids-limit=512 --memory=4g', RUNTIME)
         self.assertIn('start=(/usr/local/bin/start-dockerd', RUNTIME)
         helper = (ROOT / "scripts/native-runner-apparmor.py").read_text()

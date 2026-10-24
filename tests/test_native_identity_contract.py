@@ -239,7 +239,7 @@ class ParameterizedIdentityTests(unittest.TestCase):
                 str(destination), "upstream-rootful",
                 "ghcr.io/strukturpiloten/docker-29-rootful:v29.8.1@sha256:" + "b" * 64,
                 "rootful", "", SHA, RUN_ID]
-            rejected = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": legacy.HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, timeout=5)
+            rejected = subprocess.run(command, env={**os.environ, "NATIVE_OUTER_ENGINE": "podman", "NATIVE_FIXTURE_IMAGE": legacy.HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, timeout=5)
             self.assertNotEqual(rejected.returncode, 0)
             self.assertFalse(destination.exists())
             self.assertEqual(rejected.stderr.strip(), "native evidence rejected")

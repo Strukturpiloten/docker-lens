@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Prepare the preserved nofile producer, strict reader and custody controls as
+  registered test-only source. Keep default private proofs at16KiB and allow
+  only the explicit bounded nofile path up to512KiB. Do not invoke canonical28
+  before unresolved PIDs27, emit a public nofile result or admit a capability.
+
+- Recover preserved ShmSize, numeric supplementary-group DAC and diagonal
+  kernel-setting proofs as mandatory calls 24–26 with separate owner scopes,
+  strict post-call/emitter readers and selected-backend accounting. Preserve
+  existing first 23 calls, #125 API, maintained profile policy and original
+  resource/deadline/cleanup bounds. Add only closed unadmitted observations;
+  PIDs/nofile, fresh native qualification and milestone completion remain due.
+
+- Recover observation-scoped PIDs/cgroup reports and the inert finite-rootless-PIDs
+  destination obligation. Complete artifacts retain schema-4 prerequisites;
+  pure destination assessment remains delegation/enforcement-unverified.
+  Preserve existing capability gates, request bytes and schema 1/2/3 output when
+  the new obligation is absent. No native or catalogue admission is implied.
+
 - Maintain the scoped per-job GitHub-runner AppArmor userns profile for the owned
   outer-Docker upstream-rootless fixture in the three existing native workflows.
   Require exact task label/custody and proven profile removal after the complete

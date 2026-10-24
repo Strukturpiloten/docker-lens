@@ -182,6 +182,40 @@ else:
             archive.unlink()
 
     def test_complete_rust_native_inventory_uses_one_literal_test_only_boundary(self):
+        # These exact pure forms select data, never an executable. Retain every
+        # other byte of the unit control under the blanket literal prohibition.
+        selector = '''impl SourceOuterBackend {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "podman" => Some(Self::Podman),
+            "docker" => Some(Self::Docker),
+            _ => None,
+        }
+    }
+'''
+        pure_control = '''#[test]
+fn source_backend_accounting_is_closed_and_does_not_charge_io() {
+    let podman = SourceOuterBackend::parse("podman").unwrap();
+    let docker = SourceOuterBackend::parse("docker").unwrap();
+'''
+        pure_podman = '    let podman = SourceOuterBackend::parse("podman").unwrap();\n'
+
+        def checked_source(source, filename):
+            self.assertIn("crate::native_outer_test_command::prefix()", source)
+            scanned = source
+            if filename == "native_lifecycle_tests.rs":
+                # Require exactly one canonical parser with both closed cases
+                # and explicit None refusal: no fallback or arbitrary stripping.
+                self.assertEqual(source.count("impl SourceOuterBackend {"), 1)
+                self.assertEqual(source.count("    fn parse(value: &str) -> Option<Self> {"), 1)
+                self.assertEqual(source.count(selector), 1)
+                self.assertEqual(source.count("fn source_backend_accounting_is_closed_and_does_not_charge_io() {"), 1)
+                self.assertEqual(source.count(pure_control), 1)
+                self.assertEqual(source.count(pure_podman), 1)
+                scanned = source.replace(selector, "", 1).replace(pure_podman, "", 1)
+            self.assertNotIn('"podman"', scanned)
+            self.assertNotIn('"--remote=false"', scanned)
+
         modules = ["native_target_tests", "native_network_tests", "native_network_attachment_tests",
                    "native_bind_relabel_tests", "native_external_network_tests", "native_identity_tests",
                    "native_port_tests", "native_volume_tests", "native_volume_label_tests",
@@ -191,9 +225,19 @@ else:
         for path in paths:
             with self.subTest(path=path.name):
                 source = path.read_text()
-                self.assertIn("crate::native_outer_test_command::prefix()", source)
-                self.assertNotIn('"podman"', source)
-                self.assertNotIn('"--remote=false"', source)
+                checked_source(source, path.name)
+        lifecycle = (ROOT / "src/native_lifecycle_tests.rs").read_text()
+        injected = '    Command::new("podman");\n'
+        for mutation in (
+            lifecycle.replace("        match value {\n", injected + "        match value {\n", 1),
+            lifecycle.replace(pure_control, pure_control + injected, 1),
+            lifecycle.replace(pure_control, pure_control.replace(pure_podman, injected + pure_podman), 1),
+            lifecycle + '\n["sudo", "-n", "podman"];\n',
+            lifecycle.replace("            _ => None,\n", "            _ => Some(Self::Podman),\n", 1),
+            lifecycle + selector,
+        ):
+            with self.subTest(mutation="closed selector boundary"), self.assertRaises(AssertionError):
+                checked_source(mutation, "native_lifecycle_tests.rs")
         for path in [*ROOT.glob("src/*.rs"), *ROOT.glob("tests/*.rs")]:
             if path.name == "native_outer_test_command.rs":
                 continue

@@ -1,4 +1,4 @@
-"""Closed twenty-three-test recovery wiring; no real native calls."""
+"""Closed twenty-six-test recovery wiring; no real native calls."""
 
 import copy
 import json
@@ -45,6 +45,9 @@ EXPECTED_CALLS = [
     ("native_lifecycle_default_effect", "live_lifecycle_default_effects_match_engine"),
     ("native_hostname", "live_hostname_matches_engine"),
     ("native_command_clear", "live_command_clear_matches_engine"),
+    ("native_shm_size", "live_shm_size_effects_match_engine"),
+    ("native_supplementary_groups", "live_supplementary_groups_match_engine"),
+    ("native_kernel_settings", "live_kernel_settings_match_engine"),
 ]
 
 
@@ -89,7 +92,7 @@ sys.exit(int(os.environ["STATUS"]))
         end = source.index('\n)\n', owner)
         scoped = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source[owner:end], re.M)
         self.assertEqual(scoped, EXPECTED_CALLS[16:21])
-        self.assertEqual(source.count('export NATIVE_LIFECYCLE_CLEANUP_OWNER='), 2)
+        self.assertEqual(source.count('export NATIVE_LIFECYCLE_CLEANUP_OWNER='), 5)
         self.assertLess(source.index('unset NATIVE_LIFECYCLE_CLEANUP_OWNER'), source.index('run-exact-native-test.sh" native_capture'))
         emission = source.index('python3 "$script_dir/native-evidence.py"')
         self.assertLess(end, emission)

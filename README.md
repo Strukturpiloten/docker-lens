@@ -21,6 +21,24 @@ observations, not raw capability or catalogue admission. The preserved 28-call
 inventory remains pending reconciliation; twenty-three is not milestone completion.
 Historical evidence does not qualify this changed candidate.
 
+The next recovered source-only closure adds
+[ShmSize](docs/native-shm-size-contract.md),
+[numeric supplementary groups](docs/native-supplementary-groups-contract.md) and
+[diagonal kernel settings](docs/native-kernel-settings-contract.md) as mandatory
+calls 24–26. Each has a separate one-child owner scope and immediate strict
+reader, including without public emission. Backend accounting is independently
+bound to canonical Podman/Docker selection; original limits and the maintained
+profile policy remain unchanged. The current source sequence is 26 calls in
+five owner scopes, not the preceding 23-call checkpoint. Only unadmitted
+observations are added; PIDs27/nofile28, native qualification and milestone
+completion remain pending.
+
+The preserved [nofile proof](docs/native-nofile-contract.md) is registered as
+prepared test-only source, with its scoped private-proof bounds and custody
+controls. It is not a canonical invocation or emitter requirement: unresolved
+PIDs27 must precede eventual nofile28. An ignored test definition is not native
+execution, full28 completion or capability admission.
+
 The planned native work is tracked in [DockerLens #3](https://github.com/Strukturpiloten/docker-lens/issues/3).
 Typed networks, protected runtime settings and conditional bind-source review
 are available as inert data. The candidate selects the independently reviewed
@@ -45,7 +63,7 @@ representations retain their existing behavior.
 
 This is candidate pre-merge rehearsal admission. Production merge, main
 admission and release remain blocked until fresh exact-final-candidate complete
-and four-lane twenty-three-test native gates, fresh independently reviewed volume-only
+and four-lane twenty-six-test native gates, fresh independently reviewed volume-only
 consumer rehearsals of all six actual authored fixtures under
 [ADR 0012](docs/decisions/0012-candidate-volume-label-admission.md), and reviewed
 BoxFerry consumers of the actual Nextcloud/Supabase binds and desired external
@@ -63,6 +81,14 @@ Debian 11 Docker Engine support is bounded by exact reviewed native evidence; De
 Compose compatibility and Swarm mode are separate discussion topics.
 
 ## Contract boundaries
+
+The recovered [finite rootless PIDs destination contract](docs/destination-pids-prerequisite.md)
+retains observation-scoped PIDs/cgroup metadata and an unresolved typed destination
+obligation. Metadata compatibility never proves controller delegation or enforcement.
+Existing PIDs capability gates and reviewed profiles remain unchanged. Where an
+admitted finite rootless setting requires that obligation, complete output uses
+schema 4; other schema 1/2/3 output and request bytes remain unchanged. Downstream
+schema support and fresh integrated verification remain required.
 
 - A caller supplies an absolute Unix-socket endpoint and bounded selector. No
   daemon is discovered. Cancellation is checked between bounded I/O polls.

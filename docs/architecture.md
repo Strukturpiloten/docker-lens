@@ -1,5 +1,38 @@
 # Architecture
 
+The [nofile producer](native-nofile-contract.md) is separately registered as
+prepared test-only source. Its default-private-proof boundary remains16KiB;
+only the explicit nofile publisher/reader selects a bounded512KiB limit, with
+its separate64KiB metadata ceiling and existing stable-file/directory custody.
+It is not wired into the canonical26-call coordinator or emitter. Strict PIDs27
+and its original-boundary authority must precede eventual nofile28; no prepared
+source or ignored test grants native acceptance or a capability.
+
+## Current source-only calls 24–26 recovery
+
+The current coordinator extends the preceding 23-call checkpoint below with
+the preserved ShmSize, supplementary-groups and kernel-settings children in
+positions 23/24/25 (26 invocations total). The original five-child owner block,
+separate hostname scope and token-free command-clear call remain unchanged;
+each new child has a separate one-child scope and immediate mandatory strict
+reader. Five owner scopes result. The maintained profile policy and #125 inert
+public API remain unchanged. PIDs/nofile and their authority machinery are not
+recovered by this phase.
+
+Pure readers bind canonical selected-backend costs separately from proof and
+context data, with no absent/unknown backend fallback. Existing snapshots own
+actual charges. New private helpers calculate exact final totals and checked
+pending-final reserves only: two Docker extras in the final ledger, one pending
+extra after acquisition. The 180-second deadline, 400-call/4-MiB aggregate,
+100-call/2-MiB cleanup reserve and original stream/body/proof caps remain intact.
+Kernel cleanup retains complete-body ownership projection and known-ID guard.
+Emitter output adds only closed unadmitted observations; capability maps,
+catalogue, dependencies, pins and public request semantics do not change.
+Source controls do not qualify native behavior; final complete and genuine
+exact-candidate 26-invocation four-lane gates and independent review remain due.
+
+## Preceding 23-call checkpoint and maintained policy
+
 The first #31 recovery stage reuses the preserved
 [health-interval boundary](native-health-start-interval-boundary-contract.md) and
 [lifecycle default/zero effects](native-lifecycle-default-effects-contract.md)
@@ -54,6 +87,15 @@ proof fails the lane and aggregate. This adds no local-host policy, cgroup/PIDs
 authority, product capability or release admission.
 
 ## Data flow
+
+The recovered [destination-PIDs contract](destination-pids-prerequisite.md) adds
+observation-scoped reports from the existing captured `/info` response, not a new
+request. A pure assessor requires explicitly selected destination scope and
+matching metadata; even its compatible outcome leaves delegation and enforcement
+unverified. Finite rootless PIDs rendering, after existing capability validation,
+retains an unresolved typed obligation and selects complete-artifact schema 4.
+Other request/schema 1/2/3 bytes remain unchanged. ADRs 0020/0021 define these
+boundaries; no executor, native authority or capability admission is added.
 
 1. An explicitly supplied endpoint and selector create a bounded read request
    plan. Every operation belongs to the closed `ReadRequest` enum.
@@ -198,7 +240,7 @@ and historical evidence remain unchanged. ADR 0018 selects authenticated source
 run `37788762974` at Debian 29/46 and upstream 30/48 for candidate rehearsal;
 ADR 0019 retains those groups and adds only the StopSignal singleton.
 Definitions or offline controls grant no native compatibility. Fresh
-authenticated exact-final-candidate twenty-three-test four-lane execution,
+authenticated exact-final-candidate twenty-six-test four-lane execution,
 independent review and the separate ADR 0012/0016/0018/0019 consumer gates remain
 required before ready/merge. No source run qualifies a changed candidate.
 

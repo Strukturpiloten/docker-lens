@@ -1,5 +1,59 @@
 # Verification
 
+## Prepared nofile source, not canonical28
+
+The recovered [nofile contract](native-nofile-contract.md) has a registered
+ignored producer and pure custody/accounting controls, but no canonical wrapper
+invocation, mandatory emitter reader or public observation. The current native
+coordinator still requires26 calls. Never use this source preparation to run28
+around unresolved strict PIDs27. Default private-proof bounds remain16KiB; the
+explicit nofile publisher/reader alone may select at most512KiB, independently
+retaining the64KiB metadata bound, exclusive publication, stable no-follow reads
+and held-directory custody. Both source accounting and byte-boundary controls
+require final integrated Rust/full gates; they are not native effect evidence.
+
+## Current source-only calls 24–26 recovery
+
+The current mandatory source sequence has 26 exact invocations. Preserved
+`shm-size-v1`, `supplementary-groups-v1` and `kernel-settings-v1` follow the
+unchanged first 23, each in a separate one-child owner scope and each followed
+immediately by its strict private reader, even without evidence emission. Five
+owner scopes retain the original five-child block, hostname alone and the three
+new children. Command-clear stays outside all scopes. The maintained profile
+policy, AppArmor acceptance boundaries and #125 public contract are unchanged.
+
+Paired producer/reader/backend controls require exact Podman Debian/upstream
+ordinary calls 75/74 for Shm/groups and 71/70 for kernel; Docker is 77/76 and
+73/72. Pending-final preflight reserves one extra Docker call/65,536 bytes;
+the final two-snapshot ledger includes two extras and 131,072 bytes. Ordinary
+byte floors are 524,289 Podman / 655,361 Docker with unchanged 2-MiB upper bound.
+Missing or unknown backend refuses; the proof cannot select its own accounting.
+The shared actual snapshot charge owner is unchanged. Pure Rust boundary tests
+exercise checked pending reserves; Python literal controls exercise both
+backends, all lanes, custody, malformed/partial proofs, exact wrapper selection,
+private diagnostics and unchanged capability maps. Kernel controls retain full
+body accounting, two exact owned reads before deletion, unknown-ID refusal and
+the strict successful cleanup ceiling. These are synthetic controls, not native
+qualification or proof of real timing/body-size fit. Main owns final integrated
+complete gates and fresh exact-candidate four-lane native qualification.
+
+PIDs27/nofile28, extra authority/broker machinery and new capability admission
+remain outside this recovery. The preceding 23-call checkpoint descriptions
+below preserve their historical scope and do not qualify the changed source.
+
+## Recovered destination-PIDs contract
+
+The separate [#125 contract](destination-pids-prerequisite.md) restores scoped
+PIDs/cgroup reports, explicit-destination pure assessment and unresolved schema-4
+obligations from preserved committed source. Independent source review is not
+compilation or native qualification. Its controls cover report availability,
+origin, scope, exact lexical classification, privacy, destination/API failures,
+finite/absent/unlimited/rootful behavior, capability refusal, prerequisite order
+and literal legacy artifact bytes. Test-local facts do not change reviewed
+profiles; compatible metadata still proves neither delegation nor enforcement.
+Final integrated complete gates, downstream struct-literal/schema-reader checks
+and separate native authority/effect evidence remain required.
+
 ## Bounded #31 source recovery: first twenty-three invocations
 
 The current coordinator requires twenty-three exact ignored invocations. It keeps
@@ -49,7 +103,7 @@ publication. The original 180-second deadline, 400 calls/4 MiB aggregate and
 charging. Offline proof/custody/wrapper/emitter controls are not native evidence.
 
 Earlier checkpoint descriptions below retain their historical cohort counts;
-the current required invocation ledger is the twenty-three-call definition above.
+the current required invocation ledger is the twenty-six-call definition at the top.
 
 The [command-clear contract](native-command-clear-contract.md) retains both
 nonempty image defaults and four independent CLI/rendered cases, including the

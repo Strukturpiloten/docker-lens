@@ -61,7 +61,7 @@ else:
     def test_twenty_third_registration_and_mandatory_independent_reader(self):
         harness = (ROOT / "scripts/native-conformance.sh").read_text()
         calls = native_calls(harness)
-        self.assertEqual(len(calls), 23)
+        self.assertEqual(len(calls), 26)
         self.assertEqual(calls[21:23], [("native_hostname", "live_hostname_matches_engine"), (TARGET, TEST)])
         self.assertEqual(calls.count((TARGET, TEST)), 1)
         hostname_reader = harness.index('python3 "$script_dir/native_hostname_proof.py"')
@@ -78,7 +78,7 @@ else:
         self.assertLess(harness.index('\n)\n', owner), command)
         hostname_owner = harness.index('(\n  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1\n', owner + 1)
         self.assertLess(harness.index('\n)\n', hostname_owner), command)
-        self.assertEqual(harness.count('export NATIVE_LIFECYCLE_CLEANUP_OWNER='), 2)
+        self.assertEqual(harness.count('export NATIVE_LIFECYCLE_CLEANUP_OWNER='), 5)
         self.assertLess(reader, harness.index('if [[ -n ${apparmor_profile:-} ]]; then', reader))
         emitter = harness.index('python3 "$script_dir/native-evidence.py"')
         protocol = harness[emitter:harness.index('\n  fi\n}', emitter)].replace('\\\n', ' ')
@@ -224,6 +224,9 @@ else:
     def test_actual_harness_tail_requires_both_readers_before_public_emission(self):
         from test_native_command_clear_proof import fixture as command_fixture
         from test_native_hostname_proof import fixture as hostname_fixture
+        from test_native_shm_size_proof import fixture as shm_fixture
+        from test_native_supplementary_groups_proof import fixture as groups_fixture
+        from test_native_kernel_settings_proof import fixture as kernel_fixture
 
         harness = (ROOT / "scripts/native-conformance.sh").read_text()
         start = harness.index('python3 "$script_dir/native_hostname_proof.py"')
@@ -231,7 +234,8 @@ else:
         tail = tail.replace('"$(dirname "$0")/run-exact-native-test.sh"', 'command_wrapper')
         for lane in ("debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless"):
             for fault in ("none", "hostname_missing", "hostname_context", "command_missing",
-                          "command_effect", "command_cleanup", "native_failure"):
+                          "command_effect", "command_cleanup", "native_failure",
+                          "shm_size_missing", "supplementary_groups_missing", "kernel_settings_missing"):
                 with self.subTest(lane=lane, fault=fault), tempfile.TemporaryDirectory() as temporary:
                     root = Path(temporary)
                     hostname = hostname_fixture(lane)
@@ -247,6 +251,10 @@ else:
                         installed_docker_package=context["docker_package"],
                         NATIVE_HOSTNAME_CANDIDATE_SHA=context["candidate_sha"],
                         NATIVE_COMMAND_CLEAR_CANDIDATE_SHA=context["candidate_sha"],
+                        NATIVE_SHM_SIZE_CANDIDATE_SHA=context["candidate_sha"],
+                        NATIVE_SUPPLEMENTARY_GROUPS_CANDIDATE_SHA=context["candidate_sha"],
+                        NATIVE_KERNEL_SETTINGS_CANDIDATE_SHA=context["candidate_sha"],
+                        NATIVE_OUTER_ENGINE="podman",
                         NATIVE_FIXTURE_IMAGE=context["fixture_image"], image=context["outer"]["image"],
                         NATIVE_OUTER_CONTAINER_ID=context["outer"]["id"],
                         NATIVE_BIND_RELABEL_DAEMON_UID=str(context["daemon_uid"]),
@@ -265,14 +273,33 @@ else:
                             path = root / ("hostname-v1.json" if family == "hostname" else "command-clear-v1.json")
                             path.write_text(json.dumps(proof))
                             path.chmod(0o600)
+                    for family, fixture in (("shm_size", shm_fixture), ("supplementary_groups", groups_fixture),
+                                            ("kernel_settings", kernel_fixture)):
+                        if fault != family + "_missing":
+                            proof = fixture(lane)
+                            proof["context"] = json.loads(json.dumps(context))
+                            path = root / (family.replace("_", "-") + "-v1.json")
+                            path.write_text(json.dumps(proof))
+                            path.chmod(0o600)
                     script = ('set -euo pipefail\ncommand_wrapper() {\n'
-                              '  [[ -z ${NATIVE_LIFECYCLE_CLEANUP_OWNER:-} ]] || return 98\n'
+                              '  if [[ $1 == native_command_clear ]]; then\n'
+                              '    [[ -z ${NATIVE_LIFECYCLE_CLEANUP_OWNER:-} ]] || return 98\n'
+                              '  else\n'
+                              '    [[ ${NATIVE_LIFECYCLE_CLEANUP_OWNER:-} == native_conformance_outer_v1 ]] || return 98\n'
+                              '  fi\n'
                               '  printf "%s %s\\n" "$1" "$2" >> "$TRACE"\n'
                               '  return "$STATUS"\n}\n' + tail + 'printf "public\\n" >> "$TRACE"\n')
                     result = subprocess.run(["bash", "-c", script], env=env,
                                             capture_output=True, text=True, timeout=5)
                     events = trace.read_text().splitlines() if trace.exists() else []
                     expected = [] if fault.startswith("hostname_") else [f"{TARGET} {TEST}"]
+                    if fault == "none" or fault in ("shm_size_missing", "supplementary_groups_missing", "kernel_settings_missing"):
+                        for family, test in (("shm_size", "live_shm_size_effects_match_engine"),
+                                             ("supplementary_groups", "live_supplementary_groups_match_engine"),
+                                             ("kernel_settings", "live_kernel_settings_match_engine")):
+                            expected.append("native_" + family + " " + test)
+                            if fault == family + "_missing":
+                                break
                     if fault == "none":
                         expected.append("public")
                     self.assertEqual(events, expected)
@@ -420,7 +447,7 @@ class CommandClearEvidenceTests(unittest.TestCase):
                     proof_path.rename(moved)
                     proof_path.symlink_to(moved)
                 output = subprocess.run(result.args, capture_output=True, text=True, check=False, timeout=5,
-                    env={**os.environ, "NATIVE_FIXTURE_IMAGE": external.legacy.HEALTH_FIXTURE_IMAGE,
+                    env={**os.environ, "NATIVE_OUTER_ENGINE": "podman", "NATIVE_FIXTURE_IMAGE": external.legacy.HEALTH_FIXTURE_IMAGE,
                          "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"})
                 self.assertNotEqual(output.returncode, 0)
                 self.assertFalse(path.exists())

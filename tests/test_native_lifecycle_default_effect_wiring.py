@@ -45,7 +45,7 @@ sys.exit(int(os.environ["STATUS"]))
             began = time.time()
             result = subprocess.run(["bash", str(ROOT / "scripts/run-exact-native-test.sh"), TARGET, TEST],
                 capture_output=True, text=True, timeout=5,
-                env={**os.environ, "PATH": f"{root}:/usr/bin:/bin", "CALLS": str(calls),
+                env={**os.environ, "NATIVE_OUTER_ENGINE": "podman", "PATH": f"{root}:/usr/bin:/bin", "CALLS": str(calls),
                      "LIST": SELECTED + ": test" if listing is None else listing,
                      "OUTPUT": output, "STATUS": str(status),
                      "NATIVE_LIFECYCLE_DEFAULT_EFFECT_DEADLINE_EPOCH": "1",
@@ -57,14 +57,14 @@ sys.exit(int(os.environ["STATUS"]))
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         invocation = f'"$(dirname "$0")/run-exact-native-test.sh" {TARGET} {TEST}'
         calls = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source, re.M)
-        self.assertEqual(len(calls), 23)
+        self.assertEqual(len(calls), 26)
         self.assertEqual(calls[20], (TARGET, TEST))
         self.assertEqual(source.count(invocation), 1)
         owner = source.index('(\n  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1\n')
         end = source.index('\n)\n', owner)
         owned_calls = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source[owner:end], re.M)
         self.assertEqual(owned_calls, calls[16:21])
-        self.assertEqual(source.count("export NATIVE_LIFECYCLE_CLEANUP_OWNER="), 2)
+        self.assertEqual(source.count("export NATIVE_LIFECYCLE_CLEANUP_OWNER="), 5)
         self.assertLess(source.index("unset NATIVE_LIFECYCLE_CLEANUP_OWNER"), owner)
         for line in (f'export NATIVE_LIFECYCLE_DEFAULT_EFFECT_PROOF_PATH="$run_dir/{FILENAME}"',
                      'export NATIVE_LIFECYCLE_DEFAULT_EFFECT_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA'):
@@ -277,7 +277,7 @@ class DefaultEffectEvidenceTests(unittest.TestCase):
             else:
                 os.link(proof, alternate)
             outcome = subprocess.run(result.args, capture_output=True, text=True, timeout=5,
-                env={**os.environ, "NATIVE_FIXTURE_IMAGE": external.legacy.HEALTH_FIXTURE_IMAGE,
+                env={**os.environ, "NATIVE_OUTER_ENGINE": "podman", "NATIVE_FIXTURE_IMAGE": external.legacy.HEALTH_FIXTURE_IMAGE,
                      "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0",
                      "NATIVE_LIFECYCLE_DEFAULT_EFFECT_PROOF_PATH": str(alternate)})
             self.assertNotEqual(outcome.returncode, 0)
