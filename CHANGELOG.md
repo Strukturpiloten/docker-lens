@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Recover the preserved health-interval configuration boundary and lifecycle
+  default/zero effects as mandatory calls 20 and 21, with strict private proof
+  validation and closed unadmitted observations. Preserve the original nineteen,
+  current topology/diagnostics/pins/cleanup and experimental non-acceptance.
+  The full preserved 28-call inventory and exact-candidate qualification remain
+  pending; this stage adds no raw capability or catalogue admission.
+
 - Raise the minimum supported Rust version from 1.85.0 to 1.98.1, matching the
   pinned development toolchain. Consumers must upgrade Rust before building.
 - Select ADR 0019's authenticated configured stop-signal source cohort for

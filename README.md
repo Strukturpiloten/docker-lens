@@ -11,6 +11,14 @@ source records are available for inert rendering. Each changed candidate and
 release must pass fresh complete and four-lane native gates before a
 compatibility claim.
 
+The first #31 recovery stage restores the preserved health-interval boundary and
+lifecycle default/zero source producers as canonical invocations 20 and 21. The
+original nineteen, current fixture topology/diagnostics, pins, cleanup and
+unadmitted AppArmor boundary remain mandatory. These are strict source-only
+observations, not raw capability or catalogue admission. The preserved 28-call
+inventory remains pending reconciliation; twenty-one is not milestone completion.
+Historical evidence does not qualify this changed candidate.
+
 The planned native work is tracked in [DockerLens #3](https://github.com/Strukturpiloten/docker-lens/issues/3).
 Typed networks, protected runtime settings and conditional bind-source review
 are available as inert data. The candidate selects the independently reviewed
@@ -35,7 +43,7 @@ representations retain their existing behavior.
 
 This is candidate pre-merge rehearsal admission. Production merge, main
 admission and release remain blocked until fresh exact-final-candidate complete
-and four-lane sixteen-test native gates, fresh independently reviewed volume-only
+and four-lane twenty-one-test native gates, fresh independently reviewed volume-only
 consumer rehearsals of all six actual authored fixtures under
 [ADR 0012](docs/decisions/0012-candidate-volume-label-admission.md), and reviewed
 BoxFerry consumers of the actual Nextcloud/Supabase binds and desired external

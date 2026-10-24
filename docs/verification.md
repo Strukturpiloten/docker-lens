@@ -1,5 +1,37 @@
 # Verification
 
+## First bounded #31 source recovery
+
+The current coordinator requires twenty-one exact ignored invocations. It keeps
+the original nineteen in order and restores the existing
+`health-start-interval-boundary-v1` and `lifecycle-default-effects-v1` closures as
+calls 20 and 21. These include their independent request/effect/legacy-negative
+oracles, strict private readers, original deadlines/resource caps, registered
+identity ledgers and authenticated cleanup/terminal handoff. Only closed
+unadmitted observations enter the manifest; raw capabilities and the compiled
+catalogue remain unchanged. No duplicate producer or new image/tool is added.
+
+Recovery uses preserved committed source: boundary `f73fd928...`, default/zero
+effects `ed445233...`, and the exact original-run-bound absence allowance
+`14827e26...`, retained in the historical `cead64a...` 21-call closure and later
+`f406cb22...` 28-call checkout. The later unrelated transport/broker, catalogue
+and additional-family changes are not imported. Historical run `39121741122`
+informs recovery but cannot qualify the changed source. Source22's topology,
+closed diagnostics, current pins, cleanup-status fixes and unadmitted AppArmor
+experiment are preserved. The complete 28-call inventory remains pending; this
+stage does not complete #31 or authorize admission/release.
+
+The four recovered proof/wiring Python modules independently cover configuration
+versus scheduling effects, exact Debian CLI refusal, null/missing/type semantics,
+actual zero/default effects, strict context/custody, original budgets, privacy
+and cleanup failure propagation. Existing emitter fixtures now supply both
+mandatory private proofs; missing/partial/stale proofs refuse the manifest.
+Rust controls exercise the same composed run-bound absence predicate as the
+real request path, including rejection of GET bodies. Fresh final-edit complete
+and exact-candidate native gates plus independent review remain required.
+Earlier checkpoint descriptions below retain their historical cohort counts;
+the current required invocation ledger is the twenty-one-call definition above.
+
 The current minimum and pinned development compiler are Rust 1.98.1.
 `Cargo.toml` supplies the minimum for Clippy and `scripts/check-msrv.sh`;
 `rust-toolchain.toml` selects the same compiler for normal Cargo commands.
@@ -14,7 +46,7 @@ Podman and explicitly selects Docker in the three admitted hosted native workflo
 It verifies local rootful daemon/service/listener identity (including systemd
 activation), private CLI configuration, actual versions and owned inner resources.
 Docker-specific listing, data ownership, logging and removal are not Podman prefix
-substitutions. Four image pins/inner modes, nineteen mandatory tests, source/candidate
+substitutions. Four image pins/inner modes, all required tests, source/candidate
 admission, budgets and cleanup boundaries remain unchanged. The narrow legacy-main
 dispatcher policy is documented there; no actor or main-only gate is relaxed.
 Definitions and mocked controls do not establish Docker-backend compatibility.
@@ -31,7 +63,7 @@ Exact listing-vector, malformed/duplicate state, closed receipt, malformed absen
 and closed failure-stage controls cover the experiment-only projection. They
 invoke no policy parser, Docker/Podman or native guest and establish no hosted
 prerequisite or compatibility fact. The live experimental job must finish
-non-success after cleanup even if all nineteen unchanged tests pass;
+non-success after cleanup even if all required tests pass;
 ordinary native receipts, success summaries and aggregate acceptance are blocked.
 Its closed log result is not an uploaded lane artifact. Earlier native failures
 and cancellation remain failures; missing/uncertain cleanup remains retained.
@@ -242,8 +274,9 @@ definitions/fake controls alone establish no hosted prerequisite facts.
 
 ## Mandatory unadmitted runtime-cohort source observations
 
-The canonical harness requires nineteen exact ignored invocations, retaining the
-original first seventeen in order and adding the separate eighteenth
+The retained runtime-cohort foundation supplied nineteen exact invocations before
+the two source-recovery additions described above. It retains the
+original first seventeen in order and adds the separate eighteenth
 `native_health_metadata_tests::lifecycle::runtime_filesystem::live_runtime_filesystem_matches_engine`
 and nineteenth
 `native_health_metadata_tests::lifecycle::tmpfs_effect::live_tmpfs_effects_match_engine`.
@@ -331,7 +364,7 @@ generic version support and cannot close the larger required-contract issue.
 
 The wrapper retains its nineteen-argument emitter protocol and original
 180-second invocation deadline, exposes only fixed lifecycle diagnostics, and
-preserves the first observation failure. Only the three lifecycle-family invocations
+preserves the first observation failure. Only the five lifecycle-family invocations
 receive the canonical outer-cleanup owner token. An uncertain inner cleanup requests
 outer teardown and fails; its marker never proves completed teardown. The EXIT
 owner now binds outer/sidecar creation IDs, rechecks ID/name/run ownership, removes

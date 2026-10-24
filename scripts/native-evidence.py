@@ -16,6 +16,10 @@ from native_stop_signal_proof import (
 from native_lifecycle_proof import (
     CONTRACT as LIFECYCLE_CONTRACT, FILENAME as LIFECYCLE_FILENAME, read_lifecycle_proof,
 )
+from native_lifecycle_default_effect_proof import (
+    CONTRACT as LIFECYCLE_DEFAULT_EFFECT_CONTRACT, FILENAME as LIFECYCLE_DEFAULT_EFFECT_FILENAME,
+    read_lifecycle_default_effect_proof,
+)
 from native_runtime_filesystem_proof import (
     CONTRACT as RUNTIME_FILESYSTEM_CONTRACT, FILENAME as RUNTIME_FILESYSTEM_FILENAME,
     read_runtime_filesystem_proof,
@@ -23,6 +27,11 @@ from native_runtime_filesystem_proof import (
 from native_tmpfs_effect_proof import (
     CONTRACT as TMPFS_EFFECT_CONTRACT, FILENAME as TMPFS_EFFECT_FILENAME,
     read_proof as read_tmpfs_effect_proof, validate as validate_tmpfs_effect_proof,
+)
+from native_health_start_interval_boundary_proof import (
+    CONTRACT as HEALTH_START_INTERVAL_BOUNDARY_CONTRACT,
+    FILENAME as HEALTH_START_INTERVAL_BOUNDARY_FILENAME,
+    read_health_start_interval_boundary_proof,
 )
 from native_network_attachment_proof import CONTRACT as NETWORK_ATTACHMENT_CONTRACT, read_network_attachment_proof
 from native_bind_relabel_proof import CONTRACT as BIND_RELABEL_CONTRACT, read_bind_relabel_proof
@@ -503,6 +512,10 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         capture_dir / RUNTIME_FILESYSTEM_FILENAME, capture_dir, external_context)
     tmpfs_effect = validate_tmpfs_effect_proof(
         read_tmpfs_effect_proof(capture_dir / TMPFS_EFFECT_FILENAME), external_context)
+    health_boundary = read_health_start_interval_boundary_proof(
+        capture_dir / HEALTH_START_INTERVAL_BOUNDARY_FILENAME, capture_dir, external_context)
+    lifecycle_default_effect_outcomes = list(read_lifecycle_default_effect_proof(
+        capture_dir / LIFECYCLE_DEFAULT_EFFECT_FILENAME, capture_dir, external_context))
 
     # Only these closed mappings follow the complete, validated native proof
     # files above. They extend raw lane evidence, never the reviewed catalogue.
@@ -584,6 +597,10 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         # capability nor shape enters capability_outcome/admitted_shapes.
         "lifecycle_contract": LIFECYCLE_CONTRACT,
         "lifecycle_outcomes": {"admission": "unadmitted", "probes": lifecycle_outcomes},
+        "lifecycle_default_effect_contract": LIFECYCLE_DEFAULT_EFFECT_CONTRACT,
+        "lifecycle_default_effect_outcomes": {
+            "admission": "unadmitted", "probes": lifecycle_default_effect_outcomes,
+        },
         "runtime_filesystem_contract": RUNTIME_FILESYSTEM_CONTRACT,
         "runtime_filesystem_outcomes": {
             "admission": "unadmitted", "init_effect_scope": "pid1_indirection_only",
@@ -593,6 +610,11 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         "tmpfs_effect_contract": TMPFS_EFFECT_CONTRACT,
         "tmpfs_effect_outcomes": {
             "admission": "unadmitted", "coverage": tmpfs_effect["coverage"],
+        },
+        "health_start_interval_boundary_contract": HEALTH_START_INTERVAL_BOUNDARY_CONTRACT,
+        "health_start_interval_boundary_outcomes": {
+            "admission": "unadmitted", "scope": "created_configuration_only",
+            "probes": health_boundary["outcomes"],
         },
     }
     if parameterized_identity:

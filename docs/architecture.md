@@ -1,5 +1,18 @@
 # Architecture
 
+The first #31 recovery stage reuses the preserved
+[health-interval boundary](native-health-start-interval-boundary-contract.md) and
+[lifecycle default/zero effects](native-lifecycle-default-effects-contract.md)
+producers in their existing lifecycle test module. The original nineteen calls
+retain their order, followed by these two recovered calls under the same
+authenticated cleanup-owner scope. Strict private readers use independently
+constructed harness context and emit closed unadmitted observations only; no
+capability map, catalogue, product API or pin changes. The Debian parser-refused
+name has one original-run/lane/API/invocation-bound, body-free read-only absence
+allowance, never a mutation slot or generic request expansion. The current
+topology, diagnostics, deadlines and experimental non-acceptance remain intact.
+This restores the first 21-call closure, not the full preserved 28-call inventory.
+
 Native test subprocesses share the canonical test-only
 [outer command boundary](native-outer-runtime.md), including Rust's cfg(test)-only
 literal argv builder. It reuses the coordinator's selected backend/private client
@@ -158,7 +171,7 @@ and historical evidence remain unchanged. ADR 0018 selects authenticated source
 run `37788762974` at Debian 29/46 and upstream 30/48 for candidate rehearsal;
 ADR 0019 retains those groups and adds only the StopSignal singleton.
 Definitions or offline controls grant no native compatibility. Fresh
-authenticated exact-final-candidate sixteen-test four-lane execution,
+authenticated exact-final-candidate twenty-one-test four-lane execution,
 independent review and the separate ADR 0012/0016/0018/0019 consumer gates remain
 required before ready/merge. No source run qualifies a changed candidate.
 

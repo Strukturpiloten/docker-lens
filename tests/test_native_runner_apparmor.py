@@ -832,7 +832,7 @@ class ShellFinalizationTests(unittest.TestCase):
         receipt = SOURCE.index('if [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]')
         self.assertIn("exit 0", SOURCE[barrier:receipt])
         self.assertLess(SOURCE.index('30 apparmor verify "$lane" "$apparmor_nonce"'), SOURCE.index('/run-exact-native-test.sh"'))
-        self.assertEqual(SOURCE.count('/run-exact-native-test.sh"'), 19)
+        self.assertEqual(SOURCE.count('/run-exact-native-test.sh"'), 21)
         self.assertIn('--privileged --pids-limit=512 --memory=4g', RUNTIME)
         self.assertIn('start=(/usr/local/bin/start-dockerd', RUNTIME)
         helper = (ROOT / "scripts/native-runner-apparmor.py").read_text()

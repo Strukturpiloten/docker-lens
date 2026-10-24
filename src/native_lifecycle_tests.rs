@@ -2,11 +2,17 @@
 
 use super::*;
 
+#[path = "native_lifecycle_default_effect_tests.rs"]
+mod default_effect;
+
 #[path = "native_runtime_filesystem_tests.rs"]
 mod runtime_filesystem;
 
 #[path = "native_tmpfs_effect_tests.rs"]
 mod tmpfs_effect;
+
+#[path = "native_health_start_interval_boundary_tests.rs"]
+mod health_start_interval_boundary;
 
 const CONTRACT: &str = "lifecycle-v1";
 const FILENAME: &str = "lifecycle-v1.json";

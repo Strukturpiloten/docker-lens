@@ -1,5 +1,23 @@
 # Dependency and pin policy
 
+The bounded #31 recovery reuses the committed health-interval boundary and
+lifecycle default/zero producer/reader/contracts and their recorded oracle
+provenance; it copies no external oracle implementation. No software dependency,
+image, package, Action, toolchain pin, provisioning or host-policy change is
+introduced. All five canonical native-image version/digest extractions remain
+solely in `scripts/native-conformance.sh`, with existing grouping/manual review,
+automerge off and unchanged Renovate managers/paths/defaults. No new manager or
+Renovate edit is needed. The strict private reader default caps remain unchanged.
+
+Check/native-validation/release-validation consume the same coordinator and
+inherit its two recovered invocations; its nineteen positional emitter arguments
+remain unchanged. Other Lens/website harnesses do not consume these producers.
+BoxFerry's separately reviewed native-source/outer-runtime closure still requires
+new-SHA review and consumer qualification before use; none is claimed here.
+Historical 19/21/28-call evidence, the maintained source22 pins/safety boundaries
+and all unrelated unfinished runtime-integration files remain intact. Recovery
+is source-only and requires fresh complete/native gates and independent review.
+
 The test-only builtin no-pool Config correction is based on read-only Moby
 source review at tag `docker-v29.8.1`. Its annotated tag object is
 `b2d20c90a74af78b3f0f967db92292e4a603c03d`, peeled to commit

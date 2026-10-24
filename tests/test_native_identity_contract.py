@@ -82,8 +82,19 @@ class ParameterizedIdentityTests(unittest.TestCase):
                     self.assertEqual(evidence["admitted_shapes"][capability], [capability])
                     self.assertEqual(evidence["capability_outcome"][capability], "available")
                 self.assertNotIn("SupplementaryGroups", evidence["admitted_shapes"])
-                for private in ("dl-identity", RUN_ID, "runtime_uid", "rejection_phase", "configured"):
+                for private in ("dl-identity", RUN_ID, "runtime_uid", "rejection_phase"):
                     self.assertNotIn(private, destination.read_text())
+                # Closed configured_absent outcomes are public vocabulary; the
+                # actual private member stays forbidden at every JSON depth,
+                # independent of whitespace or escaped key serialization.
+                pending = [evidence]
+                while pending:
+                    value = pending.pop()
+                    if isinstance(value, dict):
+                        self.assertNotIn("configured", value)
+                        pending.extend(value.values())
+                    elif isinstance(value, list):
+                        pending.extend(value)
                 for case in proof_v2()["cases"]:
                     for record in case["containers"]:
                         self.assertNotIn(record["id"], destination.read_text())
