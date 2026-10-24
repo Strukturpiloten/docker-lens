@@ -385,6 +385,99 @@ class ObservationTests(unittest.TestCase):
                 OBS.document(raw)
 
 
+class BoxProfileBridgeControls(unittest.TestCase):
+    """Finite shell argv controls only; no daemon, parser or policy contact."""
+    environment = HOSTED | {
+        "GITHUB_REPOSITORY": "Strukturpiloten/boxferry", "GITHUB_EVENT_NAME": "workflow_dispatch",
+        "GITHUB_WORKFLOW_REF": "Strukturpiloten/boxferry/.github/workflows/reviewed-docker-consumer-validation.yml@refs/heads/main",
+        "GITHUB_JOB": "lanes", "GITHUB_RUN_ID": "127", "GITHUB_RUN_ATTEMPT": "1",
+        "DOCKERLENS_NATIVE_CANDIDATE_SHA": "d" * 40,
+    }
+    nonce = "a" * 32
+
+    def test_box_nonce_bridge_transports_real_context_only_for_exact_argv_shapes(self):
+        body = '''native_outer_engine=docker
+native_outer_directory=/tmp/boxferry-docker-core.Ab12Cd34
+native_outer_script_dir=/reviewed/scripts
+native_outer_privilege=()
+apparmor_profile=github_runner_userns_v1
+timeout() { printf '%s\\0' "$@"; }
+native_outer_bridge_command 30 "$@"'''
+        create = ["create-daemon", "bf-docker-core-Ab12Cd34", "Ab12Cd34", "io.boxferry.docker-core-run",
+                  "network", "volume", "/tmp/boxferry-docker-core.Ab12Cd34/socket", "/boxferry-core",
+                  "upstream-rootless", "example.invalid/engine:29@sha256:" + "c" * 64, "/private/log", self.nonce]
+        for args in (["apparmor", "prepare", "upstream-rootless", self.nonce, "owned", "run", "pin"],
+                     *(["apparmor", phase, "upstream-rootless", self.nonce] for phase in ("load", "verify", "cleanup")),
+                     create):
+            result = shell(body, args=args, environment=self.environment | {"PRIVATE_CANARY": "not-forwarded"})
+            self.assertEqual((result.returncode, result.stderr), (0, ""))
+            argv = result.stdout.split("\0")
+            for key in ("GITHUB_REPOSITORY", "GITHUB_WORKFLOW_REF", "GITHUB_JOB", "GITHUB_RUN_ID",
+                        "GITHUB_RUN_ATTEMPT", "DOCKERLENS_NATIVE_CANDIDATE_SHA"):
+                self.assertIn(key + "=" + self.environment[key], argv)
+            self.assertNotIn("PRIVATE_CANARY=not-forwarded", argv)
+            self.assertEqual(argv[:3], ["--signal=TERM", "--kill-after=2s", "30s"])
+        for index, wrong in ((3, "io.dockerlens.native-run"), (7, "/dockerlens-native"),
+                             (8, "upstream-rootful"), (11, "docker-default")):
+            args = create.copy()
+            args[index] = wrong
+            result = shell(body, args=args, environment=self.environment)
+            self.assertEqual(result.returncode, 0)
+            self.assertNotIn("GITHUB_RUN_ID=127", result.stdout.split("\0"))
+        result = shell(body, args=create[:-1], environment=self.environment)
+        self.assertNotIn("GITHUB_RUN_ID=127", result.stdout.split("\0"))
+
+    def create_box(self, changes=None):
+        body = '''native_outer_engine=$ENGINE
+native_outer_directory=/tmp/boxferry-docker-core.Ab12Cd34
+native_outer_script_dir=/reviewed/scripts
+exec 3>&1
+native_outer_command() { printf '%s\\n' "$@" >&3; return "$CREATE_STATUS"; }
+python3() { printf '%064d\\n' 0; }
+native_outer_apparmor() {
+  if [[ $1 == begin ]]; then printf '%s\\n' "$RETURNED_PROFILE"; else return "$BIND_STATUS"; fi
+}
+declare -A held=([name]="$HELD_NAME" [run]="$HELD_RUN" [owner_key]="$OWNER_KEY"
+  [network]=owned-net [volume]=owned-data [socket_dir]="$SOCKET_DIR" [guest_dir]="$GUEST_DIR"
+  [lane]="$LANE" [image]="example.invalid/engine:29@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  [log_path]=/private/log [apparmor_nonce]="$NONCE")
+native_outer_create_daemon held'''
+        environment = self.environment | {
+            "ENGINE": "docker", "LANE": "upstream-rootless", "OWNER_KEY": "io.boxferry.docker-core-run",
+            "HELD_NAME": "bf-docker-core-Ab12Cd34", "HELD_RUN": "Ab12Cd34", "GUEST_DIR": "/boxferry-core",
+            "SOCKET_DIR": "/tmp/boxferry-docker-core.Ab12Cd34/socket", "NONCE": self.nonce,
+            "RETURNED_PROFILE": "boxferry-343-upstream-rootless-127-1-" + self.nonce,
+            "CREATE_STATUS": "0", "BIND_STATUS": "0",
+        }
+        return shell(body, environment=environment | (changes or {}))
+
+    def test_box_creation_keeps_original_launch_budget_and_failure_status(self):
+        for create_status, binding_status in ((0, 0), (0, 2), (0, 130), (42, 2), (130, 2), (143, 2)):
+            result = self.create_box({"CREATE_STATUS": str(create_status), "BIND_STATUS": str(binding_status)})
+            self.assertEqual(result.returncode, create_status or binding_status, result.stderr)
+            argv = result.stdout.splitlines()
+            self.assertEqual(argv[:4], ["120", "run", "--pull=never", "-d"])
+            self.assertEqual(argv[argv.index("--security-opt") + 1], "apparmor=boxferry-343-upstream-rootless-127-1-" + self.nonce)
+            self.assertIn("--privileged", argv)
+            self.assertIn("--pids-limit=512", argv)
+            self.assertIn("--memory=4g", argv)
+            self.assertIn("--cpu-quota=200000", argv)
+            self.assertIn("io.boxferry.docker-core-run=Ab12Cd34", argv)
+            self.assertIn("/tmp/boxferry-docker-core.Ab12Cd34/socket:/boxferry-core", argv)
+            self.assertEqual(argv[-3:], ["/usr/local/bin/start-dockerd", "--host=unix:///boxferry-core/docker.sock", "0" * 64])
+
+    def test_box_nonce_refuses_cross_mode_or_unbound_identity_before_runtime(self):
+        for changes in ({"ENGINE": "podman"}, {"LANE": "upstream-rootful"}, {"LANE": "debian11-rootless"},
+                        {"OWNER_KEY": "io.dockerlens.native-run"}, {"GUEST_DIR": "/dockerlens-native"},
+                        {"HELD_NAME": "dl-native-Ab12Cd34"}, {"HELD_RUN": "other"},
+                        {"SOCKET_DIR": "/private/socket"}, {"NONCE": "docker-default"},
+                        {"RETURNED_PROFILE": "dockerlens-127-upstream-rootless-127-1-" + self.nonce},
+                        {"RETURNED_PROFILE": "/run/profile"}, {"RETURNED_PROFILE": "unconfined"}):
+            with self.subTest(changes=changes):
+                result = self.create_box(changes)
+                self.assertEqual((result.returncode, result.stdout), (2, ""), result.stderr)
+
+
 class LifecycleControls(unittest.TestCase):
     def create(self, engine, lane):
         body = '''native_outer_engine=$1

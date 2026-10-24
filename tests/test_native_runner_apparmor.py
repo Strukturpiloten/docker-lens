@@ -32,6 +32,10 @@ HOSTED = {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted", "RUNN
           "GITHUB_WORKFLOW_REF": "Strukturpiloten/docker-lens/.github/workflows/native-validation.yml@refs/heads/main",
           "GITHUB_RUN_ID": "127", "GITHUB_RUN_ATTEMPT": "1", "ImageOS": "ubuntu24",
           "ImageVersion": "20261020.1.0", "DOCKERLENS_NATIVE_CANDIDATE_SHA": "d" * 40}
+BOX_HOSTED = HOSTED | {
+    "GITHUB_REPOSITORY": "Strukturpiloten/boxferry", "GITHUB_JOB": "lanes",
+    "GITHUB_WORKFLOW_REF": "Strukturpiloten/boxferry/.github/workflows/reviewed-docker-consumer-validation.yml@refs/heads/main",
+}
 
 
 def definition(name, source=SOURCE):
@@ -39,13 +43,15 @@ def definition(name, source=SOURCE):
     return source[start:source.index("\n}\n", start) + 3]
 
 
-def private_run():
+def private_run(*, box=False):
     # Match the coordinator's alphanumeric mktemp suffix, not tempfile's
     # additional leading-underscore possibility (native run labels forbid it).
     # Production custody requires a direct /tmp child, even under gate TMPDIR.
     while True:
-        directory = tempfile.TemporaryDirectory(prefix="dockerlens-native.", dir="/tmp")
-        if Path(directory.name).name.rsplit(".", 1)[1][0].isalnum():
+        directory = tempfile.TemporaryDirectory(prefix="boxferry-docker-core." if box else "dockerlens-native.", dir="/tmp")
+        suffix = Path(directory.name).name.rsplit(".", 1)[1]
+        acceptable = suffix.isalnum() if box else suffix[0].isalnum()
+        if acceptable:
             return directory
         directory.cleanup()
 
@@ -216,9 +222,82 @@ class AdmissionTests(unittest.TestCase):
                     self.assertEqual(invoke(changes=changes | wrong).returncode, 2)
 
 
+class BoxAdmissionTests(unittest.TestCase):
+    def test_only_literal_box_context_is_admitted_and_no_lane_or_directory_is_selected_by_caller(self):
+        self.assertTrue(APP.admitted(BOX_HOSTED))
+        self.assertEqual(APP.consumer_mode(BOX_HOSTED), APP.BOX_CONSUMER)
+        self.assertEqual(APP.consumer_mode(HOSTED), APP.NATIVE_CONSUMER)
+        wrong = [BOX_HOSTED | {key: "wrong"} for key in BOX_HOSTED]
+        wrong += [BOX_HOSTED | {key: "ambient"} for key in APP.SELECTORS]
+        wrong += [BOX_HOSTED | change for change in (
+            {"GITHUB_REF": "refs/pull/469/merge"}, {"GITHUB_EVENT_NAME": "push"},
+            {"GITHUB_EVENT_NAME": "workflow_call"}, {"RUNNER_ENVIRONMENT": "self-hosted"},
+            {"GITHUB_JOB": "native-conformance"}, {"GITHUB_REPOSITORY": "Strukturpiloten/docker-lens"},
+            {"GITHUB_WORKFLOW_REF": HOSTED["GITHUB_WORKFLOW_REF"]},
+            {"GITHUB_WORKFLOW_REF": BOX_HOSTED["GITHUB_WORKFLOW_REF"].replace("refs/heads/main", "refs/heads/nonce")},
+            {"GITHUB_RUN_ID": "0"}, {"GITHUB_RUN_ATTEMPT": "01"}, {"GITHUB_RUN_ID": "1" * 21},
+            {"DOCKERLENS_NATIVE_CANDIDATE_SHA": "e" * 39},
+        )]
+        for environment in wrong:
+            with self.subTest(environment=environment):
+                self.assertFalse(APP.admitted(environment))
+        with mock.patch.object(APP, "OWNER", os.geteuid()), mock.patch.object(APP.os, "mkdir") as mkdir:
+            valid = "/tmp/boxferry-docker-core.Ab12Cd34"
+            for directory in ("/tmp/dockerlens-native.Ab12Cd34", valid + "/child", valid + "x",
+                              "/elsewhere/boxferry-docker-core.Ab12Cd34", valid.replace("Ab", "_b")):
+                with self.subTest(directory=directory), self.assertRaises(APP.Refused):
+                    APP.RunnerProfile(directory, "upstream-rootless", NONCE, BOX_HOSTED, APP.Cancellation())
+            for lane in ("debian11-rootless", "upstream-rootful", "debian11-rootful", ""):
+                with self.subTest(lane=lane), self.assertRaises(APP.Refused):
+                    APP.RunnerProfile(valid, lane, NONCE, BOX_HOSTED, APP.Cancellation())
+            for nonce in ("", "a" * 31, "A" * 32, NONCE + "/path", "docker-default"):
+                with self.subTest(nonce=nonce), self.assertRaises(APP.Refused):
+                    APP.RunnerProfile(valid, "upstream-rootless", nonce, BOX_HOSTED, APP.Cancellation())
+            with self.assertRaises(APP.Refused):
+                APP.RunnerProfile(valid, "upstream-rootless", NONCE, HOSTED, APP.Cancellation())
+            mkdir.assert_not_called()
+
+    def test_box_receipt_is_pure_closed_and_current_attempt_bound_without_native_reuse(self):
+        receipt = {"schema": 1, "prerequisite": "github_runner_userns_v1", "outcome": "verified",
+                   "candidate": "d" * 40, "label": "verified", "profile_sha256": "a" * 64,
+                   "parser_sha256": "b" * 64, "abi_sha256": "c" * 64,
+                   "parser_version": "4.0.1", "cleanup": "removed", "consumer": APP.BOX_CONSUMER,
+                   "workflow_run": "127", "attempt": "1"}
+        record = "DOCKERLENS_NATIVE_APPARMOR_PROFILE: " + json.dumps(receipt)
+        APP.validate_box_cleanup_record(record, "d" * 40, "127", "1")
+        native = {key: value for key, value in receipt.items() if key in APP.RECEIPT_KEYS}
+        APP.validate_cleanup_record("DOCKERLENS_NATIVE_APPARMOR_PROFILE: " + json.dumps(native), "d" * 40)
+        with self.assertRaises(APP.Refused):
+            APP.validate_cleanup_record(record, "d" * 40)
+        with self.assertRaises(APP.Refused):
+            APP.validate_box_cleanup_record("DOCKERLENS_NATIVE_APPARMOR_PROFILE: " + json.dumps(native), "d" * 40, "127", "1")
+        wrong = [receipt | {key: value} for key, value in (
+            ("consumer", APP.NATIVE_CONSUMER), ("workflow_run", "128"), ("attempt", "2"),
+            ("workflow_run", 127), ("attempt", True), ("outcome", "incomplete"), ("label", "unverified"),
+            ("cleanup", "not_loaded"), ("candidate", "e" * 40), ("schema", True),
+            ("parser_version", "4.0.2"), ("profile_sha256", "private/raw"), ("unknown", "extra"))]
+        wrong += [{other: value for other, value in receipt.items() if other != key} for key in receipt]
+        for value in wrong:
+            with self.subTest(value=value), self.assertRaises(APP.Refused):
+                APP.validate_box_cleanup_record("DOCKERLENS_NATIVE_APPARMOR_PROFILE: " + json.dumps(value), "d" * 40, "127", "1")
+        for run, attempt in (("128", "1"), ("127", "2"), (127, "1"), ("127", 1), ("0", "1"), ("127", "01")):
+            with self.subTest(run=run, attempt=attempt), self.assertRaises(APP.Refused):
+                APP.validate_box_cleanup_record(record, "d" * 40, run, attempt)
+        for raw in (record + "extra", record.replace('"attempt": "1"', '"attempt":"1","attempt":"1"'), "x" * 8193):
+            with self.subTest(raw=raw), self.assertRaises((APP.Refused, ValueError)):
+                APP.validate_box_cleanup_record(raw, "d" * 40, "127", "1")
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(APP, "RunnerProfile") as profile, \
+                mock.patch.object(APP.sys, "stdin", io.StringIO(record)):
+            self.assertEqual(APP.main(["validate-box-consumer-receipt", "d" * 40, "127", "1"]), 0)
+            profile.assert_not_called()
+
+
 class LifecycleTests(unittest.TestCase):
+    environment = HOSTED
+    box = False
+
     def setUp(self):
-        self.run = private_run()
+        self.run = private_run(box=self.box)
         self.root = tempfile.TemporaryDirectory(prefix="dl-fake-apparmor-root-")
         self.addCleanup(self.run.cleanup)
         self.addCleanup(self.root.cleanup)
@@ -237,15 +316,15 @@ class LifecycleTests(unittest.TestCase):
         self.absence = True
         self.commands = []
         self.snapshot_override = None
-        self.profile = APP.RunnerProfile(self.run.name, "upstream-rootless", NONCE, HOSTED, APP.Cancellation())
+        self.profile = APP.RunnerProfile(self.run.name, "upstream-rootless", NONCE, self.environment, APP.Cancellation())
         self.run_id = Path(self.run.name).name.rsplit(".", 1)[1]
-        self.name = "dl-native-" + self.run_id
+        self.name = self.profile.name_prefix + self.run_id
 
     def fake_read(self, path, _limit=65536):
         if path == self.missing_feature:
             raise FileNotFoundError
         if path == APP.PROFILES:
-            return (("dockerlens-127-upstream-rootless-127-1-" + NONCE + " (unconfined)\n").encode()
+            return ((self.profile.profile_name() + " (unconfined)\n").encode()
                     if self.profile_loaded else b"other (enforce)\n")
         if str(path).endswith("/enabled"):
             return b"Y\n"
@@ -285,7 +364,7 @@ class LifecycleTests(unittest.TestCase):
             return b""
         if "snapshot" in argv:
             value = {"Id": CID, "Name": self.name, "ImageDigest": PIN.rsplit("@", 1)[1],
-                     "Config": {"Image": PIN, "Labels": {"io.dockerlens.native-run": self.run_id}},
+                     "Config": {"Image": PIN, "Labels": {self.profile.owner_key: self.run_id}},
                      "State": {"Running": True, "Pid": 1234, "StartedAt": "started"},
                      "HostConfig": {"Privileged": True}}
             value.update(self.snapshot_override or {})
@@ -579,12 +658,58 @@ class LifecycleTests(unittest.TestCase):
                 cgroup.return_value = f"0::/system.slice/docker-{CID}.scope\n".encode()
                 self.profile.verify()
             receipt = self.profile.cleanup()
-            APP.validate_receipt(receipt, HOSTED["DOCKERLENS_NATIVE_CANDIDATE_SHA"], require_verified=True)
+            context = ({"consumer": APP.BOX_CONSUMER, "workflow_run": self.environment["GITHUB_RUN_ID"],
+                        "attempt": self.environment["GITHUB_RUN_ATTEMPT"]} if self.box else {})
+            APP.validate_receipt(receipt, self.environment["DOCKERLENS_NATIVE_CANDIDATE_SHA"], require_verified=True, **context)
             self.assertEqual((receipt["outcome"], receipt["label"], receipt["cleanup"]),
                              ("verified", "verified", "removed"))
             self.assertFalse(self.profile_loaded)
         finally:
             os.close(process)
+
+
+class BoxLifecycleTests(LifecycleTests):
+    """Run the same custody, parser, cancellation, label/cgroup and cleanup refusals in Box mode."""
+    environment = BOX_HOSTED
+    box = True
+
+    def test_distinct_state_and_profile_cannot_be_rebound_to_native_or_another_attempt(self):
+        self.prepare()
+        original = self.state()
+        self.assertEqual(original["consumer"], APP.BOX_CONSUMER)
+        self.assertTrue(self.profile.path.name.startswith("boxferry-apparmor."))
+        self.assertEqual(self.profile.profile_name(), "boxferry-343-upstream-rootless-127-1-" + NONCE)
+        self.assertEqual(APP.profile_bytes(self.profile.profile_name()),
+                         f"abi <abi/4.0>,\nprofile {self.profile.profile_name()} flags=(unconfined) {{\n  userns,\n}}\n".encode())
+        path = self.profile.path / "state.json"
+        wrong = [original | {"consumer": APP.NATIVE_CONSUMER},
+                 {key: value for key, value in original.items() if key != "consumer"},
+                 original | {"profile": original["profile"].replace("boxferry-343", "dockerlens-127")},
+                 original | {"name": "dl-native-" + self.run_id},
+                 original | {"workflow_run": "128"}, original | {"attempt": "2"}]
+        commands = len(self.commands)
+        reads = self.read.call_count
+        for value in wrong:
+            path.write_text(json.dumps(value))
+            for method, args in ((self.profile.load, ()), (self.profile.begin, (self.name, self.run_id, PIN)),
+                                 (self.profile.created, (CID,)), (self.profile.verify, ()), (self.profile.cleanup, ())):
+                with self.subTest(value=value, method=method.__name__), self.assertRaises(APP.Refused):
+                    method(*args)
+                self.assertEqual((len(self.commands), self.read.call_count), (commands, reads))
+        path.write_text(json.dumps(original))
+        self.profile.load()
+        self.assertTrue(self.profile_loaded)
+
+    def test_box_creation_requires_box_owner_even_with_correct_id_and_name(self):
+        self.prepare()
+        self.profile.load()
+        self.profile.begin(self.name, self.run_id, PIN)
+        self.snapshot_override = {"Config": {"Image": PIN, "Labels": {"io.dockerlens.native-run": self.run_id}}}
+        with self.assertRaises(ValueError):
+            self.profile.created(CID)
+        self.assertEqual(self.state()["create"], "intent")
+        with self.assertRaises(APP.Refused):
+            self.profile.cleanup()
 
 
 class ShellCreationTests(unittest.TestCase):

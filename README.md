@@ -19,8 +19,10 @@ original nineteen, current fixture topology/diagnostics, pins, cleanup and
 maintained scoped AppArmor prerequisite remain mandatory. These remain source-only;
 [ADR 0036](docs/decisions/0036-command-clear-native-source-projection.md) adds only
 guarded CommandClear/[ClearCommand] to raw source maps, with versioned catalogue
-`unadmitted` status. EntrypointClear remains withheld and sealed catalogue profiles
-still deny both clear capabilities. Other observations grant no new raw capability.
+`unadmitted` status. [ADR 0037](docs/decisions/0037-reviewed-command-clear-cohort.md)
+separately selects only CommandClear for candidate rehearsal under its existing
+explicit Exec-entrypoint guard. EntrypointClear remains withheld. Other observations
+grant no new capability.
 The preserved 28-call
 inventory remains pending reconciliation; twenty-three is not milestone completion.
 Historical evidence does not qualify this changed candidate.
@@ -46,16 +48,20 @@ execution, full28 completion or capability admission.
 The planned native work is tracked in [DockerLens #3](https://github.com/Strukturpiloten/docker-lens/issues/3).
 Typed networks, protected runtime settings and conditional bind-source review
 are available as inert data. The candidate selects the independently reviewed
-configured stop-signal source cohort from run `38106164571`, attempt 1, under
-[ADR 0019](docs/decisions/0019-reviewed-stop-signal-cohort.md). Exact Debian
-profiles admit 30 capabilities/47 shapes; upstream profiles add only the
-complete IPv6 port group, for 31/49. The machine records preserve all six
+CommandClear source cohort from run `40119803977`, attempt 1, source
+`a36e42fbaeee6585c954948c9fe3a8686d86018b`, under
+[ADR 0037](docs/decisions/0037-reviewed-command-clear-cohort.md). Exact Debian
+profiles admit 31 capabilities/48 shapes; upstream profiles add only the
+complete IPv6 port group, for 32/50. The machine records preserve all seven
 earlier cohorts byte-exact.
 
 The selection retains complete common IPv4/repeated/exposed-only/ephemeral port,
 container-label/shell-health/start-period, network-label/alias/multiple-attachment,
 and shared/private bind configured-retention groups and the complete
-external-network Internal false/true expectation group, adding only StopSignal.
+external-network Internal false/true expectation and StopSignal groups, adding
+only CommandClear/[ClearCommand]. It retains authored Cmd `[]` with explicit
+Exec entrypoint; the omitted-Cmd control intentionally has the same process
+effect. No arbitrary-image success or new effect relative to omission is claimed.
 Native symbolic TERM/INT trap effects are bounded source evidence, not a promise
 of arbitrary-image or application shutdown behavior. None remains
 unconstrained; explicit booleans select inert schema 3 and never network mutation.

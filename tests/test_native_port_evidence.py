@@ -178,12 +178,16 @@ class PortCapabilityEvidenceTests(unittest.TestCase):
         shapes = catalogue.split("const REVIEWED_SHAPES:", 1)[1].split("];", 1)[0]
         common_names = re.findall(r"Capability::(\w+)", capabilities)
         common_shapes = re.findall(r"NativeCapabilityShape::(\w+)", shapes)
-        # The reviewed StopSignal singleton extends the catalogue, not the
-        # independently authored port groups or Debian IPv6 boundary.
-        self.assertEqual(len(common_names), 30)
-        self.assertEqual(len(common_shapes), 47)
+        # Reviewed StopSignal and guarded CommandClear extend the catalogue,
+        # not the independently authored port groups or Debian IPv6 boundary.
+        self.assertEqual(len(common_names), 31)
+        self.assertEqual(len(common_shapes), 48)
         self.assertEqual(common_names.count("StopSignal"), 1)
         self.assertEqual(common_shapes.count("StopSignal"), 1)
+        self.assertEqual(common_names.count("CommandClear"), 1)
+        self.assertEqual(common_shapes.count("ClearCommand"), 1)
+        self.assertNotIn("EntrypointClear", common_names)
+        self.assertNotIn("ClearEntrypoint", common_shapes)
         self.assertEqual(set(PORT_GROUPS) - set(common_names), {"PortHostIpv6"})
         self.assertNotIn("FixedIpv6HostPort", common_shapes)
         self.assertNotIn("EphemeralIpv6HostPort", common_shapes)
@@ -194,10 +198,14 @@ class PortCapabilityEvidenceTests(unittest.TestCase):
         upstream_shapes = catalogue.split("const UPSTREAM_SHAPES:", 1)[1].split("];", 1)[0]
         upstream_names = re.findall(r"Capability::(\w+)", upstream)
         upstream_shape_names = re.findall(r"NativeCapabilityShape::(\w+)", upstream_shapes)
-        self.assertEqual(len(upstream_names), 31)
-        self.assertEqual(len(upstream_shape_names), 49)
+        self.assertEqual(len(upstream_names), 32)
+        self.assertEqual(len(upstream_shape_names), 50)
         self.assertEqual(upstream_names.count("StopSignal"), 1)
         self.assertEqual(upstream_shape_names.count("StopSignal"), 1)
+        self.assertEqual(upstream_names.count("CommandClear"), 1)
+        self.assertEqual(upstream_shape_names.count("ClearCommand"), 1)
+        self.assertNotIn("EntrypointClear", upstream_names)
+        self.assertNotIn("ClearEntrypoint", upstream_shape_names)
         self.assertEqual(set(upstream_names), set(common_names) | {"PortHostIpv6"})
         self.assertEqual(set(upstream_shape_names), set(common_shapes) | set(PORT_GROUPS["PortHostIpv6"]))
 

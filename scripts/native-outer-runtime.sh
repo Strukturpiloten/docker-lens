@@ -111,8 +111,9 @@ native_outer_bridge_command() {
   if [[ ${apparmor_profile:-} == github_runner_userns_v1 && $native_outer_engine == docker ]]; then
     if [[ ${1:-} == apparmor && ${3:-} == upstream-rootless && ${4:-} =~ ^[0-9a-f]{32}$ ]]; then
       case "${2:-}:$#" in prepare:7|load:4|verify:4|cleanup:4) profile_context=1 ;; esac
-    elif [[ $# == 12 && $1 == create-daemon && $4 == io.dockerlens.native-run &&
-            $8 == /dockerlens-native && $9 == upstream-rootless && ${12} =~ ^[0-9a-f]{32}$ ]]; then
+    elif [[ $# == 12 && $1 == create-daemon && $9 == upstream-rootless && ${12} =~ ^[0-9a-f]{32}$ &&
+            ( ( $4 == io.dockerlens.native-run && $8 == /dockerlens-native ) ||
+              ( $4 == io.boxferry.docker-core-run && $8 == /boxferry-core ) ) ]]; then
       profile_context=1
     fi
   fi
@@ -343,11 +344,22 @@ native_outer_create_daemon() {
   fi
   if [[ -n ${context[apparmor_nonce]:-} ]]; then
     [[ $native_outer_engine == docker && ${context[lane]} == upstream-rootless &&
-       ${context[owner_key]} == io.dockerlens.native-run && ${context[guest_dir]} == /dockerlens-native ]] || return 2
-    local profile
+       ${context[apparmor_nonce]} =~ ^[0-9a-f]{32}$ ]] || return 2
+    local profile profile_pattern
+    case "${context[owner_key]}:${context[guest_dir]}" in
+      io.dockerlens.native-run:/dockerlens-native)
+        profile_pattern='^dockerlens-127-upstream-rootless-[1-9][0-9]{0,19}-[1-9][0-9]{0,19}-[0-9a-f]{32}$' ;;
+      io.boxferry.docker-core-run:/boxferry-core)
+        [[ $native_outer_directory =~ ^/tmp/boxferry-docker-core\.[A-Za-z0-9]{8}$ &&
+           ${context[run]} == "${native_outer_directory##*.}" &&
+           ${context[name]} == "bf-docker-core-${context[run]}" &&
+           ${context[socket_dir]} == "$native_outer_directory/socket" ]] || return 2
+        profile_pattern='^boxferry-343-upstream-rootless-[1-9][0-9]{0,19}-[1-9][0-9]{0,19}-[0-9a-f]{32}$' ;;
+      *) return 2 ;;
+    esac
     profile=$(native_outer_apparmor begin "${context[lane]}" "${context[apparmor_nonce]}" \
       "${context[name]}" "${context[run]}" "${context[image]}") || return $?
-    [[ $profile =~ ^dockerlens-127-upstream-rootless-[1-9][0-9]{0,19}-[1-9][0-9]{0,19}-[0-9a-f]{32}$ ]] || return 2
+    [[ $profile =~ $profile_pattern ]] || return 2
     flags+=(--security-opt "apparmor=$profile")
   fi
   mount="${context[volume]}:$destination"

@@ -3,6 +3,11 @@
 Status: accepted harness contract; historical four-lane source evidence reviewed.
 Each changed candidate and release requires fresh complete and native gates.
 
+Scope amendment: [ADR 0038](0038-maintained-profile-for-box-consumer.md) supersedes
+only the maintained profile helper's native-only consumer restriction with one
+separately enumerated BoxFerry reviewed-consumer context. The native lifecycle,
+receipts, historical evidence and qualification obligations below are unchanged.
+
 The current [test-only outer runtime](../native-outer-runtime.md) additionally
 selects verified rootful local Docker in admitted hosted jobs while retaining
 local default Podman. This updates orchestration, not the four maintained inner

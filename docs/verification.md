@@ -1,14 +1,16 @@
 # Verification
 
-## Guarded CommandClear source-projection candidate
+## Guarded CommandClear source qualification and candidate rehearsal
 
 [ADR 0036](decisions/0036-command-clear-native-source-projection.md) adds only
 CommandClear/[ClearCommand] to complete existing raw maps after all four controls
 and the exact ordered private-reader return. Closed public version
 `command-clear-native-source-v1` separates `raw_source_only` from catalogue
 `unadmitted`, under the unchanged explicit Exec-entrypoint guard. EntrypointClear
-and adjacent families remain withheld; both clear capabilities still fail on
-sealed profiles. No private ABI, 19-argument emitter, 26-call order, native I/O,
+and adjacent families remain withheld. [ADR 0037](decisions/0037-reviewed-command-clear-cohort.md)
+separately selects CommandClear on sealed profiles for candidate rehearsal only.
+The explicit Exec-entrypoint guard remains mandatory. No private ABI,
+19-argument emitter, 26-call order, native I/O,
 budget, cleanup, runtime or pin changes.
 
 Canonical controls compare independent literal full baseline-plus-singleton maps
@@ -21,10 +23,15 @@ rejects unselected new-family and legacy-grant injections; exact source/run/hash
 file-set/raw-envelope equality remains mandatory. The disconnected raw subset
 does not change the reviewed-record root or replace accepting validation.
 
-Native26 run 40104150853/attempt 1 at 5fef54d supplies semantic prerequisites, not
-qualification of this changed projection/provider-integrated candidate. Original
-bytes stay unchanged. Final-edit complete and fresh exact-candidate four-lane26
-gates/review remain due; ADR 0019's trusted-harness/public-projection tier and
+Native26 run 40104150853/attempt 1 at 5fef54d supplies semantic prerequisites only.
+Source run40119803977/attempt1 independently qualifies exact source a36e42fb/tree77aee09d
+through all26 ordered calls on all four lanes, not the later admission head.
+The [sanitized source receipt](evidence/command-clear-independent-review-40119803977.json)
+binds the original raw bytes and four reviewed envelopes. Its tier is independent
+retained metadata/ZIP/log evidence and source assertions, not new live API or
+permission-response authentication. Original bytes stay unchanged. Final-edit
+complete/package and fresh exact-final-head four-lane26 gates/review remain due;
+ADR 0019's trusted-harness/public-projection tier and
 ADR 0012's actual consumer obligations remain. No private-payload replay or
 application acceptance is claimed.
 
@@ -1769,7 +1776,25 @@ evidence and all earlier worktrees remain unchanged.
 
 ## Reviewed target-profile records
 
-The candidate selects the seventh source cohort from
+The candidate selects the eighth source cohort from
+[run `40119803977`, attempt 1](https://github.com/Strukturpiloten/docker-lens/actions/runs/40119803977/attempts/1),
+source `a36e42fbaeee6585c954948c9fe3a8686d86018b`, tree
+`77aee09deede1d13b23ccaccc04b5cc54f7314a2`, under
+[ADR 0037](decisions/0037-reviewed-command-clear-cohort.md). Trusted-main dispatcher
+`b2870473551c45a4987fa2d27bd5dee9d2dd7ee5` is distinct. Its
+[provenance](evidence/command-clear-cohort-40119803977.json) binds all four original
+ZIP/raw/envelope identities and the independently authored receipt. Complete exact
+maps add only CommandClear/[ClearCommand] to the prior baseline: Debian31/48 and
+upstream32/50. Counts summarize exact sets; they are not authority. Raw metadata
+stays `raw_source_only` / catalogue `unadmitted`; only explicit reviewed envelope
+selection grants the bounded candidate claim. Family validation is mandatory even
+when fields are absent, under fixed source/run/version/identity-v2/canonical-port
+context. EntrypointClear, all neighboring families, Debian IPv6 negatives and
+unverified SELinux obligations stay unchanged. All seven earlier cohorts remain
+byte-exact. This historical source run does not qualify the changed admission head;
+complete/package/fresh final-head native26 and actual consumer gates remain due.
+
+The historical seventh source cohort came from
 [run `38106164571`, attempt 1](https://github.com/Strukturpiloten/docker-lens/actions/runs/38106164571/attempts/1),
 source `ef8b40c2d392c3983a3ebdc54730812352fe6b39`, under
 [ADR 0019](decisions/0019-reviewed-stop-signal-cohort.md). Trusted-main dispatcher
@@ -1832,8 +1857,10 @@ changed admission candidate. #31/#343/#366 and full migration remain open.
 All four earlier raw/reviewed cohorts stay byte-exact: original run
 `36451790131` (10/20), #68 `37209363801` (13/23), #70 `37214738475` (14/24)
 and #88 `37439627551` (16/26), each attempt 1. Together with application source
-`37706460127`, these are the five retained historical cohorts. The active catalogue
-still has four identities, selecting only the ADR 0019 source cohort. Four raw
+`37706460127`, these are the five earliest cohorts. External-network source
+`37788762974` and StopSignal source `38106164571` complete the seven retained
+historical cohorts before the new eighth cohort. The active catalogue
+still has four identities, now selecting only the ADR 0037 source cohort. Four raw
 members and four reviewed envelopes are added under the existing digest paths.
 
 Records conform to [the schema](native-evidence.schema.json) and bind lane,
@@ -1847,7 +1874,7 @@ single named raw member is retained byte-for-byte under its SHA-256 name.
 New reviewed schema-1 envelopes use compact UTF-8 JSON with a trailing newline;
 their separate content hashes become evidence keys without self-reference.
 
-Python regressions pin all seven cohorts, exact active selection, source
+Python regressions pin all eight cohorts, exact active selection, source
 projections, complete groups and Debian IPv6 negatives. Public Rust controls
 exercise every new group with sealed profiles, request order, protected values
 and all mixed schema-3/source/SELinux obligations. Existing schema-1/2/request behavior

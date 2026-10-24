@@ -358,6 +358,50 @@ STOP_SIGNAL_ARCHIVES = {
 }
 STOP_SIGNAL_REVIEW_RECEIPT_SHA256 = "02485e90a14b0ab44c03388931a0532b904fa963e1b90c05f03113b892637cb1"
 
+COMMAND_CLEAR_CANDIDATE = "a36e42fbaeee6585c954948c9fe3a8686d86018b"
+COMMAND_CLEAR_RUN = "https://github.com/Strukturpiloten/docker-lens/actions/runs/40119803977/attempts/1"
+COMMAND_CLEAR_SHAPES = {**STOP_SIGNAL_SHAPES, "CommandClear": ["ClearCommand"]}
+COMMAND_CLEAR_UPSTREAM_SHAPES = {**STOP_SIGNAL_UPSTREAM_SHAPES, "CommandClear": ["ClearCommand"]}
+COMMAND_CLEAR_MANIFESTS = {
+    "debian11-rootful": "1de4ed02b0652db3bd2a5d4214efd7df00d674181c91cec16743d630e9ee2e26",
+    "debian11-rootless": "e10976abab50da5e866b00b3fa42f9ea29ed27bb15dc4e242238df187a587320",
+    "upstream-rootful": "4cd85071ca05367827d62867da0388992478e7062f3d1a3de9d85b6da2bd4bdf",
+    "upstream-rootless": "eb27ec2010e57c9ed1fe9e522ffa4ba48f63e7e7dbb0433bd9e7632435b1ca23",
+}
+COMMAND_CLEAR_REVIEWED = {
+    "debian11-rootful": "9f26a185660badfbd6777bbf3a520f03e8fb48a777f8724bff506af5d28ba910",
+    "debian11-rootless": "1843873d6cae5b91d0ae3917f8238491239089905747c193e7f46027f17d891c",
+    "upstream-rootful": "b0825b797f052257f706b0102c5c720e7fcbbaef0e585869bb6d23d2e756fb94",
+    "upstream-rootless": "e6d27662271bcce957d25fe83f027eafa0264f65787d4be9b8314eb157c9ec74",
+}
+
+COMMAND_CLEAR_REVIEW_RECEIPT_SHA256 = "a11967b6a91b965c7dff1c57dc6c27bd835b1e666de6d0a20723307a7c73d7f2"
+COMMAND_CLEAR_PROVENANCE_SHA256 = "811431a0de1f46797d3effa1b170567b0d9686c8d6b69f30cd5cb6930e083db9"
+COMMAND_CLEAR_SOURCE_TREE = "77aee09deede1d13b23ccaccc04b5cc54f7314a2"
+COMMAND_CLEAR_SOURCE_MANIFEST = "ed7921dade7361bef4d44d90436aac31ebb764ac0d8a7f350546b877a0f4b1d8"
+COMMAND_CLEAR_DISPATCHER = "b2870473551c45a4987fa2d27bd5dee9d2dd7ee5"
+COMMAND_CLEAR_ARCHIVES = {
+    "dockerlens-native-debian11-rootful": {"id": 12571775396, "size": 2750,
+        "sha256": "a7f888d7531cca598b073457b17bc36994146550e0f4b440b457c6e456f1649c"},
+    "dockerlens-native-debian11-rootless": {"id": 12571222214, "size": 2752,
+        "sha256": "c5735472d33d2656ca3a9e96d79d80e82014ac89931f131192a82896f5a3d916"},
+    "dockerlens-native-upstream-rootful": {"id": 12571585475, "size": 2674,
+        "sha256": "a393a9fe341bce2cf436d7c58c121c11d5f743e7da3988a5eacd17d7cf0f6146"},
+    "dockerlens-native-upstream-rootless": {"id": 12570897402, "size": 2677,
+        "sha256": "dcefe25e10a4196efe8b931322a04c5ff0b24926c57e49f5e2d190b2435bcc04"},
+}
+COMMAND_CLEAR_SOURCE_SHA256 = {
+    "scripts/native-conformance.sh": "d497297cfb130bccc1788fb2767a82ae32531c908e485d6d1903983f8203d3c3",
+    "scripts/run-exact-native-test.sh": "80c09f89eb38d9a49f82171459560bc582110c8440b91418ea484c9709fa3967",
+    "src/native_command_clear_tests.rs": "ef05c57680be9878935ed79218c704f154af9775e91de1fad46a28fdb73b0b05",
+    "src/native_health_metadata_tests.rs": "7112fc47d3a06797e0c174ea21b52c41310a9c01180fbb050c72ac57337bdeb7",
+    "scripts/native_command_clear_proof.py": "48ad9cab5135a4f6290834c1c0b4f1a1c998f3b2cd3e73c3dbe3f0c8357cef18",
+    "scripts/native_command_clear_projection.py": "d299cee460c4782197f64e43a8af5f0235a546ffe49bace3532ecb628cc6bea6",
+    "scripts/native-evidence.py": "4bf3a76adaabcdc036f2373078844dcfd8709c2c0b92fe5ec98d3540ea1610d9",
+    "trusted_dispatcher_workflow": "bafd6f7c74dbe0353ce0dae0fc65129ef4258e143628daf0e38e41fb8b6137ec",
+    "trusted_dispatcher_admission": "dc60f867bcf648b18d32f90481582c6a6ca0e5319290aefabdb09a1485851e3a"
+}
+
 # Every reviewed cohort must be deliberately added here with its exact run,
 # candidate, four identities, four envelope digests, four raw manifest digests,
 # and exact reviewed capability-to-shape admissions. A later new shape needs
@@ -399,6 +443,12 @@ COHORTS = {
         lane: (STOP_SIGNAL_REVIEWED[lane], STOP_SIGNAL_MANIFESTS[lane],
                EXPECTED_IDENTITIES[lane], STOP_SIGNAL_SHAPES if lane.startswith("debian11-")
                else STOP_SIGNAL_UPSTREAM_SHAPES)
+        for lane in LANES
+    },
+    (COMMAND_CLEAR_CANDIDATE, COMMAND_CLEAR_RUN): {
+        lane: (COMMAND_CLEAR_REVIEWED[lane], COMMAND_CLEAR_MANIFESTS[lane],
+               EXPECTED_IDENTITIES[lane], COMMAND_CLEAR_SHAPES if lane.startswith("debian11-")
+               else COMMAND_CLEAR_UPSTREAM_SHAPES)
         for lane in LANES
     },
 }
@@ -562,10 +612,12 @@ def bind_cohorts(
             identity = record["identity"]
             expected_admission = cohorts[cohort_key][lane][3]
             command_family = any(type(key) is str and key.startswith("command_clear_") for key in manifest)
-            if command_family or "CommandClear" in manifest["capability_outcome"] or "CommandClear" in manifest["admitted_shapes"]:
-                # No selected immutable cohort admits the successor family. Do not
-                # let a receipt choose its own version, baseline or source authority.
-                if cohort_key != (STOP_SIGNAL_CANDIDATE, STOP_SIGNAL_RUN):
+            command_source = cohort_key == (COMMAND_CLEAR_CANDIDATE, COMMAND_CLEAR_RUN)
+            if command_source or command_family or "CommandClear" in manifest["capability_outcome"] or "CommandClear" in manifest["admitted_shapes"]:
+                # A fixed immutable source/run selects the new contract even when
+                # its required fields are missing. Historical None policy is not
+                # generalized; a receipt cannot choose its context or authority.
+                if not command_source and cohort_key != (STOP_SIGNAL_CANDIDATE, STOP_SIGNAL_RUN):
                     raise ValueError("command clear projection has no selected cohort context")
                 expected_ports = [{"shape": shape, "outcome": "observed"} for shape in (
                     "FixedIpv4HostPort", "EphemeralIpv4HostPort", "FixedIpv6HostPort", "EphemeralIpv6HostPort",
@@ -575,14 +627,15 @@ def bind_cohorts(
                         entry.update(outcome="expected_negative", reason="nested_default_bridge_ipv6_runtime_binding_absent")
                 validate_command_clear_projection(
                     manifest, expected_lane=lane, identity_version=2, port_outcomes=expected_ports,
-                    expected_projection_contract=None)
+                    expected_projection_contract="command-clear-native-source-v1" if command_source else None)
             if {"ContainerUser", "ContainerWorkdir"} & set(expected_admission):
                 if (manifest.get("identity_contract") != "container-identity-v1"
                         or manifest.get("identity_cases") != IDENTITY_CASES
                         or manifest.get("identity_probes") != IDENTITY_PROBES):
                     raise ValueError("identity admission requires complete parameterized proof markers")
             if cohort_key in ((APPLICATION_CANDIDATE, APPLICATION_RUN), (EXTERNAL_CANDIDATE, EXTERNAL_RUN),
-                              (STOP_SIGNAL_CANDIDATE, STOP_SIGNAL_RUN)):
+                              (STOP_SIGNAL_CANDIDATE, STOP_SIGNAL_RUN),
+                              (COMMAND_CLEAR_CANDIDATE, COMMAND_CLEAR_RUN)):
                 if (manifest["admitted_shapes"] != expected_admission
                         or manifest["capability_outcome"] != dict.fromkeys(expected_admission, "available")
                         or manifest.get("bind_relabel_selinux_effect") != "unverified"):
@@ -604,11 +657,12 @@ def bind_cohorts(
                                      reason="nested_default_bridge_ipv6_runtime_binding_absent")
                 if manifest.get("port_probes") != ports:
                     raise ValueError("application admission requires exact per-lane port outcomes")
-            if cohort_key in ((EXTERNAL_CANDIDATE, EXTERNAL_RUN), (STOP_SIGNAL_CANDIDATE, STOP_SIGNAL_RUN)):
+            if cohort_key in ((EXTERNAL_CANDIDATE, EXTERNAL_RUN), (STOP_SIGNAL_CANDIDATE, STOP_SIGNAL_RUN),
+                              (COMMAND_CLEAR_CANDIDATE, COMMAND_CLEAR_RUN)):
                 if (manifest.get("external_network_contract") != "external-network-internal-v1"
                         or manifest.get("external_network_probes") != EXTERNAL_EXPECTATION_SHAPES):
                     raise ValueError("external admission requires complete independent source projection")
-            if cohort_key == (STOP_SIGNAL_CANDIDATE, STOP_SIGNAL_RUN):
+            if cohort_key in ((STOP_SIGNAL_CANDIDATE, STOP_SIGNAL_RUN), (COMMAND_CLEAR_CANDIDATE, COMMAND_CLEAR_RUN)):
                 if (manifest.get("stop_signal_contract") != "stop-signal-v1"
                         or manifest.get("stop_signal_probes") != ["StopSignal"]):
                     raise ValueError("stop signal admission requires complete independent source projection")
@@ -675,7 +729,266 @@ def bind_stop_signal_source_provenance(metadata):
         raise ValueError("historical source provenance mismatch")
 
 
+def bind_command_clear_source_provenance(metadata, receipt_bytes):
+    if hashlib.sha256(receipt_bytes).hexdigest() != COMMAND_CLEAR_REVIEW_RECEIPT_SHA256:
+        raise ValueError("independent command clear receipt digest mismatch")
+    receipt = strict_public_json(receipt_bytes)
+    expected_run = {
+        "id": 40119803977, "attempt": 1, "url": COMMAND_CLEAR_RUN,
+        "event": "workflow_dispatch", "workflow_path": ".github/workflows/native-validation.yml",
+        "workflow_ref": "refs/heads/main", "dispatcher_sha": COMMAND_CLEAR_DISPATCHER,
+        "status": "completed", "conclusion": "success",
+    }
+    if (type(metadata.get("schema_version")) is not int or metadata["schema_version"] != 1
+            or metadata.get("kind") != "reviewed-command-clear-source-cohort"
+            or metadata.get("repository") != {"id": 1387403220, "full_name": "Strukturpiloten/docker-lens"}
+            or type(metadata.get("pull_request")) is not int or metadata["pull_request"] != 128
+            or metadata.get("candidate_sha") != COMMAND_CLEAR_CANDIDATE
+            or metadata.get("candidate_tree") != COMMAND_CLEAR_SOURCE_TREE
+            or metadata.get("source_manifest_sha256") != COMMAND_CLEAR_SOURCE_MANIFEST
+            or metadata.get("source_sha256") != COMMAND_CLEAR_SOURCE_SHA256
+            or metadata.get("run") != expected_run
+            or metadata.get("independent_source_review") != {
+                "receipt_path": "docs/evidence/command-clear-independent-review-40119803977.json",
+                "receipt_sha256": COMMAND_CLEAR_REVIEW_RECEIPT_SHA256}):
+        raise ValueError("command clear historical provenance binding mismatch")
+    expected_artifacts = []
+    for lane in LANES:
+        archive = COMMAND_CLEAR_ARCHIVES[f"dockerlens-native-{lane}"]
+        expected_artifacts.append({
+            "id": archive["id"], "name": f"dockerlens-native-{lane}",
+            "archive_api_digest": "sha256:" + archive["sha256"],
+            "archive_sha256": archive["sha256"], "size": archive["size"],
+            "expired": False, "member_name": f"{lane}.json",
+            "native_manifest_sha256": COMMAND_CLEAR_MANIFESTS[lane],
+            "reviewed_record_sha256": COMMAND_CLEAR_REVIEWED[lane],
+        })
+    if metadata.get("artifacts") != expected_artifacts:
+        raise ValueError("command clear artifact binding mismatch")
+    for field in ("candidate_sha", "candidate_tree", "source_manifest_sha256", "run",
+                  "authentication", "jobs", "source_projection", "retained_evidence",
+                  "authority_limits", "remaining_gates"):
+        if metadata.get(field) != receipt.get(field):
+            raise ValueError("command clear independent receipt binding mismatch")
+    return receipt
+
+
 class ReviewedCatalogTests(unittest.TestCase):
+    def test_command_clear_provenance_binds_actual_independent_receipt_and_retained_tier(self):
+        metadata_bytes = (ROOT / "docs/evidence/command-clear-cohort-40119803977.json").read_bytes()
+        self.assertEqual(hashlib.sha256(metadata_bytes).hexdigest(), COMMAND_CLEAR_PROVENANCE_SHA256)
+        metadata = strict_public_json(metadata_bytes)
+        receipt_bytes = (ROOT / "docs/evidence/command-clear-independent-review-40119803977.json").read_bytes()
+        receipt = bind_command_clear_source_provenance(metadata, receipt_bytes)
+        self.assertNotEqual(metadata["candidate_sha"], metadata["run"]["dispatcher_sha"])
+        self.assertEqual(receipt["record_validation"]["all_61_preexisting_tracked_evidence_file_bodies_unchanged"], True)
+        self.assertTrue(receipt["execution"]["twenty_six_required_tests_once_in_order_each_lane"])
+        self.assertFalse(receipt["authentication"]["new_live_api_requests_performed_by_this_reviewer"])
+        self.assertFalse(receipt["authentication"]["separate_original_pr_permission_response_snapshot_retained"])
+        self.assertFalse(receipt["authority_limits"]["current_mutable_admission_code_policy_or_final_head_approved_by_this_receipt"])
+        self.assertEqual(metadata["review"]["native_tests_each_lane"], 26)
+        self.assertEqual(metadata["selinux_effect"], "unverified")
+        self.assertEqual(len(receipt["records"]), 4)
+        for row in receipt["records"]:
+            lane = row["lane"]
+            self.assertEqual(row["raw_sha256"], COMMAND_CLEAR_MANIFESTS[lane])
+            self.assertEqual(row["reviewed_sha256"], COMMAND_CLEAR_REVIEWED[lane])
+        for fault in ("source", "tree", "manifest", "run", "attempt", "dispatcher", "pr",
+                      "artifact", "source_hash", "receipt", "authentication"):
+            changed = deepcopy(metadata)
+            if fault in ("source", "tree", "manifest"):
+                changed[{"source": "candidate_sha", "tree": "candidate_tree", "manifest": "source_manifest_sha256"}[fault]] = "0" * 40
+            elif fault in ("run", "attempt", "dispatcher"):
+                changed["run"][{"run": "id", "attempt": "attempt", "dispatcher": "dispatcher_sha"}[fault]] = 2
+            elif fault == "pr":
+                changed["pull_request"] = 31
+            elif fault == "artifact":
+                changed["artifacts"][0]["reviewed_record_sha256"] = "0" * 64
+            elif fault == "source_hash":
+                changed["source_sha256"]["scripts/native-evidence.py"] = "0" * 64
+            elif fault == "receipt":
+                changed["independent_source_review"]["receipt_sha256"] = "0" * 64
+            elif fault == "authentication":
+                changed["authentication"]["new_live_api_requests_performed_by_this_reviewer"] = True
+            with self.subTest(fault=fault), self.assertRaises(ValueError):
+                bind_command_clear_source_provenance(changed, receipt_bytes)
+        with self.assertRaisesRegex(ValueError, "receipt digest mismatch"):
+            bind_command_clear_source_provenance(metadata, receipt_bytes + b" ")
+
+    def test_command_clear_source_context_accepts_only_complete_baseline_plus_singleton(self):
+        reviewed = bind_cohorts(hashed_json("reviewed"), hashed_json("native"), COHORTS)
+        self.assertEqual(len(reviewed), 8)
+        for lane, (path, record) in reviewed[COMMAND_CLEAR_CANDIDATE, COMMAND_CLEAR_RUN].items():
+            expected = COMMAND_CLEAR_SHAPES if lane.startswith("debian11-") else COMMAND_CLEAR_UPSTREAM_SHAPES
+            baseline = STOP_SIGNAL_SHAPES if lane.startswith("debian11-") else STOP_SIGNAL_UPSTREAM_SHAPES
+            claims = {entry["name"]: entry["admitted_shapes"] for entry in record["capabilities"]}
+            self.assertEqual(path.stem, COMMAND_CLEAR_REVIEWED[lane])
+            self.assertEqual(record["native_manifest_sha256"], COMMAND_CLEAR_MANIFESTS[lane])
+            self.assertEqual(record["identity"], EXPECTED_IDENTITIES[lane])
+            self.assertEqual(claims, expected)
+            self.assertEqual({name: shapes for name, shapes in claims.items() if name != "CommandClear"}, baseline)
+            self.assertEqual(claims["CommandClear"], ["ClearCommand"])
+            self.assertEqual((len(claims), sum(map(len, claims.values()))),
+                             (31, 48) if lane.startswith("debian11-") else (32, 50))
+            for name in ("EntrypointClear", "HealthDisabled", "HealthStartInterval", "ContainerHostname",
+                         "ShmSize", "SupplementaryGroups", "PidsLimit", "UlimitNofile", "Sysctls"):
+                self.assertNotIn(name, claims)
+
+    def test_command_clear_semantic_faults_reach_fixed_family_validator(self):
+        # Mutate parsed values while retaining the original closed path/source/run
+        # bindings. These controls must reach semantics, not fail an unrelated
+        # digest lookup; hashed_json separately checks actual file bytes.
+        originals = hashed_json("native")
+        reviewed = hashed_json("reviewed")
+        faults = ("missing_family", "missing_version", "unknown_version", "version_type",
+                  "legacy_family", "private_contract", "extra_family_key", "outcomes_type",
+                  "missing_scope", "extra_outcome", "scope", "source_status", "catalogue_status",
+                  "capability", "outcome", "shapes_type", "shapes_empty", "shapes_duplicate",
+                  "shapes_wrong", "raw_missing_group", "raw_duplicate", "raw_unavailable",
+                  "missing_baseline", "neighbor", "missing_identity", "identity_v1", "ports")
+        for lane in LANES:
+            for fault in faults:
+                native = deepcopy(originals)
+                manifest = next(value for path, value in native if path.stem == COMMAND_CLEAR_MANIFESTS[lane])
+                outcomes = manifest["command_clear_outcomes"]
+                if fault == "missing_family":
+                    for key in list(manifest):
+                        if key.startswith("command_clear_"):
+                            del manifest[key]
+                elif fault == "missing_version":
+                    del manifest["command_clear_projection_contract"]
+                elif fault in ("unknown_version", "version_type"):
+                    manifest["command_clear_projection_contract"] = "command-clear-native-source-v2" if fault == "unknown_version" else True
+                elif fault == "legacy_family":
+                    del manifest["command_clear_projection_contract"]
+                    manifest["command_clear_outcomes"] = {"admission": "unadmitted", "outcome": "all_four_process_controls_verified"}
+                elif fault == "private_contract":
+                    manifest["command_clear_contract"] = "command-clear-v2"
+                elif fault == "extra_family_key":
+                    manifest["command_clear_extra"] = "unreviewed"
+                elif fault == "outcomes_type":
+                    manifest["command_clear_outcomes"] = []
+                elif fault == "missing_scope":
+                    del outcomes["scope"]
+                elif fault == "extra_outcome":
+                    outcomes["admission"] = "available"
+                elif fault in ("scope", "capability", "outcome"):
+                    outcomes[fault] = "unreviewed"
+                elif fault in ("source_status", "catalogue_status"):
+                    outcomes["source_admission" if fault == "source_status" else "catalogue_admission"] = "admitted"
+                elif fault.startswith("shapes_"):
+                    outcomes["shapes"] = {"shapes_type": "ClearCommand", "shapes_empty": [],
+                                          "shapes_duplicate": ["ClearCommand", "ClearCommand"],
+                                          "shapes_wrong": ["ClearEntrypoint"]}[fault]
+                elif fault == "raw_missing_group":
+                    del manifest["admitted_shapes"]["CommandClear"]
+                elif fault == "raw_duplicate":
+                    manifest["admitted_shapes"]["CommandClear"] *= 2
+                elif fault == "raw_unavailable":
+                    manifest["capability_outcome"]["CommandClear"] = "unavailable"
+                elif fault == "missing_baseline":
+                    del manifest["admitted_shapes"]["Command"]
+                    del manifest["capability_outcome"]["Command"]
+                elif fault == "neighbor":
+                    manifest["admitted_shapes"]["EntrypointClear"] = ["ClearEntrypoint"]
+                    manifest["capability_outcome"]["EntrypointClear"] = "available"
+                elif fault in ("missing_identity", "identity_v1"):
+                    del manifest["identity_contract"]
+                    if fault == "identity_v1":
+                        del manifest["identity_cases"]
+                        for name in ("ContainerUser", "ContainerWorkdir"):
+                            del manifest["admitted_shapes"][name]
+                            del manifest["capability_outcome"][name]
+                elif fault == "ports":
+                    manifest["port_probes"][2] = {"shape": "FixedIpv6HostPort", "outcome": "observed"} if lane.startswith("debian11-") else {"shape": "FixedIpv6HostPort", "outcome": "expected_negative", "reason": "nested_default_bridge_ipv6_runtime_binding_absent"}
+                with self.subTest(lane=lane, fault=fault):
+                    with self.assertRaisesRegex(ValueError, "^invalid command clear source projection$"):
+                        bind_cohorts(reviewed, native, COHORTS)
+
+    def test_command_clear_reviewed_group_rejects_missing_partial_nonpositive_and_neighbors(self):
+        originals = hashed_json("reviewed")
+        native = hashed_json("native")
+        for lane in LANES:
+            for fault in ("missing", "empty", "duplicate_shape", "wrong_shape", "unavailable",
+                          "duplicate_group", "neighbor", "missing_baseline"):
+                reviewed = deepcopy(originals)
+                record = next(value for path, value in reviewed if path.stem == COMMAND_CLEAR_REVIEWED[lane])
+                entries = record["capabilities"]
+                entry = next(value for value in entries if value["name"] == "CommandClear")
+                if fault == "missing":
+                    entries.remove(entry)
+                elif fault in ("empty", "duplicate_shape", "wrong_shape"):
+                    entry["admitted_shapes"] = {"empty": [], "duplicate_shape": ["ClearCommand"] * 2,
+                                                "wrong_shape": ["ClearEntrypoint"]}[fault]
+                elif fault == "unavailable":
+                    entry["state"] = "unavailable"
+                elif fault == "duplicate_group":
+                    entries.append(deepcopy(entry))
+                elif fault == "neighbor":
+                    entries.append({"name": "EntrypointClear", "state": "available", "admitted_shapes": ["ClearEntrypoint"]})
+                elif fault == "missing_baseline":
+                    entries.remove(next(value for value in entries if value["name"] == "Command"))
+                with self.subTest(lane=lane, fault=fault), self.assertRaises(ValueError):
+                    bind_cohorts(reviewed, native, COHORTS)
+
+    def test_command_clear_source_bindings_cannot_be_self_selected_or_lane_swapped(self):
+        originals, native_original = hashed_json("reviewed"), hashed_json("native")
+        for lane in LANES:
+            for fault in ("source", "run", "attempt", "lane", "identity", "api", "artifact", "raw_digest", "reviewed_path"):
+                reviewed, native = deepcopy(originals), deepcopy(native_original)
+                index = next(i for i, (path, _) in enumerate(reviewed) if path.stem == COMMAND_CLEAR_REVIEWED[lane])
+                path, record = reviewed[index]
+                if fault == "source":
+                    record["candidate_sha"] = "a" * 40
+                elif fault in ("run", "attempt"):
+                    record["run_url"] = COMMAND_CLEAR_RUN.replace("40119803977", "999") if fault == "run" else COMMAND_CLEAR_RUN.replace("attempts/1", "attempts/2")
+                elif fault == "lane":
+                    record["lane"] = LANES[(LANES.index(lane) + 1) % 4]
+                elif fault == "identity":
+                    record["identity"]["build"] = {"kind": "unknown"}
+                elif fault == "api":
+                    record["identity"]["rendering_api"] = "1.42"
+                elif fault == "artifact":
+                    record["native_manifest_artifact_name"] = "dockerlens-native-unknown"
+                elif fault == "raw_digest":
+                    record["native_manifest_sha256"] = "0" * 64
+                elif fault == "reviewed_path":
+                    reviewed[index] = (path.with_name("0" * 64 + ".json"), record)
+                with self.subTest(lane=lane, fault=fault), self.assertRaises(ValueError):
+                    bind_cohorts(reviewed, native, COHORTS)
+
+    def test_command_clear_closed_file_sets_reject_omissions_duplicates_swaps_and_rehashes(self):
+        originals, native_original = hashed_json("reviewed"), hashed_json("native")
+        for kind in ("reviewed", "native"):
+            for fault in ("missing", "duplicate", "extra", "path", "swapped", "self_consistent_rehash"):
+                reviewed, native = deepcopy(originals), deepcopy(native_original)
+                selected = reviewed if kind == "reviewed" else native
+                digest = (COMMAND_CLEAR_REVIEWED if kind == "reviewed" else COMMAND_CLEAR_MANIFESTS)[LANES[0]]
+                index = next(i for i, (path, _) in enumerate(selected) if path.stem == digest)
+                path, value = selected[index]
+                if fault == "missing":
+                    selected.pop(index)
+                elif fault in ("duplicate", "extra"):
+                    selected.append((path if fault == "duplicate" else path.with_name("0" * 64 + ".json"), deepcopy(value)))
+                elif fault == "path":
+                    selected[index] = (path.with_name("0" * 64 + ".json"), value)
+                elif fault == "swapped":
+                    peer = (COMMAND_CLEAR_REVIEWED if kind == "reviewed" else COMMAND_CLEAR_MANIFESTS)[LANES[1]]
+                    value.update(deepcopy(next(data for other, data in selected if other.stem == peer)))
+                else:
+                    record_index = next(i for i, (p, _) in enumerate(reviewed) if p.stem == COMMAND_CLEAR_REVIEWED[LANES[0]])
+                    raw_index = next(i for i, (p, _) in enumerate(native) if p.stem == COMMAND_CLEAR_MANIFESTS[LANES[0]])
+                    raw = native[raw_index][1]
+                    raw["candidate_sha"] = "b" * 40
+                    raw_hash = hashlib.sha256(json.dumps(raw, sort_keys=True).encode()).hexdigest()
+                    native[raw_index] = (Path(raw_hash + ".json"), raw)
+                    record = reviewed[record_index][1]
+                    record.update(candidate_sha=raw["candidate_sha"], native_manifest_sha256=raw_hash)
+                    record_hash = hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest()
+                    reviewed[record_index] = (Path(record_hash + ".json"), record)
+                with self.subTest(kind=kind, fault=fault), self.assertRaises(ValueError):
+                    bind_cohorts(reviewed, native, COHORTS)
+
     def test_new_command_clear_source_family_cannot_select_itself_into_historical_cohorts(self):
         reviewed_original = hashed_json("reviewed")
         native_original = hashed_json("native")
@@ -712,14 +1025,14 @@ class ReviewedCatalogTests(unittest.TestCase):
         self.assertEqual(section.count("NativeEvidenceLane::"), 4)
         reviewed = {
             lane: path.stem
-            for lane, (path, _) in indexed_cohorts(hashed_json("reviewed"), COHORTS)[STOP_SIGNAL_CANDIDATE, STOP_SIGNAL_RUN].items()
+            for lane, (path, _) in indexed_cohorts(hashed_json("reviewed"), COHORTS)[COMMAND_CLEAR_CANDIDATE, COMMAND_CLEAR_RUN].items()
         }
         self.assertEqual({match["variant"] for match in tuples}, set(LANE_VARIANTS))
         for match in tuples:
             lane = LANE_VARIANTS[match["variant"]]
             self.assertEqual(match["digest"], reviewed[lane])
             self.assertEqual(match["path_digest"], reviewed[lane])
-            self.assertEqual(match["digest"], STOP_SIGNAL_REVIEWED[lane])
+            self.assertEqual(match["digest"], COMMAND_CLEAR_REVIEWED[lane])
 
     def test_four_records_bind_exact_manifest_bytes_and_shapes(self) -> None:
         native_records = hashed_json("native")
@@ -821,11 +1134,11 @@ class ReviewedCatalogTests(unittest.TestCase):
 
     def test_compiled_candidate_has_exact_per_lane_complete_groups(self) -> None:
         source = (ROOT / "src/reviewed_catalog.rs").read_text(encoding="utf-8")
-        self.assertIn(f'const SOURCE_CANDIDATE: &str = "{STOP_SIGNAL_CANDIDATE}";', source)
-        self.assertIn(f'"{STOP_SIGNAL_RUN}";', source)
+        self.assertIn(f'const SOURCE_CANDIDATE: &str = "{COMMAND_CLEAR_CANDIDATE}";', source)
+        self.assertIn(f'"{COMMAND_CLEAR_RUN}";', source)
         for prefix, expected, counts in (
-                ("REVIEWED", STOP_SIGNAL_SHAPES, (30, 47)),
-                ("UPSTREAM", STOP_SIGNAL_UPSTREAM_SHAPES, (31, 49))):
+                ("REVIEWED", COMMAND_CLEAR_SHAPES, (31, 48)),
+                ("UPSTREAM", COMMAND_CLEAR_UPSTREAM_SHAPES, (32, 50))):
             capabilities = source.split(f"const {prefix}_CAPABILITIES:", 1)[1].split("];", 1)[0]
             shapes = source.split(f"const {prefix}_SHAPES:", 1)[1].split("];", 1)[0]
             capability_names = re.findall(r"Capability::(\w+)", capabilities)
@@ -893,7 +1206,7 @@ class ReviewedCatalogTests(unittest.TestCase):
 
     def test_application_cohort_binds_exact_groups_and_preserves_all_history(self) -> None:
         reviewed = bind_cohorts(hashed_json("reviewed"), hashed_json("native"), COHORTS)
-        self.assertEqual(len(reviewed), 7)
+        self.assertEqual(len(reviewed), 8)
         for lane, (path, record) in reviewed[APPLICATION_CANDIDATE, APPLICATION_RUN].items():
             expected = APPLICATION_SHAPES if lane.startswith("debian11-") else APPLICATION_UPSTREAM_SHAPES
             self.assertEqual(path.stem, APPLICATION_REVIEWED[lane])
@@ -969,7 +1282,7 @@ class ReviewedCatalogTests(unittest.TestCase):
     def test_identity_cohort_adds_only_two_singleton_groups_and_preserves_history(self) -> None:
         reviewed = bind_cohorts(hashed_json("reviewed"), hashed_json("native"), COHORTS)
         raw = indexed_native_manifests(hashed_json("native"), COHORTS)
-        self.assertEqual(len(reviewed), 7)
+        self.assertEqual(len(reviewed), 8)
         self.assertEqual(len(IDENTITY_SHAPES), 16)
         self.assertEqual(sum(map(len, IDENTITY_SHAPES.values())), 26)
         self.assertEqual(set(IDENTITY_SHAPES) - set(LABEL_SHAPES),
@@ -1283,7 +1596,7 @@ class ReviewedCatalogTests(unittest.TestCase):
     def test_external_cohort_is_exact_append_only_and_publicly_authenticated(self) -> None:
         native = hashed_json("native")
         reviewed = bind_cohorts(hashed_json("reviewed"), native, COHORTS)
-        self.assertEqual(len(reviewed), 7)
+        self.assertEqual(len(reviewed), 8)
         raw = indexed_native_manifests(native, COHORTS)
         for lane, (path, record) in reviewed[EXTERNAL_CANDIDATE, EXTERNAL_RUN].items():
             expected = EXTERNAL_SHAPES if lane.startswith("debian11-") else EXTERNAL_UPSTREAM_SHAPES
@@ -1343,7 +1656,7 @@ class ReviewedCatalogTests(unittest.TestCase):
         native = hashed_json("native")
         raw = indexed_native_manifests(native, COHORTS)
         reviewed = bind_cohorts(hashed_json("reviewed"), native, COHORTS)
-        self.assertEqual(len(reviewed), 7)
+        self.assertEqual(len(reviewed), 8)
         for lane in LANES:
             manifest = deepcopy(raw[STOP_SIGNAL_MANIFESTS[lane]][1])
             prior_manifest = raw[EXTERNAL_MANIFESTS[lane]][1]

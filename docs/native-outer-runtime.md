@@ -210,7 +210,8 @@ Every privileged helper phase requires the literal upstream-rootless lane and
 matches its root-owned state. The trusted exact source selector owns the
 canonical image choice; the helper binds that held pin and actual guest.
 No environment-provided profile or path is accepted. Local Podman, local Docker,
-self-hosted runners, other lanes and BoxFerry consumers cannot activate it;
+self-hosted runners and other lanes cannot activate it. BoxFerry can use only
+the separately enumerated reviewed-consumer mode below, never this native identity;
 selected but invalid contexts refuse without fallback. This maintained
 prerequisite does not explain earlier EACCES observations or itself qualify
 native compatibility, cgroup/PIDs authority or product capability admission.
@@ -325,6 +326,65 @@ explicit AppArmor option precedes the privileged default, not that a live task
 received it. This is the observed outer Engine version, not the pinned guest's
 29.8.1. Inspection used versioned raw-source/document reads only; no upstream
 source, binary or policy is vendored or redistributed.
+
+### Separate fixed BoxFerry reviewed-consumer mode
+
+[ADR 0038](decisions/0038-maintained-profile-for-box-consumer.md) supersedes only
+the former native-only consumer restriction. The native coordinator, three exact
+native contexts, state and cleanup receipt retain their existing semantics.
+The test helper also admits exactly the actual `Strukturpiloten/boxferry`
+`reviewed-docker-consumer-validation.yml@refs/heads/main` workflow, `lanes` job,
+`workflow_dispatch` at `refs/heads/main`, GitHub-hosted Ubuntu 24/Linux and
+`upstream-rootless` with explicitly selected outer Docker. No local/self-hosted
+context or other Box workflow is added. Real `GITHUB_RUN_ID` and
+`GITHUB_RUN_ATTEMPT` are positive decimal strings of at most 20 digits; the
+existing `DOCKERLENS_NATIVE_CANDIDATE_SHA` is the actual admitted Lens source,
+not Box source, trusted workflow revision or a forged native identity.
+These environment checks are not actor/PR/source authentication. Trusted exact
+pair admission and the complete held execution/import closure are still required.
+
+The two closed mappings cannot be mixed. Box uses exactly
+`/tmp/boxferry-docker-core.<alphanumeric8>`, suffix-bound run label,
+`bf-docker-core-<suffix>`, `io.boxferry.docker-core-run`, and the held directory's
+`socket` child mounted at `/boxferry-core`. Its derived profile uses
+`boxferry-343-upstream-rootless-<workflow-run>-<attempt>-<nonce>` and separate
+`/run/boxferry-apparmor.<nonce>` custody. A fixed Box consumer discriminator is
+required in every Box held state; native state has no new field. All existing
+finite profile/parser/ABI checks, intent, creation-bound effective kernel label
+and cgroup, uncertain-completion retention, exact absence and unload rules apply.
+Inspect's profile string alone remains insufficient.
+
+The same fixed `apparmor prepare/load/verify/cleanup` bridge and optional final
+create nonce are reused. Only the exact owner/socket mapping transports the
+extra real job/run/attempt/Lens context during nonce creation. No arbitrary
+profile or path is accepted, and the original creation owner is not extended.
+`native-runner-apparmor.py` and its unchanged
+`native_outer_diagnostic_capture.py` import must be held alongside the ordinary
+runtime closure before execution. Adding source hashes does not grant authority
+to invoke an unreviewed helper or substitute a mutable import path.
+
+Box cleanup emits the same bounded canonical stdout prefix and base schema-1
+fields, adding only `consumer="boxferry-reviewed-docker-consumer"`,
+`workflow_run` and `attempt` strings. Pure read-only
+`validate-box-consumer-receipt <LensSHA> <run> <attempt>` requires those exact
+current values plus verified label and removed profile; it rejects native or
+cross-attempt records. Native `validate-receipt` rejects the Box variant.
+Neither validator contacts policy, a daemon or the runner, or authenticates the
+receipt's source custody. Box must separately hold/capture its exact helper
+result and bind it to the current trusted execution and aggregate.
+
+Box owns activation, cleanup and receipt transport inside its existing work,
+cleanup and watchdog deadlines. The native 30-minute watchdog is not imported.
+No resource/time expansion, installation, global/local policy/sysctl/service
+change, canary, fallback, native sequence, image, pin or product API changes.
+Other lanes require explicit non-required treatment rather than fabricated
+profile success. Hermetic controls prove no runner prerequisite or application
+acceptance; fresh integrated final-source native and consumer gates remain due.
+The existing Check/native-validation/release-validation consumers and their pins
+remain unchanged; other Box workflows and other Lens/website products gain no
+profile activation, dependency or completed rollout claim. Existing Renovate
+extraction paths/ownership/grouping/approvals are unchanged; no software or
+operational pin is added, moved or changed.
 
 ## Isolation and rootful identity
 

@@ -47,6 +47,9 @@ STATE_KEYS = frozenset({"schema", "lane", "nonce", "profile", "directory", "run_
                         "create", "label", "cid", "parser", "abi", "profile_sha256"})
 RECEIPT_KEYS = frozenset({"schema", "prerequisite", "outcome", "candidate", "label", "profile_sha256",
                           "parser_sha256", "abi_sha256", "parser_version", "cleanup"})
+NATIVE_CONSUMER = "dockerlens-native"
+BOX_CONSUMER = "boxferry-reviewed-docker-consumer"
+BOX_RECEIPT_KEYS = RECEIPT_KEYS | {"consumer", "workflow_run", "attempt"}
 
 
 class Refused(Exception):
@@ -64,24 +67,39 @@ def need(condition):
         raise Refused("refused")
 
 
-def admitted(environment):
+def consumer_mode(environment):
     expected = {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted",
                 "RUNNER_OS": "Linux", "GITHUB_REF": "refs/heads/main",
-                "GITHUB_JOB": "native-conformance",
-                "GITHUB_REPOSITORY": "Strukturpiloten/docker-lens", "ImageOS": "ubuntu24"}
+                "ImageOS": "ubuntu24"}
     workflows = {
         "Strukturpiloten/docker-lens/.github/workflows/check.yml@refs/heads/main": "push",
         "Strukturpiloten/docker-lens/.github/workflows/native-validation.yml@refs/heads/main": "workflow_dispatch",
         "Strukturpiloten/docker-lens/.github/workflows/release-validation.yml@refs/heads/main": "workflow_dispatch",
     }
-    return (all(environment.get(key) == value for key, value in expected.items())
-            and environment.get("GITHUB_WORKFLOW_REF") in workflows
-            and environment.get("GITHUB_EVENT_NAME") == workflows.get(environment.get("GITHUB_WORKFLOW_REF"))
+    common = (all(environment.get(key) == value for key, value in expected.items())
             and not any(environment.get(key) for key in SELECTORS)
             and re.fullmatch(r"[0-9]{8}\.[0-9]+\.[0-9]+", environment.get("ImageVersion", "")) is not None
             and re.fullmatch(r"[0-9a-f]{40}", environment.get("DOCKERLENS_NATIVE_CANDIDATE_SHA", "")) is not None
             and all(re.fullmatch(r"[1-9][0-9]{0,19}", environment.get(key, "")) is not None
                     for key in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT")))
+    if not common:
+        return None
+    if (environment.get("GITHUB_REPOSITORY") == "Strukturpiloten/docker-lens"
+            and environment.get("GITHUB_JOB") == "native-conformance"
+            and environment.get("GITHUB_WORKFLOW_REF") in workflows
+            and environment.get("GITHUB_EVENT_NAME") == workflows[environment["GITHUB_WORKFLOW_REF"]]):
+        return NATIVE_CONSUMER
+    if (environment.get("GITHUB_REPOSITORY") == "Strukturpiloten/boxferry"
+            and environment.get("GITHUB_JOB") == "lanes"
+            and environment.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+            and environment.get("GITHUB_WORKFLOW_REF") ==
+            "Strukturpiloten/boxferry/.github/workflows/reviewed-docker-consumer-validation.yml@refs/heads/main"):
+        return BOX_CONSUMER
+    return None
+
+
+def admitted(environment):
+    return consumer_mode(environment) is not None
 
 
 def identity(info):
@@ -109,10 +127,13 @@ def file_record(value):
          and all(type(value[key]) is int and value[key] >= 0 for key in ("mtime_ns", "ctime_ns")))
 
 
-def validate_receipt(value, candidate, *, require_verified=False):
-    need(type(value) is dict and set(value) == RECEIPT_KEYS
+def validate_receipt(value, candidate, *, require_verified=False, consumer=NATIVE_CONSUMER,
+                     workflow_run=None, attempt=None):
+    need(consumer in (NATIVE_CONSUMER, BOX_CONSUMER))
+    keys = BOX_RECEIPT_KEYS if consumer == BOX_CONSUMER else RECEIPT_KEYS
+    need(type(value) is dict and set(value) == keys
          and type(value["schema"]) is int and value["schema"] == 1
-         and all(type(value[key]) is str for key in RECEIPT_KEYS - {"schema"})
+         and all(type(value[key]) is str for key in keys - {"schema"})
          and value["prerequisite"] == "github_runner_userns_v1"
          and value["outcome"] in ("verified", "incomplete")
          and value["candidate"] == candidate and re.fullmatch(r"[0-9a-f]{40}", candidate) is not None
@@ -120,6 +141,11 @@ def validate_receipt(value, candidate, *, require_verified=False):
          and value["parser_version"] in ("4.0.1", "unverified")
          and value["cleanup"] in ("removed", "not_loaded")
          and all(digest(value[key]) for key in ("profile_sha256", "parser_sha256", "abi_sha256")))
+    if consumer == BOX_CONSUMER:
+        need(value["consumer"] == BOX_CONSUMER
+             and all(type(item) is str and re.fullmatch(r"[1-9][0-9]{0,19}", item) is not None
+                     for item in (workflow_run, attempt))
+             and value["workflow_run"] == workflow_run and value["attempt"] == attempt)
     need((value["cleanup"] != "not_loaded" or value["label"] == "unverified")
          and (value["cleanup"] != "removed" or value["parser_version"] == "4.0.1"))
     verified = value["label"] == "verified" and value["cleanup"] == "removed"
@@ -133,6 +159,15 @@ def validate_cleanup_record(raw, candidate):
     need(type(raw) is str and len(raw) <= 8192 and raw.startswith(prefix))
     value = json.loads(raw[len(prefix):], object_pairs_hook=unique_object)
     validate_receipt(value, candidate, require_verified=True)
+
+
+def validate_box_cleanup_record(raw, candidate, workflow_run, attempt):
+    """Pure current-attempt Box receipt validation; no runner/profile authority."""
+    prefix = "DOCKERLENS_NATIVE_APPARMOR_PROFILE: "
+    need(type(raw) is str and len(raw) <= 8192 and raw.startswith(prefix))
+    value = json.loads(raw[len(prefix):], object_pairs_hook=unique_object)
+    validate_receipt(value, candidate, require_verified=True, consumer=BOX_CONSUMER,
+                     workflow_run=workflow_run, attempt=attempt)
 
 
 def read_fd(descriptor, limit):
@@ -177,7 +212,7 @@ def trusted_file(path, limit):
 
 
 def profile_bytes(name):
-    need(re.fullmatch(r"dockerlens-127-upstream-rootless-[1-9][0-9]{0,19}-[1-9][0-9]{0,19}-[0-9a-f]{32}", name) is not None)
+    need(re.fullmatch(r"(?:dockerlens-127|boxferry-343)-upstream-rootless-[1-9][0-9]{0,19}-[1-9][0-9]{0,19}-[0-9a-f]{32}", name) is not None)
     return f"abi <abi/4.0>,\nprofile {name} flags=(unconfined) {{\n  userns,\n}}\n".encode("ascii")
 
 
@@ -193,12 +228,17 @@ class RunnerProfile:
         self.stage = "admission"
         need(admitted(environment) and os.geteuid() == OWNER and lane == "upstream-rootless"
              and NONCE.fullmatch(nonce) is not None)
+        self.consumer = consumer_mode(environment)
+        box = self.consumer == BOX_CONSUMER
         self.directory = Path(directory)
         need(self.directory.parent == Path("/tmp")
-             and re.fullmatch(r"dockerlens-native\.[A-Za-z0-9_]{8}", self.directory.name) is not None)
+             and re.fullmatch(r"boxferry-docker-core\.[A-Za-z0-9]{8}" if box else
+                              r"dockerlens-native\.[A-Za-z0-9_]{8}", self.directory.name) is not None)
+        self.owner_key = "io.boxferry.docker-core-run" if box else "io.dockerlens.native-run"
+        self.name_prefix = "bf-docker-core-" if box else "dl-native-"
         self.nonce = nonce
         self.lane = lane
-        self.path = ROOT / ("dockerlens-apparmor." + nonce)
+        self.path = ROOT / (("boxferry-apparmor." if box else "dockerlens-apparmor.") + nonce)
         self.environment = ENV | {key: environment[key] for key in CONTEXT}
         self.cancellation = cancellation
         self.deadline = time.monotonic() + 24
@@ -270,13 +310,16 @@ class RunnerProfile:
             os.close(run)
 
     def profile_name(self):
-        return ("dockerlens-127-upstream-rootless-" + self.environment["GITHUB_RUN_ID"] + "-"
+        prefix = "boxferry-343" if self.consumer == BOX_CONSUMER else "dockerlens-127"
+        return (prefix + "-upstream-rootless-" + self.environment["GITHUB_RUN_ID"] + "-"
                 + self.environment["GITHUB_RUN_ATTEMPT"] + "-" + self.nonce)
 
     def validate_state(self):
         value = self.state
         need(type(value) is dict and type(value.get("load")) is str)
         extra = {"parser_version"} if value["load"] != "never" else set()
+        if self.consumer == BOX_CONSUMER:
+            extra |= {"consumer"}
         need(set(value) == STATE_KEYS | extra and type(value["schema"]) is int and value["schema"] == 1)
         need(all(type(value[key]) is str for key in (STATE_KEYS | extra) - {"schema", "run_identity", "parser", "abi"}))
         held = value["run_identity"]
@@ -290,13 +333,14 @@ class RunnerProfile:
              and value["profile"] == self.profile_name()
              and value["profile_sha256"] == hashlib.sha256(profile_bytes(self.profile_name())).hexdigest()
              and value["run"] == self.directory.name.rsplit(".", 1)[1]
-             and value["name"] == "dl-native-" + value["run"] and PIN.fullmatch(value["image"]) is not None)
+             and value["name"] == self.name_prefix + value["run"] and PIN.fullmatch(value["image"]) is not None
+             and (self.consumer != BOX_CONSUMER or value["consumer"] == BOX_CONSUMER))
         file_record(value["parser"])
         file_record(value["abi"])
         need(value["load"] in ("never", "prepared", "intent", "loaded", "unload_intent", "removed")
              and value["create"] in ("never", "intent", "recorded")
              and value["label"] in ("unverified", "verified")
-             and (not extra or value["parser_version"] == "4.0.1"))
+             and (value["load"] == "never" or value["parser_version"] == "4.0.1"))
         if value["create"] == "never":
             need(value["cid"] == "" and value["label"] == "unverified")
         elif value["create"] == "intent":
@@ -348,7 +392,7 @@ class RunnerProfile:
         return result
 
     def prepare(self, name, run, image):
-        need(name == "dl-native-" + self.directory.name.rsplit(".", 1)[1]
+        need(name == self.name_prefix + self.directory.name.rsplit(".", 1)[1]
              and run == self.directory.name.rsplit(".", 1)[1] and PIN.fullmatch(image) is not None)
         # Trusted coordinator admission and the unprivileged shell selector
         # already checked clean HEAD. Never run caller-configured Git as root.
@@ -360,6 +404,8 @@ class RunnerProfile:
                           "name": name, "run": run, "image": image, "load": "never", "create": "never",
                           "label": "unverified", "cid": "", "parser": trusted_file(PARSER, 16777216),
                           "abi": trusted_file(ABI, 65536), "profile_sha256": hashlib.sha256(profile_bytes(profile)).hexdigest()}
+            if self.consumer == BOX_CONSUMER:
+                self.state["consumer"] = BOX_CONSUMER
             self.write_owned("profile", profile_bytes(profile))
             self.save()
             self.stage = "kernel_enabled"
@@ -425,7 +471,7 @@ class RunnerProfile:
         spec.loader.exec_module(observer)
         value = observer.document(self.bridge("snapshot", self.state["cid"]))
         observer.daemon_binding(value, "docker", self.state["cid"], self.state["name"],
-                                "io.dockerlens.native-run", self.state["run"], self.state["image"])
+                                self.owner_key, self.state["run"], self.state["image"])
         return value
 
     def snapshot(self):
@@ -490,7 +536,14 @@ class RunnerProfile:
                        "profile_sha256": self.state["profile_sha256"], "parser_sha256": self.state["parser"]["sha256"],
                        "abi_sha256": self.state["abi"]["sha256"], "parser_version": self.state.get("parser_version", "unverified"),
                        "cleanup": "removed" if phase == "loaded" else "not_loaded"}
-            validate_receipt(receipt, self.environment["DOCKERLENS_NATIVE_CANDIDATE_SHA"])
+            if self.consumer == BOX_CONSUMER:
+                receipt |= {"consumer": BOX_CONSUMER, "workflow_run": self.environment["GITHUB_RUN_ID"],
+                            "attempt": self.environment["GITHUB_RUN_ATTEMPT"]}
+                validate_receipt(receipt, self.environment["DOCKERLENS_NATIVE_CANDIDATE_SHA"],
+                                 consumer=BOX_CONSUMER, workflow_run=self.environment["GITHUB_RUN_ID"],
+                                 attempt=self.environment["GITHUB_RUN_ATTEMPT"])
+            else:
+                validate_receipt(receipt, self.environment["DOCKERLENS_NATIVE_CANDIDATE_SHA"])
             # Fixed finite leaves only. Unknown files/state are never swept up.
             self.revalidate()
             need(set(os.listdir(self.path)) == {"lock", "state.json", "profile"})
@@ -533,6 +586,11 @@ def main(argv):
         if argv and argv[0] == "validate-receipt":
             need(len(argv) == 2)
             validate_cleanup_record(sys.stdin.read(8193), argv[1])
+            cancellation.check()
+            return 0
+        if argv and argv[0] == "validate-box-consumer-receipt":
+            need(len(argv) == 4)
+            validate_box_cleanup_record(sys.stdin.read(8193), *argv[1:])
             cancellation.check()
             return 0
         need(len(argv) >= 4 and operation != "invalid")

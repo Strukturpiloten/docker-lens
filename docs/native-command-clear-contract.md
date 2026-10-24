@@ -23,8 +23,11 @@ shapes `[ClearCommand]`, scope `explicit_exec_entrypoint_required`, and outcome
 `all_four_process_controls_verified`. Append exactly available CommandClear and
 its singleton to the complete baseline raw maps; EntrypointClear stays absent.
 The latter's case is a mandatory control, not a second grant. No hostname, argv,
-IDs, timestamps or private payloads are projected. Current sealed catalogue
-profiles still deny both clear capabilities; public intent/rendering is unchanged.
+IDs, timestamps or private payloads are projected. The raw record remains
+catalogue-unadmitted. [ADR 0037](decisions/0037-reviewed-command-clear-cohort.md)
+separately selects four independently reviewed source-run envelopes to admit
+only CommandClear under the existing guard for candidate rehearsal. EntrypointClear
+remains withheld; public intent and rendering semantics are unchanged.
 
 Historical discriminator-absent `admission: unadmitted` keeps its observation-only
 meaning and cannot carry an injected raw grant. New raw-source metadata asserts
@@ -68,11 +71,16 @@ independent full literal canonical maps on all four lanes.
 
 The additive disconnected raw subset in `native-evidence.schema.json` documents
 but does not alone validate acceptance. Reviewed-catalogue policy checks encountered
-family versions under its independently selected immutable cohort context; no
-current cohort selects the successor. Exact source/run/hash/file-set and
-raw-to-envelope equality checks remain mandatory. No historical bytes or sealed
-selection change. Final complete and fresh exact-candidate four-lane26 gates and
-independent review remain due at ADR 0019's trusted-harness/public-projection tier.
+family versions under its independently selected immutable cohort context.
+Only source `a36e42fbaeee6585c954948c9fe3a8686d86018b`, run40119803977/attempt1,
+selects this successor, with fixed identity-v2 and independent complete canonical
+port outcomes. Required family fields are checked even when absent; historical
+None-version policy is not generalized. Exact source/run/hash/file-set and
+raw-to-envelope equality checks remain mandatory. All historical bytes remain
+unchanged. The independent source receipt covers the exact four raw/envelope
+pairings, not the later mutable admission diff or final head. Final complete and
+fresh exact-final-head four-lane26 gates, review and inherited actual consumers
+remain due at the trusted-harness/public-projection tier, not private-proof replay.
 
 ## Independent process oracle
 

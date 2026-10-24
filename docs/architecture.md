@@ -1,6 +1,6 @@
 # Architecture
 
-## Guarded CommandClear raw source, not catalogue admission
+## Guarded CommandClear raw source and explicit candidate admission
 
 [ADR 0036](decisions/0036-command-clear-native-source-projection.md) versions the
 command-clear public family as `command-clear-native-source-v1`. Only after the
@@ -10,10 +10,13 @@ CommandClear/[ClearCommand] to every existing raw group and require closed
 guard. EntrypointClear remains only a control. An executable validator couples
 version/fields/scope and full baseline maps before publication; accepting catalogue
 policy rejects unselected family versions. Historical unadmitted payloads keep
-their old meaning. Sealed profiles still deny both clear capabilities. No public
+their old meaning. [ADR 0037](decisions/0037-reviewed-command-clear-cohort.md)
+separately selects only the reviewed CommandClear singleton on the four sealed
+profiles for candidate rehearsal; EntrypointClear remains withheld. No public
 Rust/private ABI, 26-call order, native I/O or pin changes. Old native26 is a
-semantic prerequisite, not qualification of this changed emitter; complete and
-fresh exact-candidate four-lane26 gates/review remain required.
+semantic prerequisite. Source run40119803977/attempt1 independently qualifies
+source a36e42fb, not the later admission head. Complete and fresh exact-final-head
+four-lane26 gates/review and actual consumer gates remain required.
 
 The [nofile producer](native-nofile-contract.md) is separately registered as
 prepared test-only source. Its default-private-proof boundary remains16KiB;
@@ -146,8 +149,8 @@ boundaries; no executor, native authority or capability admission is added.
    health and timing, runtime settings, and restart policy.
    Command inheritance means omitting the native field, not promising an image
    default survives an entrypoint override. Command clear requires an explicit
-   exec entrypoint at intent validation; even that pair remains capability-gated
-   pending exact native proof. No planning step inspects the image.
+   exec entrypoint at intent validation; only that pair is admitted by ADR 0037's
+   exact source records. EntrypointClear remains withheld. No planning step inspects the image.
    The public planner admits
    only profiles resolved from the reviewed catalog; caller-authored positive
    daemon claims cannot authorize planning. A profile distinguishes upstream
@@ -155,11 +158,11 @@ boundaries; no executor, native authority or capability admission is added.
    advertised maximum API, negotiated acquisition API, tested rendering API,
    and daemon mode. Catalog discovery returns its SHA-256 evidence key. The
    candidate catalog selects four exact records from independently reviewed
-   run `38106164571`, attempt 1, source
-   `ef8b40c2d392c3983a3ebdc54730812352fe6b39`, under ADR 0019.
-   Only StopSignal is added beyond ADR 0018's retained complete groups.
-   Debian admits exactly 30 capabilities/47 shapes; upstream adds only the
-   complete IPv6 port group for 31/49. All six historical cohorts remain
+   run `40119803977`, attempt 1, source
+   `a36e42fbaeee6585c954948c9fe3a8686d86018b`, under ADR 0037.
+   Only CommandClear/[ClearCommand] is added beyond ADR 0019's complete groups.
+   Debian admits exactly 31 capabilities/48 shapes; upstream adds only the
+   complete IPv6 port group for 32/50. All seven historical cohorts remain
    immutable. ADR 0012's six actual authored fixture volume-only consumer gate
    and fresh reviewed actual Nextcloud/Supabase bind and desired external
    expectation consumers remain required.
