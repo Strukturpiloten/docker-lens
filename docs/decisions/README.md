@@ -1,5 +1,9 @@
 # Architecture decisions
 
+- [0039: Prepared measured PIDs boundary](0039-measured-pids-boundary.md) defines
+  an unwired post-daemon-start/pre-workload collector only. Historical ADRs
+  0022–0035 remain unadopted; mandatory PIDs27 and nofile28 remain pending.
+
 Durable native boundaries and evidence/admission contracts:
 
 ADR 0004 now maintains the narrowly scoped GitHub-runner upstream-rootless
