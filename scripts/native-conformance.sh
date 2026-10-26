@@ -1469,6 +1469,8 @@ export NATIVE_SUPPLEMENTARY_GROUPS_PROOF_PATH="$run_dir/supplementary-groups-v1.
 export NATIVE_SUPPLEMENTARY_GROUPS_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 export NATIVE_KERNEL_SETTINGS_PROOF_PATH="$run_dir/kernel-settings-v1.json"
 export NATIVE_KERNEL_SETTINGS_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
+export NATIVE_PIDS_PROOF_PATH="$run_dir/pids-v1.json"
+export NATIVE_PIDS_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 export NATIVE_PORT_START_DIAGNOSTIC_PATH="$run_dir/diagnostics/port-start-window.json"
 export NATIVE_PORT_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 export NATIVE_HEALTH_METADATA_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
@@ -1827,6 +1829,25 @@ python3 "$script_dir/native_supplementary_groups_proof.py" "$run_dir" "$NATIVE_S
 python3 "$script_dir/native_kernel_settings_proof.py" "$run_dir" "$NATIVE_KERNEL_SETTINGS_CANDIDATE_SHA" "$run_id" \
   "$lane" "$server_version" "$api_version" "$expected_mode" "$installed_docker_package" \
   "$NATIVE_FIXTURE_IMAGE" "$image" "$NATIVE_OUTER_CONTAINER_ID" "$NATIVE_BIND_RELABEL_DAEMON_UID"
+
+# Build the fixed inert witness before invocation27 owns its source deadline.
+# This separate bounded host-build receipt never counts as live/native evidence.
+mkdir -m 0700 "$run_dir/socket/pids-worker"
+pids_build_deadline=$(python3 -c 'import time; print(time.monotonic_ns() + 180_000_000_000)')
+if ! timeout --signal=TERM --kill-after=2s 180s python3 "$script_dir/build-native-pids-worker.py" \
+  --output-directory "$run_dir/socket/pids-worker" --candidate "$NATIVE_PIDS_CANDIDATE_SHA" \
+  --deadline-ns "$pids_build_deadline" >"$run_dir/pids-prebuild.log" 2>&1; then
+  echo 'native PIDs witness prebuild refused' >&2
+  exit 1
+fi
+(
+  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1
+  "$(dirname "$0")/run-exact-native-test.sh" native_pids live_pids_limits_and_effects_match_engine
+)
+# Immediate independent reading is mandatory even without evidence publication.
+python3 "$script_dir/native_pids_proof.py" "$run_dir" "$NATIVE_PIDS_CANDIDATE_SHA" "$run_id" \
+  "$lane" "$server_version" "$api_version" "$expected_mode" "$NATIVE_FIXTURE_IMAGE" \
+  "$NATIVE_OUTER_CONTAINER_ID" "$NATIVE_OUTER_IMAGE"
 
 publish_native_evidence() {
   local candidate_sha dirty

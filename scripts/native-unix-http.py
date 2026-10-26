@@ -73,10 +73,13 @@ def _validate(socket_path, method, path, timeout, response_cap, request_cap, bod
 
 
 class _Reader:
-    def __init__(self, stream, deadline):
+    def __init__(self, stream, deadline, lease=None):
         self.stream, self.deadline, self.buffer = stream, deadline, bytearray()
+        self.lease = lease
 
     def receive(self, cap):
+        if self.lease is not None and hasattr(self.lease, "reserve_read"):
+            _lease_call(self.lease, "reserve_read", min(cap, 8192))
         self.stream.settimeout(_remaining(self.deadline))
         chunk = self.stream.recv(min(cap, 8192))
         _remaining(self.deadline)
@@ -105,93 +108,140 @@ class _Reader:
         return result
 
 
-def _exchange(socket_path, method, path, body, deadline, response_cap, content_type):
+def _exchange(socket_path, method, path, body, deadline, response_cap, content_type,
+              peer_lease=None):
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stream:
         stream.settimeout(_remaining(deadline))
         stream.connect(socket_path)
-        # Fixed Host is inert HTTP syntax. No hostname is ever resolved.
-        head = (f"{method} {path} HTTP/1.1\r\nHost: localhost\r\n"
-                "Connection: close\r\n")
-        if content_type is not None:
-            head += "Content-Type: application/json\r\n"
-        if body is not None or method == "POST":
-            head += f"Content-Length: {len(body) if body is not None else 0}\r\n"
-        stream.settimeout(_remaining(deadline))
-        stream.sendall(head.encode("ascii") + b"\r\n" + (body or b""))
-        reader = _Reader(stream, deadline)
-        status_line, used = reader.line(HEADER_LIMIT)
-        match = re.fullmatch(rb"HTTP/1\.[01] ([1-5][0-9]{2}) [\x20-\x7e]*", status_line)
-        if match is None or int(match[1]) < 200:
+        lease = None
+        unwinding = False
+        try:
+            if peer_lease is not None:
+                try:
+                    lease = peer_lease(stream)
+                except Exception:
+                    raise TransportError(4) from None
+                _lease_call(lease, "check")
+                _remaining(deadline)
+            return _response(stream, method, path, body, deadline, response_cap,
+                             content_type, lease)
+        except BaseException:
+            unwinding = True
+            raise
+        finally:
+            if lease is not None:
+                try:
+                    _lease_call(lease, "close")
+                except BaseException:
+                    # Cleanup must be attempted without replacing an existing
+                    # protocol/deadline/cancellation failure. A close-only
+                    # failure still prevents returning usable payload bytes.
+                    if not unwinding:
+                        raise
+
+
+def _lease_call(lease, operation, *args):
+    try:
+        getattr(lease, operation)(*args)
+    except Exception:
+        raise TransportError(4) from None
+
+
+def _response(stream, method, path, body, deadline, response_cap, content_type, lease):
+    # Fixed Host is inert HTTP syntax. No hostname is ever resolved.
+    head = (f"{method} {path} HTTP/1.1\r\nHost: localhost\r\n"
+            "Connection: close\r\n")
+    if content_type is not None:
+        head += "Content-Type: application/json\r\n"
+    if body is not None or method == "POST":
+        head += f"Content-Length: {len(body) if body is not None else 0}\r\n"
+    stream.settimeout(_remaining(deadline))
+    stream.sendall(head.encode("ascii") + b"\r\n" + (body or b""))
+    reader = _Reader(stream, deadline, lease)
+    status_line, used = reader.line(HEADER_LIMIT)
+    match = re.fullmatch(rb"HTTP/1\.[01] ([1-5][0-9]{2}) [\x20-\x7e]*", status_line)
+    if match is None or int(match[1]) < 200:
+        raise TransportError(5)
+    status_code = int(match[1])
+    headers = {}
+    while True:
+        line, size = reader.line(HEADER_LIMIT - used)
+        used += size
+        if not line:
+            break
+        match = re.fullmatch(rb"([!#$%&'*+.^_`|~0-9A-Za-z-]+):[ \t]*([\x20-\x7e\t]*)", line)
+        if match is None:
             raise TransportError(5)
-        status_code = int(match[1])
-        headers = {}
+        key, value = match[1].lower(), match[2].strip()
+        if key in headers and key in (b"content-length", b"transfer-encoding", b"content-encoding"):
+            raise TransportError(5)
+        headers[key] = value
+    length, transfer = headers.get(b"content-length"), headers.get(b"transfer-encoding")
+    if (length is not None and transfer is not None
+            or headers.get(b"content-encoding", b"identity").lower() != b"identity"
+            or transfer is not None and transfer.lower() != b"chunked"
+            or length is not None and re.fullmatch(rb"[0-9]+", length) is None):
+        raise TransportError(5)
+    if lease is not None:
+        _lease_call(lease, "check")
+    _remaining(deadline)
+    if method == "HEAD" or status_code in (204, 304):
+        if transfer is not None or status_code == 204 and length not in (None, b"0"):
+            raise TransportError(5)
+        result = b""
+    elif length is not None:
+        # Avoid converting arbitrarily long decimal strings.
+        if len(length) > 12 or int(length) > response_cap:
+            raise TransportError(6)
+        result = reader.exact(int(length))
+    elif transfer is not None:
+        result = bytearray()
+        metadata = 0
         while True:
-            line, size = reader.line(HEADER_LIMIT - used)
-            used += size
-            if not line:
-                break
-            match = re.fullmatch(rb"([!#$%&'*+.^_`|~0-9A-Za-z-]+):[ \t]*([\x20-\x7e\t]*)", line)
-            if match is None:
+            line, size = reader.line(HEADER_LIMIT - metadata)
+            metadata += size
+            if re.fullmatch(rb"[0-9a-fA-F]+", line) is None:
                 raise TransportError(5)
-            key, value = match[1].lower(), match[2].strip()
-            if key in headers and key in (b"content-length", b"transfer-encoding", b"content-encoding"):
-                raise TransportError(5)
-            headers[key] = value
-        length, transfer = headers.get(b"content-length"), headers.get(b"transfer-encoding")
-        if (length is not None and transfer is not None
-                or headers.get(b"content-encoding", b"identity").lower() != b"identity"
-                or transfer is not None and transfer.lower() != b"chunked"
-                or length is not None and re.fullmatch(rb"[0-9]+", length) is None):
-            raise TransportError(5)
-        if method == "HEAD" or status_code in (204, 304):
-            if transfer is not None or status_code == 204 and length not in (None, b"0"):
-                raise TransportError(5)
-            result = b""
-        elif length is not None:
-            # Avoid converting arbitrarily long decimal strings.
-            if len(length) > 12 or int(length) > response_cap:
+            if len(line) > 12 or int(line, 16) > response_cap - len(result):
                 raise TransportError(6)
-            result = reader.exact(int(length))
-        elif transfer is not None:
-            result = bytearray()
-            metadata = 0
-            while True:
-                line, size = reader.line(HEADER_LIMIT - metadata)
-                metadata += size
-                if re.fullmatch(rb"[0-9a-fA-F]+", line) is None:
-                    raise TransportError(5)
-                if len(line) > 12 or int(line, 16) > response_cap - len(result):
-                    raise TransportError(6)
-                size = int(line, 16)
-                if not size:
-                    # Trailers are deliberately unsupported rather than silently ignored.
-                    if reader.exact(2) != b"\r\n":
-                        raise TransportError(5)
-                    break
-                result.extend(reader.exact(size))
+            size = int(line, 16)
+            if not size:
+                # Trailers are deliberately unsupported rather than silently ignored.
                 if reader.exact(2) != b"\r\n":
                     raise TransportError(5)
-            result = bytes(result)
-        else:
-            raise TransportError(5)
-        if reader.buffer:
-            raise TransportError(5)
-        _remaining(deadline)
-        return status_code, result
+                break
+            result.extend(reader.exact(size))
+            if reader.exact(2) != b"\r\n":
+                raise TransportError(5)
+        result = bytes(result)
+    else:
+        raise TransportError(5)
+    if reader.buffer:
+        raise TransportError(5)
+    if lease is not None:
+        _lease_call(lease, "check")
+    _remaining(deadline)
+    return status_code, result
 
 
 def request(socket_path, method, path, body=None, *, timeout,
-            max_response_bytes, max_request_bytes=BYTE_LIMIT, content_type=None):
+            max_response_bytes, max_request_bytes=BYTE_LIMIT, content_type=None,
+            peer_lease=None):
     """Return (actual HTTP status, complete bytes), or raise TransportError."""
     _validate(socket_path, method, path, timeout, max_response_bytes, max_request_bytes,
               body, content_type)
     return _request_until(socket_path, method, path, body,
-                          time.monotonic() + timeout, max_response_bytes, content_type)
+                          time.monotonic() + timeout, max_response_bytes, content_type,
+                          peer_lease)
 
 
-def _request_until(socket_path, method, path, body, deadline, response_cap, content_type):
+def _request_until(socket_path, method, path, body, deadline, response_cap, content_type,
+                   peer_lease=None):
     try:
-        return _exchange(socket_path, method, path, body, deadline, response_cap, content_type)
+        result = _exchange(socket_path, method, path, body, deadline, response_cap,
+                           content_type, peer_lease)
+        _remaining(deadline)  # includes lease and socket cleanup before success
+        return result
     except (TimeoutError, socket.timeout):
         raise TransportError(3) from None
     except (OSError, ValueError, OverflowError):

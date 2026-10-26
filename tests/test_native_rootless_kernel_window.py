@@ -14,6 +14,8 @@ import time
 import unittest
 from unittest.mock import patch
 
+from test_native_hostname_wiring import assert_current_cohort
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 SPEC = importlib.util.spec_from_file_location("kernel_window", ROOT / "scripts/native-rootless-kernel-window.py")
@@ -431,7 +433,8 @@ class ShellTests(unittest.TestCase):
         boundary = SOURCE.index('rootless_startup_pair=$(python3 "$script_dir/native-rootless-kernel-window.py" startup-clock')
         self.assertLess(boundary, SOURCE.index("outer_container_id=$(native_outer_bridge_command 120 create-daemon"))
         self.assertEqual(SOURCE.count('rootless_startup_pair=$(python3 "$script_dir/native-rootless-kernel-window.py" startup-clock'), 1)
-        self.assertEqual(SOURCE.count('/run-exact-native-test.sh"'), 26)
+        self.assertEqual(SOURCE.count('/run-exact-native-test.sh"'), 27)
+        assert_current_cohort(self, SOURCE)
         self.assertIn('rootless_kernel_window_diagnostic "${diagnosis##* rootlesskit_self_reexec=}"', SOURCE)
 
 

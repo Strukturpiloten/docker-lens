@@ -5,6 +5,7 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -14,6 +15,8 @@ import importlib.util
 
 import test_native_external_network_evidence as external
 from test_native_command_clear_projection import OUTCOME, expected_shapes
+
+from test_native_hostname_wiring import assert_current_cohort
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = "native_command_clear"
@@ -25,7 +28,7 @@ SECRET = "PRIVATE_COMMAND_CLEAR_CANARY"
 
 
 def native_calls(source):
-    return re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source, re.M)
+    return re.findall(r'^[ \t]*"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source, re.M)
 
 
 class CommandClearWiringTests(unittest.TestCase):
@@ -63,8 +66,8 @@ else:
 
     def test_twenty_third_registration_and_mandatory_independent_reader(self):
         harness = (ROOT / "scripts/native-conformance.sh").read_text()
-        calls = native_calls(harness)
-        self.assertEqual(len(calls), 26)
+        calls = assert_current_cohort(self, harness)
+        self.assertEqual(len(calls), 27)
         self.assertEqual(calls[21:23], [("native_hostname", "live_hostname_matches_engine"), (TARGET, TEST)])
         self.assertEqual(calls.count((TARGET, TEST)), 1)
         hostname_reader = harness.index('python3 "$script_dir/native_hostname_proof.py"')
@@ -81,7 +84,7 @@ else:
         self.assertLess(harness.index('\n)\n', owner), command)
         hostname_owner = harness.index('(\n  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1\n', owner + 1)
         self.assertLess(harness.index('\n)\n', hostname_owner), command)
-        self.assertEqual(harness.count('export NATIVE_LIFECYCLE_CLEANUP_OWNER='), 5)
+        self.assertEqual(harness.count('export NATIVE_LIFECYCLE_CLEANUP_OWNER='), 6)
         self.assertLess(reader, harness.index('if [[ -n ${apparmor_profile:-} ]]; then', reader))
         emitter = harness.index('python3 "$script_dir/native-evidence.py"')
         protocol = harness[emitter:harness.index('\n  fi\n}', emitter)].replace('\\\n', ' ')
@@ -238,9 +241,49 @@ else:
         for lane in ("debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless"):
             for fault in ("none", "hostname_missing", "hostname_context", "command_missing",
                           "command_effect", "command_cleanup", "native_failure",
-                          "shm_size_missing", "supplementary_groups_missing", "kernel_settings_missing"):
+                          "shm_size_missing", "supplementary_groups_missing", "kernel_settings_missing",
+                          "pids_prebuild_failure", "pids_native_failure", "pids_reader_failure"):
                 with self.subTest(lane=lane, fault=fault), tempfile.TemporaryDirectory() as temporary:
                     root = Path(temporary)
+                    (root / "socket").mkdir(mode=0o700)
+                    # Intercept only the new tail's build and reader. Earlier
+                    # private readers still run on the real interpreter.
+                    python = root / "python3"
+                    python.write_text(f"#!{sys.executable}\n" + '''import os, pathlib, sys, time
+root = pathlib.Path(os.environ["run_dir"])
+target = str(pathlib.Path(os.environ["script_dir"]) / "build-native-pids-worker.py")
+reader = str(pathlib.Path(os.environ["script_dir"]) / "native_pids_proof.py")
+if sys.argv[1] not in (target, reader):
+    allowed = {str(pathlib.Path(os.environ["script_dir"]) / ("native_" + family + "_proof.py"))
+               for family in ("hostname", "shm_size", "supplementary_groups", "kernel_settings")}
+    assert sys.argv[1] in allowed | {"-", "-c"}
+    if sys.argv[1] == "-c":
+        assert sys.argv[2:] == ["import time; print(time.monotonic_ns() + 180_000_000_000)"]
+    os.execv(sys.executable, [sys.executable, *sys.argv[1:]])
+def event(value):
+    with open(os.environ["TRACE"], "a") as stream:
+        stream.write(value + "\\n")
+if sys.argv[1] == target:
+    assert sys.argv[2:6] == ["--output-directory", str(root / "socket/pids-worker"),
+                           "--candidate", os.environ["NATIVE_PIDS_CANDIDATE_SHA"]]
+    assert sys.argv[6] == "--deadline-ns" and len(sys.argv) == 8
+    assert 0 < int(sys.argv[7]) - time.monotonic_ns() <= 180_000_000_000
+    assert (root / "socket/pids-worker").is_dir()
+    event("pids-prebuild")
+    if os.environ["FAULT"] == "pids_prebuild_failure":
+        sys.exit(41)
+    (root / "fixture-prebuilt").touch()
+else:
+    assert sys.argv[2:] == [str(root), os.environ["NATIVE_PIDS_CANDIDATE_SHA"],
+        os.environ["run_id"], os.environ["lane"], os.environ["server_version"],
+        os.environ["api_version"], os.environ["expected_mode"], os.environ["NATIVE_FIXTURE_IMAGE"],
+        os.environ["NATIVE_OUTER_CONTAINER_ID"], os.environ["NATIVE_OUTER_IMAGE"]]
+    assert (root / "fixture-prebuilt").is_file() and (root / "fixture-pids-ran").is_file()
+    event("pids-reader")
+    if os.environ["FAULT"] == "pids_reader_failure":
+        sys.exit(43)
+''')
+                    python.chmod(0o700)
                     hostname = hostname_fixture(lane)
                     context = hostname["context"]
                     context["outer"]["socket_source"] = str(root / "socket")
@@ -257,11 +300,14 @@ else:
                         NATIVE_SHM_SIZE_CANDIDATE_SHA=context["candidate_sha"],
                         NATIVE_SUPPLEMENTARY_GROUPS_CANDIDATE_SHA=context["candidate_sha"],
                         NATIVE_KERNEL_SETTINGS_CANDIDATE_SHA=context["candidate_sha"],
+                        NATIVE_PIDS_CANDIDATE_SHA=context["candidate_sha"],
+                        NATIVE_OUTER_IMAGE=context["outer"]["image"],
                         NATIVE_OUTER_ENGINE="podman",
                         NATIVE_FIXTURE_IMAGE=context["fixture_image"], image=context["outer"]["image"],
                         NATIVE_OUTER_CONTAINER_ID=context["outer"]["id"],
                         NATIVE_BIND_RELABEL_DAEMON_UID=str(context["daemon_uid"]),
                         NATIVE_COMMAND_CLEAR_PROOF_PATH=SECRET, TRACE=str(trace),
+                        PATH=str(root) + os.pathsep + os.environ["PATH"], FAULT=fault,
                         STATUS="37" if fault == "native_failure" else "0")
                     env.pop("NATIVE_LIFECYCLE_CLEANUP_OWNER", None)
                     env.pop("DOCKERLENS_NATIVE_EVIDENCE_DIR", None)
@@ -290,25 +336,40 @@ else:
                               '  else\n'
                               '    [[ ${NATIVE_LIFECYCLE_CLEANUP_OWNER:-} == native_conformance_outer_v1 ]] || return 98\n'
                               '  fi\n'
+                              '  if [[ $1 == native_pids ]]; then\n'
+                              '    [[ -f $run_dir/fixture-prebuilt ]] || return 98\n'
+                              '    touch "$run_dir/fixture-pids-ran"\n'
+                              '  fi\n'
                               '  printf "%s %s\\n" "$1" "$2" >> "$TRACE"\n'
+                              '  if [[ $1 == native_pids && $FAULT == pids_native_failure ]]; then return 42; fi\n'
                               '  return "$STATUS"\n}\n' + tail + 'printf "public\\n" >> "$TRACE"\n')
                     result = subprocess.run(["bash", "-c", script], env=env,
                                             capture_output=True, text=True, timeout=5)
                     events = trace.read_text().splitlines() if trace.exists() else []
                     expected = [] if fault.startswith("hostname_") else [f"{TARGET} {TEST}"]
-                    if fault == "none" or fault in ("shm_size_missing", "supplementary_groups_missing", "kernel_settings_missing"):
+                    if fault == "none" or fault.startswith("pids_") or fault in ("shm_size_missing", "supplementary_groups_missing", "kernel_settings_missing"):
                         for family, test in (("shm_size", "live_shm_size_effects_match_engine"),
                                              ("supplementary_groups", "live_supplementary_groups_match_engine"),
                                              ("kernel_settings", "live_kernel_settings_match_engine")):
                             expected.append("native_" + family + " " + test)
                             if fault == family + "_missing":
                                 break
+                    if fault == "none" or fault.startswith("pids_"):
+                        expected.append("pids-prebuild")
+                        if fault != "pids_prebuild_failure":
+                            expected.append("native_pids live_pids_limits_and_effects_match_engine")
+                            if fault != "pids_native_failure":
+                                expected.append("pids-reader")
                     if fault == "none":
                         expected.append("public")
                     self.assertEqual(events, expected)
                     self.assertEqual(result.returncode == 0, fault == "none", result.stderr)
                     if fault == "native_failure":
                         self.assertEqual(result.returncode, 37)
+                    elif fault == "pids_native_failure":
+                        self.assertEqual(result.returncode, 42)
+                    elif fault == "pids_reader_failure":
+                        self.assertEqual(result.returncode, 43)
                     self.assertEqual(result.stdout, "")
                     self.assertNotIn(SECRET, result.stderr)
 

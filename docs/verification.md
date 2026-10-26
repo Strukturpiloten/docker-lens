@@ -1,5 +1,19 @@
 # Verification
 
+## Current PIDs27 source gate
+
+The current coordinator appends the [original-owner PIDs experiment](native-pids-owner.md)
+as invocation 27 after the unchanged first 26 calls and kernel reader. A bounded
+static prebuild precedes its original live deadline; the immediate independent
+reader is mandatory even without optional evidence emission. It separately
+checks actual private artifact/source/raw-tool hashes and static ELF structure.
+The emitter repeats the reader and adds only an unadmitted source outcome.
+No PidsLimit capability or catalogue grant follows. Pure checks and source
+integration do not qualify a lane: complete final-source checks, genuine fresh
+exact-candidate 27-call four-lane runs, original lane EXIT cleanup and independent
+review remain due. Nofile28 is prepared separately. Historical first26 run
+claims below remain unchanged and cannot qualify the new candidate.
+
 ## Guarded CommandClear source qualification and candidate rehearsal
 
 [ADR 0036](decisions/0036-command-clear-native-source-projection.md) adds only

@@ -16,6 +16,8 @@ import time
 import unittest
 from unittest import mock
 
+from test_native_hostname_wiring import assert_current_cohort
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 SPEC = importlib.util.spec_from_file_location("runner_apparmor", ROOT / "scripts/native-runner-apparmor.py")
@@ -1165,7 +1167,8 @@ class ShellFinalizationTests(unittest.TestCase):
     def test_exact_native_sequence_and_launch_remain_mandatory(self):
         self.assertLess(SOURCE.index('30 apparmor verify "$lane" "$apparmor_nonce"'), SOURCE.index('/run-exact-native-test.sh"'))
         self.assertLess(SOURCE.rindex('/run-exact-native-test.sh"'), SOURCE.index("  apparmor_native_completed=1"))
-        self.assertEqual(SOURCE.count('/run-exact-native-test.sh"'), 26)
+        self.assertEqual(SOURCE.count('/run-exact-native-test.sh"'), 27)
+        assert_current_cohort(self, SOURCE)
         self.assertIn('--privileged --pids-limit=512 --memory=4g', RUNTIME)
         self.assertIn('start=(/usr/local/bin/start-dockerd', RUNTIME)
         helper = (ROOT / "scripts/native-runner-apparmor.py").read_text()

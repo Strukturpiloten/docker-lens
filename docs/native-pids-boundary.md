@@ -1,11 +1,31 @@
 # Prepared live PIDs boundary collector
 
-`scripts/native_pids_boundary.py` is an **unwired source collector**, governed by
-[ADR 0039](decisions/0039-measured-pids-boundary.md). It is not invocation 27,
-an effect producer, a private-proof publisher/reader, or a product API. The
-canonical first 26 invocations, emitter, capability maps, catalogue and prepared
-nofile source remain unchanged. Tests with injected sources establish controls,
-not native runtime evidence.
+[ADR 0041](decisions/0041-original-owner-pids-experiment.md) now integrates this
+measured boundary through the fixed runtime source and actual original Rust
+owner as canonical PIDs27. See [the owner contract](native-pids-owner.md).
+Earlier unwired checkpoint statements below remain historical descriptions;
+the measured-window restrictions still apply and native qualification remains
+pending. The legacy standalone pipe collector is not a new authority source.
+
+`scripts/native_pids_boundary.py` supplies the measured collector governed by
+[ADR 0039](decisions/0039-measured-pids-boundary.md). Its legacy standalone pipe
+entry point remains outside canonical invocation 27; the fixed runtime source
+composes its collector with the original owner's effect producer and independent
+private reader. The first 26 invocations, product APIs, capability maps,
+catalogue and prepared nofile source remain unchanged. The emitter now requires
+the PIDs reader and adds only an unadmitted source outcome. Injected-source tests
+establish controls, not native runtime evidence.
+
+The [prepared runtime source session](native-pids-runtime.md), governed by
+[ADR 0040](decisions/0040-pids-runtime-source-session.md), now supplies an
+in-process inner-peer/container locator and root descriptor/watchdog protocol.
+Its fixed root factory now acquires actual kernel/daemon objects from exclusive
+original-owner outer PID/start locators and requires pending/confirmation before
+experiment creation. ADR 0041 supplies the original Rust owner's actual
+canonical before/after CID acquisition and producer integration; native
+qualification remains pending. Root acknowledgments alone authenticate no
+container or completed experiment.
+The legacy pipe Session below does not acquire that authority by being wrapped.
 
 ## Measured window and authority
 
@@ -21,8 +41,9 @@ The selected trusted runtime and caller must independently identify the owned
 outer container and each inner container's reader-namespace PID/start. PID/start
 arguments are locators, not authentication. The collector measures the actual
 located process and controllers; matching context or inspect fields cannot prove
-the task belongs to a particular container/run. The independently owned runtime
-PID locator, including daemon/reader PID-namespace translation, remains pending.
+the task belongs to a particular container/run. The in-process locator implements
+inner-daemon/reader PID-namespace translation; the original runtime owner's
+actual outer acquisition and fixed source launch are integrated under ADR 0041.
 There is no container-ID-to-path inference or ambient `/proc` scan.
 
 The trusted hosted Linux reader must have the intended host PID/mount/cgroup
@@ -79,7 +100,9 @@ Each slot's first sample phase is `before`. Later distinct phases advance throug
 intermediate phases may be omitted. Phases describe caller-selected barriers;
 their names do not prove a syscall or effect occurred. A sample privately returns
 actual maximum, current, `pids.events`'s `max` counter, and accounted TID/start
-pairs. Exact `cgroup.threads` membership, per-task status/namespaces/cgroup, and
+pairs, plus `task_namespace_ids` rows containing reader TID and complete native
+NSpid/NStgid vectors for later worker-child mapping. Exact `cgroup.threads`
+membership, per-task status/namespaces/cgroup, and
 `pids.current` must agree across repeated bounded reads. Counts include threads,
 not just `cgroup.procs`. These reads are not an atomic kernel snapshot and cannot
 exclude an intervening change that returns to its original state.
@@ -112,28 +135,32 @@ kernel filesystem calls can still block in the kernel; the independent parent
 timeout/process owner is mandatory.
 
 Conservative pre-I/O charges retain failed reservations and never refund unused
-success reservations. The collector caps combined source/input/output bytes at
-2 MiB, output at 64 KiB, physical reads plus read reservations at 65,536, live FD
+success reservations. ADR 0040 replaces the unsuitable combined2MiB physical
+bound with a separate32MiB source/input cap, output at64KiB, physical reads plus
+read reservations at65,536, live FD
 reservations at 256, cumulative FD reservations at 32,768, and requests at 64.
 Limits include real proc/controller bytes and fixed 4096-byte `getdents64`
 buffers, not just projected JSON. Oversized proc fields/mountinfo, more than 96
 leaf TIDs, more than 128 directory entries, deep paths or ambiguous mounts
 refuse rather than broaden the contract. This conservative bound can refuse
-otherwise valid experiments. A complete six-role measurement fitting this bound
-has **not** been demonstrated.
+otherwise valid experiments. The runtime-source documentation records an
+executable six-role authored-kernel ledger; full native fit remains unproved.
 
 These local bounds do not allocate new allowance from the existing parent
 400-call/4-MiB total, 300-call/2-MiB ordinary capacity and 100-call/2-MiB cleanup
-reserve. A one-way parent
-reservation/accounting adapter and complete experiment ledger remain pending;
+reserve. The prepared runtime locator exposes a one-way parent reservation
+callback/receipt, while its actual Rust-owner integration and complete experiment
+ledger remain pending;
 integration must fit the unchanged aggregate bounds or fail. Runtime command
 costs and helper physical reads are different quantities and cannot replace
 one another. No new allowance is authorized by this source slice.
 
-Still required before canonical PIDs27: independently owned runtime PID locator,
+Still required before canonical PIDs27: original runtime-owner integration of
+the prepared locator,
 parent-owned barrier/process/cleanup integration and inherited-FD allowlist,
-ancestor controller headroom/event attribution (the current source holds/rechecks
-ancestor directories but samples only outer/leaf controller values), a real
+strict producer interpretation of the runtime source's implemented held-ancestor
+local/hierarchical counters and global/worker-limit observations (the legacy
+base collector alone samples only outer/leaf values), a real
 fork/errno witness, matched finite16/finite64/unlimited controls, competing-limit
 checks, strict integrated private reader/owner, native matrix and final gates.
 The collector does not classify rootless delegation. Rootless none/v2 refusal

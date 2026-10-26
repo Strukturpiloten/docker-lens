@@ -1,4 +1,4 @@
-"""Three mandatory private families add observations, never admission."""
+"""Mandatory private families add observations, never admission."""
 
 from copy import deepcopy
 import json
@@ -43,6 +43,8 @@ class SourceFamilyEvidenceTests(unittest.TestCase):
                         self.assertEqual(record[family + "_contract"], family.replace("_", "-") + "-v1")
                         self.assertEqual(record[family + "_outcomes"]["admission"], "unadmitted")
                         self.assertEqual(set(record[family + "_outcomes"]), {"admission", "scope", "outcome"})
+                    self.assertEqual(record["pids_contract"], "pids-v1")
+                    self.assertEqual(record["pids_outcomes"]["qualification"], "requires_complete_lane_exit_and_fresh_aggregate")
                     for capability in ("ShmSize", "SupplementaryGroups", "SecurityOptions", "Sysctls", "SysctlIpv4Forward", "PidsLimit", "UlimitNofile"):
                         self.assertNotIn(capability, record["capability_outcome"])
                         self.assertNotIn(capability, record["admitted_shapes"])
@@ -50,7 +52,7 @@ class SourceFamilyEvidenceTests(unittest.TestCase):
                         self.assertNotIn(protected, path.read_text())
 
     def test_each_fixed_proof_is_mandatory_before_any_manifest(self):
-        for family in FAMILIES:
+        for family in (*FAMILIES, "pids"):
             for backend in ("podman", "docker"):
                 result, path = self.emit(outer_backend=backend, **{family + "_missing": True})
                 self.assertNotEqual(result.returncode, 0)

@@ -7,6 +7,8 @@ import tempfile
 import unittest
 
 
+from test_native_hostname_wiring import assert_current_cohort
+
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = (ROOT / "src/native_network_tests.rs").read_text()
 PREFIX = "DOCKERLENS_NATIVE_INNER_TOPOLOGY: reason="
@@ -187,7 +189,8 @@ class InnerTopologyDiagnosticTests(unittest.TestCase):
         coordinator = (ROOT / "scripts/native-conformance.sh").read_text()
         invocations = re.findall(r'^\s*"\$\(dirname "\$0"\)/run-exact-native-test.sh" ',
                                  coordinator, re.MULTILINE)
-        self.assertEqual(len(invocations), 26)
+        self.assertEqual(len(invocations), 27)
+        assert_current_cohort(self, coordinator)
         self.assertIn('resources.require_budget(8);', live)
         self.assertIn('NATIVE_NETWORK_TEST_DEADLINE_EPOCH', SOURCE)
 

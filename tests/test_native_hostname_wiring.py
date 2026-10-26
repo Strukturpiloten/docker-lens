@@ -23,7 +23,44 @@ HANDOFF = "DOCKERLENS_NATIVE_LIFECYCLE_CLEANUP: owner=native_conformance_outer_v
 
 
 def native_calls(source):
-    return re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source, re.M)
+    return re.findall(r'^[ \t]*"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source, re.M)
+
+
+ORIGINAL_CALLS = [('native_capture', 'live_engine_capture_decodes'),
+ ('acquisition', 'live_read_only_acquisition_matches_oracle'),
+ ('native_selection', 'live_native_selection_and_source_observations'),
+ ('native_selection', 'live_network_membership_matches_engine'),
+ ('native_target', 'live_target_render_matches_engine'),
+ ('native_network', 'live_network_render_matches_engine'),
+ ('native_network', 'live_internal_network_blocks_external_egress'),
+ ('native_volume', 'live_existing_volume_prerequisite_matches_engine'),
+ ('native_volume_label', 'live_created_volume_labels_match_engine'),
+ ('native_identity', 'live_container_process_identity_matches_engine'),
+ ('native_port', 'live_port_publications_match_engine'),
+ ('native_health_metadata', 'live_health_metadata_matches_engine'),
+ ('native_network_attachment', 'live_network_attachments_match_engine'),
+ ('native_bind_relabel', 'live_bind_relabel_configuration_matches_engine'),
+ ('native_external_network', 'live_external_network_internal_matches_engine'),
+ ('native_stop_signal', 'live_stop_signal_matches_engine'),
+ ('native_lifecycle', 'live_lifecycle_matches_engine'),
+ ('native_runtime_filesystem', 'live_runtime_filesystem_matches_engine'),
+ ('native_tmpfs_effect', 'live_tmpfs_effects_match_engine'),
+ ('native_health_start_interval_boundary', 'live_health_start_interval_boundary_matches_engine'),
+ ('native_lifecycle_default_effect', 'live_lifecycle_default_effects_match_engine'),
+ ('native_hostname', 'live_hostname_matches_engine'),
+ ('native_command_clear', 'live_command_clear_matches_engine'),
+ ('native_shm_size', 'live_shm_size_effects_match_engine'),
+ ('native_supplementary_groups', 'live_supplementary_groups_match_engine'),
+ ('native_kernel_settings', 'live_kernel_settings_match_engine')]
+
+
+def assert_current_cohort(test, source):
+    """Preserve the original ordered 26; require only the controlled PIDs27 tail."""
+    calls = native_calls(source)
+    test.assertEqual(calls[:26], ORIGINAL_CALLS)
+    test.assertEqual(calls[26:], [("native_pids", "live_pids_limits_and_effects_match_engine")])
+    test.assertEqual(source.count("export NATIVE_LIFECYCLE_CLEANUP_OWNER="), 6)
+    return calls
 
 
 class HostnameWiringTests(unittest.TestCase):
@@ -60,8 +97,8 @@ else:
 
     def test_twenty_second_registration_preserves_existing_protocol_and_private_reader(self):
         harness = (ROOT / "scripts/native-conformance.sh").read_text()
-        calls = native_calls(harness)
-        self.assertEqual(len(calls), 26)
+        calls = assert_current_cohort(self, harness)
+        self.assertEqual(len(calls), 27)
         self.assertEqual(calls[21], (TARGET, TEST))
         self.assertEqual(calls.count((TARGET, TEST)), 1)
         owner_marker = '(\n  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1\n'
@@ -72,7 +109,7 @@ else:
         owner = harness.index(owner_marker, original_end)
         end = harness.index('\n)\n', owner)
         self.assertEqual(native_calls(harness[owner:end]), [(TARGET, TEST)])
-        self.assertEqual(harness.count(owner_marker), 5)
+        self.assertEqual(harness.count(owner_marker), 6)
         reader = harness.index('python3 "$script_dir/native_hostname_proof.py"')
         emitter = harness.index('python3 "$script_dir/native-evidence.py"')
         self.assertLess(end, reader)

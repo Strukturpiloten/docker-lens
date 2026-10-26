@@ -252,7 +252,38 @@ fn source_backend_accounting_is_closed_and_does_not_charge_io() {
             self.assertIn("snapshot_extra_calls()", source)
             self.assertIn("extra * 65536", source)
         self.assertIn("charge_outer_snapshot", (ROOT / "src/native_health_metadata_tests.rs").read_text())
-        self.assertIn("charge_outer_snapshot(false)", (ROOT / "src/native_lifecycle_tests.rs").read_text())
+        health = (ROOT / "src/native_health_metadata_tests.rs").read_text()
+
+        def checked_snapshot_accounting(lifecycle_source, health_source):
+            normal = lifecycle_source.split("fn outer_context(run: &HealthRun) -> Value {", 1)[1].split("\n}", 1)[0]
+            self.assertIn("outer_context_observation(run, false).0", normal)
+            self.assertNotIn("run.capture", normal)
+            observed = lifecycle_source.split("fn outer_context_observation(run: &HealthRun, cleanup: bool)", 1)[1].split("\n}", 1)[0]
+            self.assertEqual(observed.count("run.charge_outer_snapshot(cleanup);"), 1)
+            self.assertLess(observed.index("run.charge_outer_snapshot(cleanup);"), observed.index("run.timer(cleanup, elevated)"))
+            self.assertLess(observed.index("run.timer(cleanup, elevated)"), observed.index("run.capture(&mut command, None, cleanup)"))
+            charged = health_source.split("fn charge_outer_snapshot(&self, cleanup: bool) {", 1)[1].split("\n    }", 1)[0]
+            for required in ("crate::native_outer_test_command::snapshot_extra_calls()",
+                             "self.calls.set(self.calls.get() + extra)",
+                             "self.bytes.set(self.bytes.get() + extra * 65536)",
+                             "capture_room(self.calls.get(), self.bytes.get(), cleanup)"):
+                self.assertIn(required, charged)
+            self.assertLess(charged.index("self.bytes.set"), charged.index("capture_room("))
+
+        checked_snapshot_accounting(lifecycle, health)
+        for changed_lifecycle, changed_health in (
+            (lifecycle.replace("outer_context_observation(run, false).0", "outer_context_observation(run, true).0"), health),
+            (lifecycle.replace("run.charge_outer_snapshot(cleanup);", "run.charge_outer_snapshot(false);"), health),
+            (lifecycle.replace("run.timer(cleanup, elevated)", "run.timer(false, elevated)"), health),
+            (lifecycle.replace("run.capture(&mut command, None, cleanup)", "run.capture(&mut command, None, false)"), health),
+            (lifecycle, health.replace("self.calls.get() + extra", "self.calls.get()")),
+            (lifecycle, health.replace("extra * 65536", "0")),
+            (lifecycle, health.replace("capture_room(self.calls.get(), self.bytes.get(), cleanup)",
+                                       "capture_room(self.calls.get(), self.bytes.get(), false)")),
+        ):
+            with self.subTest(mutation="shared snapshot cleanup and accounting"):
+                with self.assertRaises((AssertionError, ValueError)):
+                    checked_snapshot_accounting(changed_lifecycle, changed_health)
         self.assertIn("charge_outer_snapshot(cleanup)", (ROOT / "src/native_stop_signal_tests.rs").read_text())
 
     def test_created_cid_survives_failed_run_without_hiding_original_status(self):

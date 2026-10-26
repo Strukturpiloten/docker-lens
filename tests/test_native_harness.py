@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class NativeHarnessTests(unittest.TestCase):
     def test_port_publication_is_independent_eleventh_mandatory_check_before_manifest(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text()
-        invocations = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$',
+        invocations = re.findall(r'^[ \t]*"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$',
                                  source, re.MULTILINE)
         self.assertEqual(invocations, [
             ("native_capture", "live_engine_capture_decodes"),
@@ -48,6 +48,7 @@ class NativeHarnessTests(unittest.TestCase):
             ("native_shm_size", "live_shm_size_effects_match_engine"),
             ("native_supplementary_groups", "live_supplementary_groups_match_engine"),
             ("native_kernel_settings", "live_kernel_settings_match_engine"),
+            ("native_pids", "live_pids_limits_and_effects_match_engine"),
         ])
         self.assertLess(source.index('native_port live_port_publications_match_engine'),
                         source.index('python3 "$script_dir/native-evidence.py"'))

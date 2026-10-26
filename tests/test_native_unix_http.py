@@ -88,6 +88,8 @@ class NativeUnixHttpTests(unittest.TestCase):
                                "--timeout", timeout, "--max-response-bytes", "1024", *args],
                               input=input, capture_output=True, timeout=3, check=False)
 
+
+
     def test_exact_method_origin_path_binary_body_and_explicit_json_header(self):
         body = b'{"protected":"\x00\xff"}'
         with peer(b"HTTP/1.1 201 Created\r\nContent-Length: 2\r\n\r\n{}") as (path, seen):
@@ -348,5 +350,120 @@ class NativeUnixHttpTests(unittest.TestCase):
         self.assertIn("BoxFerry", documentation)
 
 
+class NativePeerLeaseTests(unittest.TestCase):
+    """Real wire bytes through one socketpair, no Engine or listener needed."""
+
+    def exchange(self, reply, lease, *, timeout=1):
+        client, server = socket.socketpair()
+        received = []
+        def respond():
+            try:
+                wire = bytearray()
+                while b"\r\n\r\n" not in wire:
+                    part = server.recv(4096)
+                    if not part:
+                        return
+                    wire.extend(part)
+                received.append(bytes(wire))
+                server.sendall(reply)
+            except OSError:
+                pass
+            finally:
+                server.close()
+        thread = threading.Thread(target=respond)
+        thread.start()
+        # Preserve real socket's I/O/closure while replacing only connect; the
+        # pair is already connected, and exactly this stream reaches the lease.
+        proxy = mock.Mock(wraps=client)
+        proxy.__enter__ = mock.Mock(return_value=proxy)
+        proxy.__exit__ = mock.Mock(side_effect=lambda *_: client.close())
+        proxy.connect = mock.Mock()
+        factory = mock.Mock(side_effect=lambda stream: lease if stream is proxy else self.fail("wrong stream"))
+        try:
+            with mock.patch.object(HTTP.socket, "socket", return_value=proxy):
+                result = HTTP.request("/explicit-held-endpoint", "GET", "/v1.41/containers/" + "a" * 64 + "/json",
+                                      timeout=timeout, max_response_bytes=128, peer_lease=factory)
+            self.assertEqual(factory.call_count, 1)
+            self.assertEqual(proxy.connect.call_count, 1)
+            return result, received
+        finally:
+            client.close()
+            thread.join(2)
+            self.assertFalse(thread.is_alive())
+
+    def test_lease_is_same_stream_checked_before_after_body_and_closed(self):
+        lease = mock.Mock()
+        result, requests = self.exchange(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}", lease)
+        self.assertEqual(result, (200, b"{}"))
+        self.assertEqual(lease.check.call_count, 3)
+        self.assertEqual(lease.close.call_count, 1)
+        self.assertEqual(len(requests), 1)
+        self.assertTrue(requests[0].startswith(b"GET /v1.41/containers/" + b"a" * 64 + b"/json HTTP/1.1\r\n"))
+
+    def test_malformed_body_and_each_peer_check_failure_close_without_payload(self):
+        for fail_at in (0, 1, 2, 3):
+            with self.subTest(fail_at=fail_at):
+                lease = mock.Mock()
+                if fail_at:
+                    lease.check.side_effect = [None] * (fail_at - 1) + [RuntimeError("private PID/path/body")]
+                reply = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}" if fail_at else b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nxBAD"
+                with self.assertRaises(HTTP.TransportError) as error:
+                    self.exchange(reply, lease)
+                self.assertNotIn("private", str(error.exception))
+                self.assertEqual(lease.close.call_count, 1)
+
+    def test_slow_lease_uses_original_http_deadline_and_cancellation_closes(self):
+        lease = mock.Mock()
+        lease.check.side_effect = lambda: time.sleep(0.02)
+        with self.assertRaises(HTTP.TransportError) as error:
+            self.exchange(b"", lease, timeout=0.005)
+        self.assertEqual(error.exception.code, 3)
+        self.assertEqual(lease.close.call_count, 1)
+        lease = mock.Mock()
+        lease.check.side_effect = KeyboardInterrupt()
+        with self.assertRaises(KeyboardInterrupt):
+            self.exchange(b"", lease)
+        self.assertEqual(lease.close.call_count, 1)
+
+    def test_cleanup_failure_preserves_primary_protocol_deadline_and_cancellation(self):
+        for primary in ("protocol", "deadline", "cancellation", "none"):
+            with self.subTest(primary=primary):
+                lease = mock.Mock()
+                lease.close.side_effect = RuntimeError("private cleanup PID/path/body")
+                reply = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}"
+                if primary == "protocol":
+                    reply = b"HTTP/1.1 200 OK\r\nContent-Length: x\r\n\r\n"
+                elif primary == "deadline":
+                    lease.check.side_effect = lambda: time.sleep(0.02)
+                elif primary == "cancellation":
+                    lease.check.side_effect = KeyboardInterrupt()
+                if primary == "cancellation":
+                    with self.assertRaises(KeyboardInterrupt):
+                        self.exchange(reply, lease)
+                else:
+                    with self.assertRaises(HTTP.TransportError) as failure:
+                        self.exchange(reply, lease, timeout=0.005 if primary == "deadline" else 1)
+                    self.assertEqual(failure.exception.code, {"protocol": 5, "deadline": 3, "none": 4}[primary])
+                    self.assertNotIn("private", str(failure.exception))
+                self.assertEqual(lease.close.call_count, 1)
+
+    def test_close_only_failure_inside_callers_except_block_still_refuses_payload(self):
+        lease = mock.Mock()
+        lease.close.side_effect = RuntimeError("private cleanup failure")
+        try:
+            raise ValueError("caller's unrelated handled exception")
+        except ValueError:
+            with self.assertRaises(HTTP.TransportError) as failure:
+                self.exchange(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nusable", lease)
+        self.assertEqual(failure.exception.code, 4)
+        self.assertEqual(lease.close.call_count, 1)
+
+    def test_slow_successful_lease_close_cannot_return_after_original_deadline(self):
+        lease = mock.Mock()
+        lease.close.side_effect = lambda: time.sleep(0.03)
+        with self.assertRaises(HTTP.TransportError) as failure:
+            self.exchange(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}", lease, timeout=0.01)
+        self.assertEqual(failure.exception.code, 3)
+        self.assertEqual(lease.close.call_count, 1)
 if __name__ == "__main__":
     unittest.main()

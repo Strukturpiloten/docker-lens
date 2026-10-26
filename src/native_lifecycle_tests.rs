@@ -18,6 +18,9 @@ mod health_start_interval_boundary;
 mod hostname;
 #[path = "native_kernel_settings_tests.rs"]
 mod kernel_settings;
+#[path = "native_pids_tests.rs"]
+#[cfg(target_os = "linux")]
+mod pids;
 #[path = "native_shm_size_tests.rs"]
 mod shm_size;
 #[path = "native_supplementary_groups_tests.rs"]
@@ -217,6 +220,13 @@ fn docker(run: &HealthRun, args: &[String]) -> Vec<u8> {
 }
 
 fn outer_context(run: &HealthRun) -> Value {
+    outer_context_observation(run, false).0
+}
+
+// Preserve the original inspected state for source experiments which need
+// actual runtime PID/start/restart custody. Existing callers keep their
+// unchanged, closed projection; neither path accepts a caller-made snapshot.
+fn outer_context_observation(run: &HealthRun, cleanup: bool) -> (Value, Value) {
     let id = required("NATIVE_OUTER_CONTAINER_ID");
     assert!(identifier(&id), "closed outer identity");
     let image = required("NATIVE_OUTER_IMAGE");
@@ -229,11 +239,11 @@ fn outer_context(run: &HealthRun) -> Value {
         "1" => true,
         _ => panic!("closed privilege selector"),
     };
-    run.charge_outer_snapshot(false);
-    let mut command = run.timer(false, elevated);
+    run.charge_outer_snapshot(cleanup);
+    let mut command = run.timer(cleanup, elevated);
     command.args(crate::native_outer_test_command::prefix());
     command.args(["inspect", "--format", "{{json .}}", &id]);
-    let value: Value = serde_json::from_slice(&run.capture(&mut command, None, false))
+    let value: Value = serde_json::from_slice(&run.capture(&mut command, None, cleanup))
         .unwrap_or_else(|_| panic!("private outer JSON"));
     let mounts = value["Mounts"]
         .as_array()
@@ -279,9 +289,10 @@ fn outer_context(run: &HealthRun) -> Value {
             && networks.contains_key(&format!("dl-native-net-{}", run.run)),
         "authenticated unchanged two-CPU outer context"
     );
-    json!({"id":id,"name":run.outer,"owner":run.run,"image":image,
+    let projection = json!({"id":id,"name":run.outer,"owner":run.run,"image":image,
         "data_volume":format!("dl-native-data-{}",run.run),"socket_source":directory.join("socket"),
-        "privileged":true,"memory_bytes":4294967296_u64,"cpu_quota":200000,"cpu_period":100000,"pids_limit":512})
+        "privileged":true,"memory_bytes":4294967296_u64,"cpu_quota":200000,"cpu_period":100000,"pids_limit":512});
+    (projection, value)
 }
 
 fn image_snapshot(run: &HealthRun) -> Value {

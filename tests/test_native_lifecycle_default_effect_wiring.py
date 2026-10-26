@@ -13,6 +13,8 @@ from pathlib import Path
 
 import test_native_external_network_evidence as external
 
+from test_native_hostname_wiring import assert_current_cohort
+
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = "native_lifecycle_default_effect"
 TEST = "live_lifecycle_default_effects_match_engine"
@@ -53,18 +55,19 @@ sys.exit(int(os.environ["STATUS"]))
             ended = time.time()
             return result, [json.loads(line) for line in calls.read_text().splitlines()], began, ended
 
-    def test_twenty_first_required_registration_preserves_protocol_and_five_owner_scope(self):
+    def test_twenty_first_required_registration_preserves_protocol_and_six_owner_scopes(self):
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         invocation = f'"$(dirname "$0")/run-exact-native-test.sh" {TARGET} {TEST}'
-        calls = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source, re.M)
-        self.assertEqual(len(calls), 26)
+        calls = re.findall(r'^[ \t]*"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source, re.M)
+        self.assertEqual(len(calls), 27)
+        assert_current_cohort(self, source)
         self.assertEqual(calls[20], (TARGET, TEST))
         self.assertEqual(source.count(invocation), 1)
         owner = source.index('(\n  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1\n')
         end = source.index('\n)\n', owner)
-        owned_calls = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source[owner:end], re.M)
+        owned_calls = re.findall(r'^[ \t]*"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source[owner:end], re.M)
         self.assertEqual(owned_calls, calls[16:21])
-        self.assertEqual(source.count("export NATIVE_LIFECYCLE_CLEANUP_OWNER="), 5)
+        self.assertEqual(source.count("export NATIVE_LIFECYCLE_CLEANUP_OWNER="), 6)
         self.assertLess(source.index("unset NATIVE_LIFECYCLE_CLEANUP_OWNER"), owner)
         for line in (f'export NATIVE_LIFECYCLE_DEFAULT_EFFECT_PROOF_PATH="$run_dir/{FILENAME}"',
                      'export NATIVE_LIFECYCLE_DEFAULT_EFFECT_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA'):

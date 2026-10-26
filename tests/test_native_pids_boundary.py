@@ -207,13 +207,33 @@ class KernelReaderTests(unittest.TestCase):
     def test_partial_reads_charge_every_syscall_and_do_not_refund_failure(self):
         with patch.object(b.os, "lseek"), patch.object(b.os, "read", side_effect=[b"a", b"b", b""]):
             self.assertEqual(self.source.read_fd(8, 8), b"ab")
-        self.assertEqual(self.budget.bytes, 9)
-        self.assertEqual(self.budget.reads, 4)  # reservation plus all three syscalls
+        self.assertEqual(self.budget.bytes, 24)  # caps9,8,7; no partial/EOF refund
+        self.assertEqual(self.budget.reads, 3)
         previous = self.budget.bytes
         with patch.object(b.os, "lseek"), patch.object(b.os, "read", side_effect=OSError("CANARY")):
             with self.assertRaises(OSError):
                 self.source.read_fd(8, 8)
         self.assertEqual(self.budget.bytes, previous + 9)
+
+    def test_chunk_reservation_exhaustion_precedes_seek_and_read(self):
+        self.budget.bytes = 32 * 1024 * 1024
+        with patch.object(b.os, "lseek") as seek, patch.object(b.os, "read") as read:
+            with self.assertRaises(b.Refusal):
+                self.source.read_fd(8, 65536)
+            seek.assert_not_called()
+            read.assert_not_called()
+        self.assertEqual(self.budget.bytes, 32 * 1024 * 1024 + 1024)
+
+    def test_chunk_caps_partial_error_and_eof_are_all_precharged(self):
+        with patch.object(b.os, "lseek"), patch.object(b.os, "read", side_effect=[b"x" * 1024, b"y" * 1024, b""]) as read:
+            self.assertEqual(len(self.source.read_fd(8, 3000)), 2048)
+        self.assertEqual([call.args for call in read.call_args_list], [(8, 1024), (8, 1024), (8, 953)])
+        self.assertEqual((self.budget.bytes, self.budget.reads), (3001, 3))
+        previous = self.budget.bytes
+        with patch.object(b.os, "lseek"), patch.object(b.os, "read", side_effect=[b"x", OSError("private")]):
+            with self.assertRaises(OSError):
+                self.source.read_fd(8, 65536)
+        self.assertEqual(self.budget.bytes, previous + 2048)
 
     def test_oversize_read_rejected(self):
         with patch.object(b.os, "lseek"), patch.object(b.os, "read", return_value=b"123456789"):
@@ -319,6 +339,7 @@ class KernelReaderTests(unittest.TestCase):
         self.source.tasks = lambda *_: ((10, 11), (12, 13))
         self.assertEqual(self.source.snapshot(None, None), {
             "maximum": 16, "current": 2, "events_max": 3, "tasks": [[10, 11], [12, 13]],
+            "task_namespace_ids": [],
         })
         for facts in [iter([((10, 11),), ((10, 11),)]),
                       iter([((10, 11), (12, 13)), ((10, 11), (12, 14))])]:
@@ -346,7 +367,7 @@ class KernelReaderTests(unittest.TestCase):
         self.assertEqual(scans, [False, True])
 
     def test_real_tasks_counts_leader_and_thread_and_closes_all_temporary_fds(self):
-        for fault in (None, "duplicate", "missing_leader", "membership", "namespace", "start", "status"):
+        for fault in (None, "duplicate", "missing_leader", "membership", "namespace", "start", "status", "namespace_groups"):
             with self.subTest(fault=fault):
                 self.source.proc = 9
                 group = SimpleNamespace(files=(10, 11, 12, 13), membership=("owned", "leaf"))
@@ -381,7 +402,8 @@ class KernelReaderTests(unittest.TestCase):
                         return b"0::/other\n" if fault == "membership" and tid == 101 else b"0::/owned/leaf\n"
                     if name == "status":
                         uid = b"2" if fault == "status" and tid == 101 and reads[key] == 2 else b"1"
-                        return b"Pid: " + str(tid).encode() + b"\nTgid: 100\nUid: " + b" ".join([uid] * 4) + b"\nNSpid: " + str(tid).encode() + b"\n"
+                        groups = b"99" if fault == "namespace_groups" and tid == 101 and reads[key] == 2 else b"100"
+                        return b"Pid: " + str(tid).encode() + b"\nTgid: 100\nUid: " + b" ".join([uid] * 4) + b"\nNSpid: " + str(tid).encode() + b"\nNStgid: " + groups + b"\n"
                     self.fail("unexpected proc field")
                 self.source.open = open_fd
                 self.source.read = read_proc
@@ -391,6 +413,8 @@ class KernelReaderTests(unittest.TestCase):
                 ):
                     if fault is None:
                         self.assertEqual(self.source.tasks(group, proc), ((100, 1000), (101, 1001)))
+                        self.assertEqual(self.source.task_coordinates,
+                                         ((100, (100,), (100,)), (101, (101,), (100,))))
                     else:
                         with self.assertRaises(b.Refusal):
                             self.source.tasks(group, proc)
@@ -481,10 +505,10 @@ class ProtocolAndBudgetTests(unittest.TestCase):
 
     def test_limits_fail_before_io_and_failure_charges_are_retained(self):
         budget = b.Budget(180_000_000_001, lambda: 1)
-        budget.bytes = 2 * 1024 * 1024
+        budget.bytes = 32 * 1024 * 1024
         with self.assertRaises(b.Refusal):
             budget.read(1)
-        self.assertEqual(budget.bytes, 2 * 1024 * 1024 + 1)
+        self.assertEqual(budget.bytes, 32 * 1024 * 1024 + 1)
         budget = b.Budget(180_000_000_001, lambda: 1)
         budget.fds = 256
         with self.assertRaises(b.Refusal):

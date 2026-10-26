@@ -25,6 +25,15 @@ identity() { [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]]; }
 cid() { [[ $1 =~ ^[0-9a-f]{64}$ ]]; }
 pin() { [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9_./:-]+@sha256:[0-9a-f]{64}$ ]]; }
 case $operation in
+  pids-controller)
+    # One fixed native-fixture controller, outside the measured inner leaves.
+    # Preserve the caller's original actor, selected backend and whole-session
+    # timer. This is not a generic interactive command or executable broker.
+    [[ $# == 5 ]] && cid "$1" || refuse
+    [[ $2 =~ ^[A-Za-z0-9]{8}$ && $4 =~ ^[0-9a-f]{32}$ && $5 =~ ^[1-9][0-9]{0,18}$ ]] || refuse
+    case $3 in debian11-rootful|debian11-rootless|upstream-rootful|upstream-rootless) ;; *) refuse ;; esac
+    exec "${native_outer_cmd[@]}" exec -i --user 0 "$1" \
+      /dockerlens-native/pids-worker/native-pids-worker serve "$2" "$3" "$4" "$5" ;;
   check-context) [[ $# == 0 ]] || refuse ;;
   preflight)
     native_outer_preflight || refuse

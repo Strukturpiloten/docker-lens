@@ -147,6 +147,47 @@
     }
   },
   "$defs": {
+    "pids_native_source_outcomes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "admission",
+        "scope",
+        "outcome",
+        "qualification"
+      ],
+      "properties": {
+        "admission": {
+          "const": "unadmitted"
+        },
+        "scope": {
+          "const": "controlled_live_leaf_enforcement_only"
+        },
+        "outcome": {
+          "const": "leaf_enforcement_with_higher_capacity_controls"
+        },
+        "qualification": {
+          "const": "requires_complete_lane_exit_and_fresh_aggregate"
+        }
+      }
+    },
+    "pids_native_source_projection": {
+      "description": "Optional raw lane source vocabulary only. Mandatory private proof and actual artifact/source re-read precede emission; this does not amend historical reviewed admission records. Complete lane exit and fresh aggregate qualification remain required.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pids_contract",
+        "pids_outcomes"
+      ],
+      "properties": {
+        "pids_contract": {
+          "const": "pids-v1"
+        },
+        "pids_outcomes": {
+          "$ref": "#/$defs/pids_native_source_outcomes"
+        }
+      }
+    },
     "command_clear_native_source_outcomes": {
       "description": "Raw source only under the explicit Exec-entrypoint guard; never catalogue admission or review completion.",
       "type": "object",

@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from native_source_accounting import outer_snapshot_cost
+from native_pids_proof import CONTRACT as PIDS_CONTRACT, FILENAME as PIDS_FILENAME, read_pids_proof
 from native_shm_size_proof import (
     CONTRACT as SHM_SIZE_CONTRACT, FILENAME as SHM_SIZE_FILENAME, read_shm_size_proof,
 )
@@ -543,6 +544,14 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
     # Separately bound canonical selection, never inferred from private proof data.
     outer_backend = os.environ.get("NATIVE_OUTER_ENGINE")
     outer_snapshot_cost(outer_backend)
+    pids_context = {
+        "candidate_sha": candidate_sha, "run_id": run_id, "lane": lane,
+        "engine_release": engine, "api_version": maximum, "mode": mode,
+        "outer_backend": outer_backend, "outer_id": network_context["outer"]["id"],
+        "fixture_image": network_context["fixture_image"], "outer": network_context["outer"],
+    }
+    # Repeat private custody and actual prebuild/raw/source binding before publication.
+    read_pids_proof(capture_dir / PIDS_FILENAME, capture_dir, pids_context)
     read_shm_size_proof(
         capture_dir / SHM_SIZE_FILENAME, capture_dir, external_context, outer_backend=outer_backend)
     read_supplementary_groups_proof(
@@ -647,6 +656,12 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
             "source_admission": "raw_source_only", "catalogue_admission": "unadmitted",
             "capability": "CommandClear", "shapes": ["ClearCommand"],
             "scope": "explicit_exec_entrypoint_required", "outcome": "all_four_process_controls_verified",
+        },
+        "pids_contract": PIDS_CONTRACT,
+        "pids_outcomes": {
+            "admission": "unadmitted", "scope": "controlled_live_leaf_enforcement_only",
+            "outcome": "leaf_enforcement_with_higher_capacity_controls",
+            "qualification": "requires_complete_lane_exit_and_fresh_aggregate",
         },
         "shm_size_contract": SHM_SIZE_CONTRACT,
         "shm_size_outcomes": {

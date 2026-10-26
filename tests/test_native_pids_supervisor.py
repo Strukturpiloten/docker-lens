@@ -1,0 +1,772 @@
+"""Actual anonymous descriptor IPC and bounded watchdog controls, never sudo/native."""
+
+import array
+import importlib.util
+import json
+import os
+from pathlib import Path
+import signal
+import socket
+import struct
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import unittest
+from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+import native_pids_boundary as b
+import native_pids_locator as l
+
+SPEC = importlib.util.spec_from_file_location("pids_supervisor", Path(__file__).resolve().parents[1] / "scripts/native-pids-supervisor.py")
+s = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(s)
+
+
+def frame(value):
+    body = json.dumps(value, separators=(",", ":")).encode()
+    return struct.pack("!I", len(body)) + body
+
+
+class ChannelTests(unittest.TestCase):
+    def setUp(self):
+        self.parent, self.child = socket.socketpair()
+        self.peer = s.peer_socket(self.child)
+        self.budget = b.Budget(time.monotonic_ns() + 180_000_000_000)
+        self.channel = s.Channel(self.child, self.budget, self.peer[3])
+
+    def tearDown(self):
+        self.parent.close()
+        self.child.close()
+        os.close(self.peer[3])
+
+    def send_rights(self, body, fds):
+        return self.parent.sendmsg([body], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array("i", fds))])
+
+    def test_actual_unnamed_pair_credentials_pidfd_and_cloexec(self):
+        self.assertEqual(self.peer[:3], (os.getpid(), os.getuid(), os.getgid()))
+        self.assertFalse(os.get_inheritable(self.peer[3]))
+        l.live(self.peer[3])
+
+    def test_split_bootstrap_one_capture_fd_ready_and_framed_request(self):
+        with tempfile.TemporaryDirectory(prefix="dl-pids-capture-") as directory:
+            os.chmod(directory, 0o700)
+            fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                self.send_rights(b"B", [fd])
+                self.parent.sendall(b"FPIDS1\n")
+                received = self.channel.bootstrap(os.getuid())
+                try:
+                    self.assertEqual(b.identity(received), b.identity(fd))
+                    self.assertEqual(self.parent.recv(8), b"BFREADY\n")
+                    self.assertFalse(os.get_inheritable(received))
+                    self.parent.sendall(frame({"version": 1, "sequence": 1, "op": "LocateBatch"}))
+                    self.assertEqual(self.channel.request(), {"version": 1, "sequence": 1, "op": "LocateBatch"})
+                finally:
+                    os.close(received)
+            finally:
+                os.close(fd)
+
+    def test_all_delivered_rights_close_on_extraneous_and_truncated_bootstrap(self):
+        for count in (2, 4):
+            with self.subTest(count=count), tempfile.TemporaryDirectory() as directory:
+                fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    before = len(os.listdir("/proc/self/fd"))
+                    self.send_rights(b"BFPIDS1\n", [fd] * count)
+                    with self.assertRaises(b.Refusal):
+                        self.channel.bootstrap(os.getuid())
+                    self.assertEqual(len(os.listdir("/proc/self/fd")), before)
+                finally:
+                    os.close(fd)
+
+    def test_wrong_mode_owner_type_marker_missing_rights_and_early_eof(self):
+        for fault in ("mode", "owner", "type", "marker", "missing", "eof"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
+                parent, child = socket.socketpair()
+                peer = s.peer_socket(child)
+                channel = s.Channel(child, b.Budget(time.monotonic_ns() + 180_000_000_000), peer[3])
+                fd = os.open(directory if fault != "type" else "/dev/null", os.O_RDONLY)
+                try:
+                    if fault == "mode":
+                        os.chmod(directory, 0o1700)
+                    payload = b"INVALID!" if fault == "marker" else b"BFPIDS1\n"
+                    if fault == "eof":
+                        parent.shutdown(socket.SHUT_WR)
+                    elif fault == "missing":
+                        parent.sendall(payload)
+                    else:
+                        parent.sendmsg([payload], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array("i", [fd]))])
+                    before = len(os.listdir("/proc/self/fd"))
+                    with self.assertRaises(b.Refusal):
+                        channel.bootstrap(os.getuid() + 1 if fault == "owner" else os.getuid())
+                    self.assertEqual(len(os.listdir("/proc/self/fd")), before)
+                finally:
+                    os.close(fd)
+                    parent.close()
+                    child.close()
+                    os.close(peer[3])
+
+    def test_late_rights_in_frame_and_terminal_eof_are_closed(self):
+        for terminal in (False, True):
+            fd = os.open("/dev/null", os.O_RDONLY)
+            try:
+                before = len(os.listdir("/proc/self/fd"))
+                self.send_rights(b"x", [fd])
+                with self.assertRaises(b.Refusal):
+                    self.channel.eof() if terminal else self.channel.request()
+                self.assertEqual(len(os.listdir("/proc/self/fd")), before)
+            finally:
+                os.close(fd)
+
+    def test_literal_frame_encoding_sequence_duplicate_and_size_refusals(self):
+        for payload in (b"\0\0\0\0", struct.pack("!I", 16385),
+                        frame({"version": 1, "sequence": 2, "op": "LocateBatch"}),
+                        frame({"version": True, "sequence": 1, "op": "LocateBatch"}),
+                        struct.pack("!I", 31) + b'{"version":1,"version":1,"x":0}',
+                        struct.pack("!I", 1) + b"\xff"):
+            with self.subTest(payload=payload[:30]):
+                # Independent socket endpoints prevent failed frame residue
+                # from affecting a subsequent rejection control.
+                p, c = socket.socketpair()
+                peer = s.peer_socket(c)
+                channel = s.Channel(c, b.Budget(time.monotonic_ns() + 180_000_000_000), peer[3])
+                try:
+                    p.sendall(payload)
+                    p.shutdown(socket.SHUT_WR)
+                    with self.assertRaises((b.Refusal, ValueError, UnicodeError)):
+                        channel.request()
+                finally:
+                    p.close(); c.close(); os.close(peer[3])
+
+    def test_terminal_requires_actual_eof_and_original_deadline_is_not_renewed(self):
+        self.parent.sendall(b"extra")
+        self.parent.shutdown(socket.SHUT_WR)
+        with self.assertRaises(b.Refusal):
+            self.channel.eof()
+        now = [1]
+        budget = l.RuntimeBudget(180_000_000_001, lambda: now[0])
+        original = budget.deadline_ns
+        now[0] = budget.work_ns - 1
+        budget.begin_cleanup()
+        now[0] = budget.work_ns + 1
+        budget.read(1)
+        self.assertEqual(budget.deadline_ns, original)
+        now[0] = original
+        with self.assertRaises(b.Refusal):
+            budget.read(1)
+
+    def test_pipe_stdin_never_becomes_socketpair_authority(self):
+        read, write = os.pipe()
+        try:
+            with patch.object(s.os, "fstat", return_value=os.fstat(read)):
+                with patch.object(s.os, "write") as output:
+                    self.assertEqual(s.main(["supervise", "1"]), 1)
+                    self.assertEqual(output.call_args.args[1], b"native-pids-supervisor: refused\n")
+        finally:
+            os.close(read); os.close(write)
+
+    def test_reverse_api_reservation_waits_for_matching_same_sequence_debit_ack(self):
+        self.channel.sequence = 7
+        debit = []
+        errors = []
+        def parent():
+            try:
+                header = self.parent.recv(4)
+                size = struct.unpack("!I", header)[0]
+                body = bytearray()
+                while len(body) < size:
+                    body.extend(self.parent.recv(size - len(body)))
+                value = json.loads(body)
+                self.assertEqual(value, {"version": 1, "sequence": 7, "op": "ReserveApi",
+                                         "reservation": 1, "units": 1, "max_body_bytes": 32768})
+                debit.append((1, 32768))
+                self.parent.sendall(frame({"version": 1, "sequence": 7,
+                                           "op": "ApiReservationAccepted", "reservation": 1}))
+            except BaseException as error:
+                errors.append(error)
+        thread = threading.Thread(target=parent)
+        thread.start()
+        try:
+            self.channel.reserve_api(1, 32768)
+        finally:
+            thread.join(2)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(debit, [(1, 32768)])
+        self.assertEqual((self.channel.sequence, self.channel.reservation, self.budget.frames), (7, 1, 1))
+
+    def test_reverse_api_stale_reservation_ack_refuses_and_keeps_charge(self):
+        self.channel.sequence = 3
+        self.parent.sendall(frame({"version": 1, "sequence": 3, "op": "ApiReservationAccepted", "reservation": 2}))
+        with self.assertRaises(b.Refusal):
+            self.channel.reserve_api(1, 4096)
+        self.assertEqual(self.channel.reservation, 1)
+        self.assertGreater(self.budget.output, 0)
+
+
+class WatchdogTests(unittest.TestCase):
+    def spawn(self, resistant=False):
+        read, write = os.pipe()
+        pid = os.fork()
+        if pid == 0:
+            os.close(read)
+            os.setpgid(0, 0)
+            if resistant:
+                signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            os.write(write, b"R")
+            os.close(write)
+            while True:
+                signal.pause()
+        os.close(write)
+        self.assertEqual(os.read(read, 1), b"R")
+        os.close(read)
+        return pid, os.pidfd_open(pid)
+
+    def test_parent_death_kills_term_resistant_child_and_reaps(self):
+        peer, peerfd = self.spawn()
+        child, childfd = self.spawn(resistant=True)
+        try:
+            os.kill(peer, signal.SIGKILL)
+            os.waitpid(peer, 0)
+            begin = time.monotonic()
+            self.assertEqual(s.monitor(peerfd, child, childfd, time.monotonic_ns() + 5_000_000_000), 1)
+            self.assertLess(time.monotonic() - begin, 2)
+            with self.assertRaises(ChildProcessError):
+                os.waitpid(child, os.WNOHANG)
+        finally:
+            for pid, fd in ((peer, peerfd), (child, childfd)):
+                try:
+                    os.killpg(pid, signal.SIGKILL)
+                    os.waitpid(pid, 0)
+                except (ChildProcessError, ProcessLookupError):
+                    pass
+                os.close(fd)
+
+    def test_external_cancellation_has_bounded_kill_and_reap(self):
+        child, childfd = self.spawn(resistant=True)
+        peerfd = os.pidfd_open(os.getpid())
+        timer = threading.Timer(0.05, lambda: os.kill(os.getpid(), signal.SIGTERM))
+        try:
+            timer.start()
+            self.assertEqual(s.monitor(peerfd, child, childfd, time.monotonic_ns() + 5_000_000_000), 1)
+            with self.assertRaises(ChildProcessError):
+                os.waitpid(child, os.WNOHANG)
+        finally:
+            timer.cancel(); timer.join()
+            try:
+                os.killpg(child, signal.SIGKILL)
+                os.waitpid(child, 0)
+            except (ChildProcessError, ProcessLookupError):
+                pass
+            os.close(peerfd); os.close(childfd)
+
+
+class RootSessionTests(unittest.TestCase):
+    def test_isolated_startup_resolves_only_fixed_siblings_and_keeps_diagnostic_closed(self):
+        result = subprocess.run([sys.executable, "-I", str(Path(s.__file__).resolve()), "supervise", "1"],
+                                stdin=subprocess.DEVNULL, capture_output=True, timeout=2, check=False)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, b"")
+        self.assertEqual(result.stderr, b"native-pids-supervisor: refused\n")
+
+    def test_fixed_sibling_loader_rejects_wrong_cached_module_paths(self):
+        script = str(Path(s.__file__).resolve())
+        code = ("import sys,types,runpy,pathlib\n"
+                "for name in ('native_pids_locator','native_pids_boundary'):\n"
+                " m=types.ModuleType(name);m.__file__='/untrusted/'+name+'.py';sys.modules[name]=m\n"
+                f"scope=runpy.run_path({script!r})\n"
+                f"expected=pathlib.Path({script!r}).parent\n"
+                "assert pathlib.Path(scope['locator'].__file__).resolve()==expected/'native_pids_locator.py'\n"
+                "assert pathlib.Path(scope['boundary'].__file__).resolve()==expected/'native_pids_boundary.py'\n")
+        result = subprocess.run([sys.executable, "-I", "-c", code],
+                                stdin=subprocess.DEVNULL, capture_output=True, timeout=2, check=False)
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, b"", b""))
+
+    def test_full_six_role_session_over_actual_descriptor_bootstrap_and_framed_ipc(self):
+        from test_native_pids_locator import LocatorTests
+        harness = LocatorTests()
+        def run(tree):
+            runtime = harness.runtime(tree)
+            parent, child_stream = socket.socketpair()
+            capture = os.open(tree.root, os.O_RDONLY | os.O_DIRECTORY)
+            child = os.fork()
+            if child == 0:
+                parent.close()
+                peer = s.peer_socket(child_stream)
+                received = None
+                try:
+                    channel = s.Channel(child_stream, tree.source.budget, peer[3])
+                    received = channel.bootstrap(os.getuid())
+                    tree.source.adopt_capture_directory(received)
+                    received = None
+                    runtime.retained.add(tree.source.capture_directory)
+                    original_response = channel.response
+                    def checked_response(value):
+                        if value.get("op") == "SealMeasurements":
+                            os.fstat(tree.source.capture_directory)
+                        if value.get("op") == "OuterFinalize":
+                            try:
+                                os.fstat(tree.source.capture_directory)
+                            except OSError:
+                                pass
+                            else:
+                                raise AssertionError("capture capability survived finalization")
+                        original_response(value)
+                    channel.response = checked_response
+                    s.serve_session(channel, s.RootSession(runtime, tree.ids))
+                    result = 0
+                except BaseException:
+                    result = 1
+                finally:
+                    if received is not None:
+                        os.close(received)
+                    child_stream.close()
+                    os.close(peer[3])
+                os._exit(result)
+            child_stream.close()
+            peer = s.peer_socket(parent)
+            channel = s.Channel(parent, l.RuntimeBudget(time.monotonic_ns() + 50_000_000_000), peer[3])
+            sequence = 0
+            reaped = False
+            try:
+                parent.sendmsg([b"BFPIDS1\n"], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array("i", [capture]))])
+                self.assertEqual(channel.exact(8), b"BFREADY\n")
+                def call(operation, **fields):
+                    nonlocal sequence
+                    sequence += 1
+                    channel.send_raw(frame({"version": 1, "sequence": sequence, "op": operation, **fields}))
+                    if operation == "OuterFinalize":
+                        parent.shutdown(socket.SHUT_WR)
+                    return channel.request()
+                self.assertEqual(call("LocateBatch")["status"], "ok")
+                for slot in l.ORDER:
+                    for phase in (("before", "at_limit", "after_failure", "after_release") if slot.endswith("16") else
+                                  ("before", "at_limit", "control", "after_release")):
+                        self.assertEqual(call("Sample", slot=slot, phase=phase)["sample"]["current"], 1)
+                call("RecheckBatch")
+                self.assertEqual(call("SealMeasurements")["status"], "sealed")
+                self.assertEqual(call("OuterFinalize")["status"], "finalized")
+                self.assertEqual(channel.receive(1)[0], b"")
+                self.assertEqual(os.waitpid(child, 0)[1], 0)
+                reaped = True
+            finally:
+                parent.close(); os.close(peer[3]); os.close(capture)
+                if not reaped:
+                    try:
+                        os.kill(child, signal.SIGKILL)
+                        os.waitpid(child, 0)
+                    except (ProcessLookupError, ChildProcessError):
+                        pass
+        harness.run_tree(True, run)
+
+    def test_six_slot_seal_retains_original_outer_during_intentional_inner_removal(self):
+        from test_native_pids_locator import LocatorTests
+        harness = LocatorTests()
+        def run(tree):
+            capture = os.open(tree.root, os.O_RDONLY | os.O_DIRECTORY)
+            tree.source.adopt_capture_directory(capture)
+            runtime = harness.runtime(tree)
+            session = s.RootSession(runtime, tree.ids)
+            channel = type("Terminal", (), {"eof": lambda _self: None})()
+            sequence = 0
+            def handle(operation, **fields):
+                nonlocal sequence
+                sequence += 1
+                return session.handle({"version": 1, "sequence": sequence, "op": operation, **fields}, channel)
+            handle("LocateBatch")
+            for slot in l.ORDER:
+                for phase in (("before", "at_limit", "after_failure", "after_release") if slot.endswith("16") else
+                              ("before", "at_limit", "control", "after_release")):
+                    sample = handle("Sample", slot=slot, phase=phase)["sample"]
+                    self.assertEqual(sample["current"], 1)
+            original_daemon = runtime.daemon
+            self.assertEqual(handle("SealMeasurements")["status"], "sealed")
+            self.assertTrue(tree.source.budget.cleanup_only)
+            self.assertEqual(runtime.bound, {})
+            self.assertIs(runtime.daemon, original_daemon)
+            os.fstat(capture)  # source must retain it through intentional cleanup
+            for pid in range(200, 206):
+                (tree.proc / str(pid) / "stat").write_bytes(b"intentionally removed")
+            self.assertEqual(handle("OuterFinalize")["status"], "finalized")
+            self.assertEqual(tree.source.owned, set())
+            with self.assertRaises(OSError):
+                os.fstat(capture)
+        harness.run_tree(True, run)
+
+    def test_capture_close_failure_prevents_finalized_ack_and_closes_other_source_fds(self):
+        from test_native_pids_locator import LocatorTests
+        harness = LocatorTests()
+        def run(tree):
+            capture = os.open(tree.root, os.O_RDONLY | os.O_DIRECTORY)
+            tree.source.adopt_capture_directory(capture)
+            runtime = harness.runtime(tree)
+            session = s.RootSession(runtime, tree.ids)
+            session.phase = "sealed"
+            tree.source.budget.begin_cleanup()
+            channel = type("Terminal", (), {"eof": lambda _self: None})()
+            original_close = tree.source.close_fd
+            closed = []
+            def close(fd):
+                original_close(fd)
+                closed.append(fd)
+                if fd == capture:
+                    raise OSError("private cleanup failure")
+            with patch.object(tree.source, "close_fd", side_effect=close):
+                with self.assertRaises(b.Refusal):
+                    session.handle({"version": 1, "sequence": 1, "op": "OuterFinalize"}, channel)
+            self.assertTrue(session.failed)
+            self.assertEqual(tree.source.owned, set())
+            self.assertEqual(closed.count(capture), 1)
+        harness.run_tree(True, run)
+
+    def test_unknown_slot_order_seal_before_complete_and_cleanup_failure_never_ack(self):
+        from test_native_pids_locator import LocatorTests
+        for fault in ("slot", "order", "seal", "cleanup"):
+            harness = LocatorTests()
+            def run(tree):
+                runtime = harness.runtime(tree)
+                session = s.RootSession(runtime, tree.ids)
+                channel = type("Terminal", (), {"eof": lambda _self: None})()
+                session.handle({"version": 1, "sequence": 1, "op": "LocateBatch"}, channel)
+                if fault in ("slot", "order"):
+                    request = {"version": 1, "sequence": 2, "op": "Sample", "slot": "arbitrary" if fault == "slot" else "cli16",
+                               "phase": "before" if fault == "slot" else "control"}
+                elif fault == "seal":
+                    request = {"version": 1, "sequence": 2, "op": "SealMeasurements"}
+                else:
+                    session.phase = "sealed"
+                    tree.source.budget.begin_cleanup()
+                    request = {"version": 1, "sequence": 2, "op": "OuterFinalize"}
+                    with patch.object(tree.source, "close", side_effect=OSError("private")):
+                        with self.assertRaises(OSError):
+                            session.handle(request, channel)
+                    self.assertTrue(session.failed)
+                    return
+                with self.assertRaises(b.Refusal):
+                    session.handle(request, channel)
+                self.assertTrue(session.failed)
+            with self.subTest(fault=fault):
+                harness.run_tree(True, run)
+
+
+class RootFactoryTests(unittest.TestCase):
+    """Fixed factory executes source I/O; namespace/pidfd kernel facts simulated."""
+
+    def test_closed_lane_expectations_match_canonical_profile_and_acquisition_ceiling(self):
+        root = Path(__file__).resolve().parents[1]
+        profiles = json.loads((root / "docs/evidence/command-clear-independent-review-40119803977.json").read_text())["exact_profiles"]
+        script = (root / "scripts/native-conformance.sh").read_text()
+        ceiling = (root / "src/acquisition.rs").read_text()
+        self.assertIn("const MAX_KNOWN_API_MINOR: u16 = 49;", ceiling)
+        self.assertEqual(set(s.LANES), {"debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless"})
+        for lane, (uid, executable, engine, api) in s.LANES.items():
+            self.assertIn(lane + ") image=", script)
+            self.assertEqual(uid, 1000 if lane.endswith("rootless") else 0)
+            if lane.startswith("debian11"):
+                self.assertEqual((executable, engine, api), (("usr", "sbin", "dockerd"), profiles["debian_engine"],
+                    profiles["debian_acquisition_rendering_and_advertised_api"]))
+                self.assertIn("DEBIAN_DOCKER_PACKAGE='" + profiles["debian_package"] + "'", script)
+            else:
+                self.assertEqual((executable, engine, api), (("usr", "local", "bin", "dockerd"),
+                                                           profiles["upstream_engine"], profiles["upstream_acquisition_api"]))
+                self.assertIn(":v" + engine + "@sha256:", script)
+
+    def run_factory(self, operation, *, rootful=False):
+        from test_native_pids_locator import LocatorTests
+        harness = LocatorTests()
+        def run(tree):
+            (tree.ns / "outer").touch()
+            tree.parents[str(tree.ns / "outer")] = "reader"
+            tree.parents[str(tree.ns / "daemon")] = "outer"
+            (tree.proc / "100/ns/pid").unlink()
+            (tree.proc / "100/ns/pid").symlink_to(tree.ns / "outer")
+            (tree.ns / "outer-cgroup").touch()
+            (tree.proc / "100/ns/cgroup").unlink()
+            (tree.proc / "100/ns/cgroup").symlink_to(tree.ns / "outer-cgroup")
+            (tree.proc / "100/status").write_text("Pid: 100\nTgid: 100\nUid: 0 0 0 0\nNSpid: 100 1\nNStgid: 100 1\n")
+            (tree.proc / "110/status").write_text("Pid: 110\nTgid: 110\nUid: 1000 1000 1000 1000\nNSpid: 110 2 1\nNStgid: 110 2 1\n")
+            for index, slot in enumerate(l.ORDER):
+                pid = 200 + index
+                vector = f"{pid} {70 + index} 1" if rootful else f"{pid} {500 + index} {70 + index} 1"
+                if rootful:
+                    tree.parents[str(tree.ns / slot)] = "outer"
+                (tree.proc / str(pid) / "status").write_text(
+                    f"Pid: {pid}\nTgid: {pid}\nUid: 1000 1000 1000 1000\nNSpid: {vector}\nNStgid: {vector}\n")
+            executable = tree.rootfs / "usr/local/bin/dockerd"
+            executable.parent.mkdir(parents=True)
+            executable.write_bytes(b"immutable upstream fixture executable")
+            peer_pid, peer_uid = (100, 0) if rootful else (110, 1000)
+            (tree.proc / str(peer_pid) / "exe").unlink()
+            (tree.proc / str(peer_pid) / "exe").symlink_to(executable)
+            (tree.rootfs / "sys/fs").mkdir(parents=True)
+            device = os.stat(tree.cg).st_dev
+            (tree.proc / "100/mountinfo").write_text(
+                f"10 0 {os.major(device)}:{os.minor(device)} /owned /sys/fs/cgroup rw - cgroup2 cgroup rw\n")
+            original_open = tree.source.open
+            def guest_mount_open(name, parent=None, **options):
+                if (name == "cgroup" and parent is not None
+                        and os.readlink("/proc/self/fd/" + str(parent)) == str(tree.rootfs / "sys/fs")):
+                    # Simulate only the guest mount dentry: returned capability
+                    # is the actual configured-root directory, not a JSON tuple.
+                    return original_open(str(tree.cg / "owned"), directory=True)
+                return original_open(name, parent, **options)
+            tree.source.open = guest_mount_open
+            (tree.root / "socket").mkdir()
+            listener = socket.socket(socket.AF_UNIX)
+            listener.bind(str(tree.root / "socket/docker.sock"))
+            listener.listen(1)
+            capture = os.open(tree.root, os.O_RDONLY | os.O_DIRECTORY)
+            tree.source.adopt_capture_directory(capture)
+            session = s.RuntimeBoundSession(tree.source)
+            calls = []
+            channel = type("Owner", (), {"reserve_api": lambda _self, units, maximum: calls.append((units, maximum)),
+                                         "eof": lambda _self: None})()
+            request = {"version": 1, "sequence": 1, "op": "RootBindRuntime", "outer_pid": 100, "outer_start": 1000,
+                       "context": {"backend": "podman", "candidate": "a" * 40, "run": "run1",
+                                   "lane": "upstream-rootful" if rootful else "upstream-rootless", "outer_id": "b" * 64},
+                       "owner_labels": {"io.dockerlens.native-pids": "run1"},
+                       "external_source": {"bytes": 1024 * 1024, "reads": 1024}}
+            class Connected:
+                def getsockopt(_self, _level, option, *_size):
+                    return os.dup(tree.pipe[0]) if option == 77 else struct.pack("3i", peer_pid, peer_uid, peer_uid)
+            def actual_response(address, method, route, **options):
+                self.assertEqual(method, "GET")
+                lease = options["peer_lease"](Connected())
+                try:
+                    lease.check()
+                    if route == "/version":
+                        self.assertEqual(options["max_response_bytes"], 4096)
+                        body = {"Version": "29.8.1", "ApiVersion": "1.56", "MinAPIVersion": "1.44"}
+                    else:
+                        cid = route.split("/")[-2]
+                        slot = next(slot for slot, value in tree.ids.items() if value == cid)
+                        index = l.ORDER.index(slot)
+                        body = {"Id": cid, "RestartCount": 0,
+                                "Config": {"Labels": {"io.dockerlens.native-pids": "run1",
+                                                      "io.dockerlens.native-pids-slot": slot}},
+                                "State": {"Status": "running", "Running": True, "Restarting": False,
+                                          "Paused": False, "Dead": False, "Pid": 70 + index,
+                                          "StartedAt": "2026-10-25T12:00:00Z"}}
+                    lease.check()
+                    return 200, json.dumps(body).encode()
+                finally:
+                    lease.close()
+            try:
+                with patch.object(l.http, "request", side_effect=actual_response):
+                    return operation(tree, session, channel, request, calls)
+            finally:
+                listener.close()
+        return harness.run_tree(True, run)
+
+    def test_fixed_factory_pending_confirm_then_later_six_ids_and_source_measurements(self):
+        def run(tree, session, channel, request, calls):
+            self.assertEqual(session.handle(request, channel)["status"], "pending")
+            self.assertEqual(calls, [(1, 4096)])
+            original = session.runtime.outer
+            self.assertEqual(session.handle({"version": 1, "sequence": 2, "op": "ConfirmRuntime"}, channel)["status"], "confirmed")
+            self.assertIs(session.runtime.outer, original)
+            self.assertEqual(session.handle({"version": 1, "sequence": 3, "op": "LocateBatch", "slots": tree.ids}, channel)["status"], "ok")
+            self.assertEqual(calls, [(1, 4096)] + [(1, 32768)] * 12)
+            response = session.handle({"version": 1, "sequence": 4, "op": "Sample", "slot": "cli16", "phase": "before"}, channel)
+            self.assertEqual(response["sample"]["current"], 1)
+            self.assertEqual(response["sample"]["task_namespace_ids"], [[200, [200, 500, 70, 1], [200, 500, 70, 1]]])
+        self.run_factory(run)
+
+    def test_rootful_direct_daemon_may_be_outer_init_in_same_pid_namespace_and_group(self):
+        def run(tree, session, channel, request, _calls):
+            self.assertEqual(session.handle(request, channel)["status"], "pending")
+            runtime = session.runtime
+            self.assertEqual(runtime.daemon.pid, runtime.outer.pid)
+            self.assertEqual(b.identity(runtime.daemon.namespaces[0]), b.identity(runtime.outer.namespaces[0]))
+            self.assertEqual(runtime.daemon.membership, runtime.outer.membership)
+            session.handle({"version": 1, "sequence": 2, "op": "ConfirmRuntime"}, channel)
+            self.assertEqual(session.handle({"version": 1, "sequence": 3, "op": "LocateBatch", "slots": tree.ids}, channel)["status"], "ok")
+        self.run_factory(run, rootful=True)
+
+    def test_configured_outer512_is_exact_guest_mount_ancestor_when_pid1_moved_to_init_scope(self):
+        def run(tree, session, channel, request, _calls):
+            tree.make_group(tree.cg / "owned/init.scope", "max", [100])
+            (tree.cg / "owned/cgroup.procs").write_text("110\n")
+            (tree.cg / "owned/cgroup.threads").write_text("110\n")
+            (tree.proc / "100/cgroup").write_text("0::/owned/init.scope\n")
+            self.assertEqual(session.handle(request, channel)["status"], "pending")
+            self.assertEqual(session.runtime.outer.membership, ("owned", "init.scope"))
+            self.assertEqual(session.runtime.outer_group.membership, ("owned",))
+            self.assertEqual(tree.source.values(session.runtime.outer_group)[0], 512)
+            session.handle({"version": 1, "sequence": 2, "op": "ConfirmRuntime"}, channel)
+            self.assertEqual(session.handle({"version": 1, "sequence": 3, "op": "LocateBatch", "slots": tree.ids}, channel)["status"], "ok")
+        self.run_factory(run)
+
+    def test_no_nearest512_fallback_and_changed_guest_mount_record_refuse(self):
+        for fault in ("wrong_root_limit", "mount_record"):
+            def run(tree, session, channel, request, calls):
+                if fault == "wrong_root_limit":
+                    tree.make_group(tree.cg / "owned/init.scope", 512, [100])
+                    (tree.cg / "owned/cgroup.procs").write_text("110\n")
+                    (tree.proc / "100/cgroup").write_text("0::/owned/init.scope\n")
+                    (tree.cg / "owned/pids.max").write_text("64\n")
+                    with self.assertRaises(b.Refusal):
+                        session.handle(request, channel)
+                    self.assertEqual(calls, [])
+                else:
+                    session.handle(request, channel)
+                    path = tree.proc / "100/mountinfo"
+                    path.write_text(path.read_text().replace(" cgroup rw\n", " cgroup ro\n"))
+                    with self.assertRaises(b.Refusal):
+                        session.handle({"version": 1, "sequence": 2, "op": "ConfirmRuntime"}, channel)
+                self.assertTrue(session.failed)
+            with self.subTest(fault=fault):
+                self.run_factory(run)
+
+    def test_full_factory_transcript_actual_ipc_has_30_owner_requests_and_25_debit_acks(self):
+        include_recheck = getattr(self, "inspect_recheck", True)
+        expected_frames = 55 if include_recheck else 48
+        expected_requests = 30 if include_recheck else 29
+        expected_reservations = 25 if include_recheck else 19
+        expected_body = 790528 if include_recheck else 593920
+        expected_inspects = 24 if include_recheck else 18
+        expected_inspect_bytes = 786432 if include_recheck else 589824
+        def run(tree, session, _channel, request, _calls):
+            parent, child_stream = socket.socketpair()
+            child = os.fork()
+            if child == 0:
+                parent.close()
+                peer = s.peer_socket(child_stream)
+                try:
+                    channel = s.Channel(child_stream, tree.source.budget, peer[3])
+                    original_response = channel.response
+                    def checked_response(value):
+                        if value.get("op") == "OuterFinalize":
+                            assert channel.budget.frames == expected_frames
+                            assert tree.source.owned == set()
+                        original_response(value)
+                    channel.response = checked_response
+                    s.serve_session(channel, session)
+                    result = 0
+                except BaseException:
+                    result = 1
+                finally:
+                    child_stream.close()
+                    os.close(peer[3])
+                os._exit(result)
+            child_stream.close()
+            peer = s.peer_socket(parent)
+            channel = s.Channel(parent, l.RuntimeBudget(time.monotonic_ns() + 50_000_000_000), peer[3])
+            sequence, reservations, body_bytes = 0, 0, 0
+            reaped = False
+            try:
+                def call(operation, **fields):
+                    nonlocal sequence, reservations, body_bytes
+                    sequence += 1
+                    channel.send_raw(frame({"version": 1, "sequence": sequence, "op": operation, **fields}))
+                    if operation == "OuterFinalize":
+                        parent.shutdown(socket.SHUT_WR)
+                    while True:
+                        value = channel.object()
+                        self.assertEqual(value["sequence"], sequence)
+                        if value["op"] != "ReserveApi":
+                            return value
+                        reservations += 1
+                        self.assertEqual(value["reservation"], reservations)
+                        self.assertEqual(value["units"], 1)
+                        body_bytes += value["max_body_bytes"]
+                        # Independent parent ledger precedes the source's call.
+                        self.assertLessEqual(body_bytes, 2 * 1024 * 1024)
+                        channel.send_raw(frame({"version": 1, "sequence": sequence,
+                                               "op": "ApiReservationAccepted", "reservation": reservations}))
+                fields = {key: value for key, value in request.items() if key not in ("version", "sequence", "op")}
+                self.assertEqual(call("RootBindRuntime", **fields)["status"], "pending")
+                self.assertEqual(call("ConfirmRuntime")["status"], "confirmed")
+                call("LocateBatch", slots=tree.ids)
+                counts = {slot: 1 for slot in l.ORDER}
+                failures = 0
+                for slot_index, slot in enumerate(l.ORDER):
+                    for phase in (("before", "at_limit", "after_failure", "after_release") if slot.endswith("16") else
+                                  ("before", "at_limit", "control", "after_release")):
+                        count = 1 if phase in ("before", "after_release") else (16 if slot.endswith("16") else 33)
+                        members = [200 + slot_index]
+                        for index in range(1, count):
+                            pid = 1000 + slot_index * 100 + index
+                            if not (tree.proc / str(pid)).exists():
+                                tree.make_process(pid, slot, (pid, 5000 + pid, 7000 + pid, index + 1), "owned/" + slot, 1000)
+                            members.append(pid)
+                        counts[slot] = count
+                        directory = tree.cg / "owned" / slot
+                        for name in ("cgroup.threads", "cgroup.procs"):
+                            (directory / name).write_text("".join(str(pid) + "\n" for pid in members))
+                        (directory / "pids.current").write_text(str(count) + "\n")
+                        (tree.cg / "owned/pids.current").write_text(str(2 + sum(counts.values())) + "\n")
+                        (tree.proc / "loadavg").write_text(f"0.00 0.00 0.00 1/{1000 + sum(counts.values()) - 6} 200\n")
+                        if phase == "after_failure":
+                            failures += 1
+                            (directory / "pids.events").write_text("max 1\n")
+                            (directory / "pids.events.local").write_text("max 1\n")
+                            (tree.cg / "owned/pids.events").write_text(f"max {failures}\n")
+                        sample = call("Sample", slot=slot, phase=phase)["sample"]
+                        self.assertEqual(sample["current"], count)
+                        self.assertEqual(len(sample["tasks"]), count)
+                        self.assertTrue(sample["attribution"]["complete_chain"])
+                if include_recheck:
+                    call("RecheckBatch")
+                self.assertEqual(call("SealMeasurements")["status"], "sealed")
+                final = call("OuterFinalize")
+                self.assertEqual(final["status"], "finalized")
+                self.assertEqual((sequence, reservations, body_bytes),
+                                 (expected_requests, expected_reservations, expected_body))
+                self.assertEqual(final["reservations"], {"inspect_calls_reserved": expected_inspects,
+                    "inspect_body_bytes_reserved": expected_inspect_bytes, "runtime_probe_calls_reserved": 1,
+                    "runtime_probe_body_bytes_reserved": 4096})
+                ledger = final["source_ledger"]
+                self.assertEqual(ledger["external_reserved"], {"bytes": 1048576, "reads": 1024})
+                self.assertEqual(ledger["root_reserved"]["bytes"] + 1048576, ledger["total_reserved"]["bytes"])
+                self.assertLessEqual(ledger["total_reserved"]["bytes"], 33554432)
+                self.assertLessEqual(ledger["total_reserved"]["reads"], 65536)
+                self.assertEqual(ledger["fds"]["source_owned_remaining"], 0)
+                final_frame = len(json.dumps(final, separators=(",", ":"), sort_keys=True).encode()) + 4
+                self.assertLessEqual(ledger["output_reserved_before_final"] + final_frame, 65536)
+                self.assertEqual(channel.receive(1)[0], b"")
+                self.assertEqual(os.waitpid(child, 0)[1], 0)
+                reaped = True
+            finally:
+                parent.close(); os.close(peer[3])
+                if not reaped:
+                    try:
+                        os.kill(child, signal.SIGKILL)
+                        os.waitpid(child, 0)
+                    except (ProcessLookupError, ChildProcessError):
+                        pass
+        self.run_factory(run)
+
+    def test_canonical_18_inspect_flow_has_48_input_frames_and_19_api_debits(self):
+        self.inspect_recheck = False
+        self.test_full_factory_transcript_actual_ipc_has_30_owner_requests_and_25_debit_acks()
+
+    def test_unconfirmed_work_and_changed_original_outer_never_confirm(self):
+        for fault in ("unconfirmed", "replacement", "labels", "start"):
+            def run(tree, session, channel, request, calls):
+                if fault == "labels":
+                    request["owner_labels"] = {"arbitrary.selector": "run1"}
+                if fault == "start":
+                    request["outer_start"] = 999
+                if fault in ("labels", "start"):
+                    with self.assertRaises((b.Refusal, OSError)):
+                        session.handle(request, channel)
+                    self.assertEqual(calls, [])
+                    return
+                session.handle(request, channel)
+                if fault == "replacement":
+                    (tree.proc / "100/stat").write_bytes(b"100 (reused) S " + b"0 " * 18 + b"9999\n")
+                operation = {"version": 1, "sequence": 2, "op": "ConfirmRuntime"} if fault == "replacement" else {
+                    "version": 1, "sequence": 2, "op": "LocateBatch", "slots": tree.ids}
+                with self.assertRaises(b.Refusal):
+                    session.handle(operation, channel)
+                self.assertTrue(session.failed)
+            with self.subTest(fault=fault):
+                self.run_factory(run)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -34,16 +34,20 @@ The next recovered source-only closure adds
 calls 24–26. Each has a separate one-child owner scope and immediate strict
 reader, including without public emission. Backend accounting is independently
 bound to canonical Podman/Docker selection; original limits and the maintained
-profile policy remain unchanged. The current source sequence is 26 calls in
-five owner scopes, not the preceding 23-call checkpoint. Only unadmitted
-observations are added; PIDs27/nofile28, native qualification and milestone
-completion remain pending.
+profile policy remain unchanged. The current source sequence appends the
+[original-owner PIDs experiment](docs/native-pids-owner.md) as call 27 under
+[ADR 0041](docs/decisions/0041-original-owner-pids-experiment.md), in a sixth
+owner scope after the unchanged first 26 calls. Its bounded prebuild, six-case
+producer and immediate independent reader run before deferred publication or
+outer cleanup, including without public emission. Only an unadmitted PIDs
+source outcome is added. Fresh exact-candidate four-lane 27-call qualification,
+whole-lane cleanup and milestone completion remain pending.
 
 The preserved [nofile proof](docs/native-nofile-contract.md) is registered as
 prepared test-only source, with its scoped private-proof bounds and custody
-controls. It is not a canonical invocation or emitter requirement: unresolved
-PIDs27 must precede eventual nofile28. An ignored test definition is not native
-execution, full28 completion or capability admission.
+controls. It is not a canonical invocation or emitter requirement: successful
+PIDs27 qualification must precede eventual nofile28 integration. An ignored
+test definition is not native execution, full28 completion or capability admission.
 
 The planned native work is tracked in [DockerLens #3](https://github.com/Strukturpiloten/docker-lens/issues/3).
 Typed networks, protected runtime settings and conditional bind-source review
@@ -73,7 +77,7 @@ representations retain their existing behavior.
 
 This is candidate pre-merge rehearsal admission. Production merge, main
 admission and release remain blocked until fresh exact-final-candidate complete
-and four-lane twenty-six-test native gates, fresh independently reviewed volume-only
+and four-lane twenty-seven-test native gates, fresh independently reviewed volume-only
 consumer rehearsals of all six actual authored fixtures under
 [ADR 0012](docs/decisions/0012-candidate-volume-label-admission.md), and reviewed
 BoxFerry consumers of the actual Nextcloud/Supabase binds and desired external

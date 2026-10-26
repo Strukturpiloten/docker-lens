@@ -1,5 +1,13 @@
 # Architecture decisions
 
+- [0041: Original-owner PIDs27 source integration](0041-original-owner-pids-experiment.md)
+  adopts the Linux-only owner/controller/private reader and canonical call27,
+  preserving source-only unadmitted status and fresh native qualification.
+
+- [0040: In-process PIDs runtime source session](0040-pids-runtime-source-session.md)
+  adds held inner-peer/namespace association and prepared root supervision;
+  original owner integration and native qualification remain pending.
+
 - [0039: Prepared measured PIDs boundary](0039-measured-pids-boundary.md) defines
   an unwired post-daemon-start/pre-workload collector only. Historical ADRs
   0022–0035 remain unadopted; mandatory PIDs27 and nofile28 remain pending.

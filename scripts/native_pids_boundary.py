@@ -27,6 +27,7 @@ CGROUP_MAGIC = 0x63677270
 FRAME = 2048
 MAX_TASKS = 96
 RESERVE_NS = 46_000_000_000
+SOURCE_BYTES = 32 * 1024 * 1024
 
 
 class Refusal(Exception):
@@ -54,6 +55,7 @@ class Budget:
         self.deadline_ns = deadline_ns
         self.work_ns = deadline_ns - RESERVE_NS
         self.reads = self.bytes = self.fds = self.opens = self.output = self.frames = 0
+        self.peak_fds = 0
 
     def check(self):
         require(self.clock() < self.work_ns)
@@ -62,18 +64,19 @@ class Budget:
         self.check()
         self.reads += 1
         self.bytes += maximum
-        require(self.reads <= 65536 and self.bytes + self.output <= 2 * 1024 * 1024)
+        require(self.reads <= 65536 and self.bytes <= SOURCE_BYTES)
 
     def fd(self):
         self.check()
         self.fds += 1
         self.opens += 1
+        self.peak_fds = max(self.peak_fds, self.fds)
         require(self.fds <= 256 and self.opens <= 32768)
 
     def emit(self, maximum):
         self.check()
         self.output += maximum
-        require(self.output <= 64 * 1024 and self.bytes + self.output <= 2 * 1024 * 1024)
+        require(self.output <= 64 * 1024)
 
 
 @dataclass(frozen=True)
@@ -158,6 +161,15 @@ def process_status(body, pid, leader=False):
     return tgid, uid, nested
 
 
+def task_namespace_groups(body, status):
+    rows = [line.split()[1:] for line in body.splitlines() if line.startswith(b"NStgid:")]
+    require(len(rows) == 1 and len(rows[0]) == len(status[2])
+            and all(x.isdigit() and int(x) > 0 for x in rows[0]))
+    result = tuple(int(x) for x in rows[0])
+    require(result[0] == status[0][0])
+    return result
+
+
 def number(body, allow_max=False):
     if allow_max and body == b"max\n":
         return "max"
@@ -222,18 +234,23 @@ class LinuxSource:
         require(not failed and self.budget.clock() < self.budget.deadline_ns)
 
     def read_fd(self, fd, maximum):
-        self.budget.read(maximum + 1)
+        integer(maximum, 0, 65536)
+        capacity = min(1024, maximum + 1)
+        self.budget.read(capacity)
         os.lseek(fd, 0, os.SEEK_SET)
         chunks = []
         size = 0
         while True:
-            self.budget.read(0)  # every physical syscall, including EOF/partial reads
-            chunk = os.read(fd, maximum + 1 - size)
+            # Precharge each actual bounded syscall, including partial/EOF/error
+            # calls. Whole-file caps still apply; unused charges never refund.
+            chunk = os.read(fd, capacity)
             if not chunk:
                 break
             size += len(chunk)
             require(size <= maximum)
             chunks.append(chunk)
+            capacity = min(1024, maximum + 1 - size)
+            self.budget.read(capacity)
         return b"".join(chunks)
 
     def read(self, parent, name, maximum):
@@ -404,6 +421,7 @@ class LinuxSource:
         tids = tuple(int(x) for x in body.splitlines())
         require(len(tids) <= MAX_TASKS and len(set(tids)) == len(tids) and proc.pid in tids)
         result = []
+        coordinates = []
         for tid in sorted(tids):
             directory = self.open(str(tid), self.proc, directory=True)
             temporary = []
@@ -411,19 +429,27 @@ class LinuxSource:
                 require(fs_magic(directory) == PROC_MAGIC)
                 first = start_from_stat(self.read(directory, "stat", 1024), tid)
                 require(cgroup_path(self.read(directory, "cgroup", 1024)) == group.membership)
-                task_status = process_status(self.read(directory, "status", 4096), tid)
+                status_body = self.read(directory, "status", 4096)
+                task_status = process_status(status_body, tid)
+                namespace_groups = task_namespace_groups(status_body, task_status)
                 require(len(task_status[2]) == len(proc.status[2]))
                 for name, expected in zip(NS, proc.namespaces):
                     fd = self.open("ns/" + name, directory, magic=True)
                     temporary.append(fd)
                     require(identity(fd) == identity(expected))
+                if hasattr(self, "check_task_time_namespace"):
+                    self.check_task_time_namespace(directory)
                 require(start_from_stat(self.read(directory, "stat", 1024), tid) == first)
-                require(process_status(self.read(directory, "status", 4096), tid) == task_status)
+                last_status = self.read(directory, "status", 4096)
+                require(process_status(last_status, tid) == task_status
+                        and task_namespace_groups(last_status, task_status) == namespace_groups)
                 result.append((tid, first))
+                coordinates.append((tid, task_status[2], namespace_groups))
             finally:
                 for fd in temporary:
                     self.close_fd(fd)
                 self.close_fd(directory)
+        self.task_coordinates = tuple(coordinates)
         return tuple(result)
 
     def snapshot(self, proc, group):
@@ -432,13 +458,17 @@ class LinuxSource:
         self.leaf(group)
         before = self.values(group)
         tasks = self.tasks(group, proc)
+        coordinates = getattr(self, "task_coordinates", ())
         require(before[1] == len(tasks))
         require(self.values(group) == before and self.tasks(group, proc) == tasks)
+        require(getattr(self, "task_coordinates", ()) == coordinates)
         self.leaf(group)
         self.check_group(group)
         self.check_process(proc)
         return {"maximum": before[0], "current": before[1], "events_max": before[2],
-                "tasks": [list(task) for task in tasks]}
+                "tasks": [list(task) for task in tasks],
+                "task_namespace_ids": [[tid, list(pids), list(groups)]
+                                       for tid, pids, groups in coordinates]}
 
 
 def closed(obj, keys):

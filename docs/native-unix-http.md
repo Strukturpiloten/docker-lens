@@ -8,7 +8,7 @@ credentials or environment selectors. `Host: localhost` never causes DNS or TCP.
 ## Interface and bounds
 
 `request(socket_path, method, path, body=None, *, timeout, max_response_bytes,
-max_request_bytes=67108864, content_type=None)` returns `(actual_status, bytes)`
+max_request_bytes=67108864, content_type=None, peer_lease=None)` returns `(actual_status, bytes)`
 only for a complete bounded response. Body is absent or exact bytes; content type
 is absent or literal `application/json`. POST always sends Content-Length.
 Origin-form paths and body bytes are preserved. `TransportError.category` is one
@@ -22,6 +22,23 @@ Content-Length/chunked bodies and empty 204 responses are supported. Conflicting
 or duplicate framing, encodings other than identity, absent framing, malformed,
 truncated or overbound bodies, chunk extensions and trailers fail closed.
 Progress never renews deadlines. Caller budgets and cleanup remain authoritative.
+
+The additive keyword-only `peer_lease` is an optional factory receiving the
+actual connected stream before any request is sent. Its lease must implement
+`check()` and `close()`. Checks occur after connection, before body consumption
+and after complete framing; closure runs in finally on every path, including
+cancellation and parser failure. The lease owns its acquired descriptors only;
+the transport owns the socket. Callback failures map to fixed I/O refusal without
+exception text. Closure is always attempted; a local protocol/deadline/
+cancellation failure remains primary even if closure also fails. A close-only
+failure prevents returning payload, including when the caller is already inside
+an unrelated exception handler. Acquisition/checks share the original HTTP deadline. An optional
+`reserve_read(maximum)` lease method precharges each actual socket receive,
+including failed/partial/EOF reads, into a caller's physical-source ledger.
+CLI callers and callers omitting the keyword retain their existing interface.
+The [prepared PIDs locator](native-pids-runtime.md) uses this hook to hold actual
+SO_PEERPIDFD/credentials on the connection carrying each exact-ID inspect body;
+the hook alone makes no daemon-authentication claim.
 
 Required CLI options: `--socket`, `--method`, `--path`, `--timeout`,
 `--max-response-bytes`. `--body-stdin` requires `--max-request-bytes`;

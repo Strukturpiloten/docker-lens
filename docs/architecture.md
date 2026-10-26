@@ -1,5 +1,18 @@
 # Architecture
 
+## Original-owner PIDs27 source integration
+
+[ADR 0041](decisions/0041-original-owner-pids-experiment.md) integrates the
+Linux-only original-owner producer, fixed static guest controller and strict
+independent private reader as canonical invocation 27, after the unchanged
+first 26 calls. The [owner contract](native-pids-owner.md) preserves actual
+selected-actor inspection, one exclusive root session, original accounting and
+deadlines, six independent CLI/rendered effect controls, fixed-chunk copy I/O
+receipts and supervised inner cleanup. Its source outcome remains unadmitted;
+full exact-candidate native qualification and original lane EXIT cleanup remain
+required. The outer is retained for later prepared nofile28. Earlier first26
+checkpoint descriptions below retain their historical evidence and scope.
+
 ## Guarded CommandClear raw source and explicit candidate admission
 
 [ADR 0036](decisions/0036-command-clear-native-source-projection.md) versions the

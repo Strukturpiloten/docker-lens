@@ -22,6 +22,7 @@ from test_native_command_clear_proof import fixture as command_clear_fixture
 from test_native_shm_size_proof import fixture as shm_size_fixture
 from test_native_supplementary_groups_proof import fixture as supplementary_groups_fixture
 from test_native_kernel_settings_proof import fixture as kernel_settings_fixture
+from test_native_pids_proof import materialize_pids_proof
 from test_native_runtime_filesystem_proof import fixture as runtime_filesystem_fixture
 from test_native_tmpfs_effect_proof import fixture as tmpfs_effect_fixture
 from test_native_health_start_interval_boundary_proof import fixture as health_boundary_fixture
@@ -179,14 +180,16 @@ class NativeEvidenceTests(unittest.TestCase):
                                      "native_port_probe_proof", "bind_relabel_capability_vocabulary",
                                      "bind_relabel_shape_vocabulary", "external_network_probes",
                                      "external_network_projection", "command_clear_native_source_outcomes",
-                                     "command_clear_native_source_projection"})
+                                     "command_clear_native_source_projection",
+                                     "pids_native_source_outcomes", "pids_native_source_projection"})
         unchanged = copy.deepcopy(schema)
         for name in ("identity_probes", "identity_container_proof", "native_identity_proof",
                      "identity_container_v2", "identity_case_v2", "native_identity_proof_v2",
                      "port_shape", "port_probe_entry", "port_probes", "native_port_probe_proof",
                      "bind_relabel_capability_vocabulary", "bind_relabel_shape_vocabulary",
                      "external_network_probes", "external_network_projection",
-                     "command_clear_native_source_outcomes", "command_clear_native_source_projection"):
+                     "command_clear_native_source_outcomes", "command_clear_native_source_projection",
+                     "pids_native_source_outcomes", "pids_native_source_projection"):
             del unchanged["$defs"][name]
         # Preserve the exact historical #74 root projection: later vocabulary
         # additions do not rewrite historical envelope bytes or admission.
@@ -373,6 +376,7 @@ class NativeEvidenceTests(unittest.TestCase):
                  shm_size: object = None, shm_size_missing: bool = False,
                  supplementary_groups: object = None, supplementary_groups_missing: bool = False,
                  kernel_settings: object = None, kernel_settings_missing: bool = False,
+                 pids_missing: bool = False, pids_mutate=None,
                  outer_backend: str = "podman",
                  port_proof_override: object = None) -> tuple[subprocess.CompletedProcess[str], Path]:
         temporary = tempfile.TemporaryDirectory()
@@ -519,6 +523,16 @@ class NativeEvidenceTests(unittest.TestCase):
                 family_path = root / (family_name + "-v1.json")
                 family_path.write_text(json.dumps(payload if override is None else override), encoding="utf-8")
                 family_path.chmod(0o600)
+        if not pids_missing:
+            pids_context = {
+                "candidate_sha": sha, "run_id": RUN_ID, "lane": lane,
+                "engine_release": version.get("Version"), "api_version": version.get("ApiVersion"),
+                "mode": mode, "outer_backend": outer_backend, "outer_id": "f" * 64,
+                "fixture_image": HEALTH_FIXTURE_IMAGE, "outer": copy.deepcopy(network["context"]["outer"]),
+            }
+            materialize_pids_proof(root, pids_context)
+            if pids_mutate is not None:
+                pids_mutate(root)
         result = subprocess.run(
             ["python3", str(SCRIPT), str(version_path), str(shapes_path), str(source_path),
              str(network_path), str(volume_path), str(volume_label_path), str(identity_path),
