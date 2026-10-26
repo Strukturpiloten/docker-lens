@@ -16,6 +16,7 @@ SELECTED = "native_health_metadata_tests::lifecycle::pids::" + TEST
 HANDOFF = "DOCKERLENS_NATIVE_LIFECYCLE_CLEANUP: owner=native_conformance_outer_v1 scope=outer_container_and_data_volume state=required"
 SETUP_REFUSAL = "DOCKERLENS_NATIVE_PIDS_SETUP_REFUSAL: code="
 IO_DETAIL = "DOCKERLENS_NATIVE_PIDS_IO:"
+STARTUP_REFUSAL = "DOCKERLENS_NATIVE_PIDS_START:"
 
 
 class PidsWiringTests(unittest.TestCase):
@@ -363,6 +364,118 @@ else:
                         self.assertNotIn(evidence.encode(), result.stdout + result.stderr)
                         self.assertNotIn(success.encode(), result.stdout + result.stderr)
                         self.assertIn((SETUP_REFUSAL + "unclassified\n").encode(), result.stderr)
+
+    def test_startup_catalogue_matches_finite_origins_and_every_instrumented_site(self):
+        import ast
+        source = (ROOT / "scripts/native-pids-supervisor.py").read_text()
+        values = {}
+        for node in ast.parse(source).body:
+            if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+                if node.targets[0].id in ("SUPERVISOR_SITES", "WORKER_SITES", "PEER_SITES", "STARTUP_KINDS"):
+                    values[node.targets[0].id] = ast.literal_eval(node.value)
+        # Literal contract checks independent of the parser's tables: exact
+        # process prefixes and all taxonomic kinds, not arbitrary pids-* data.
+        self.assertEqual(values["STARTUP_KINDS"], ("guard", "no_api", "import", "bad_arg", "denied", "missing",
+                         "unsupported", "resource", "io", "cancelled", "other"))
+        self.assertIn("parent_uid", values["WORKER_SITES"])
+        self.assertIn("kid_gate_read", values["WORKER_SITES"])
+        self.assertIn("mon_wait", values["SUPERVISOR_SITES"])
+        self.assertNotIn("mon_wait", values["WORKER_SITES"])
+        self.assertNotIn("parent_uid", values["SUPERVISOR_SITES"])
+        sites = [origin + "_" + site for origin, key in (("s", "SUPERVISOR_SITES"), ("w", "WORKER_SITES"))
+                 for site in values[key] + values["PEER_SITES"]]
+        self.assertEqual(len(sites), len(set(sites)))
+        rust = (ROOT / "src/native_pids_tests.rs").read_text()
+        rust_sites = re.findall(r'"([a-z_0-9]+)"', rust.split("const STARTUP_SITES: &[&str] = &[", 1)[1].split("];", 1)[0])
+        wrapper = (ROOT / "scripts/run-exact-native-test.sh").read_text()
+        wrapper_sites = re.search(r'startup_sites = set\(b"([a-z_0-9 ]+)"\.split\(\)\)', wrapper)[1].split()
+        self.assertEqual(rust_sites, sites)
+        self.assertEqual(wrapper_sites, sites)
+        used = set()
+        for name in ("native-pids-supervisor.py", "native_pids_boundary.py", "native_pids_locator.py"):
+            for node in ast.walk(ast.parse((ROOT / "scripts" / name).read_text())):
+                if isinstance(node, ast.Call) and node.args and isinstance(node.args[0], ast.Constant):
+                    called = node.func.attr if isinstance(node.func, ast.Attribute) else node.func.id if isinstance(node.func, ast.Name) else ""
+                    if called in ("scope", "fault", "startup_scope", "startup_fault", "startup_require"):
+                        used.add(node.args[0].value)
+        declared = set(values["SUPERVISOR_SITES"] + values["WORKER_SITES"] + values["PEER_SITES"])
+        self.assertEqual(used, declared)
+        for site in sites:
+            for kind in values["STARTUP_KINDS"]:
+                record = f"DOCKERLENS_NATIVE_PIDS_START: s={site} k={kind}"
+                self.assertTrue(record.isascii())
+                self.assertLessEqual(len(record), 63)
+        drop = rust.split("impl Drop for RootChannel {", 1)[1].split("struct WorkerControl", 1)[0]
+        self.assertEqual(drop.count("retire_child("), 1)
+        self.assertEqual(drop.count("self.startup.get().copied()"), 1)
+        self.assertLess(drop.index("retire_child("), drop.index("self.startup.get().copied()"))
+        for forbidden in (".join(", ".is_finished(", ".try_wait(", "sleep(", "get_or_init("):
+            self.assertNotIn(forbidden, drop)
+
+    def test_startup_projects_only_triple_paired_finite_records(self):
+        general = SETUP_REFUSAL + "pids-read"
+        detail = IO_DETAIL + " phase=ready kind=reset"
+        for site in ("s_fd0", "w_parent_uid"):
+            for kind in ("guard", "no_api", "import", "bad_arg", "denied", "missing",
+                         "unsupported", "resource", "io", "cancelled", "other"):
+                startup = STARTUP_REFUSAL + f" s={site} k={kind}"
+                result, _ = self.wrapper(startup + "\n" + detail + "\n" + general + "\n" + startup, status=101)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stderr.count((startup + "\n").encode()), 1)
+                self.assertEqual(result.stderr.count((general + "\n").encode()), 1)
+                self.assertEqual(result.stderr.count((detail + "\n").encode()), 1)
+                self.assertIn(b"(exit 101)", result.stderr)
+        startup = STARTUP_REFUSAL + " s=w_parent_uid k=guard"
+        for prefix in ("", general, detail, SETUP_REFUSAL + "pids-eof\n" + detail,
+                       general + "\n" + IO_DETAIL + " phase=bind kind=reset",
+                       general + "\n" + IO_DETAIL + " phase=ready kind=other"):
+            result, _ = self.wrapper(prefix + "\n" + startup, status=101)
+            self.assertNotIn(STARTUP_REFUSAL.encode(), result.stdout + result.stderr)
+        for target, name in (("native_pids", "other_test"), ("native_nofile", "other_test")):
+            result, _ = self.wrapper(general + "\n" + detail + "\n" + startup, status=101, target=target, test_name=name)
+            self.assertNotIn(STARTUP_REFUSAL.encode(), result.stdout + result.stderr)
+
+    def test_startup_conflicts_unknown_private_records_nul_and_overflow_never_project(self):
+        companions = SETUP_REFUSAL + "pids-read\n" + IO_DETAIL + " phase=ready kind=reset\n"
+        valid = STARTUP_REFUSAL + " s=w_parent_uid k=guard"
+        parent = STARTUP_REFUSAL + " s=s_par_gate_send k=io"
+        gate = STARTUP_REFUSAL + " s=w_kid_gate_read k=guard"
+        for value in [
+            STARTUP_REFUSAL, STARTUP_REFUSAL + " PRIVATE_CANARY", valid + " PRIVATE_CANARY", valid + "\r",
+            valid + "\0", valid + "\0PRIVATE_CANARY", STARTUP_REFUSAL + " s=w_PRIVATE_CANARY k=guard",
+            STARTUP_REFUSAL + " s=s_parent_uid k=guard", STARTUP_REFUSAL + " s=w_mon_wait k=io",
+            STARTUP_REFUSAL + " s=w_parent_uid k=PRIVATE_CANARY", valid + "\n" + parent, parent + "\n" + valid,
+            parent + "\n" + gate, gate + "\n" + parent,
+            STARTUP_REFUSAL + " s=s_peer_live k=io\n" + STARTUP_REFUSAL + " s=w_peer_live k=io",
+            valid + "\n" + STARTUP_REFUSAL + " PRIVATE_CANARY", STARTUP_REFUSAL + "x" * 70000,
+            "x" * 1048577 + "\n" + valid,
+        ]:
+            with self.subTest(length=len(value)):
+                result, _ = self.wrapper(companions + value, status=101)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn(STARTUP_REFUSAL.encode(), result.stdout + result.stderr)
+                self.assertNotIn(b"PRIVATE_CANARY", result.stdout + result.stderr)
+                self.assertIn(b"(exit 101)", result.stderr)
+        # A gate record is only its observed site; no retirement/root-cause field.
+        result, _ = self.wrapper(companions + gate, status=101)
+        self.assertIn((gate + "\n").encode(), result.stderr)
+        self.assertNotIn(b"cause=", result.stdout + result.stderr)
+        self.assertNotIn((STARTUP_REFUSAL + " s=unavailable").encode(), result.stdout + result.stderr)
+
+    def test_any_startup_prefix_contradicts_success_before_companion_or_registry_validation(self):
+        success = "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 100 filtered out;"
+        evidence = "DOCKERLENS_NATIVE_CHECK: pids_evidence"
+        for startup in (STARTUP_REFUSAL, STARTUP_REFUSAL + " PRIVATE_CANARY",
+                        STARTUP_REFUSAL + " s=w_parent_uid k=guard"):
+            for status, positive in ((0, ""), (0, success), (0, evidence), (101, success), (101, evidence)):
+                for output in (startup + "\n" + positive, positive + "\n" + startup):
+                    result, _ = self.wrapper(output, status=status, registry=b"")
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertNotIn(STARTUP_REFUSAL.encode(), result.stdout + result.stderr)
+                    self.assertNotIn(b"PRIVATE_CANARY", result.stdout + result.stderr)
+                    self.assertNotIn(evidence.encode(), result.stdout + result.stderr)
+                    self.assertNotIn(success.encode(), result.stdout + result.stderr)
+                    self.assertIn((SETUP_REFUSAL + "unclassified\n").encode(), result.stderr)
 
     def test_canonical27_is_after_kernel_reader_and_before_final_emission(self):
         source = (ROOT / "scripts/native-conformance.sh").read_text()

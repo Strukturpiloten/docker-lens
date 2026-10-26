@@ -9,11 +9,12 @@ use rustix::net::{
 };
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-use std::io::{IoSlice, IoSliceMut};
+use std::io::{IoSlice, IoSliceMut, Read};
 use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::process::{Child, ChildStdin, ChildStdout};
+use std::sync::{Arc, OnceLock};
 
 const VERSION: u64 = 1;
 const FRAME: usize = 16 * 1024;
@@ -82,6 +83,220 @@ fn pids_constructor_refusal_diagnostic(error: &str) -> String {
 fn pids_constructor_refused(error: &str) -> ! {
     eprintln!("{}", pids_constructor_refusal_diagnostic(error));
     panic!("private native PIDs setup refused");
+}
+
+// A startup record is only a closed site observation from an existing stderr
+// capture. It does not authenticate source authority or establish a root cause.
+const STARTUP_PREFIX: &str = "DOCKERLENS_NATIVE_PIDS_START:";
+const STARTUP_SITES: &[&str] = &[
+    "s_imports",
+    "s_args",
+    "s_fd0",
+    "s_socket_wrap",
+    "s_root_uid",
+    "s_root_deadline",
+    "s_gate_pipe",
+    "s_block_signals",
+    "s_source_fork",
+    "s_par_gate_close",
+    "s_par_pgroup",
+    "s_par_pidfd",
+    "s_par_sockclose",
+    "s_par_gate_send",
+    "s_par_gate_done",
+    "s_mon_handlers",
+    "s_mon_unmask",
+    "s_mon_wait",
+    "s_peer_shape",
+    "s_peer_cred",
+    "s_peer_pidfd",
+    "s_peer_cloexec",
+    "s_peer_live",
+    "w_kid_gate_close",
+    "w_kid_pgroup",
+    "w_kid_pdeath",
+    "w_kid_parent",
+    "w_kid_gate_read",
+    "w_kid_gate_done",
+    "w_kid_unmask",
+    "w_source_peer_eq",
+    "w_source_budget",
+    "w_source_init",
+    "w_locator_init",
+    "w_source_api",
+    "w_source_libc",
+    "w_source_getdents",
+    "w_source_proc",
+    "w_source_procfs",
+    "w_source_readfs",
+    "w_source_read",
+    "w_self_stat",
+    "w_self_status",
+    "w_self_pidns",
+    "w_self_userns",
+    "w_self_cgroupns",
+    "w_self_timens",
+    "w_parent_live",
+    "w_parent_stat",
+    "w_parent_process",
+    "w_parent_uid",
+    "w_parent_cgroup",
+    "w_parent_time",
+    "w_parent_link",
+    "w_anc_load",
+    "w_anc_uid",
+    "w_anc_ppid",
+    "w_anc_sudo",
+    "w_anc_exe",
+    "w_anc_recheck",
+    "w_anc_end",
+    "w_proc_pidfd",
+    "w_proc_dir",
+    "w_proc_fs",
+    "w_proc_start",
+    "w_proc_cgroup",
+    "w_proc_root",
+    "w_proc_ns",
+    "w_proc_status",
+    "w_proc_identity",
+    "w_proc_check",
+    "w_proc_timens",
+    "w_proc_live",
+    "w_proc_reopen",
+    "w_proc_fdinfo",
+    "w_stat_delimiter",
+    "w_stat_state",
+    "w_stat_start",
+    "w_status_fields",
+    "w_status_pid",
+    "w_status_tgid",
+    "w_status_uid",
+    "w_status_nspid",
+    "w_status_nstgid",
+    "w_cgroup_record",
+    "w_channel_fds",
+    "w_chan_nonblock",
+    "w_chan_cloexec",
+    "w_boot_wait",
+    "w_boot_recv",
+    "w_boot_ancillary",
+    "w_boot_accumulate",
+    "w_boot_marker",
+    "w_boot_count",
+    "w_boot_stat",
+    "w_boot_dir",
+    "w_boot_mode",
+    "w_boot_uid",
+    "w_boot_cloexec",
+    "w_ready_budget",
+    "w_ready_wait",
+    "w_ready_send",
+    "w_budget_deadline",
+    "w_budget_reads",
+    "w_budget_bytes",
+    "w_budget_fds",
+    "w_budget_opens",
+    "w_budget_output",
+    "w_peer_shape",
+    "w_peer_cred",
+    "w_peer_pidfd",
+    "w_peer_cloexec",
+    "w_peer_live",
+];
+const STARTUP_KINDS: &[&str] = &[
+    "guard",
+    "no_api",
+    "import",
+    "bad_arg",
+    "denied",
+    "missing",
+    "unsupported",
+    "resource",
+    "io",
+    "cancelled",
+    "other",
+];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ClosedStartupFault {
+    site: usize,
+    kind: usize,
+}
+
+impl ClosedStartupFault {
+    fn parts(self) -> Option<(&'static str, &'static str)> {
+        Some((
+            *STARTUP_SITES.get(self.site)?,
+            *STARTUP_KINDS.get(self.kind)?,
+        ))
+    }
+}
+
+fn startup_fault_from_capture(bytes: &[u8], overflow: bool) -> Option<ClosedStartupFault> {
+    if overflow || bytes.len() > 1024 || bytes.contains(&0) || !bytes.ends_with(b"\n") {
+        return None;
+    }
+    let mut candidate = None;
+    for line in bytes.split(|byte| *byte == b'\n') {
+        if !line.starts_with(STARTUP_PREFIX.as_bytes()) {
+            continue;
+        }
+        if line.len() > 63 {
+            return None;
+        }
+        let body = line.strip_prefix(b"DOCKERLENS_NATIVE_PIDS_START: s=")?;
+        let body = std::str::from_utf8(body).ok()?;
+        let (site, kind) = body.split_once(" k=")?;
+        let fault = ClosedStartupFault {
+            site: STARTUP_SITES.iter().position(|allowed| *allowed == site)?,
+            kind: STARTUP_KINDS.iter().position(|allowed| *allowed == kind)?,
+        };
+        if candidate.is_some_and(|first| first != fault) {
+            return None;
+        }
+        candidate = Some(fault);
+    }
+    candidate
+}
+
+fn write_startup_fault(mut output: impl std::io::Write, fault: ClosedStartupFault) {
+    let Some((site, kind)) = fault.parts() else {
+        return;
+    };
+    // Fixed constants only; one bounded write, no allocation, flush or retry.
+    let chunks: &[&[u8]] = &[
+        b"DOCKERLENS_NATIVE_PIDS_START: s=",
+        site.as_bytes(),
+        b" k=",
+        kind.as_bytes(),
+        b"\n",
+    ];
+    let mut line = [0; 64];
+    let mut length = 0usize;
+    for chunk in chunks {
+        let Some(next) = length.checked_add(chunk.len()) else {
+            return;
+        };
+        let Some(destination) = line.get_mut(length..next) else {
+            return;
+        };
+        destination.copy_from_slice(chunk);
+        length = next;
+    }
+    let _ = output.write(&line[..length]);
+}
+
+fn root_stderr_capture(
+    source: impl Read,
+    startup: &OnceLock<ClosedStartupFault>,
+) -> (Vec<u8>, bool) {
+    // stream owns exactly the original reads, cap and EOF. No partial capture,
+    // overflow or reader panic may publish. Preserve its tuple for success join.
+    let capture = stream(source, 1024);
+    if let Some(fault) = startup_fault_from_capture(&capture.0, capture.1) {
+        let _ = startup.set(fault);
+    }
+    capture
 }
 
 // Constructor-only observation of a fatal recvmsg, not a diagnosis of its cause.
@@ -496,6 +711,7 @@ struct RootChannel {
     wire: RootWire,
     child: Child,
     stderr: Option<std::thread::JoinHandle<(Vec<u8>, bool)>>,
+    startup: Arc<OnceLock<ClosedStartupFault>>,
     reservation: u64,
     inspect_calls: u64,
     inspect_bytes: u64,
@@ -580,13 +796,16 @@ impl RootChannel {
             .map_err(|_| "pids-supervisor")?;
         let mut child = SpawnedChild::new(child, run.deadline);
         let error = child.child()?.stderr.take().ok_or("pids-supervisor")?;
+        let startup = Arc::new(OnceLock::new());
+        let reader_startup = Arc::clone(&startup);
         let stderr = std::thread::Builder::new()
-            .spawn(move || stream(error, 1024))
+            .spawn(move || root_stderr_capture(error, &reader_startup))
             .map_err(|_| "pids-supervisor")?;
         let mut channel = Self {
             wire,
             child: child.transfer()?,
             stderr: Some(stderr),
+            startup,
             reservation: 0,
             inspect_calls: 0,
             inspect_bytes: 0,
@@ -817,6 +1036,18 @@ impl Drop for RootChannel {
         // supervisor independently enforces the original absolute terminal time.
         // Never signal a guessed PID, a foreign process group, or a new runtime.
         retire_child(&mut self.child, self.wire.terminal);
+        // One nonblocking snapshot after the ORIGINAL retirement. Success still
+        // joins; failure still detaches. Late/no EOF or reader panic is silent.
+        let startup = self.startup.get().copied();
+        if self.wire.first_read_fault
+            == Some(ConstructorIoFault {
+                phase: ConstructorIoPhase::Ready,
+                kind: ConstructorIoKind::Reset,
+            })
+            && let Some(fault) = startup
+        {
+            write_startup_fault(std::io::stderr().lock(), fault);
+        }
     }
 }
 
@@ -3073,6 +3304,210 @@ fn live_pids_limits_and_effects_match_engine() {
     // real worker barriers per role; it is never a public capability record.
     producer.target.publish_bounded(&proof, 128 * 1024);
     eprintln!("DOCKERLENS_NATIVE_CHECK: pids_evidence");
+}
+
+#[test]
+fn pids_startup_records_have_closed_origins_kinds_and_literal_bounds() {
+    for site in STARTUP_SITES {
+        for kind in STARTUP_KINDS {
+            let line = format!("DOCKERLENS_NATIVE_PIDS_START: s={site} k={kind}\n");
+            assert!(line.is_ascii());
+            assert!(line.len() <= 64);
+            let fault = startup_fault_from_capture(line.as_bytes(), false).unwrap();
+            assert_eq!(fault.parts(), Some((*site, *kind)));
+        }
+    }
+    for (literal, expected) in [
+        (
+            b"DOCKERLENS_NATIVE_PIDS_START: s=w_parent_uid k=guard\n".as_slice(),
+            ("w_parent_uid", "guard"),
+        ),
+        (
+            b"DOCKERLENS_NATIVE_PIDS_START: s=s_mon_wait k=io\n".as_slice(),
+            ("s_mon_wait", "io"),
+        ),
+        (
+            b"DOCKERLENS_NATIVE_PIDS_START: s=w_kid_gate_read k=guard\n".as_slice(),
+            ("w_kid_gate_read", "guard"),
+        ),
+    ] {
+        assert_eq!(
+            startup_fault_from_capture(literal, false).unwrap().parts(),
+            Some(expected)
+        );
+    }
+    assert_eq!(
+        ClosedStartupFault {
+            site: usize::MAX,
+            kind: 0
+        }
+        .parts(),
+        None
+    );
+    assert_eq!(
+        ClosedStartupFault {
+            site: 0,
+            kind: usize::MAX
+        }
+        .parts(),
+        None
+    );
+}
+
+#[test]
+fn pids_startup_capture_refuses_unknown_partial_overflow_and_cross_process_conflicts() {
+    let first = "DOCKERLENS_NATIVE_PIDS_START: s=w_parent_uid k=guard\n";
+    let second = "DOCKERLENS_NATIVE_PIDS_START: s=s_par_gate_send k=io\n";
+    let gate = "DOCKERLENS_NATIVE_PIDS_START: s=w_kid_gate_read k=guard\n";
+    let valid = startup_fault_from_capture(first.as_bytes(), false).unwrap();
+    assert_eq!(
+        startup_fault_from_capture(format!("{first}{first}").as_bytes(), false),
+        Some(valid)
+    );
+    for bytes in [
+        first.trim_end().as_bytes().to_vec(),
+        format!("{first}DOCKERLENS_NATIVE_PIDS_START: s=w_parent_uid k=PRIVATE_CANARY\n").into_bytes(),
+        b"DOCKERLENS_NATIVE_PIDS_START: s=w_PRIVATE_CANARY k=guard\n".to_vec(),
+        b"DOCKERLENS_NATIVE_PIDS_START: s=s_parent_uid k=guard\n".to_vec(),
+        b"DOCKERLENS_NATIVE_PIDS_START: s=w_mon_wait k=io\n".to_vec(),
+        b"DOCKERLENS_NATIVE_PIDS_START: s=w_parent_uid k=guard\r\n".to_vec(),
+        b"DOCKERLENS_NATIVE_PIDS_START: s=w_parent_uid k=guard\0\n".to_vec(),
+        format!("{first}PRIVATE_CANARY\0\n").into_bytes(),
+        format!("{first}{second}").into_bytes(),
+        format!("{second}{first}").into_bytes(),
+        format!("{second}{gate}").into_bytes(),
+        format!("{gate}{second}").into_bytes(),
+        b"DOCKERLENS_NATIVE_PIDS_START: s=s_peer_live k=io\nDOCKERLENS_NATIVE_PIDS_START: s=w_peer_live k=io\n".to_vec(),
+        [first.as_bytes(), &[b'x'; 1024], b"\n"].concat(),
+    ] {
+        assert_eq!(startup_fault_from_capture(&bytes, false), None);
+    }
+    assert_eq!(startup_fault_from_capture(first.as_bytes(), true), None);
+    assert_eq!(
+        startup_fault_from_capture(b"private non-record stderr\n", false),
+        None
+    );
+}
+
+#[test]
+fn pids_startup_reader_preserves_original_tuple_and_every_read() {
+    struct Counted<'a> {
+        bytes: std::io::Cursor<Vec<u8>>,
+        calls: &'a std::cell::Cell<usize>,
+    }
+    impl Read for Counted<'_> {
+        fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+            self.calls.set(self.calls.get() + 1);
+            self.bytes.read(bytes)
+        }
+    }
+    for bytes in [
+        b"DOCKERLENS_NATIVE_PIDS_START: s=w_parent_uid k=guard\n".to_vec(),
+        b"DOCKERLENS_NATIVE_PIDS_START: s=w_parent_uid k=guard".to_vec(),
+        vec![b'x'; 8193],
+    ] {
+        let original_calls = std::cell::Cell::new(0);
+        let observed_calls = std::cell::Cell::new(0);
+        let original = stream(
+            Counted {
+                bytes: std::io::Cursor::new(bytes.clone()),
+                calls: &original_calls,
+            },
+            1024,
+        );
+        let slot = OnceLock::new();
+        let observed = root_stderr_capture(
+            Counted {
+                bytes: std::io::Cursor::new(bytes),
+                calls: &observed_calls,
+            },
+            &slot,
+        );
+        assert_eq!(observed, original);
+        assert_eq!(observed_calls.get(), original_calls.get());
+        assert_eq!(
+            slot.get().copied(),
+            startup_fault_from_capture(&original.0, original.1)
+        );
+    }
+}
+
+#[test]
+fn pids_startup_diagnostic_write_failure_preserves_failure_without_flush_or_retry() {
+    struct RefusedWrite<'a>(&'a std::cell::Cell<usize>);
+    impl std::io::Write for RefusedWrite<'_> {
+        fn write(&mut self, _bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.set(self.0.get() + 1);
+            Err(std::io::ErrorKind::BrokenPipe.into())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            panic!("startup diagnostics must not flush");
+        }
+    }
+    let record = b"DOCKERLENS_NATIVE_PIDS_START: s=w_parent_uid k=guard\n";
+    let fault = startup_fault_from_capture(record, false).unwrap();
+    let calls = std::cell::Cell::new(0);
+    write_startup_fault(RefusedWrite(&calls), fault);
+    assert_eq!(calls.get(), 1);
+    struct ShortWrite<'a>(&'a std::cell::Cell<usize>);
+    impl std::io::Write for ShortWrite<'_> {
+        fn write(&mut self, _bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.set(self.0.get() + 1);
+            Ok(1)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            panic!("startup diagnostics must not flush");
+        }
+    }
+    write_startup_fault(ShortWrite(&calls), fault);
+    assert_eq!(calls.get(), 2);
+    let mut bytes = Vec::new();
+    write_startup_fault(&mut bytes, fault);
+    assert_eq!(bytes, record);
+}
+
+#[test]
+fn pids_startup_no_eof_panic_and_late_publication_do_not_change_snapshot() {
+    struct Incomplete {
+        supplied: bool,
+        panic: bool,
+    }
+    impl Read for Incomplete {
+        fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+            if !self.supplied {
+                self.supplied = true;
+                let record = b"DOCKERLENS_NATIVE_PIDS_START: s=w_parent_uid k=guard\n";
+                bytes[..record.len()].copy_from_slice(record);
+                return Ok(record.len());
+            }
+            assert!(!self.panic, "synthetic reader panic before EOF");
+            Err(std::io::ErrorKind::WouldBlock.into())
+        }
+    }
+    for panic in [false, true] {
+        let slot = OnceLock::new();
+        let result = std::panic::catch_unwind(|| {
+            root_stderr_capture(
+                Incomplete {
+                    supplied: false,
+                    panic,
+                },
+                &slot,
+            )
+        });
+        assert!(result.is_err());
+        assert_eq!(slot.get(), None);
+    }
+    let slot = OnceLock::new();
+    // This is the sole nonblocking failure snapshot. A later EOF publication
+    // cannot retroactively become an observed failure or require another read.
+    let snapshot = slot.get().copied();
+    root_stderr_capture(
+        std::io::Cursor::new(b"DOCKERLENS_NATIVE_PIDS_START: s=w_parent_uid k=guard\n"),
+        &slot,
+    );
+    assert_eq!(snapshot, None);
+    assert!(slot.get().is_some());
 }
 
 #[test]

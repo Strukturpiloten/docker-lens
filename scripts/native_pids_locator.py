@@ -60,7 +60,7 @@ class RuntimeBudget(boundary.Budget):
             self.fd()
 
     def check(self):
-        require(self.clock() < (self.deadline_ns if self.cleanup_only else self.work_ns))
+        boundary.startup_require("budget_deadline", self.clock() < (self.deadline_ns if self.cleanup_only else self.work_ns))
 
     def begin_cleanup(self):
         require(not self.cleanup_only)
@@ -137,9 +137,9 @@ class LocatorRefusal(boundary.Refusal):
 def status_vectors(body, pid):
     status = boundary.process_status(body, pid, leader=True)
     rows = [line.split()[1:] for line in body.splitlines() if line.startswith(b"NStgid:")]
-    require(len(rows) == 1 and rows[0] and all(x.isdigit() for x in rows[0]))
+    boundary.startup_require("status_nstgid", len(rows) == 1 and rows[0] and all(x.isdigit() for x in rows[0]))
     groups = tuple(int(x) for x in rows[0])
-    require(groups == status[2])  # leader, in every represented namespace
+    boundary.startup_require("status_nstgid", groups == status[2])  # leader, in every represented namespace
     return status, groups
 
 
@@ -155,22 +155,31 @@ class LocatorSource(boundary.LinuxSource):
         self.process_times = {}
         super().__init__(budget)
         try:
-            reader = os.getpid()
-            facts, groups = status_vectors(self.read(self.proc, "self/status", 4096), reader)
-            require(facts[0] == (reader,) and groups == (reader,))
-            self.reader_namespace = self.open("self/ns/pid", self.proc, magic=True)
-            self.reader_user_namespace = self.open("self/ns/user", self.proc, magic=True)
-            self.reader_cgroup_namespace = self.open("self/ns/cgroup", self.proc, magic=True)
-            self.reader_time_namespace = self.open("self/ns/time", self.proc, magic=True)
-        except BaseException:
-            self.close()
+            with boundary.startup_scope("self_status"):
+                reader = os.getpid()
+                facts, groups = status_vectors(self.read(self.proc, "self/status", 4096), reader)
+                require(facts[0] == (reader,) and groups == (reader,))
+            with boundary.startup_scope("self_pidns"):
+                self.reader_namespace = self.open("self/ns/pid", self.proc, magic=True)
+            with boundary.startup_scope("self_userns"):
+                self.reader_user_namespace = self.open("self/ns/user", self.proc, magic=True)
+            with boundary.startup_scope("self_cgroupns"):
+                self.reader_cgroup_namespace = self.open("self/ns/cgroup", self.proc, magic=True)
+            with boundary.startup_scope("self_timens"):
+                self.reader_time_namespace = self.open("self/ns/time", self.proc, magic=True)
+        except BaseException as error:
+            boundary.startup_fault("locator_init", error)
+            with boundary.startup_cleanup():
+                self.close()
             raise
 
     def process(self, pid, start, within=None):
         process = super().process(pid, start, within)
-        time_namespace = self.open("ns/time", process.directory, magic=True)
-        require(boundary.identity(time_namespace) == boundary.identity(self.reader_time_namespace))
-        live(process.pidfd)
+        with boundary.startup_scope("proc_timens"):
+            time_namespace = self.open("ns/time", process.directory, magic=True)
+            require(boundary.identity(time_namespace) == boundary.identity(self.reader_time_namespace))
+        with boundary.startup_scope("proc_live"):
+            live(process.pidfd)
         if not hasattr(self, "process_times"):
             self.process_times = {}
         self.process_times[process] = time_namespace
@@ -180,12 +189,15 @@ class LocatorSource(boundary.LinuxSource):
         super().check_process(process)
         time_namespace = getattr(self, "process_times", {}).get(process)
         if time_namespace is not None:
-            reopened = self.open("ns/time", process.directory, magic=True)
+            with boundary.startup_scope("proc_timens"):
+                reopened = self.open("ns/time", process.directory, magic=True)
             try:
-                require(boundary.identity(reopened) == boundary.identity(time_namespace)
-                        == boundary.identity(self.reader_time_namespace))
+                with boundary.startup_scope("proc_timens"):
+                    require(boundary.identity(reopened) == boundary.identity(time_namespace)
+                            == boundary.identity(self.reader_time_namespace))
             finally:
-                self.close_fd(reopened)
+                with boundary.startup_cleanup():
+                    self.close_fd(reopened)
 
     def check_task_time_namespace(self, directory):
         held = self.open("ns/time", directory, magic=True)

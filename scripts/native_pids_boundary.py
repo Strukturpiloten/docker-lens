@@ -39,6 +39,72 @@ def require(condition):
         raise Refusal()
 
 
+# Optional test-only startup observer, installed only by the fixed supervisor.
+# Inactive after READY; it never changes guards, native data or cleanup work.
+STARTUP_OBSERVER = None
+
+
+def startup_fault(site, error):
+    if STARTUP_OBSERVER is not None:
+        STARTUP_OBSERVER.fault(site, error)
+
+
+class StartupScope:
+    def __init__(self, site):
+        self.site = site
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _kind, error, _traceback):
+        if error is not None and self.site is not None:
+            startup_fault(self.site, error)
+        return False
+
+
+_INACTIVE_STARTUP_SCOPE = StartupScope(None)
+
+
+def startup_scope(site):
+    observer = STARTUP_OBSERVER
+    return StartupScope(site) if observer is not None and observer.active else _INACTIVE_STARTUP_SCOPE
+
+
+class StartupCleanup:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _kind, error, _traceback):
+        if error is not None:
+            try:
+                # Preserve the SAME exception, its arguments and control flow.
+                # A closed boolean excludes cleanup provenance at outer scopes.
+                BaseException.__setattr__(error, "_dockerlens_startup_cleanup", True)
+            except BaseException:
+                observer = STARTUP_OBSERVER
+                if observer is not None:
+                    try:
+                        observer.stop()  # failed marking is unobserved
+                    except BaseException:
+                        pass
+        return False
+
+
+_STARTUP_CLEANUP = StartupCleanup()
+
+
+def startup_cleanup():
+    observer = STARTUP_OBSERVER
+    return _STARTUP_CLEANUP if observer is not None and observer.active else _INACTIVE_STARTUP_SCOPE
+
+
+def startup_require(site, condition):
+    if not condition:
+        error = Refusal()
+        startup_fault(site, error)
+        raise error
+
+
 def integer(value, low=1, high=(1 << 63) - 1):
     require(type(value) is int and low <= value <= high)
     return value
@@ -50,33 +116,36 @@ class Budget:
     def __init__(self, deadline_ns, clock=time.monotonic_ns):
         self.clock = clock
         now = clock()
-        integer(deadline_ns)
-        require(now + RESERVE_NS < deadline_ns <= now + 180_000_000_000)
+        with startup_scope("budget_deadline"):
+            integer(deadline_ns)
+            require(now + RESERVE_NS < deadline_ns <= now + 180_000_000_000)
         self.deadline_ns = deadline_ns
         self.work_ns = deadline_ns - RESERVE_NS
         self.reads = self.bytes = self.fds = self.opens = self.output = self.frames = 0
         self.peak_fds = 0
 
     def check(self):
-        require(self.clock() < self.work_ns)
+        startup_require("budget_deadline", self.clock() < self.work_ns)
 
     def read(self, maximum):
         self.check()
         self.reads += 1
         self.bytes += maximum
-        require(self.reads <= 65536 and self.bytes <= SOURCE_BYTES)
+        startup_require("budget_reads", self.reads <= 65536)
+        startup_require("budget_bytes", self.bytes <= SOURCE_BYTES)
 
     def fd(self):
         self.check()
         self.fds += 1
         self.opens += 1
         self.peak_fds = max(self.peak_fds, self.fds)
-        require(self.fds <= 256 and self.opens <= 32768)
+        startup_require("budget_fds", self.fds <= 256)
+        startup_require("budget_opens", self.opens <= 32768)
 
     def emit(self, maximum):
         self.check()
         self.output += maximum
-        require(self.output <= 64 * 1024)
+        startup_require("budget_output", self.output <= 64 * 1024)
 
 
 @dataclass(frozen=True)
@@ -132,32 +201,36 @@ def unescape_mount(value):
 def start_from_stat(body, pid):
     # comm can contain spaces and parentheses. The closing delimiter is the last ')'.
     head, separator, rest = body.rpartition(b") ")
-    require(separator and head.startswith(str(pid).encode() + b" ("))
+    startup_require("stat_delimiter", separator and head.startswith(str(pid).encode() + b" ("))
     fields = rest.split()
-    require(len(fields) >= 20 and fields[0] not in (b"Z", b"X", b"x"))
-    require(fields[19].isdigit())
-    return integer(int(fields[19]))
+    startup_require("stat_state", len(fields) >= 20 and fields[0] not in (b"Z", b"X", b"x"))
+    startup_require("stat_start", fields[19].isdigit())
+    with startup_scope("stat_start"):
+        return integer(int(fields[19]))
 
 
 def cgroup_path(body):
-    lines = body.decode("ascii").splitlines()
-    require(len(lines) == 1 and lines[0].startswith("0::"))
-    return components(lines[0][3:])
+    with startup_scope("cgroup_record"):
+        lines = body.decode("ascii").splitlines()
+        require(len(lines) == 1 and lines[0].startswith("0::"))
+        return components(lines[0][3:])
 
 
 def process_status(body, pid, leader=False):
     fields = {}
     for line in body.splitlines():
         key, separator, value = line.partition(b":")
-        require(separator and key not in fields)
+        startup_require("status_fields", separator and key not in fields)
         fields[key] = value.split()
-    require(fields.get(b"Pid") == [str(pid).encode()])
+    startup_require("status_pid", fields.get(b"Pid") == [str(pid).encode()])
     wanted = (b"Tgid", b"Uid", b"NSpid")
-    require(all(key in fields and all(x.isdigit() for x in fields[key]) for key in wanted))
+    startup_require("status_fields", all(key in fields and all(x.isdigit() for x in fields[key]) for key in wanted))
     tgid, uid, nested = (tuple(int(x) for x in fields[key]) for key in wanted)
-    require(len(tgid) == 1 and len(uid) == 4 and 1 <= len(nested) <= 16)
-    require(tgid[0] > 0 and nested[0] == pid and all(x > 0 for x in nested))
-    require(not leader or tgid[0] == pid)
+    startup_require("status_tgid", len(tgid) == 1)
+    startup_require("status_uid", len(uid) == 4)
+    startup_require("status_nspid", 1 <= len(nested) <= 16)
+    startup_require("status_nspid", tgid[0] > 0 and nested[0] == pid and all(x > 0 for x in nested))
+    startup_require("status_tgid", not leader or tgid[0] == pid)
     return tgid, uid, nested
 
 
@@ -181,19 +254,26 @@ class LinuxSource:
     """Real read-only kernel source. No synthetic path or authority parameters."""
 
     def __init__(self, budget):
-        require(sys.platform == "linux" and hasattr(os, "pidfd_open"))
+        startup_require("source_api", sys.platform == "linux" and hasattr(os, "pidfd_open"))
         self.budget = budget
         self.owned = set()
         try:
-            self.libc = ctypes.CDLL(None, use_errno=True)
-            self.getdents = self.libc.getdents64
-            self.getdents.argtypes = (ctypes.c_int, ctypes.c_void_p, ctypes.c_size_t)
-            self.getdents.restype = ctypes.c_ssize_t
-            self.proc = self.open("/proc", directory=True)
-            require(fs_magic(self.proc) == PROC_MAGIC)
-            start_from_stat(self.read(self.proc, "self/stat", 1024), os.getpid())
-        except BaseException:
-            self.close()
+            with startup_scope("source_libc"):
+                self.libc = ctypes.CDLL(None, use_errno=True)
+            with startup_scope("source_getdents"):
+                self.getdents = self.libc.getdents64
+                self.getdents.argtypes = (ctypes.c_int, ctypes.c_void_p, ctypes.c_size_t)
+                self.getdents.restype = ctypes.c_ssize_t
+            with startup_scope("source_proc"):
+                self.proc = self.open("/proc", directory=True)
+            with startup_scope("source_procfs"):
+                require(fs_magic(self.proc) == PROC_MAGIC)
+            with startup_scope("self_stat"):
+                start_from_stat(self.read(self.proc, "self/stat", 1024), os.getpid())
+        except BaseException as error:
+            startup_fault("source_init", error)
+            with startup_cleanup():
+                self.close()
             raise
 
     def own(self, fd):
@@ -256,48 +336,68 @@ class LinuxSource:
     def read(self, parent, name, maximum):
         fd = self.open(name, parent)
         try:
-            require(fs_magic(fd) == PROC_MAGIC)
-            return self.read_fd(fd, maximum)
+            with startup_scope("source_readfs"):
+                require(fs_magic(fd) == PROC_MAGIC)
+            with startup_scope("source_read"):
+                return self.read_fd(fd, maximum)
         finally:
-            self.close_fd(fd)
+            with startup_cleanup():
+                self.close_fd(fd)
 
     def process(self, pid, start, within=None):
-        integer(pid, high=(1 << 31) - 1)
-        integer(start)
-        self.budget.fd()
-        pidfd = self.own(os.pidfd_open(pid, 0))
-        directory = self.open(str(pid), self.proc, directory=True)
-        require(fs_magic(directory) == PROC_MAGIC)
-        require(start_from_stat(self.read(directory, "stat", 1024), pid) == start)
-        membership = cgroup_path(self.read(directory, "cgroup", 1024))
-        if within is not None:
-            require(len(membership) > len(within.membership))
-            require(membership[:len(within.membership)] == within.membership)
-        root = self.open("root", directory, directory=True, magic=True)
-        namespaces = tuple(self.open("ns/" + name, directory, magic=True) for name in NS)
-        status = process_status(self.read(directory, "status", 4096), pid, leader=True)
-        proc = Process(pid, start, directory, pidfd, root, namespaces, membership,
-                       (identity(directory), (identity(root), self.fd_mount_id(root)),
-                        tuple(identity(fd) for fd in namespaces)), status)
-        self.check_process(proc)
+        with startup_scope("proc_pidfd"):
+            integer(pid, high=(1 << 31) - 1)
+            integer(start)
+            self.budget.fd()
+            pidfd = self.own(os.pidfd_open(pid, 0))
+        with startup_scope("proc_dir"):
+            directory = self.open(str(pid), self.proc, directory=True)
+        with startup_scope("proc_fs"):
+            require(fs_magic(directory) == PROC_MAGIC)
+        with startup_scope("proc_start"):
+            require(start_from_stat(self.read(directory, "stat", 1024), pid) == start)
+        with startup_scope("proc_cgroup"):
+            membership = cgroup_path(self.read(directory, "cgroup", 1024))
+            if within is not None:
+                require(len(membership) > len(within.membership))
+                require(membership[:len(within.membership)] == within.membership)
+        with startup_scope("proc_root"):
+            root = self.open("root", directory, directory=True, magic=True)
+        with startup_scope("proc_ns"):
+            namespaces = tuple(self.open("ns/" + name, directory, magic=True) for name in NS)
+        with startup_scope("proc_status"):
+            status = process_status(self.read(directory, "status", 4096), pid, leader=True)
+        with startup_scope("proc_identity"):
+            proc = Process(pid, start, directory, pidfd, root, namespaces, membership,
+                           (identity(directory), (identity(root), self.fd_mount_id(root)),
+                            tuple(identity(fd) for fd in namespaces)), status)
+        with startup_scope("proc_check"):
+            self.check_process(proc)
         return proc
 
     def check_process(self, proc):
         self.budget.check()
-        require(not select.select([proc.pidfd], [], [], 0)[0])
-        require(start_from_stat(self.read(proc.directory, "stat", 1024), proc.pid) == proc.start)
-        require(cgroup_path(self.read(proc.directory, "cgroup", 1024)) == proc.membership)
-        require(process_status(self.read(proc.directory, "status", 4096), proc.pid, leader=True) == proc.status)
+        with startup_scope("proc_live"):
+            require(not select.select([proc.pidfd], [], [], 0)[0])
+        with startup_scope("proc_start"):
+            require(start_from_stat(self.read(proc.directory, "stat", 1024), proc.pid) == proc.start)
+        with startup_scope("proc_cgroup"):
+            require(cgroup_path(self.read(proc.directory, "cgroup", 1024)) == proc.membership)
+        with startup_scope("proc_status"):
+            require(process_status(self.read(proc.directory, "status", 4096), proc.pid, leader=True) == proc.status)
         reopened = []
         try:
-            reopened.append(self.open(str(proc.pid), self.proc, directory=True))
-            reopened.append(self.open("root", reopened[0], directory=True, magic=True))
-            reopened.extend(self.open("ns/" + n, reopened[0], magic=True) for n in NS)
-            require((identity(reopened[0]), (identity(reopened[1]), self.fd_mount_id(reopened[1])),
-                     tuple(identity(fd) for fd in reopened[2:])) == proc.identity)
+            with startup_scope("proc_reopen"):
+                reopened.append(self.open(str(proc.pid), self.proc, directory=True))
+                reopened.append(self.open("root", reopened[0], directory=True, magic=True))
+                reopened.extend(self.open("ns/" + n, reopened[0], magic=True) for n in NS)
+            with startup_scope("proc_identity"):
+                require((identity(reopened[0]), (identity(reopened[1]), self.fd_mount_id(reopened[1])),
+                         tuple(identity(fd) for fd in reopened[2:])) == proc.identity)
         finally:
-            for fd in reopened:
-                self.close_fd(fd)
+            with startup_cleanup():
+                for fd in reopened:
+                    self.close_fd(fd)
 
     def group(self, proc):
         # Both files are in the reader's actual view. Never combine guest mountinfo
@@ -370,10 +470,11 @@ class LinuxSource:
         require(fields[2] == str(os.major(device)) + ":" + str(os.minor(device)))
 
     def fd_mount_id(self, fd):
-        info = self.read(self.proc, "self/fdinfo/" + str(fd), 4096)
-        ids = [line.split()[1:] for line in info.splitlines() if line.startswith(b"mnt_id:")]
-        require(len(ids) == 1 and len(ids[0]) == 1 and ids[0][0].isdigit())
-        return integer(int(ids[0][0]))
+        with startup_scope("proc_fdinfo"):
+            info = self.read(self.proc, "self/fdinfo/" + str(fd), 4096)
+            ids = [line.split()[1:] for line in info.splitlines() if line.startswith(b"mnt_id:")]
+            require(len(ids) == 1 and len(ids[0]) == 1 and ids[0][0].isdigit())
+            return integer(int(ids[0][0]))
 
     def descendant(self, outer, leaf):
         require(len(leaf.identities) > len(outer.identities))

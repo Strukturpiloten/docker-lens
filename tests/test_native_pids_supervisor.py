@@ -270,7 +270,7 @@ class RootSessionTests(unittest.TestCase):
                                 stdin=subprocess.DEVNULL, capture_output=True, timeout=2, check=False)
         self.assertEqual(result.returncode, 1)
         self.assertEqual(result.stdout, b"")
-        self.assertEqual(result.stderr, b"native-pids-supervisor: refused\n")
+        self.assertEqual(result.stderr, b"DOCKERLENS_NATIVE_PIDS_START: s=s_fd0 k=guard\nnative-pids-supervisor: refused\n")
 
     def test_fixed_sibling_loader_rejects_wrong_cached_module_paths(self):
         script = str(Path(s.__file__).resolve())
@@ -767,6 +767,333 @@ class RootFactoryTests(unittest.TestCase):
             with self.subTest(fault=fault):
                 self.run_factory(run)
 
+
+class StartupDiagnosticTests(unittest.TestCase):
+    """Inert startup faults; no sudo, source server or host kernel acquisition."""
+
+    def recorder(self, origin="w"):
+        value = s.StartupRecorder(origin, active=True)
+        return value, patch.object(s, "_STARTUP", value), patch.object(b, "STARTUP_OBSERVER", value)
+
+    def test_literal_origins_closed_kinds_redaction_and_every_line_bound(self):
+        errors = [
+            (b.Refusal(), "guard"), (AttributeError("PRIVATE_CANARY"), "no_api"),
+            (NotImplementedError("PRIVATE_CANARY"), "no_api"),
+            (ImportError("PRIVATE_CANARY"), "import"),
+            (TypeError("PRIVATE_CANARY"), "bad_arg"), (ValueError("PRIVATE_CANARY"), "bad_arg"),
+            (OverflowError("PRIVATE_CANARY"), "bad_arg"),
+            (PermissionError(s.errno.EACCES, "PRIVATE_CANARY"), "denied"),
+            (OSError(s.errno.EPERM, "PRIVATE_CANARY"), "denied"),
+            (OSError(s.errno.ENOENT, "PRIVATE_CANARY"), "missing"),
+            (OSError(s.errno.ESRCH, "PRIVATE_CANARY"), "missing"),
+            (OSError(s.errno.ENOSYS, "PRIVATE_CANARY"), "unsupported"),
+            (OSError(s.errno.ENOPROTOOPT, "PRIVATE_CANARY"), "unsupported"),
+            (OSError(s.errno.EOPNOTSUPP, "PRIVATE_CANARY"), "unsupported"),
+            *[(OSError(number, "PRIVATE_CANARY"), "resource") for number in
+              (s.errno.ENOMEM, s.errno.ENOBUFS, s.errno.EMFILE, s.errno.ENFILE, s.errno.EAGAIN)],
+            (OSError(s.errno.EIO, "PRIVATE_CANARY"), "io"),
+            (OSError(4095, "PRIVATE_CANARY"), "io"),
+            (KeyboardInterrupt("PRIVATE_CANARY"), "cancelled"),
+            (RuntimeError("PRIVATE_CANARY"), "other"),
+        ]
+        self.assertEqual(set(s.STARTUP_KINDS), {expected for _, expected in errors})
+        for origin, sites in [("s", s.SUPERVISOR_SITES), ("w", s.WORKER_SITES)]:
+            for site in sites + s.PEER_SITES:
+                for error, kind in errors:
+                    recorder = s.StartupRecorder(origin, active=True)
+                    with patch.object(s.os, "write") as output:
+                        recorder.fault(site, error)
+                    self.assertEqual(output.call_count, 1)
+                    line = output.call_args.args[1]
+                    self.assertEqual(line, f"DOCKERLENS_NATIVE_PIDS_START: s={origin}_{site} k={kind}\n".encode())
+                    self.assertLessEqual(len(line), 64)
+                    self.assertTrue(line.isascii())
+                    self.assertNotIn(b"PRIVATE_CANARY", line)
+        with patch.object(s.os, "write") as output:
+            s.StartupRecorder("w", True).fault("parent_uid", b.Refusal())
+        self.assertEqual(output.call_args.args[1], b"DOCKERLENS_NATIVE_PIDS_START: s=w_parent_uid k=guard\n")
+        for origin, site in [("s", "parent_uid"), ("w", "mon_wait"), ("private", "peer_shape"),
+                             ("w", "PRIVATE_CANARY"), ("w", "parent_uid\nPRIVATE_CANARY")]:
+            with patch.object(s.os, "write") as output:
+                recorder = s.StartupRecorder(origin, True)
+                recorder.fault(site, b.Refusal())
+                recorder.fault("peer_shape", b.Refusal())
+            output.assert_not_called()
+
+    def test_first_fault_precedes_cleanup_and_write_failure_is_not_retried(self):
+        recorder, supervisor, boundary = self.recorder()
+        with supervisor, boundary, patch.object(s.os, "write", side_effect=OSError("PRIVATE_CANARY")) as output:
+            try:
+                try:
+                    with b.startup_scope("parent_uid"):
+                        raise b.Refusal()
+                finally:
+                    raise PermissionError(s.errno.EPERM, "cleanup")
+            except PermissionError:
+                pass
+            recorder.fault("parent_time", RuntimeError("cleanup"))
+        self.assertEqual(output.call_count, 1)
+        self.assertEqual(recorder.value, ("w", "parent_uid", "guard"))
+        self.assertTrue(recorder.emitted)
+
+    def test_source_initialization_preserves_work_fault_masked_by_close(self):
+        recorder, supervisor, boundary = self.recorder()
+        budget = unittest.mock.Mock()
+        with supervisor, boundary, patch.object(s.os, "write") as output, \
+                patch.object(b.ctypes, "CDLL", side_effect=PermissionError(s.errno.EACCES, "work")), \
+                patch.object(b.LinuxSource, "close", side_effect=OSError(s.errno.EIO, "cleanup")):
+            with self.assertRaises(OSError):
+                b.LinuxSource(budget)
+        self.assertEqual(recorder.value, ("w", "source_libc", "denied"))
+        self.assertEqual(output.call_count, 1)
+
+    def test_locator_initialization_preserves_work_fault_masked_by_close(self):
+        recorder, supervisor, boundary = self.recorder()
+        def initial(source, budget):
+            source.budget, source.proc = budget, 123
+        with supervisor, boundary, patch.object(s.os, "write") as output, \
+                patch.object(b.LinuxSource, "__init__", initial), \
+                patch.object(l, "status_vectors", side_effect=ValueError("PRIVATE_CANARY")), \
+                patch.object(l.LocatorSource, "read", return_value=b"private"), \
+                patch.object(l.LocatorSource, "close", side_effect=OSError(s.errno.EIO, "cleanup")):
+            with self.assertRaises(OSError):
+                l.LocatorSource(unittest.mock.Mock())
+        self.assertEqual(recorder.value, ("w", "self_status", "bad_arg"))
+        self.assertEqual(output.call_count, 1)
+
+    def test_cleanup_only_checked_peer_close_does_not_author_a_record(self):
+        recorder, supervisor, boundary = self.recorder()
+        with supervisor, boundary, patch.object(s.os, "write") as output, \
+                patch.object(s, "peer_socket", return_value=(1, 2, 3, 4)), \
+                patch.object(s.os, "close", side_effect=OSError(s.errno.EIO, "cleanup")):
+            with self.assertRaises(OSError):
+                s.source_server(unittest.mock.Mock(), 100, (1, 2, 3, 9), 10)
+        output.assert_not_called()
+        self.assertIsNone(recorder.value)
+
+    def test_invalid_ancillary_is_latched_before_failed_rights_cleanup(self):
+        recorder, supervisor, boundary = self.recorder()
+        channel = s.Channel.__new__(s.Channel)
+        channel.wait, channel.budget, channel.stream = unittest.mock.Mock(), unittest.mock.Mock(), unittest.mock.Mock()
+        channel.stream.recvmsg.return_value = (b"x", [], socket.MSG_TRUNC, None)
+        with supervisor, boundary, patch.object(s.os, "write") as output, \
+                patch.object(s, "close_all", side_effect=OSError(s.errno.EIO, "cleanup")):
+            with self.assertRaises(OSError):
+                channel.receive(1, bootstrap=True)
+        self.assertEqual(recorder.value, ("w", "boot_ancillary", "guard"))
+        self.assertEqual(output.call_count, 1)
+
+    def test_partial_ready_records_work_but_complete_ready_disables_worker(self):
+        from types import SimpleNamespace
+        for partial in (False, True):
+            with self.subTest(partial=partial):
+                recorder, supervisor, boundary = self.recorder()
+                channel = s.Channel.__new__(s.Channel)
+                channel.wait, channel.budget, channel.stream = unittest.mock.Mock(), unittest.mock.Mock(), unittest.mock.Mock()
+                channel.receive = unittest.mock.Mock(return_value=(b"BFPIDS1\n", [17]))
+                channel.stream.send.side_effect = [3, OSError(s.errno.EIO, "private")] if partial else [8]
+                with supervisor, boundary, patch.object(s.os, "write") as output, \
+                        patch.object(s.os, "fstat", return_value=SimpleNamespace(st_mode=0o40700, st_uid=5)), \
+                        patch.object(s.fcntl, "fcntl", return_value=s.fcntl.FD_CLOEXEC), patch.object(s, "close_all"):
+                    if partial:
+                        with self.assertRaises(OSError):
+                            channel.bootstrap(5)
+                        self.assertEqual(recorder.value, ("w", "ready_send", "io"))
+                        self.assertTrue(recorder.active)
+                    else:
+                        self.assertEqual(channel.bootstrap(5), 17)
+                        self.assertFalse(recorder.active)
+                        recorder.fault("parent_uid", b.Refusal())
+                        output.assert_not_called()
+
+    def test_successful_nested_scope_does_not_leave_stale_site(self):
+        recorder, supervisor, boundary = self.recorder()
+        with supervisor, boundary, patch.object(s.os, "write") as output:
+            with self.assertRaises(b.Refusal):
+                with b.startup_scope("parent_uid"):
+                    with b.startup_scope("proc_status"):
+                        pass
+                    raise b.Refusal()
+        self.assertEqual(recorder.value, ("w", "parent_uid", "guard"))
+        self.assertEqual(output.call_count, 1)
+
+    def test_read_work_is_latched_before_close_but_cleanup_only_stays_silent(self):
+        for work_failure in (False, True):
+            recorder, supervisor, boundary = self.recorder()
+            source = b.LinuxSource.__new__(b.LinuxSource)
+            source.open = unittest.mock.Mock(return_value=7)
+            source.read_fd = unittest.mock.Mock(return_value=b"ok")
+            if work_failure:
+                source.read_fd.side_effect = PermissionError(s.errno.EACCES, "work")
+            source.close_fd = unittest.mock.Mock(side_effect=OSError(s.errno.EIO, "cleanup"))
+            with supervisor, boundary, patch.object(s.os, "write") as output, patch.object(b, "fs_magic", return_value=b.PROC_MAGIC):
+                with self.assertRaises(OSError):
+                    source.read(3, "fixed", 1024)
+            self.assertEqual(output.call_count, int(work_failure))
+            self.assertEqual(recorder.value, ("w", "source_read", "denied") if work_failure else None)
+
+    def test_source_server_preserves_parent_work_before_final_source_close(self):
+        recorder, supervisor, boundary = self.recorder()
+        source = unittest.mock.Mock()
+        source.read.side_effect = PermissionError(s.errno.EACCES, "work")
+        source.close.side_effect = OSError(s.errno.EIO, "cleanup")
+        with supervisor, boundary, patch.object(s.os, "write") as output, \
+                patch.object(s, "peer_socket", return_value=(9, 10, 11, 12)), patch.object(s.os, "close"), \
+                patch.object(l, "RuntimeBudget"), patch.object(l, "LocatorSource", return_value=source), patch.object(l, "live"):
+            with self.assertRaises(b.Refusal):
+                s.source_server(unittest.mock.Mock(), 100, (9, 10, 11, 13), 20)
+        self.assertEqual(recorder.value, ("w", "parent_stat", "denied"))
+        self.assertEqual(output.call_count, 1)
+
+    def test_recorder_construction_failure_is_silent_and_never_retried(self):
+        recorder = s.StartupRecorder("w", True)
+        with patch.object(recorder, "kind", side_effect=RuntimeError("PRIVATE_CANARY")), patch.object(s.os, "write") as output:
+            recorder.fault("parent_uid", b.Refusal())
+            recorder.fault("parent_time", b.Refusal())
+        output.assert_not_called()
+        self.assertTrue(recorder.seen)
+        self.assertIsNone(recorder.value)
+
+    def test_nested_constructor_read_cleanup_is_not_self_stat_or_status_work(self):
+        for locator in (False, True):
+            recorder, supervisor, boundary = self.recorder()
+            error = OSError(s.errno.EIO, "PRIVATE_CLEANUP")
+            original_args = error.args
+            def initial(source, budget):
+                source.budget, source.proc = budget, 3
+            with supervisor, boundary, patch.object(s.os, "write") as output, \
+                    patch.object(b, "fs_magic", return_value=b.PROC_MAGIC), \
+                    patch.object(b.ctypes, "CDLL"), patch.object(b.LinuxSource, "open", return_value=3), \
+                    patch.object(b.LinuxSource, "read_fd", return_value=b"ok"), \
+                    patch.object(b.LinuxSource, "close_fd", side_effect=error), patch.object(b.LinuxSource, "close"):
+                if locator:
+                    with patch.object(b.LinuxSource, "__init__", initial):
+                        with self.assertRaises(OSError) as caught:
+                            l.LocatorSource(unittest.mock.Mock())
+                else:
+                    with self.assertRaises(OSError) as caught:
+                        b.LinuxSource(unittest.mock.Mock())
+            self.assertIs(caught.exception, error)
+            self.assertEqual(error.args, original_args)
+            self.assertIsNone(recorder.value)
+            self.assertFalse(recorder.seen)
+            output.assert_not_called()
+
+    def test_nested_reopened_close_only_is_not_proc_check_work(self):
+        from types import SimpleNamespace
+        for work_failure in (False, True):
+            recorder, supervisor, boundary = self.recorder()
+            error = OSError(s.errno.EIO, "PRIVATE_CLEANUP")
+            original_args = error.args
+            source = b.LinuxSource.__new__(b.LinuxSource)
+            source.budget = unittest.mock.Mock()
+            source.proc = 3
+            source.read = unittest.mock.Mock(side_effect=[
+                b"9 (comm) S " + b"0 " * 18 + b"10\n", b"0::/\n",
+                b"Pid:\t9\nTgid:\t9\nUid:\t5\t5\t5\t5\nNSpid:\t9\n",
+            ])
+            source.open = unittest.mock.Mock(side_effect=[21, 22, 23, 24, 25])
+            source.fd_mount_id = unittest.mock.Mock(return_value=1)
+            source.close_fd = unittest.mock.Mock(side_effect=error)
+            proc = SimpleNamespace(pidfd=2, pid=9, start=10, directory=3, membership=(),
+                status=((9,), (5, 5, 5, 5), (9,)), identity=((1, 1), ((1, 1), 1), ((1, 1),) * 3))
+            if work_failure:
+                proc.identity = ()
+            with supervisor, boundary, patch.object(s.os, "write") as output, \
+                    patch.object(b.select, "select", return_value=([], [], [])), patch.object(b, "identity", return_value=(1, 1)):
+                with self.assertRaises(OSError) as caught:
+                    with b.startup_scope("proc_check"):
+                        source.check_process(proc)
+            self.assertIs(caught.exception, error)
+            self.assertEqual(error.args, original_args)
+            self.assertEqual(source.close_fd.call_count, 1)
+            self.assertEqual(output.call_count, int(work_failure))
+            self.assertEqual(recorder.value, ("w", "proc_identity", "guard") if work_failure else None)
+            if not work_failure:
+                self.assertFalse(recorder.seen)
+
+    def test_failed_cleanup_marking_disables_observation_without_replacing_exception(self):
+        class Unmarkable(OSError):
+            @property
+            def _dockerlens_startup_cleanup(self):
+                return False
+        for first_work in (False, True):
+            recorder, supervisor, boundary = self.recorder()
+            error = Unmarkable(s.errno.EIO, "PRIVATE_CLEANUP")
+            original_args = error.args
+            with supervisor, boundary, patch.object(s.os, "write") as output:
+                if first_work:
+                    recorder.fault("parent_uid", b.Refusal())
+                with self.assertRaises(Unmarkable) as caught:
+                    with b.startup_scope("self_stat"):
+                        with b.startup_cleanup():
+                            raise error
+                recorder.fault("parent_time", b.Refusal())
+            self.assertIs(caught.exception, error)
+            self.assertEqual(error.args, original_args)
+            self.assertFalse(recorder.active)
+            self.assertEqual(output.call_count, int(first_work))
+            self.assertEqual(recorder.value, ("w", "parent_uid", "guard") if first_work else None)
+
+    def test_failed_cleanup_marker_lookup_is_unobserved_without_new_failure(self):
+        class Uninspectable(OSError):
+            @property
+            def _dockerlens_startup_cleanup(self):
+                raise RuntimeError("PRIVATE_CANARY")
+        recorder = s.StartupRecorder("w", True)
+        with patch.object(s.os, "write") as output:
+            recorder.fault("parent_uid", Uninspectable(s.errno.EIO, "private"))
+            recorder.fault("parent_time", b.Refusal())
+        output.assert_not_called()
+        self.assertFalse(recorder.active)
+        self.assertIsNone(recorder.value)
+
+    def test_fork_child_resets_inherited_supervisor_role_and_latch(self):
+        class ExitChild(BaseException):
+            pass
+        recorder, supervisor, boundary = self.recorder("s")
+        with patch.object(s.os, "write"):
+            recorder.fault("peer_shape", b.Refusal())
+        def source(*_args):
+            self.assertEqual((recorder.origin, recorder.seen), ("w", False))
+            recorder.fault("parent_uid", b.Refusal())
+        stream = unittest.mock.Mock()
+        with supervisor, boundary, patch.object(s.os, "write") as output, \
+                patch.object(s.os, "geteuid", return_value=0), patch.object(s.time, "monotonic_ns", return_value=1), \
+                patch.object(s, "peer_socket", return_value=(9, 10, 11, 12)), \
+                patch.object(s.os, "pipe2", return_value=(13, 14)), patch.object(s.signal, "pthread_sigmask", return_value=set()), \
+                patch.object(s.os, "getpid", return_value=20), patch.object(s.os, "getppid", return_value=20), \
+                patch.object(s.os, "fork", return_value=0), patch.object(s.os, "close"), patch.object(s.os, "setpgid"), \
+                patch.object(s.boundary.ctypes, "CDLL") as libc, patch.object(s.os, "read", return_value=b"G"), \
+                patch.object(s, "source_server", side_effect=source), patch.object(s.os, "_exit", side_effect=ExitChild), \
+                patch.object(s.os, "waitpid", return_value=(0, 0)), patch.object(s.os, "killpg"):
+            libc.return_value.prctl.return_value = 0
+            with self.assertRaises(ExitChild):
+                s.supervise(stream, 180_000_000_001)
+        self.assertEqual(output.call_count, 1)
+        self.assertEqual(output.call_args.args[1], b"DOCKERLENS_NATIVE_PIDS_START: s=w_parent_uid k=guard\n")
+
+    def test_supervisor_remains_site_observer_after_worker_ready(self):
+        worker, supervisor = s.StartupRecorder("w", True), s.StartupRecorder("s", True)
+        worker.stop()
+        with patch.object(s.os, "write") as output:
+            worker.fault("ready_send", OSError(s.errno.EIO, "private"))
+            supervisor.fault("mon_wait", OSError(s.errno.EIO, "private"))
+        self.assertEqual(output.call_count, 1)
+        self.assertEqual(output.call_args.args[1], b"DOCKERLENS_NATIVE_PIDS_START: s=s_mon_wait k=io\n")
+
+    def test_derived_monitor_result_does_not_invent_a_startup_fault(self):
+        from types import SimpleNamespace
+        for result in (0, 1):
+            with self.subTest(result=result), patch.object(s.os, "write") as output, \
+                    patch.object(s.os, "fstat", return_value=SimpleNamespace(st_mode=0o140600)), \
+                    patch.object(s.socket, "socket") as stream, patch.object(s, "supervise", return_value=result):
+                self.assertEqual(s.main(["supervise", "123"]), result)
+                self.assertIsNone(s._STARTUP.value)
+                self.assertFalse(s._STARTUP.active)
+                self.assertEqual(output.call_count, result)
+                if result:
+                    self.assertEqual(output.call_args.args[1], b"native-pids-supervisor: refused\n")
 
 if __name__ == "__main__":
     unittest.main()

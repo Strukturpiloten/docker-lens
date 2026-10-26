@@ -5,29 +5,159 @@ There is deliberately no runtime-context/PID acquisition fallback. The executabl
 refuses source binding until the original Rust runtime-owner seam is integrated.
 """
 
-import array
-import fcntl
-import importlib.util
-import json
 import os
-from pathlib import Path
-import select
-import signal
-import socket
-import stat
-import struct
 import sys
-import time
+import errno
 
-_locator_path = Path(__file__).with_name("native_pids_locator.py").resolve()
-locator = sys.modules.get("native_pids_locator")
-if (locator is None or getattr(locator, "__file__", None) is None
-        or Path(locator.__file__).resolve() != _locator_path):
-    _locator_spec = importlib.util.spec_from_file_location("native_pids_locator", _locator_path)
-    locator = importlib.util.module_from_spec(_locator_spec)
-    sys.modules["native_pids_locator"] = locator
-    _locator_spec.loader.exec_module(locator)
-boundary = locator.boundary
+# Closed test-only startup observations. Prefixes are disjoint process origins;
+# these are failure sites, never authenticated authority or root-cause claims.
+STARTUP_KINDS = (
+    "guard", "no_api", "import", "bad_arg", "denied", "missing", "unsupported",
+    "resource", "io", "cancelled", "other",
+)
+SUPERVISOR_SITES = (
+    "imports", "args", "fd0", "socket_wrap", "root_uid", "root_deadline",
+    "gate_pipe", "block_signals", "source_fork", "par_gate_close", "par_pgroup",
+    "par_pidfd", "par_sockclose", "par_gate_send", "par_gate_done",
+    "mon_handlers", "mon_unmask", "mon_wait",
+)
+PEER_SITES = ("peer_shape", "peer_cred", "peer_pidfd", "peer_cloexec", "peer_live")
+WORKER_SITES = (
+    "kid_gate_close", "kid_pgroup", "kid_pdeath", "kid_parent", "kid_gate_read",
+    "kid_gate_done", "kid_unmask", "source_peer_eq", "source_budget",
+    "source_init", "locator_init", "source_api", "source_libc", "source_getdents",
+    "source_proc", "source_procfs", "source_readfs", "source_read", "self_stat", "self_status", "self_pidns",
+    "self_userns", "self_cgroupns", "self_timens", "parent_live", "parent_stat",
+    "parent_process", "parent_uid", "parent_cgroup", "parent_time", "parent_link",
+    "anc_load", "anc_uid", "anc_ppid", "anc_sudo", "anc_exe", "anc_recheck", "anc_end",
+    "proc_pidfd", "proc_dir", "proc_fs", "proc_start", "proc_cgroup", "proc_root",
+    "proc_ns", "proc_status", "proc_identity", "proc_check", "proc_timens",
+    "proc_live", "proc_reopen", "proc_fdinfo", "stat_delimiter", "stat_state",
+    "stat_start", "status_fields", "status_pid", "status_tgid", "status_uid",
+    "status_nspid", "status_nstgid", "cgroup_record", "channel_fds",
+    "chan_nonblock", "chan_cloexec", "boot_wait", "boot_recv", "boot_ancillary",
+    "boot_accumulate", "boot_marker", "boot_count", "boot_stat", "boot_dir",
+    "boot_mode", "boot_uid", "boot_cloexec", "ready_budget", "ready_wait", "ready_send",
+    "budget_deadline", "budget_reads", "budget_bytes", "budget_fds", "budget_opens",
+    "budget_output",
+)
+
+
+class RecorderScope:
+    __slots__ = ("recorder", "site")
+
+    def __init__(self, recorder, site):
+        self.recorder, self.site = recorder, site
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _kind, error, _traceback):
+        if error is not None and self.recorder is not None:
+            self.recorder.fault(self.site, error)
+        return False
+
+
+_INACTIVE_SCOPE = RecorderScope(None, None)
+
+
+class StartupRecorder:
+    """One best-effort static write per process before cleanup can mask work."""
+
+    def __init__(self, origin="s", active=False):
+        self.reset(origin, active)
+
+    def reset(self, origin, active=True):
+        self.origin, self.active = origin, active
+        self.seen = self.emitted = False
+        self.value = None
+
+    def stop(self):
+        self.active = False
+
+    def kind(self, error):
+        boundary_module = globals().get("boundary")
+        if boundary_module is not None and isinstance(error, boundary_module.Refusal):
+            return "guard"
+        if isinstance(error, (AttributeError, NotImplementedError)):
+            return "no_api"
+        if isinstance(error, ImportError):
+            return "import"
+        if isinstance(error, (TypeError, ValueError, OverflowError)):
+            return "bad_arg"
+        if isinstance(error, OSError):
+            if error.errno in (errno.EACCES, errno.EPERM):
+                return "denied"
+            if error.errno in (errno.ENOENT, errno.ESRCH):
+                return "missing"
+            if error.errno in (errno.ENOSYS, errno.ENOPROTOOPT, errno.EOPNOTSUPP):
+                return "unsupported"
+            if error.errno in (errno.ENOMEM, errno.ENOBUFS, errno.EMFILE, errno.ENFILE, errno.EAGAIN):
+                return "resource"
+            return "io"
+        if isinstance(error, KeyboardInterrupt):
+            return "cancelled"
+        return "other"
+
+    def fault(self, site, error):
+        if not self.active or self.seen:
+            return
+        # Cleanup-origin exceptions can cross outer work scopes. Exclude them
+        # before setting seen, and fail closed on an uninspectable exception.
+        try:
+            cleanup = BaseException.__getattribute__(error, "_dockerlens_startup_cleanup")
+        except AttributeError:
+            cleanup = False
+        except BaseException:
+            self.stop()
+            return
+        if cleanup is True:
+            return
+        # Set before rendering/writing; no retry or cleanup-derived replacement.
+        self.seen = True
+        try:
+            if self.origin not in ("s", "w"):
+                return
+            allowed = SUPERVISOR_SITES if self.origin == "s" else WORKER_SITES
+            if site not in allowed + PEER_SITES:
+                return
+            kind = self.kind(error)
+            line = f"DOCKERLENS_NATIVE_PIDS_START: s={self.origin}_{site} k={kind}"
+            self.value = (self.origin, site, kind)
+            self.emitted = True
+            os.write(2, line.encode("ascii") + b"\n")
+        except BaseException:
+            pass
+
+    def scope(self, site):
+        return RecorderScope(self, site) if self.active else _INACTIVE_SCOPE
+
+
+_STARTUP = StartupRecorder(active=__name__ == "__main__")
+with _STARTUP.scope("imports"):
+    import array
+    import fcntl
+    import importlib.util
+    import json
+    from pathlib import Path
+    import select
+    import signal
+    import socket
+    import stat
+    import struct
+    import time
+
+    _locator_path = Path(__file__).with_name("native_pids_locator.py").resolve()
+    locator = sys.modules.get("native_pids_locator")
+    if (locator is None or getattr(locator, "__file__", None) is None
+            or Path(locator.__file__).resolve() != _locator_path):
+        _locator_spec = importlib.util.spec_from_file_location("native_pids_locator", _locator_path)
+        locator = importlib.util.module_from_spec(_locator_spec)
+        sys.modules["native_pids_locator"] = locator
+        _locator_spec.loader.exec_module(locator)
+    boundary = locator.boundary
+
+boundary.STARTUP_OBSERVER = _STARTUP
 
 require = boundary.require
 BOOT = b"BFPIDS1\n"
@@ -59,18 +189,24 @@ def close_all(fds):
 
 def peer_socket(stream):
     """Check the actual stdin socketpair; never accept a named listener/PTY."""
-    require(stream.family == socket.AF_UNIX
-            and stream.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE) == socket.SOCK_STREAM
-            and stream.getsockname() in ("", b"") and stream.getpeername() in ("", b""))
-    pid, uid, gid = struct.unpack("3i", stream.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
-    require(pid > 0 and uid >= 0 and gid >= 0)
-    fd = stream.getsockopt(socket.SOL_SOCKET, locator.SO_PEERPIDFD)
+    with _STARTUP.scope("peer_shape"):
+        require(stream.family == socket.AF_UNIX
+                and stream.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE) == socket.SOCK_STREAM
+                and stream.getsockname() in ("", b"") and stream.getpeername() in ("", b""))
+    with _STARTUP.scope("peer_cred"):
+        pid, uid, gid = struct.unpack("3i", stream.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+        require(pid > 0 and uid >= 0 and gid >= 0)
+    with _STARTUP.scope("peer_pidfd"):
+        fd = stream.getsockopt(socket.SOL_SOCKET, locator.SO_PEERPIDFD)
     try:
-        os.set_inheritable(fd, False)
-        locator.live(fd)
+        with _STARTUP.scope("peer_cloexec"):
+            os.set_inheritable(fd, False)
+        with _STARTUP.scope("peer_live"):
+            locator.live(fd)
         return pid, uid, gid, fd
     except BaseException:
-        os.close(fd)
+        with boundary.startup_cleanup():
+            os.close(fd)
         raise
 
 
@@ -83,10 +219,13 @@ class Channel:
         self.reservation = 0
         # Three live slots cover the accepted capture capability plus both
         # detectable ancillary descriptors during any subsequent recvmsg.
-        for _ in range(3):
-            budget.fd()
-        self.stream.setblocking(False)
-        self.stream.set_inheritable(False)
+        with _STARTUP.scope("channel_fds"):
+            for _ in range(3):
+                budget.fd()
+        with _STARTUP.scope("chan_nonblock"):
+            self.stream.setblocking(False)
+        with _STARTUP.scope("chan_cloexec"):
+            self.stream.set_inheritable(False)
 
     def wait(self, writing=False):
         self.budget.check()
@@ -104,24 +243,29 @@ class Channel:
             timeout = min(0.1, max(0, (terminal - self.budget.clock()) / 1e9))
 
     def receive(self, size, *, bootstrap=False):
-        self.wait()
-        self.budget.read(size)
-        body, controls, flags, _address = self.stream.recvmsg(
-            size, socket.CMSG_SPACE(2 * array.array("i").itemsize),
-            socket.MSG_CMSG_CLOEXEC | socket.MSG_DONTWAIT)
-        rights, valid = [], not flags & (socket.MSG_CTRUNC | socket.MSG_TRUNC)
-        for level, kind, data in controls:
-            if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
-                items = array.array("i")
-                width = items.itemsize
-                items.frombytes(data[:len(data) - len(data) % width])
-                rights.extend(items)
-                valid = valid and len(data) % width == 0
-            else:
-                valid = False
-        if not valid or (not bootstrap and rights) or len(rights) > 1:
-            close_all(rights)
-            raise boundary.Refusal()
+        with _STARTUP.scope("boot_wait"):
+            self.wait()
+        with _STARTUP.scope("boot_recv"):
+            self.budget.read(size)
+            body, controls, flags, _address = self.stream.recvmsg(
+                size, socket.CMSG_SPACE(2 * array.array("i").itemsize),
+                socket.MSG_CMSG_CLOEXEC | socket.MSG_DONTWAIT)
+        with _STARTUP.scope("boot_ancillary"):
+            rights, valid = [], not flags & (socket.MSG_CTRUNC | socket.MSG_TRUNC)
+            for level, kind, data in controls:
+                if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
+                    items = array.array("i")
+                    width = items.itemsize
+                    items.frombytes(data[:len(data) - len(data) % width])
+                    rights.extend(items)
+                    valid = valid and len(data) % width == 0
+                else:
+                    valid = False
+            if not valid or (not bootstrap and rights) or len(rights) > 1:
+                # The predicate already failed; close_all must not hide it.
+                _STARTUP.fault("boot_ancillary", boundary.Refusal())
+                close_all(rights)
+                raise boundary.Refusal()
         return body, rights
 
     def bootstrap(self, uid):
@@ -129,20 +273,34 @@ class Channel:
         try:
             while len(body) < len(BOOT):
                 part, rights = self.receive(len(BOOT) - len(body), bootstrap=True)
-                held.extend(rights)
-                require(part and len(held) <= 1)
-                body.extend(part)
-            require(bytes(body) == BOOT and len(held) == 1)
+                with _STARTUP.scope("boot_accumulate"):
+                    held.extend(rights)
+                    require(part and len(held) <= 1)
+                    body.extend(part)
+            # Preserve the original short-circuit guard and tag its failed arm.
+            with _STARTUP.scope("boot_marker"):
+                require(bytes(body) == BOOT)
+            with _STARTUP.scope("boot_count"):
+                require(len(held) == 1)
             fd = held[0]
-            info = os.fstat(fd)
-            require(stat.S_ISDIR(info.st_mode) and stat.S_IMODE(info.st_mode) == 0o700
-                    and info.st_uid == uid
-                    and fcntl.fcntl(fd, fcntl.F_GETFD) & fcntl.FD_CLOEXEC)
+            with _STARTUP.scope("boot_stat"):
+                info = os.fstat(fd)
+            with _STARTUP.scope("boot_dir"):
+                require(stat.S_ISDIR(info.st_mode))
+            with _STARTUP.scope("boot_mode"):
+                require(stat.S_IMODE(info.st_mode) == 0o700)
+            with _STARTUP.scope("boot_uid"):
+                require(info.st_uid == uid)
+            with _STARTUP.scope("boot_cloexec"):
+                require(fcntl.fcntl(fd, fcntl.F_GETFD) & fcntl.FD_CLOEXEC)
             self.send_raw(READY)
+            # Supervisor memory is independent and cannot observe this boundary.
+            _STARTUP.stop()
             held.clear()
             return fd
         finally:
-            close_all(held)
+            with boundary.startup_cleanup():
+                close_all(held)
 
     def exact(self, size):
         result = bytearray()
@@ -193,13 +351,16 @@ class Channel:
         require(part == b"")
 
     def send_raw(self, body):
-        self.budget.emit(len(body))
+        with _STARTUP.scope("ready_budget"):
+            self.budget.emit(len(body))
         offset = 0
         while offset < len(body):
-            self.wait(writing=True)
-            size = self.stream.send(body[offset:], socket.MSG_DONTWAIT | socket.MSG_NOSIGNAL)
-            require(size > 0)
-            offset += size
+            with _STARTUP.scope("ready_wait"):
+                self.wait(writing=True)
+            with _STARTUP.scope("ready_send"):
+                size = self.stream.send(body[offset:], socket.MSG_DONTWAIT | socket.MSG_NOSIGNAL)
+                require(size > 0)
+                offset += size
 
     def response(self, value):
         payload = json.dumps(value, separators=(",", ":"), sort_keys=True).encode("ascii")
@@ -373,47 +534,62 @@ class RuntimeBoundSession:
 def guard_parent(source, peer, supervisor_pid):
     """Actual held peer, namespace and bounded sudo monitor ancestry."""
     pid, uid, _gid, pidfd = peer
-    locator.live(pidfd)
-    start = boundary.start_from_stat(source.read(source.proc, str(pid) + "/stat", 1024), pid)
-    parent = source.process(pid, start)
-    require(parent.status[1] == (uid,) * 4)
-    require(boundary.identity(source.reader_cgroup_namespace) == boundary.identity(parent.namespaces[2]))
+    with _STARTUP.scope("parent_live"):
+        locator.live(pidfd)
+    with _STARTUP.scope("parent_stat"):
+        start = boundary.start_from_stat(source.read(source.proc, str(pid) + "/stat", 1024), pid)
+    with _STARTUP.scope("parent_process"):
+        parent = source.process(pid, start)
+    with _STARTUP.scope("parent_uid"):
+        require(parent.status[1] == (uid,) * 4)
+    with _STARTUP.scope("parent_cgroup"):
+        require(boundary.identity(source.reader_cgroup_namespace) == boundary.identity(parent.namespaces[2]))
     source.authenticated_parent_process = parent
     source.authenticated_parent_cgroup_namespace = parent.namespaces[2]
-    own_time = source.open("self/ns/time", source.proc, magic=True)
-    parent_time = source.open("ns/time", parent.directory, magic=True)
-    require(boundary.identity(own_time) == boundary.identity(parent_time))
-    require(os.getppid() == supervisor_pid)
+    with _STARTUP.scope("parent_time"):
+        own_time = source.open("self/ns/time", source.proc, magic=True)
+        parent_time = source.open("ns/time", parent.directory, magic=True)
+        require(boundary.identity(own_time) == boundary.identity(parent_time))
+    with _STARTUP.scope("parent_link"):
+        require(os.getppid() == supervisor_pid)
     current = supervisor_pid
     sudo_identity = None
     ancestry = []
     for _ in range(8):
         if current == pid:
-            source.check_process(parent)
-            for process, ppid in ancestry:
-                source.check_process(process)
-                rows = [line.split()[1:] for line in source.read(process.directory, "status", 4096).splitlines()
-                        if line.startswith(b"PPid:")]
-                require(rows == [[str(ppid).encode()]])
-            locator.live(pidfd)
+            with _STARTUP.scope("anc_recheck"):
+                source.check_process(parent)
+                for process, ppid in ancestry:
+                    source.check_process(process)
+                    rows = [line.split()[1:] for line in source.read(process.directory, "status", 4096).splitlines()
+                            if line.startswith(b"PPid:")]
+                    require(rows == [[str(ppid).encode()]])
+                locator.live(pidfd)
             return parent
-        start = boundary.start_from_stat(source.read(source.proc, str(current) + "/stat", 1024), current)
-        process = source.process(current, start)
-        require(process.status[1] in ((0,) * 4, (uid,) * 4))
-        status = source.read(process.directory, "status", 4096)
-        rows = [line.split()[1:] for line in status.splitlines() if line.startswith(b"PPid:")]
-        require(len(rows) == 1 and len(rows[0]) == 1 and rows[0][0].isdigit())
+        with _STARTUP.scope("anc_load"):
+            start = boundary.start_from_stat(source.read(source.proc, str(current) + "/stat", 1024), current)
+            process = source.process(current, start)
+        with _STARTUP.scope("anc_uid"):
+            require(process.status[1] in ((0,) * 4, (uid,) * 4))
+        with _STARTUP.scope("anc_ppid"):
+            status = source.read(process.directory, "status", 4096)
+            rows = [line.split()[1:] for line in status.splitlines() if line.startswith(b"PPid:")]
+            require(len(rows) == 1 and len(rows[0]) == 1 and rows[0][0].isdigit())
         if current != supervisor_pid:
             # Permitted sudo monitor shape, never SUDO_UID or caller JSON.
             if sudo_identity is None:
-                sudo = source.open("/usr/bin/sudo")
-                sudo_identity = boundary.identity(sudo)
-            executable = source.open("exe", process.directory, magic=True)
-            require(boundary.identity(executable) == sudo_identity)
+                with _STARTUP.scope("anc_sudo"):
+                    sudo = source.open("/usr/bin/sudo")
+                    sudo_identity = boundary.identity(sudo)
+            with _STARTUP.scope("anc_exe"):
+                executable = source.open("exe", process.directory, magic=True)
+                require(boundary.identity(executable) == sudo_identity)
         ancestry.append((process, int(rows[0][0])))
         current = int(rows[0][0])
-        require(current > 0)
-    raise boundary.Refusal()
+        with _STARTUP.scope("anc_ppid"):
+            require(current > 0)
+    with _STARTUP.scope("anc_end"):
+        raise boundary.Refusal()
 
 
 def serve_session(channel, session):
@@ -423,8 +599,9 @@ def serve_session(channel, session):
             request = channel.request()
             channel.response(session.handle(request, channel))
     finally:
-        if session.source.owned:
-            session.source.close()
+        with boundary.startup_cleanup():
+            if session.source.owned:
+                session.source.close()
 
 
 def source_server(stream, deadline_ns, peer, supervisor_pid):
@@ -433,10 +610,13 @@ def source_server(stream, deadline_ns, peer, supervisor_pid):
     try:
         checked = peer_socket(stream)
         try:
-            require(checked[:3] == peer[:3])
+            with _STARTUP.scope("source_peer_eq"):
+                require(checked[:3] == peer[:3])
         finally:
-            os.close(checked[3])
-        budget = locator.RuntimeBudget(deadline_ns)
+            with boundary.startup_cleanup():
+                os.close(checked[3])
+        with _STARTUP.scope("source_budget"):
+            budget = locator.RuntimeBudget(deadline_ns)
         source = locator.LocatorSource(budget)
         guard_parent(source, peer, supervisor_pid)
         channel = Channel(stream, budget, peer[3])
@@ -445,18 +625,19 @@ def source_server(stream, deadline_ns, peer, supervisor_pid):
         capture = None  # transfer is irreversible; never close a reused number
         serve_session(channel, RuntimeBoundSession(source))
     finally:
-        failed = False
-        if capture is not None:
-            try:
-                os.close(capture)
-            except (OSError, KeyboardInterrupt):
-                failed = True
-        if source is not None:
-            try:
-                source.close()
-            except (Exception, KeyboardInterrupt):
-                failed = True
-        require(not failed)
+        with boundary.startup_cleanup():
+            failed = False
+            if capture is not None:
+                try:
+                    os.close(capture)
+                except (OSError, KeyboardInterrupt):
+                    failed = True
+            if source is not None:
+                try:
+                    source.close()
+                except (Exception, KeyboardInterrupt):
+                    failed = True
+            require(not failed)
 
 
 def monitor(parent_pidfd, child, child_pidfd, deadline_ns, *, clock=time.monotonic_ns,
@@ -468,14 +649,17 @@ def monitor(parent_pidfd, child, child_pidfd, deadline_ns, *, clock=time.monoton
         nonlocal cancelled
         cancelled = True
     for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
-        old[number] = signal.signal(number, cancel)
+        with _STARTUP.scope("mon_handlers"):
+            old[number] = signal.signal(number, cancel)
     term_at, killed = None, False
     try:
         if unmask is not None:
-            signal.pthread_sigmask(signal.SIG_SETMASK, unmask)
+            with _STARTUP.scope("mon_unmask"):
+                signal.pthread_sigmask(signal.SIG_SETMASK, unmask)
         while True:
-            now = clock()
-            parent_dead = bool(select.select([parent_pidfd], [], [], 0)[0])
+            with _STARTUP.scope("mon_wait"):
+                now = clock()
+                parent_dead = bool(select.select([parent_pidfd], [], [], 0)[0])
             if term_at is None and (cancelled or parent_dead or now >= deadline_ns - 2_000_000_000):
                 term_at = now
                 try:
@@ -489,92 +673,123 @@ def monitor(parent_pidfd, child, child_pidfd, deadline_ns, *, clock=time.monoton
                     os.killpg(child, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
-            done, status = os.waitpid(child, os.WNOHANG)
+            with _STARTUP.scope("mon_wait"):
+                done, status = os.waitpid(child, os.WNOHANG)
             if done:
                 return 0 if not (cancelled or parent_dead or killed or term_at is not None) and status == 0 else 1
             if now >= deadline_ns:
                 # Unreapable tasks are failed cleanup, never a blocking extension.
                 return 1
             # Never block beyond the next original-deadline action.
-            timeout = max(0, min(0.05, (kill_at - clock()) / 1e9))
-            select.select([parent_pidfd, child_pidfd], [], [], timeout)
+            with _STARTUP.scope("mon_wait"):
+                timeout = max(0, min(0.05, (kill_at - clock()) / 1e9))
+                select.select([parent_pidfd, child_pidfd], [], [], timeout)
     finally:
-        for number, previous in old.items():
-            signal.signal(number, previous)
+        with boundary.startup_cleanup():
+            for number, previous in old.items():
+                signal.signal(number, previous)
 
 
 def supervise(stream, deadline_ns):
-    require(os.geteuid() == 0)
-    now = time.monotonic_ns()
-    require(type(deadline_ns) is int and now + boundary.RESERVE_NS < deadline_ns <= now + 180_000_000_000)
+    with _STARTUP.scope("root_uid"):
+        require(os.geteuid() == 0)
+    with _STARTUP.scope("root_deadline"):
+        now = time.monotonic_ns()
+        require(type(deadline_ns) is int and now + boundary.RESERVE_NS < deadline_ns <= now + 180_000_000_000)
     peer = peer_socket(stream)
     child = None
     child_pidfd = None
-    gate_read, gate_write = os.pipe2(os.O_CLOEXEC)
+    with _STARTUP.scope("gate_pipe"):
+        gate_read, gate_write = os.pipe2(os.O_CLOEXEC)
     # Block cancellation until ownership/handshake and monitor handlers exist.
     numbers = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
-    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, numbers)
+    with _STARTUP.scope("block_signals"):
+        previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, numbers)
     supervisor_pid = os.getpid()
     try:
-        child = os.fork()
+        with _STARTUP.scope("source_fork"):
+            child = os.fork()
         if child == 0:
+            # Fork copies memory: reset role/latch before the first child work.
+            _STARTUP.reset("w")
             try:
-                os.close(gate_write)
-                os.setpgid(0, 0)
+                with _STARTUP.scope("kid_gate_close"):
+                    os.close(gate_write)
+                with _STARTUP.scope("kid_pgroup"):
+                    os.setpgid(0, 0)
                 # A killed watchdog must not orphan a privileged blocked reader.
-                libc = boundary.ctypes.CDLL(None, use_errno=True)
-                require(libc.prctl(1, signal.SIGKILL, 0, 0, 0) == 0)
-                require(os.getppid() == supervisor_pid)
-                require(os.read(gate_read, 1) == b"G")
-                os.close(gate_read)
-                signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+                with _STARTUP.scope("kid_pdeath"):
+                    libc = boundary.ctypes.CDLL(None, use_errno=True)
+                    require(libc.prctl(1, signal.SIGKILL, 0, 0, 0) == 0)
+                with _STARTUP.scope("kid_parent"):
+                    require(os.getppid() == supervisor_pid)
+                with _STARTUP.scope("kid_gate_read"):
+                    require(os.read(gate_read, 1) == b"G")
+                with _STARTUP.scope("kid_gate_done"):
+                    os.close(gate_read)
+                with _STARTUP.scope("kid_unmask"):
+                    signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
                 source_server(stream, deadline_ns, peer, supervisor_pid)
                 result = 0
             except BaseException:
                 result = 1
             finally:
-                stream.close()
-                os.close(peer[3])
+                with boundary.startup_cleanup():
+                    stream.close()
+                    os.close(peer[3])
             os._exit(result)
-        os.close(gate_read)
+        with _STARTUP.scope("par_gate_close"):
+            os.close(gate_read)
         gate_read = None
-        os.setpgid(child, child)
-        child_pidfd = os.pidfd_open(child)
-        stream.close()
-        os.write(gate_write, b"G")
-        os.close(gate_write)
+        with _STARTUP.scope("par_pgroup"):
+            os.setpgid(child, child)
+        with _STARTUP.scope("par_pidfd"):
+            child_pidfd = os.pidfd_open(child)
+        with _STARTUP.scope("par_sockclose"):
+            stream.close()
+        with _STARTUP.scope("par_gate_send"):
+            os.write(gate_write, b"G")
+        with _STARTUP.scope("par_gate_done"):
+            os.close(gate_write)
         gate_write = None
         # Signals stay blocked until monitor installed handlers; it unmasks via
         # the supplied wrapper immediately before entering its polling loop.
         return monitor(peer[3], child, child_pidfd, deadline_ns, unmask=previous_mask)
     finally:
-        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
-        for fd in (gate_read, gate_write, child_pidfd, peer[3]):
-            if fd is not None:
-                os.close(fd)
-        if child is not None:
-            try:
-                done, _status = os.waitpid(child, os.WNOHANG)
-                if not done:
-                    # The unreaped child still owns this number/group. Do not
-                    # signal a numeric group after reaping its original owner.
-                    os.killpg(child, signal.SIGKILL)
-                    os.waitpid(child, os.WNOHANG)
-            except ChildProcessError:
-                pass
-            except ProcessLookupError:
-                pass
+        with boundary.startup_cleanup():
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+            for fd in (gate_read, gate_write, child_pidfd, peer[3]):
+                if fd is not None:
+                    os.close(fd)
+            if child is not None:
+                try:
+                    done, _status = os.waitpid(child, os.WNOHANG)
+                    if not done:
+                        # The unreaped child still owns this number/group. Do not
+                        # signal a numeric group after reaping its original owner.
+                        os.killpg(child, signal.SIGKILL)
+                        os.waitpid(child, os.WNOHANG)
+                except ChildProcessError:
+                    pass
+                except ProcessLookupError:
+                    pass
 
 
 def main(argv=None):
+    _STARTUP.reset("s")
     try:
-        args = sys.argv[1:] if argv is None else argv
-        require(len(args) == 2 and args[0] == "supervise"
-                and 0 < len(args[1]) <= 19 and args[1].isascii() and args[1].isdigit())
-        require(stat.S_ISSOCK(os.fstat(0).st_mode))
-        with socket.socket(fileno=0) as stream:
+        with _STARTUP.scope("args"):
+            args = sys.argv[1:] if argv is None else argv
+            require(len(args) == 2 and args[0] == "supervise"
+                    and 0 < len(args[1]) <= 19 and args[1].isascii() and args[1].isdigit())
+        with _STARTUP.scope("fd0"):
+            require(stat.S_ISSOCK(os.fstat(0).st_mode))
+        with _STARTUP.scope("socket_wrap"):
+            stream = socket.socket(fileno=0)
+        with stream:
             result = supervise(stream, int(args[1]))
         if result:
+            # A derived child result is not an authored startup work fault.
             raise boundary.Refusal()
         return 0
     except BaseException:
@@ -583,6 +798,8 @@ def main(argv=None):
         except OSError:
             pass
         return 1
+    finally:
+        _STARTUP.stop()
 
 
 if __name__ == "__main__":
