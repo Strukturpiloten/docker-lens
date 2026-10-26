@@ -131,6 +131,25 @@ environment variables and JSON parent facts are not authority. This assumes the
 trusted original harness, guest/runtime and host root, not hostile-root defense.
 No Cargo, tests, caches or capture publication run as root.
 
+[ADR 0042](decisions/0042-sudo-monitor-uid-shape.md) corrects one finite
+sudo-ancestor credential assumption. Linux reports UID fields in real, effective,
+saved-set, filesystem order. In addition to the existing all-root/all-peer forms,
+a non-supervisor ancestor may provisionally retain exactly positive peer real UID
+and root effective/saved/filesystem UIDs. It still must pass the fixed
+`/usr/bin/sudo` device/inode comparison, the bounded parent chain and every
+existing held-process/UID/namespace/time/liveness and final PPid recheck before
+READY. This shape alone does not establish sudo identity or source authority.
+The original peer's four-equal-UID check, the supervisor's uniform forms and its
+earlier root-effective-UID launch requirement are unchanged. Other mixed or
+foreign UID vectors remain refused; environment identity claims are not used.
+
+The executable comparison is an existing one-time held inode witness. The final
+process pass does not reopen `exe`, and repeated kernel snapshots are not atomic;
+no continuously stable executable or hostile-root guarantee is claimed. The
+reference Linux/sudo semantics justify this shape independently, but neither the
+rejected vector/ancestor role nor the hosted sudo version is known from the
+`w_anc_uid` record. Fresh exact-source native qualification remains required.
+
 Bootstrap is exactly `BFPIDS1\n` with one SCM_RIGHTS capture-directory FD, followed
 by `BFREADY\n`. The actual directory must be mode0700 including special-bit
 rejection, owned by the actual original peer UID, and close-on-exec. Split stream

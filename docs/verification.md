@@ -2,6 +2,16 @@
 
 ## Current PIDs27 source gate
 
+The [finite sudo credential correction](decisions/0042-sudo-monitor-uid-shape.md)
+has inert full-guard controls in `tests/test_native_pids_supervisor.py`. They
+independently enumerate root/peer/foreign UID vectors and roles, verify the exact
+additional sudo shape still needs the fixed executable and valid ancestry,
+reject PPid/process/credential/namespace/time/liveness drift, and preserve source
+call order/counts and the eight-link bound. These authored process fixtures do
+not execute sudo or establish the actual hosted UID tuple, role or version.
+The existing one-time executable witness remains explicit; passing controls do
+not prove PIDs27, native compatibility or capability admission.
+
 The current coordinator appends the [original-owner PIDs experiment](native-pids-owner.md)
 as invocation 27 after the unchanged first 26 calls and kernel reader. A bounded
 static prebuild precedes its original live deadline; the immediate independent

@@ -570,7 +570,12 @@ def guard_parent(source, peer, supervisor_pid):
             start = boundary.start_from_stat(source.read(source.proc, str(current) + "/stat", 1024), current)
             process = source.process(current, start)
         with _STARTUP.scope("anc_uid"):
-            require(process.status[1] in ((0,) * 4, (uid,) * 4))
+            # A setuid-root sudo parent may retain the peer's real UID. This
+            # candidate still requires the fixed sudo inode below; never widen
+            # the authenticated peer or supervisor credential contract.
+            require(process.status[1] in ((0,) * 4, (uid,) * 4)
+                    or (current != supervisor_pid and uid > 0
+                        and process.status[1] == (uid, 0, 0, 0)))
         with _STARTUP.scope("anc_ppid"):
             status = source.read(process.directory, "status", 4096)
             rows = [line.split()[1:] for line in status.splitlines() if line.startswith(b"PPid:")]

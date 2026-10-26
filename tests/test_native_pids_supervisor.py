@@ -768,6 +768,292 @@ class RootFactoryTests(unittest.TestCase):
                 self.run_factory(run)
 
 
+class HeldAncestryFixture:
+    """Independent inert kernel model for the guard, not a source authority."""
+
+    PEER, SUDO, SUPERVISOR = 41, 42, 43
+    UID, FOREIGN = 37, 61
+    PROC, CGROUP, TIME, SUDO_FILE = 900, 901, 902, 903
+
+    def __init__(self, ancestor_uid=None, peer_uid=UID, links=None):
+        self.peer_uid = peer_uid
+        self.log = []
+        self.proc, self.reader_cgroup_namespace = self.PROC, self.CGROUP
+        self.reader_time_namespace = self.TIME
+        self.ppids = dict(links or {self.SUPERVISOR: self.SUDO, self.SUDO: self.PEER})
+        self.held, self.current, self.times, self.live = {}, {}, {}, {}
+        self.identities = {self.CGROUP: (1, 1), self.TIME: (2, 2), self.SUDO_FILE: (3, 3)}
+        self.after_exe = None
+        self.fixed_sudo_error = None
+        for pid in {self.PEER, *self.ppids}:
+            vector = (peer_uid,) * 4 if pid == self.PEER else (0,) * 4
+            if pid == self.SUDO and ancestor_uid is not None:
+                vector = ancestor_uid
+            process = b.Process(pid, pid + 100, pid + 1000, pid + 2000, pid + 3000,
+                (pid + 4000, pid + 5000, self.CGROUP), (),
+                ((4, pid), ((5, pid), 6), ((7, pid), (8, pid), (1, 1))),
+                ((pid,), vector, (pid,)))
+            self.held[pid] = process
+            self.current[pid] = process
+            self.times[pid], self.live[pid] = self.TIME, True
+            self.identities[pid + 6000] = (3, 3)  # fixed sudo executable witness
+
+    def process(self, pid, start):
+        self.log.append(("process", pid, start))
+        b.require(pid in self.held and self.held[pid].start == start)
+        self.check_process(self.held[pid])
+        return self.held[pid]
+
+    def check_process(self, process):
+        self.log.append(("check", process.pid))
+        b.require(self.live[process.pid] and self.current[process.pid] == process
+                  and self.times[process.pid] == self.reader_time_namespace)
+
+    def read(self, parent, name, maximum):
+        self.log.append(("read", parent, name, maximum))
+        if parent == self.PROC and name.endswith("/stat"):
+            pid = int(name.split("/")[0])
+            b.require(pid in self.current and maximum == 1024)
+            return (f"{pid} (fixture) S ".encode() + b"0 " * 18
+                    + str(self.current[pid].start).encode() + b"\n")
+        if name == "status":
+            pid = parent - 1000
+            b.require(pid in self.ppids and maximum == 4096)
+            return b"PPid:\t" + str(self.ppids[pid]).encode() + b"\n"
+        raise AssertionError("unexpected fixture read")
+
+    def open(self, name, parent=None, directory=False, magic=False):
+        self.log.append(("open", name, parent, directory, magic))
+        if name == "self/ns/time":
+            b.require(parent == self.PROC and magic)
+            return self.TIME
+        if name == "ns/time":
+            b.require(parent == self.held[self.PEER].directory and magic)
+            return self.times[self.PEER]
+        if name == "/usr/bin/sudo":
+            b.require(parent is None and not magic)
+            if self.fixed_sudo_error:
+                raise self.fixed_sudo_error
+            return self.SUDO_FILE
+        if name == "exe":
+            pid = parent - 1000
+            b.require(pid != self.SUPERVISOR and pid != self.PEER and magic)
+            if self.after_exe is not None:
+                callback, self.after_exe = self.after_exe, None
+                callback(self)
+            return pid + 6000
+        raise AssertionError("unexpected fixture open")
+
+
+class SudoAncestorUidTests(unittest.TestCase):
+    """Full guard controls with authored process facts, never /proc or sudo."""
+
+    def run_guard(self, fixture):
+        recorder = s.StartupRecorder("w", True)
+        with patch.object(s, "_STARTUP", recorder), patch.object(b, "STARTUP_OBSERVER", recorder), \
+                patch.object(l, "live") as peer_live, patch.object(s.os, "getppid", return_value=fixture.SUPERVISOR), \
+                patch.object(b, "identity", side_effect=lambda fd: fixture.identities[fd]), patch.object(s.os, "write"):
+            try:
+                result = s.guard_parent(fixture,
+                    (fixture.PEER, fixture.peer_uid, 0, 7000), fixture.SUPERVISOR)
+            except (b.Refusal, OSError) as error:
+                return None, error, recorder.value, peer_live.call_count
+        return result, None, recorder.value, peer_live.call_count
+
+    def test_independent_complete_uid_product_allows_only_legacy_and_exact_sudo_shape(self):
+        import itertools
+        p, foreign = HeldAncestryFixture.UID, HeldAncestryFixture.FOREIGN
+        allowed = {(0, 0, 0, 0), (p, p, p, p), (p, 0, 0, 0)}
+        for vector in itertools.product((0, p, foreign), repeat=4):
+            with self.subTest(vector=vector):
+                fixture = HeldAncestryFixture(vector)
+                result, error, observed, _ = self.run_guard(fixture)
+                if vector in allowed:
+                    self.assertIs(result, fixture.held[fixture.PEER])
+                    self.assertIsNone(error)
+                    self.assertIsNone(observed)
+                else:
+                    self.assertIsNone(result)
+                    self.assertIsInstance(error, b.Refusal)
+                    self.assertEqual(observed, ("w", "anc_uid", "guard"))
+                    self.assertFalse(any(event[:2] == ("read", fixture.held[fixture.SUDO].directory)
+                                         for event in fixture.log))
+                    self.assertNotIn(("open", "/usr/bin/sudo", None, False, False), fixture.log)
+
+    def test_candidate_is_rejected_for_peer_and_supervisor_without_executable_lookup(self):
+        from dataclasses import replace
+        p = HeldAncestryFixture.UID
+        for role, site in ((HeldAncestryFixture.PEER, "parent_uid"), (HeldAncestryFixture.SUPERVISOR, "anc_uid")):
+            fixture = HeldAncestryFixture((p, 0, 0, 0))
+            changed = replace(fixture.held[role], status=((role,), (p, 0, 0, 0), (role,)))
+            fixture.held[role] = fixture.current[role] = changed
+            result, error, observed, _ = self.run_guard(fixture)
+            self.assertIsNone(result)
+            self.assertIsInstance(error, b.Refusal)
+            self.assertEqual(observed, ("w", site, "guard"))
+            self.assertNotIn(("open", "/usr/bin/sudo", None, False, False), fixture.log)
+
+    def test_supervisor_legacy_uniform_forms_keep_existing_guard_behavior(self):
+        from dataclasses import replace
+        p = HeldAncestryFixture.UID
+        for vector in ((0,) * 4, (p,) * 4):
+            fixture = HeldAncestryFixture()
+            held = fixture.held[fixture.SUPERVISOR]
+            changed = replace(held, status=((held.pid,), vector, (held.pid,)))
+            fixture.held[fixture.SUPERVISOR] = fixture.current[fixture.SUPERVISOR] = changed
+            result, error, _, _ = self.run_guard(fixture)
+            self.assertIs(result, fixture.held[fixture.PEER])
+            self.assertIsNone(error)
+            self.assertNotIn(("open", "exe", held.directory, False, True), fixture.log)
+        # This tests the existing ancestor predicate only. The original launch
+        # also requires supervisor geteuid()==0; this creates no new role grant.
+
+    def test_zero_peer_introduces_no_new_uid_shape(self):
+        import itertools
+        for vector in itertools.product((0, HeldAncestryFixture.FOREIGN), repeat=4):
+            fixture = HeldAncestryFixture(vector, peer_uid=0)
+            result, error, _, _ = self.run_guard(fixture)
+            self.assertEqual(error is None, vector == (0, 0, 0, 0))
+            if vector != (0, 0, 0, 0):
+                self.assertIsNone(result)
+
+    def test_new_route_has_identical_source_call_order_to_legacy_sudo_routes(self):
+        p = HeldAncestryFixture.UID
+        logs = []
+        for vector in ((0, 0, 0, 0), (p, p, p, p), (p, 0, 0, 0)):
+            fixture = HeldAncestryFixture(vector)
+            result, error, observed, live_calls = self.run_guard(fixture)
+            self.assertIs(result, fixture.held[fixture.PEER])
+            self.assertIsNone(error)
+            self.assertIsNone(observed)
+            self.assertEqual(live_calls, 2)
+            logs.append(fixture.log)
+        self.assertEqual(logs[0], logs[1])
+        self.assertEqual(logs[0], logs[2])
+        self.assertEqual(logs[0].count(("open", "/usr/bin/sudo", None, False, False)), 1)
+        self.assertEqual(logs[0].count(("open", "exe", 1042, False, True)), 1)
+        self.assertNotIn(("open", "exe", 1043, False, True), logs[0])
+        self.assertNotIn(("open", "exe", 1041, False, True), logs[0])
+        self.assertEqual(sum(event[0] == "check" for event in logs[0]), 6)
+
+    def test_no_saved_filesystem_foreign_or_arbitrary_mixed_identity_fallback(self):
+        p, other = HeldAncestryFixture.UID, HeldAncestryFixture.FOREIGN
+        for vector in ((other, 0, 0, 0), (p, p, 0, 0), (p, 0, p, 0), (p, 0, 0, p),
+                       (p, 0, 0, other), (p, 0, other, 0), (0, p, 0, 0), (other, other, other, other),
+                       (p, 0, 0, other + 1)):
+            fixture = HeldAncestryFixture(vector)
+            with patch.dict(os.environ, {"SUDO_UID": str(p), "SUDO_USER": "fixture-owner"}):
+                result, error, observed, _ = self.run_guard(fixture)
+            self.assertIsNone(result)
+            self.assertIsInstance(error, b.Refusal)
+            self.assertEqual(observed, ("w", "anc_uid", "guard"))
+
+    def test_correct_uid_tuple_never_substitutes_for_fixed_sudo_executable(self):
+        p = HeldAncestryFixture.UID
+        for vector in ((0, 0, 0, 0), (p, p, p, p), (p, 0, 0, 0)):
+            for different in ((3, 999), (999, 3)):
+                fixture = HeldAncestryFixture(vector)
+                fixture.identities[fixture.SUDO + 6000] = different
+                result, error, observed, _ = self.run_guard(fixture)
+                self.assertIsNone(result)
+                self.assertIsInstance(error, b.Refusal)
+                self.assertEqual(observed, ("w", "anc_exe", "guard"))
+        fixture = HeldAncestryFixture((p, 0, 0, 0))
+        failure = PermissionError(s.errno.EACCES, "fixed sudo unavailable")
+        fixture.fixed_sudo_error = failure
+        result, error, observed, _ = self.run_guard(fixture)
+        self.assertIsNone(result)
+        self.assertIs(error, failure)
+        self.assertEqual(observed, ("w", "anc_sudo", "denied"))
+
+    def test_new_shape_still_rejects_broken_ppid_or_non_sudo_intermediate(self):
+        p = HeldAncestryFixture.UID
+        for change in ("zero_ppid", "missing_link", "foreign_exe"):
+            fixture = HeldAncestryFixture((p, 0, 0, 0))
+            if change == "zero_ppid":
+                fixture.ppids[fixture.SUDO] = 0
+            elif change == "missing_link":
+                fixture.ppids[fixture.SUDO] = 99
+            else:
+                fixture.identities[fixture.SUDO + 6000] = (999, 999)
+            result, error, _, _ = self.run_guard(fixture)
+            self.assertIsNone(result)
+            self.assertIsInstance(error, b.Refusal)
+
+    def test_held_credential_root_cgroup_namespace_start_and_liveness_drift_fail(self):
+        from dataclasses import replace
+        p = HeldAncestryFixture.UID
+        for field in ("uid", "start", "root", "mount_identity", "membership", "namespaces", "time", "live", "ppid"):
+            fixture = HeldAncestryFixture((p, 0, 0, 0))
+            def drift(source, field=field):
+                held = source.current[source.SUDO]
+                if field == "uid":
+                    source.current[source.SUDO] = replace(held, status=((held.pid,), (p,) * 4, (held.pid,)))
+                elif field == "start":
+                    source.current[source.SUDO] = replace(held, start=held.start + 1)
+                elif field == "root":
+                    source.current[source.SUDO] = replace(held, root=999)
+                elif field == "mount_identity":
+                    source.current[source.SUDO] = replace(held, identity=())
+                elif field == "membership":
+                    source.current[source.SUDO] = replace(held, membership=("moved",))
+                elif field == "namespaces":
+                    source.current[source.SUDO] = replace(held, namespaces=(999,) * 3)
+                elif field == "time":
+                    source.times[source.SUDO] = 999
+                elif field == "live":
+                    source.live[source.SUDO] = False
+                else:
+                    source.ppids[source.SUDO] = 99
+            fixture.after_exe = drift
+            result, error, observed, _ = self.run_guard(fixture)
+            self.assertIsNone(result, field)
+            self.assertIsInstance(error, b.Refusal, field)
+            self.assertEqual(observed, ("w", "anc_recheck", "guard"), field)
+
+    def test_peer_cgroup_time_parent_and_eight_link_bound_remain_required(self):
+        from dataclasses import replace
+        p = HeldAncestryFixture.UID
+        fixture = HeldAncestryFixture((p, 0, 0, 0))
+        parent = fixture.held[fixture.PEER]
+        changed = replace(parent, namespaces=(parent.namespaces[0], parent.namespaces[1], 999))
+        fixture.held[fixture.PEER] = fixture.current[fixture.PEER] = changed
+        fixture.identities[999] = (99, 99)
+        self.assertIsInstance(self.run_guard(fixture)[1], b.Refusal)
+        fixture = HeldAncestryFixture((p, 0, 0, 0))
+        fixture.times[fixture.PEER] = 999
+        self.assertIsInstance(self.run_guard(fixture)[1], b.Refusal)
+        fixture = HeldAncestryFixture((p, 0, 0, 0))
+        recorder = s.StartupRecorder("w", True)
+        with patch.object(s, "_STARTUP", recorder), patch.object(b, "STARTUP_OBSERVER", recorder), \
+                patch.object(l, "live"), patch.object(s.os, "getppid", return_value=999), \
+                patch.object(b, "identity", side_effect=lambda fd: fixture.identities[fd]), patch.object(s.os, "write"):
+            with self.assertRaises(b.Refusal):
+                s.guard_parent(fixture, (fixture.PEER, p, 0, 7000), fixture.SUPERVISOR)
+        self.assertEqual(recorder.value, ("w", "parent_link", "guard"))
+        links = {pid: pid + 1 for pid in range(43, 51)}
+        links[51] = HeldAncestryFixture.PEER
+        fixture = HeldAncestryFixture(links=links)
+        result, error, observed, _ = self.run_guard(fixture)
+        self.assertIsNone(result)
+        self.assertIsInstance(error, b.Refusal)
+        self.assertEqual(observed, ("w", "anc_end", "guard"))
+        self.assertEqual(sum(event[0] == "process" for event in fixture.log), 9)
+
+    def test_one_time_executable_witness_is_not_advertised_as_a_final_exec_recheck(self):
+        p = HeldAncestryFixture.UID
+        fixture = HeldAncestryFixture((p, 0, 0, 0))
+        result, error, _, _ = self.run_guard(fixture)
+        self.assertIsNotNone(result)
+        self.assertIsNone(error)
+        executable = ("open", "exe", 1042, False, True)
+        self.assertEqual(fixture.log.count(executable), 1)
+        last_executable = fixture.log.index(executable)
+        self.assertTrue(any(event[0] == "check" for event in fixture.log[last_executable + 1:]))
+        # Only the existing snapshot witness is asserted. A same-PID/credential
+        # exec after it is outside this non-atomic trusted-bootstrap contract.
+
+
 class StartupDiagnosticTests(unittest.TestCase):
     """Inert startup faults; no sudo, source server or host kernel acquisition."""
 

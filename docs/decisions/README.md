@@ -1,5 +1,9 @@
 # Architecture decisions
 
+- [0042: Finite sudo ancestor UID shape](0042-sudo-monitor-uid-shape.md)
+  admits only the exact positive-peer/root-effective/saved/filesystem shape for
+  non-supervisor links still bound to the existing fixed sudo and ancestry checks;
+  native qualification and the observed run's UID/role remain unresolved.
 - [0041: Original-owner PIDs27 source integration](0041-original-owner-pids-experiment.md)
   adopts the Linux-only owner/controller/private reader and canonical call27,
   preserving source-only unadmitted status and fresh native qualification.
