@@ -2098,6 +2098,22 @@ fn validate_case(
     )
 }
 
+fn validate_outer_owner_state(raw: &Value, id: &str, run: &str) -> PidsResult<()> {
+    // outer_context_observation already binds the selected actor's exact CID,
+    // name, image, resources and private socket. Corroborate its canonical outer
+    // owner here; LABEL belongs only to the six inner PIDs experiment fixtures.
+    if raw["Id"] != id
+        || raw["State"]["Running"] != true
+        || raw["State"]["Restarting"] != false
+        || raw["State"]["Paused"] != false
+        || raw["Config"]["Labels"][OWNER] != run
+        || raw["RestartCount"].as_u64() != Some(0)
+    {
+        return Err("pids-outer");
+    }
+    Ok(())
+}
+
 impl OuterIdentity {
     fn acquire(run: &HealthRun, cleanup: bool) -> PidsResult<Self> {
         // This executes the original selected actor's canonical exact-CID
@@ -2120,15 +2136,7 @@ impl OuterIdentity {
             .filter(|mode| *mode == "private")
             .ok_or("pids-cgroup-namespace")?
             .to_owned();
-        if raw["Id"] != id
-            || raw["State"]["Running"] != true
-            || raw["State"]["Restarting"] != false
-            || raw["State"]["Paused"] != false
-            || raw["Config"]["Labels"][LABEL] != run.run
-            || restart_count != 0
-        {
-            return Err("pids-outer");
-        }
+        validate_outer_owner_state(&raw, &id, &run.run)?;
         reserve(run, 1, 0, cleanup)?;
         let mut process = OpenOptions::new()
             .read(true)
@@ -2892,6 +2900,92 @@ fn live_pids_limits_and_effects_match_engine() {
     // real worker barriers per role; it is never a public capability record.
     producer.target.publish_bounded(&proof, 128 * 1024);
     eprintln!("DOCKERLENS_NATIVE_CHECK: pids_evidence");
+}
+
+#[test]
+fn pids_outer_owner_state_accepts_canonical_outer_without_inner_label() {
+    // Literal fixture facts come from the native coordinator's outer role,
+    // independently of the constants and inner-label constructors above.
+    let mut outer = json!({
+        "Id": "a".repeat(64),
+        "State": {"Running": true, "Restarting": false, "Paused": false},
+        "RestartCount": 0,
+        "Config": {"Labels": {"io.dockerlens.native-run": "outer-owner-fixture"}}
+    });
+    let id = "a".repeat(64);
+    assert_eq!(
+        validate_outer_owner_state(&outer, &id, "outer-owner-fixture"),
+        Ok(())
+    );
+    // An unrelated inner-role label must neither be required nor substitute
+    // for the canonical outer ownership binding.
+    outer["Config"]["Labels"]["io.dockerlens.native-pids"] = json!("different-inner-owner");
+    assert_eq!(
+        validate_outer_owner_state(&outer, &id, "outer-owner-fixture"),
+        Ok(())
+    );
+}
+
+#[test]
+fn pids_outer_owner_state_refuses_wrong_role_key_and_value() {
+    let id = "b".repeat(64);
+    let outer = json!({
+        "Id": id,
+        "State": {"Running": true, "Restarting": false, "Paused": false},
+        "RestartCount": 0,
+        "Config": {"Labels": {"io.dockerlens.native-run": "outer-owner-fixture"}}
+    });
+    for labels in [
+        json!({"io.dockerlens.native-pids": "outer-owner-fixture"}),
+        json!({"io.dockerlens.native-pids-slot": "outer-owner-fixture"}),
+        json!({"io.dockerlens.native-run-other": "outer-owner-fixture"}),
+        json!({"io.dockerlens.native-run": "other-owner", "io.dockerlens.native-pids": "outer-owner-fixture"}),
+        json!({"io.dockerlens.native-run": null}),
+        json!({"io.dockerlens.native-run": true}),
+        json!({}),
+        Value::Null,
+    ] {
+        let mut changed = outer.clone();
+        changed["Config"]["Labels"] = labels;
+        assert_eq!(
+            validate_outer_owner_state(&changed, &id, "outer-owner-fixture"),
+            Err("pids-outer")
+        );
+    }
+}
+
+#[test]
+fn pids_outer_owner_state_preserves_exact_cid_running_and_restart_guards() {
+    let id = "c".repeat(64);
+    let outer = json!({
+        "Id": id,
+        "State": {"Running": true, "Restarting": false, "Paused": false},
+        "RestartCount": 0,
+        "Config": {"Labels": {"io.dockerlens.native-run": "outer-owner-fixture"}}
+    });
+    assert_eq!(
+        validate_outer_owner_state(&outer, &id, "outer-owner-fixture"),
+        Ok(())
+    );
+    for (pointer, replacement) in [
+        ("/Id", json!("d".repeat(64))),
+        ("/Id", Value::Null),
+        ("/State/Running", json!(false)),
+        ("/State/Running", json!("true")),
+        ("/State/Restarting", json!(true)),
+        ("/State/Paused", json!(true)),
+        ("/RestartCount", json!(1)),
+        ("/RestartCount", json!(-1)),
+        ("/RestartCount", json!(false)),
+        ("/RestartCount", Value::Null),
+    ] {
+        let mut changed = outer.clone();
+        *changed.pointer_mut(pointer).unwrap() = replacement;
+        assert_eq!(
+            validate_outer_owner_state(&changed, &id, "outer-owner-fixture"),
+            Err("pids-outer")
+        );
+    }
 }
 
 #[test]
