@@ -1173,9 +1173,16 @@ class PublicationBudgetTests(unittest.TestCase):
                                     ("head", ["head"]), ("status", ["head", "status"]),
                                     ("publisher", ["head", "status", "publisher"])):
                 trace = tools / (phase + ".trace")
+                # The positive arm checks throughput under its existing <5s
+                # bound. Real hangs and deterministic expired/late controls
+                # retain the original cutoff proof, without a one-tick race
+                # between three successful child launches in this arm.
+                phase_body = body
+                if phase == "none":
+                    phase_body = body.replace("\nSECONDS=1796\n", "\nSECONDS=1790\n", 1)
                 with self.subTest(phase=phase):
                     started = time.monotonic()
-                    result = subprocess.run(["/bin/bash", "-c", body],
+                    result = subprocess.run(["/bin/bash", "-c", phase_body],
                                             env={"PATH": temporary, "HANG": phase, "TRACE": str(trace),
                                                  "CANDIDATE": "d" * 40},
                                             capture_output=True, text=True, timeout=7)

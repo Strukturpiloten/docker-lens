@@ -44,8 +44,101 @@ fi
 
 # libtest returns success for zero selected tests. Check the ignored-only list
 # first, then require exactly one executed success in the final summary.
+exact_pids=0
+capture_directory=
+if [[ $target == native_pids && $test_name == live_pids_limits_and_effects_match_engine ]]; then
+  exact_pids=1
+  capture_directory=$(mktemp -d 2>/dev/null) || {
+    echo "required native test private capture unavailable" >&2
+    exit 1
+  }
+  remove_native_capture() {
+    if [[ -z $capture_directory ]]; then return 0; fi
+    local held_directory=$capture_directory
+    capture_directory=
+    if ! rm -rf -- "$held_directory" >/dev/null 2>&1; then
+      echo "required native test private capture cleanup unavailable" >&2
+      return 1
+    fi
+  }
+  cleanup_native_capture() {
+    local status=$?
+    trap - EXIT
+    if ! remove_native_capture; then
+      if (( status == 0 )); then status=1; fi
+    fi
+    exit "$status"
+  }
+  trap cleanup_native_capture EXIT
+fi
+
+capture_native_raw() {
+  # Keep at most 1 MiB plus one overflow byte, but drain to EOF so capture
+  # overflow cannot replace the original Cargo status with a broken pipe.
+  python3 -I -c '
+import os, sys
+failed, size = False, 0
+try:
+    descriptor = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    output = os.fdopen(descriptor, "wb")
+except OSError:
+    failed, output = True, None
+try:
+    while part := sys.stdin.buffer.read(65536):
+        if output is not None and size < 1048577:
+            retained = part[:1048577 - size]
+            try:
+                output.write(retained)
+            except OSError:
+                failed = True
+            size += len(retained)
+    if output is not None:
+        try:
+            output.close()
+        except OSError:
+            failed = True
+except OSError:
+    failed = True
+sys.exit(1 if failed else 2 if size > 1048576 else 0)
+' "$1" 2>/dev/null
+}
+
+materialize_native_raw() {
+  # Validate original bytes before Bash can discard NUL or issue a path-bearing
+  # command-substitution warning. Ordinary UTF-8 and ANSI output is unchanged.
+  python3 -I -c '
+import os, stat, sys
+try:
+    descriptor = os.open(sys.argv[1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, "rb") as capture:
+        info = os.fstat(capture.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o600
+                or info.st_size > 1048576):
+            raise ValueError()
+        data = capture.read(1048577)
+    if len(data) != info.st_size or b"\0" in data:
+        raise ValueError()
+    sys.stdout.buffer.write(data)
+except (OSError, ValueError):
+    sys.exit(1)
+' "$1" 2>/dev/null
+}
+
 list_status=0
-listing=$(timeout 180 cargo test --locked "${cargo_target[@]}" -- --ignored --list 2>&1) || list_status=$?
+if (( exact_pids )); then
+  set +e
+  timeout 180 cargo test --locked "${cargo_target[@]}" -- --ignored --list 2>&1 | capture_native_raw "$capture_directory/list.raw"
+  capture_status=("${PIPESTATUS[@]}")
+  set -e
+  list_status=${capture_status[0]}
+  listing=
+  if (( capture_status[1] != 0 )) || ! listing=$(materialize_native_raw "$capture_directory/list.raw"); then
+    if (( list_status == 0 )); then list_status=1; fi
+  fi
+else
+  listing=$(timeout 180 cargo test --locked "${cargo_target[@]}" -- --ignored --list 2>&1) || list_status=$?
+fi
 if (( list_status != 0 )); then
   echo "failed to list required ignored native test $target::$test_name (exit $list_status)" >&2
   exit 1
@@ -58,7 +151,84 @@ run_status=0
 # Bind optional failure diagnostics to this invocation's existing hard timeout.
 # The native test reserves its own cleanup and reporting margin before this time.
 run_deadline_epoch=$(( $(date +%s) + 180 ))
-result=$(NATIVE_NETWORK_TEST_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_HEALTH_METADATA_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_STOP_SIGNAL_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_LIFECYCLE_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_RUNTIME_FILESYSTEM_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_TMPFS_EFFECT_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_HEALTH_START_INTERVAL_BOUNDARY_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_LIFECYCLE_DEFAULT_EFFECT_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_HOSTNAME_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_COMMAND_CLEAR_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_SHM_SIZE_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_SUPPLEMENTARY_GROUPS_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_KERNEL_SETTINGS_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_PIDS_DEADLINE_EPOCH=$run_deadline_epoch timeout 180 cargo test --locked "${cargo_target[@]}" -- --ignored --exact "$selected" 2>&1) || run_status=$?
+run_exact_native() {
+  NATIVE_NETWORK_TEST_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_HEALTH_METADATA_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_STOP_SIGNAL_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_LIFECYCLE_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_RUNTIME_FILESYSTEM_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_TMPFS_EFFECT_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_HEALTH_START_INTERVAL_BOUNDARY_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_LIFECYCLE_DEFAULT_EFFECT_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_HOSTNAME_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_COMMAND_CLEAR_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_SHM_SIZE_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_SUPPLEMENTARY_GROUPS_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_KERNEL_SETTINGS_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_PIDS_DEADLINE_EPOCH=$run_deadline_epoch timeout 180 cargo test --locked "${cargo_target[@]}" -- --ignored --exact "$selected" 2>&1
+}
+raw_capture_invalid=0
+if (( exact_pids )); then
+  set +e
+  run_exact_native | capture_native_raw "$capture_directory/run.raw"
+  capture_status=("${PIPESTATUS[@]}")
+  set -e
+  run_status=${capture_status[0]}
+  original_run_status=$run_status
+  result=
+  if (( capture_status[1] != 0 )) || ! result=$(materialize_native_raw "$capture_directory/run.raw"); then
+    raw_capture_invalid=1
+    if (( run_status == 0 )); then run_status=1; fi
+  fi
+else
+  result=$(run_exact_native) || run_status=$?
+fi
+pids_setup_refusal=
+if (( exact_pids && !raw_capture_invalid )); then
+  # Validate the original file, not a Bash-normalized string. Only one distinct
+  # valid record may project; identical duplicates are deduplicated. Setup
+  # refusal contradicts native evidence/success and must remain a generic fail.
+  setup_projection_status=0
+  pids_setup_refusal=$(python3 -I -c '
+import os, re, stat, sys
+try:
+    descriptor = os.open(sys.argv[2], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, "rb") as capture:
+        info = os.fstat(capture.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o600
+                or info.st_size > 1048576):
+            raise ValueError()
+        data = capture.read(1048577)
+    if len(data) != info.st_size or b"\0" in data:
+        raise ValueError()
+    prefix = b"DOCKERLENS_NATIVE_PIDS_SETUP_REFUSAL: code="
+    lines = data.split(b"\n")
+    seen = any(line.startswith(b"DOCKERLENS_NATIVE_PIDS_SETUP_REFUSAL:") for line in lines)
+    positive = any(line == b"DOCKERLENS_NATIVE_CHECK: pids_evidence" or line.startswith(b"test result: ok.") for line in lines)
+    if seen and (positive or sys.argv[3] == "0"):
+        sys.stdout.buffer.write(prefix + b"unclassified\n")
+        sys.exit(3)
+    descriptor = os.open(sys.argv[1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, "rb") as registry:
+        info = os.fstat(registry.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or not 0 < info.st_size <= 704:
+            raise ValueError()
+        registry_data = registry.read(705)
+    if len(registry_data) != info.st_size or not registry_data.endswith(b"\n"):
+        raise ValueError()
+    codes = registry_data[:-1].split(b"\n")
+    if (len(codes) != 32 or codes != sorted(set(codes))
+            or any(len(code) > 21 or re.fullmatch(rb"pids-[a-z]+(?:-[a-z]+)*", code) is None for code in codes)):
+        raise ValueError()
+    allowed = set(codes) | {b"unclassified"}
+    candidate, tainted = None, False
+    for line in lines:
+        if line.startswith(b"DOCKERLENS_NATIVE_PIDS_SETUP_REFUSAL:"):
+            code = line[len(prefix):] if line.startswith(prefix) else None
+            if len(line) > 64 or code not in allowed:
+                tainted = True
+            elif candidate is None:
+                candidate = code
+            elif candidate != code:
+                tainted = True
+    if seen and not tainted and candidate is not None:
+        sys.stdout.buffer.write(prefix + candidate + b"\n")
+except (OSError, ValueError):
+    pass
+' "$(dirname "$0")/../src/native_pids_setup_refusals.txt" "$capture_directory/run.raw" "$original_run_status" 2>/dev/null) || setup_projection_status=$?
+  if (( setup_projection_status == 3 )); then
+    result=
+    if (( run_status == 0 )); then run_status=1; fi
+  fi
+fi
 # Only libtest's numeric summary is safe to print. Test and compiler output can
 # contain protected native values, socket payloads, or authored secrets.
 summary=$(grep -Eo '^test result: (ok|FAILED)\. [0-9]+ passed; [0-9]+ failed; [0-9]+ ignored; [0-9]+ measured; [0-9]+ filtered out;' <<<"$result" | tail -n 1 || true)
@@ -338,6 +508,7 @@ case $target in
 esac
 if (( run_status != 0 )); then
   echo "required native test $target::$test_name failed (exit $run_status)" >&2
+  if [[ -n $pids_setup_refusal ]]; then echo "$pids_setup_refusal" >&2; fi
   if [[ -n $port_causal_marker && $port_causal_marker != "$marker" ]]; then echo "$port_causal_marker" >&2; fi
   if [[ -n $marker ]]; then echo "$marker" >&2; fi
   if [[ -n $lifecycle_causal_marker && $lifecycle_causal_marker != "$marker" ]]; then echo "$lifecycle_causal_marker" >&2; fi
@@ -376,4 +547,5 @@ if ! grep -Eq '^test result: ok\. 1 passed; 0 failed; 0 ignored; 0 measured; [0-
   fi
   exit 1
 fi
+if (( exact_pids )) && ! remove_native_capture; then exit 1; fi
 echo "required native test passed: $target::$test_name"

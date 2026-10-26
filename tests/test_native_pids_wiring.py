@@ -14,6 +14,7 @@ NONCE = "0123456789abcdef0123456789abcdef"
 TEST = "live_pids_limits_and_effects_match_engine"
 SELECTED = "native_health_metadata_tests::lifecycle::pids::" + TEST
 HANDOFF = "DOCKERLENS_NATIVE_LIFECYCLE_CLEANUP: owner=native_conformance_outer_v1 scope=outer_container_and_data_volume state=required"
+SETUP_REFUSAL = "DOCKERLENS_NATIVE_PIDS_SETUP_REFUSAL: code="
 
 
 class PidsWiringTests(unittest.TestCase):
@@ -64,28 +65,75 @@ sys.stdout.buffer.write(sys.stdin.buffer.read())
             self.assertEqual(result.stdout, b"")
             self.assertEqual(result.stderr, b"native outer command refused\n")
 
-    def wrapper(self, output, status=0, listing=None):
+    def wrapper(self, output, status=0, listing=None, *, target="native_pids", test_name=TEST,
+                registry=None, registry_kind="file", capture_failure=None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            (root / "scripts").mkdir()
+            (root / "src").mkdir()
+            capture_parent = root / "captures"
+            capture_parent.mkdir(mode=0o700)
+            if capture_failure in ("create", "write"):
+                mktemp = root / "mktemp"
+                mktemp.write_text('''#!/usr/bin/env python3
+import os, sys, tempfile
+if os.environ["CAPTURE_FAILURE"] == "create":
+    print("PRIVATE_CAPTURE_PATH_CANARY", file=sys.stderr)
+    raise SystemExit(1)
+directory = tempfile.mkdtemp()
+with open(os.path.join(directory, "run.raw"), "xb") as held:
+    held.write(b"private preexisting capture")
+print(directory)
+''')
+                mktemp.chmod(0o700)
+            if capture_failure == "cleanup":
+                remove = root / "rm"
+                remove.write_text('#!/usr/bin/env bash\nprintf "PRIVATE_CAPTURE_PATH_CANARY\\n" >&2\nexit 1\n')
+                remove.chmod(0o700)
+            wrapper = root / "scripts/run-exact-native-test.sh"
+            wrapper.write_bytes((ROOT / "scripts/run-exact-native-test.sh").read_bytes())
+            registry_path = root / "src/native_pids_setup_refusals.txt"
+            registry_bytes = (ROOT / "src/native_pids_setup_refusals.txt").read_bytes() if registry is None else registry
+            if registry_kind == "file":
+                registry_path.write_bytes(registry_bytes)
+            elif registry_kind == "symlink":
+                (root / "foreign-registry").write_bytes(registry_bytes)
+                registry_path.symlink_to(root / "foreign-registry")
+            elif registry_kind == "fifo":
+                os.mkfifo(registry_path)
+            elif registry_kind != "missing":
+                raise AssertionError("unknown inert registry fixture")
+            (root / "output").write_bytes(output.encode() if isinstance(output, str) else output)
+            selected = "native_health_metadata_tests::lifecycle::pids::" + test_name if target == "native_pids" else test_name
+            listing = selected + ": test" if listing is None else listing
+            (root / "listing").write_bytes(listing.encode() if isinstance(listing, str) else listing)
             cargo = root / "cargo"
             cargo.write_text('''#!/usr/bin/env python3
 import json, os, sys
+from pathlib import Path
 with open(os.environ["TRACE"], "a") as stream:
     stream.write(json.dumps({"argv":sys.argv[1:], "deadline":os.environ.get("NATIVE_PIDS_DEADLINE_EPOCH"),
                             "owner":os.environ.get("NATIVE_LIFECYCLE_CLEANUP_OWNER")}) + "\\n")
 if "--list" in sys.argv:
-    print(os.environ["LISTING"])
+    sys.stdout.buffer.write(Path(os.environ["LISTING_PATH"]).read_bytes() + b"\\n")
 else:
-    print(os.environ["OUTPUT"])
+    sys.stdout.buffer.write(Path(os.environ["OUTPUT_PATH"]).read_bytes() + b"\\n")
     sys.exit(int(os.environ["STATUS"]))
 ''')
             cargo.chmod(0o700)
-            result = subprocess.run(["bash", str(ROOT / "scripts/run-exact-native-test.sh"), "native_pids", TEST],
+            result = subprocess.run(["bash", str(wrapper), target, test_name],
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, timeout=10,
                 env={**os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"], "TRACE": str(root / "trace"),
-                     "NATIVE_LIFECYCLE_CLEANUP_OWNER": "native_conformance_outer_v1", "LISTING": SELECTED + ": test" if listing is None else listing,
-                     "OUTPUT": output, "STATUS": str(status)})
-            return result, [json.loads(row) for row in (root / "trace").read_text().splitlines()]
+                     "NATIVE_LIFECYCLE_CLEANUP_OWNER": "native_conformance_outer_v1", "LISTING_PATH": str(root / "listing"),
+                     "OUTPUT_PATH": str(root / "output"), "STATUS": str(status), "TMPDIR": str(capture_parent),
+                     "CAPTURE_FAILURE": capture_failure or ""})
+            if capture_failure != "cleanup":
+                self.assertEqual(list(capture_parent.iterdir()), [], "private raw captures must be removed")
+            else:
+                self.assertTrue(list(capture_parent.iterdir()), "fixture must actually refuse raw-capture cleanup")
+            self.assertNotIn(b"PRIVATE_CAPTURE_PATH_CANARY", result.stdout + result.stderr)
+            trace = root / "trace"
+            return result, [json.loads(row) for row in trace.read_text().splitlines()] if trace.exists() else []
 
     def test_exact_selector_and_original_deadline_reject_zero_execution_and_cleanup_handoff(self):
         success = "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 100 filtered out;"
@@ -104,6 +152,150 @@ else:
             result, _ = self.wrapper(output, status, listing)
             self.assertNotEqual(result.returncode, 0)
             self.assertNotIn(b"PRIVATE_PIDS_CANARY", result.stdout + result.stderr)
+
+    def test_constructor_refusal_registry_is_packaged_and_projects_every_actual_code_on_failure(self):
+        # Independent complete expectations: changing registry alone cannot
+        # silently expand the reviewed constructor diagnostic vocabulary.
+        expected = (
+            "pids-ancillary pids-artifact pids-artifact-source pids-bootstrap pids-budget "
+            "pids-build-tools pids-build-tools-raw pids-capture pids-cgroup-namespace "
+            "pids-child-custody pids-clock pids-deadline pids-eof pids-frame pids-frames "
+            "pids-input pids-integer pids-json pids-nonce pids-outer pids-outer-changed "
+            "pids-proc pids-read pids-reservation pids-schema pids-sequence pids-shutdown "
+            "pids-socket pids-source-budget pids-status pids-supervisor pids-write"
+        ).split()
+        self.assertEqual((ROOT / "src/native_pids_setup_refusals.txt").read_text().splitlines(), expected)
+        self.assertIn('include_str!("native_pids_setup_refusals.txt")', (ROOT / "src/native_pids_tests.rs").read_text())
+        self.assertIn('"src/**"', (ROOT / "Cargo.toml").read_text())
+        for code in expected + ["unclassified"]:
+            with self.subTest(code=code):
+                line = SETUP_REFUSAL + code
+                output = "DOCKERLENS_NATIVE_CHECK: pids_context\n" + line + "\nPRIVATE_PIDS_CANARY"
+                result, trace = self.wrapper(output, status=101)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(len(trace), 2)
+                self.assertIn((line + "\n").encode(), result.stderr)
+                self.assertEqual(result.stderr.count(SETUP_REFUSAL.encode()), 1)
+                self.assertIn(b"DOCKERLENS_NATIVE_CHECK: pids_context\n", result.stderr)
+                self.assertNotIn(b"PRIVATE_PIDS_CANARY", result.stdout + result.stderr)
+                self.assertLessEqual(len(line), 64)
+
+    def test_constructor_refusal_projection_is_failure_only_and_exact_test_only(self):
+        line = SETUP_REFUSAL + "pids-outer"
+        success = "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 100 filtered out;"
+        for kwargs in ({"status": 101, "target": "native_container"},
+                       {"status": 101, "test_name": "other_pids_test"}):
+            result, _ = self.wrapper(line + "\n" + success, **kwargs)
+            self.assertNotIn(SETUP_REFUSAL.encode(), result.stdout + result.stderr)
+            self.assertEqual(result.returncode == 0, kwargs["status"] == 0)
+        result, _ = self.wrapper(success)
+        self.assertEqual(result.returncode, 0)
+        self.assertNotIn(SETUP_REFUSAL.encode(), result.stdout + result.stderr)
+
+    def test_constructor_refusal_projection_rejects_private_suffixes_unknowns_and_duplicates(self):
+        valid = SETUP_REFUSAL + "pids-outer"
+        for output in [
+            SETUP_REFUSAL + "pids-secret-PRIVATE_PIDS_CANARY",
+            SETUP_REFUSAL + "/tmp/PRIVATE_PIDS_CANARY/socket",
+            SETUP_REFUSAL + "token=PRIVATE_PIDS_CANARY",
+            SETUP_REFUSAL + "pids-version",
+            valid + " PRIVATE_PIDS_CANARY",
+            valid + "\r",
+            SETUP_REFUSAL + "pids-ou\0ter",
+            valid + "\0",
+            valid + "\0PRIVATE_PIDS_CANARY",
+            valid + "\x1b[31mPRIVATE_PIDS_CANARY",
+            SETUP_REFUSAL + "pids-secret-" + "x" * 70000,
+            valid + "\n" + SETUP_REFUSAL + "pids-cgroup-namespace",
+            valid + "\n" + SETUP_REFUSAL + "pids-secret-PRIVATE_PIDS_CANARY",
+            "x" * 1048577 + "\n" + valid,
+        ]:
+            with self.subTest(length=len(output)):
+                result, _ = self.wrapper(output, status=101)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn(SETUP_REFUSAL.encode(), result.stdout + result.stderr)
+                self.assertNotIn(b"PRIVATE_PIDS_CANARY", result.stdout + result.stderr)
+                self.assertNotIn(b"ignored null byte", result.stdout + result.stderr)
+                self.assertNotIn(b"run-exact-native-test.sh:", result.stdout + result.stderr)
+                self.assertIn(b"(exit 101)", result.stderr)
+
+    def test_constructor_refusal_deduplicates_identical_records_but_rejects_success_conflicts(self):
+        line = SETUP_REFUSAL + "pids-outer"
+        result, _ = self.wrapper(line + "\n" + line, status=101)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stderr.count((line + "\n").encode()), 1)
+        success = "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 100 filtered out;"
+        evidence = "DOCKERLENS_NATIVE_CHECK: pids_evidence"
+        for output, status in [(line + "\n" + evidence, 101), (evidence + "\n" + line, 101),
+                               (line + "\n" + success, 101), (line + "\n" + success, 0),
+                               (line, 0), (line + "\n" + evidence, 0)]:
+            result, _ = self.wrapper(output, status=status)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn(line.encode(), result.stdout + result.stderr)
+            self.assertNotIn(evidence.encode(), result.stdout + result.stderr)
+            self.assertNotIn(b"test result: ok.", result.stdout + result.stderr)
+            self.assertIn((SETUP_REFUSAL + "unclassified\n").encode(), result.stderr)
+            self.assertNotIn(b"required native test passed:", result.stdout + result.stderr)
+        for registry in [b"", None]:
+            result, _ = self.wrapper(line + "\n" + evidence + "\n" + success, status=0, registry=registry)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn(evidence.encode(), result.stdout + result.stderr)
+            self.assertNotIn(b"test result: ok.", result.stdout + result.stderr)
+            self.assertIn((SETUP_REFUSAL + "unclassified\n").encode(), result.stderr)
+
+    def test_raw_capture_refuses_invalid_listing_and_oversize_without_normalizing_bytes(self):
+        for listing in [(SELECTED + ": test\0").encode(), b"x" * 1048577]:
+            result, trace = self.wrapper("", listing=listing)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(len(trace), 1)
+            self.assertNotIn(b"ignored null byte", result.stdout + result.stderr)
+            self.assertNotIn(b"run-exact-native-test.sh:", result.stdout + result.stderr)
+        for output in [SETUP_REFUSAL.encode() + b"pids-ou\0ter", b"x" * 1048577]:
+            result, _ = self.wrapper(output, status=0)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn(SETUP_REFUSAL.encode(), result.stdout + result.stderr)
+            self.assertNotIn(b"ignored null byte", result.stdout + result.stderr)
+        output = b"\x1b[31mUTF8: \xc3\xa9\x1b[0m\nDOCKERLENS_NATIVE_CHECK: pids_context\n"
+        output += (SETUP_REFUSAL + "pids-outer").encode()
+        result, _ = self.wrapper(output, status=101)
+        self.assertIn((SETUP_REFUSAL + "pids-outer\n").encode(), result.stderr)
+        self.assertIn(b"DOCKERLENS_NATIVE_CHECK: pids_context\n", result.stderr)
+        self.assertNotIn(b"UTF8", result.stdout + result.stderr)
+
+    def test_raw_capture_creation_write_and_cleanup_failures_stay_closed(self):
+        for failure in ["create", "write", "cleanup"]:
+            result, _ = self.wrapper(SETUP_REFUSAL + "pids-outer", status=101, capture_failure=failure)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn(b"PRIVATE_CAPTURE_PATH_CANARY", result.stdout + result.stderr)
+            self.assertNotIn(b"run-exact-native-test.sh:", result.stdout + result.stderr)
+            if failure == "cleanup":
+                self.assertIn(b"private capture cleanup unavailable", result.stderr)
+            if failure == "write":
+                self.assertIn(b"(exit 101)", result.stderr)
+                self.assertNotIn(SETUP_REFUSAL.encode(), result.stdout + result.stderr)
+        success = "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 100 filtered out;"
+        result, _ = self.wrapper(success, capture_failure="cleanup")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn(b"required native test passed:", result.stdout + result.stderr)
+
+    def test_constructor_refusal_projection_fails_closed_for_registry_tampering(self):
+        registry = (ROOT / "src/native_pids_setup_refusals.txt").read_bytes()
+        for changed in [b"", registry.rstrip(b"\n"), registry.replace(b"\n", b"\r\n"),
+                        registry.replace(b"pids-write", b"pids-status"),
+                        registry.replace(b"pids-write", b"pids-secret-xxxxxxxxxx"),
+                        registry.replace(b"pids-write", b"pids-WRITE"),
+                        registry.replace(b"pids-write", b"pids--write"),
+                        registry.replace(b"pids-write", b"pids-write-"),
+                        registry.replace(b"pids-write", b"pids-writ\xff"),
+                        registry + b"pids-z\n", b"x" * 705,
+                        b"\n".join(reversed(registry.splitlines())) + b"\n"]:
+            result, _ = self.wrapper(SETUP_REFUSAL + "pids-outer", status=101, registry=changed)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn(SETUP_REFUSAL.encode(), result.stdout + result.stderr)
+        for kind in ["missing", "symlink", "fifo"]:
+            result, _ = self.wrapper(SETUP_REFUSAL + "pids-outer", status=101, registry_kind=kind)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn(SETUP_REFUSAL.encode(), result.stdout + result.stderr)
 
     def test_canonical27_is_after_kernel_reader_and_before_final_emission(self):
         source = (ROOT / "scripts/native-conformance.sh").read_text()

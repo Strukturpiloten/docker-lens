@@ -31,6 +31,59 @@ const SLOT_LABEL: &str = "io.dockerlens.native-pids-slot";
 
 type PidsResult<T> = Result<T, &'static str>;
 
+fn pids_constructor_refusal_registry_valid(registry: &str) -> bool {
+    if !registry.ends_with('\n')
+        || registry.len() > 32 * 22
+        || !registry
+            .bytes()
+            .all(|byte| matches!(byte, b'a'..=b'z' | b'-' | b'\n'))
+    {
+        return false;
+    }
+    let mut count = 0;
+    let mut previous = "";
+    for code in registry.lines() {
+        if count == 32
+            || code.len() > 21
+            || code <= previous
+            || !code
+                .strip_prefix("pids-")
+                .is_some_and(|suffix| suffix.split('-').all(|part| !part.is_empty()))
+        {
+            return false;
+        }
+        count += 1;
+        previous = code;
+    }
+    count == 32
+}
+
+fn pids_constructor_refusal_code(error: &str) -> &'static str {
+    // One packaged registry supplies both producer and failure-only projection.
+    // Return only a registry-borrowed static slice, never the supplied error.
+    // Every unknown value, including a new pids-* string, has the same fallback.
+    let registry = include_str!("native_pids_setup_refusals.txt");
+    if !pids_constructor_refusal_registry_valid(registry) {
+        return "unclassified";
+    }
+    registry
+        .lines()
+        .find(|code| *code == error)
+        .unwrap_or("unclassified")
+}
+
+fn pids_constructor_refusal_diagnostic(error: &str) -> String {
+    format!(
+        "DOCKERLENS_NATIVE_PIDS_SETUP_REFUSAL: code={}",
+        pids_constructor_refusal_code(error)
+    )
+}
+
+fn pids_constructor_refused(error: &str) -> ! {
+    eprintln!("{}", pids_constructor_refusal_diagnostic(error));
+    panic!("private native PIDs setup refused");
+}
+
 fn closed(value: &Value, fields: &[&str]) -> PidsResult<()> {
     let object = value.as_object().ok_or("pids-schema")?;
     if object.len() != fields.len() || fields.iter().any(|name| !object.contains_key(*name)) {
@@ -2872,7 +2925,7 @@ impl NativeProducer {
 fn live_pids_limits_and_effects_match_engine() {
     eprintln!("DOCKERLENS_NATIVE_CHECK: pids_context");
     let mut producer =
-        NativeProducer::new().unwrap_or_else(|_| panic!("private native PIDs setup refused"));
+        NativeProducer::new().unwrap_or_else(|error| pids_constructor_refused(error));
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| producer.measure()));
     let completed = result.as_ref().is_ok_and(|result| result.is_ok());
     eprintln!("DOCKERLENS_NATIVE_CHECK: pids_cleanup");
@@ -2900,6 +2953,118 @@ fn live_pids_limits_and_effects_match_engine() {
     // real worker barriers per role; it is never a public capability record.
     producer.target.publish_bounded(&proof, 128 * 1024);
     eprintln!("DOCKERLENS_NATIVE_CHECK: pids_evidence");
+}
+
+#[test]
+fn pids_constructor_refusal_preserves_only_explicit_static_codes() {
+    // Independent literal expectations include prebuild, outer, resource,
+    // supervisor and protocol refusals reachable before producer.measure.
+    for code in [
+        "pids-ancillary",
+        "pids-artifact",
+        "pids-artifact-source",
+        "pids-bootstrap",
+        "pids-budget",
+        "pids-build-tools",
+        "pids-build-tools-raw",
+        "pids-capture",
+        "pids-cgroup-namespace",
+        "pids-child-custody",
+        "pids-clock",
+        "pids-deadline",
+        "pids-eof",
+        "pids-frame",
+        "pids-frames",
+        "pids-input",
+        "pids-integer",
+        "pids-json",
+        "pids-nonce",
+        "pids-outer",
+        "pids-outer-changed",
+        "pids-proc",
+        "pids-read",
+        "pids-reservation",
+        "pids-schema",
+        "pids-sequence",
+        "pids-shutdown",
+        "pids-socket",
+        "pids-source-budget",
+        "pids-status",
+        "pids-supervisor",
+        "pids-write",
+    ] {
+        assert_eq!(pids_constructor_refusal_code(code), code);
+        let line = pids_constructor_refusal_diagnostic(code);
+        assert_eq!(
+            line,
+            format!("DOCKERLENS_NATIVE_PIDS_SETUP_REFUSAL: code={code}")
+        );
+        assert!(line.len() <= 64);
+        assert_eq!(line.lines().count(), 1);
+        assert!(line.is_ascii());
+    }
+}
+
+#[test]
+fn pids_constructor_refusal_redacts_every_unknown_input_to_one_bounded_line() {
+    let expected = "DOCKERLENS_NATIVE_PIDS_SETUP_REFUSAL: code=unclassified";
+    for input in [
+        "".to_owned(),
+        "unrecognized setup error".to_owned(),
+        "/tmp/private-owner/socket/docker.sock".to_owned(),
+        "source-token=eyJhbGciOiJIUzI1NiJ9.private-signature".to_owned(),
+        "private run 123e4567-e89b-12d3-a456-426614174000".to_owned(),
+        "io.dockerlens.native-run=protected-owner".to_owned(),
+        "pids-secret-protected-owner".to_owned(),
+        "pids-version".to_owned(),
+        "pids-outer-private-value".to_owned(),
+        "pids-outer\nDOCKERLENS_NATIVE_CHECK: pids_evidence".to_owned(),
+        "pids-outer\r\nprivate value".to_owned(),
+        "pids-outer\0private value".to_owned(),
+        "\u{1b}[31mpids-outer\u{1b}[0m".to_owned(),
+        "pids-outer ".to_owned(),
+        "pids-secret-".repeat(65536),
+        "保護された値".to_owned(),
+    ] {
+        assert_eq!(pids_constructor_refusal_code(&input), "unclassified");
+        let line = pids_constructor_refusal_diagnostic(&input);
+        assert_eq!(line, expected);
+        assert!(line.len() <= 64);
+        assert_eq!(line.lines().count(), 1);
+        assert!(!line.contains(['\n', '\r', '\0', '\u{1b}']));
+    }
+}
+
+#[test]
+fn pids_constructor_refusal_registry_refuses_malformed_or_widened_schema() {
+    let registry = include_str!("native_pids_setup_refusals.txt");
+    assert!(pids_constructor_refusal_registry_valid(registry));
+    for changed in [
+        registry.trim_end().to_owned(),
+        registry.replace('\n', "\r\n"),
+        registry.replace("pids-write", "pids-status"),
+        registry.replace("pids-write", "pids-secret-xxxxxxxxxx"),
+        registry.replace("pids-write", "pids--write"),
+        registry.replace("pids-write", "pids-write-"),
+        registry.replace("pids-write", "pids-WRITE"),
+        registry.replace("pids-write", "pids-writé"),
+        format!("{registry}pids-z\n"),
+        registry.lines().rev().collect::<Vec<_>>().join("\n") + "\n",
+    ] {
+        assert!(!pids_constructor_refusal_registry_valid(&changed));
+    }
+}
+
+#[test]
+fn pids_constructor_refusal_keeps_the_original_failure() {
+    for error in ["pids-cgroup-namespace", "private setup failure"] {
+        let failure = std::panic::catch_unwind(|| pids_constructor_refused(error));
+        let payload = failure.expect_err("a diagnostic must not turn setup failure into success");
+        assert_eq!(
+            payload.downcast_ref::<&str>(),
+            Some(&"private native PIDs setup refused")
+        );
+    }
 }
 
 #[test]
