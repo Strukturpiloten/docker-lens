@@ -26,8 +26,12 @@ OWNER = 0
 PARSER = Path("/usr/sbin/apparmor_parser")
 ABI = Path("/etc/apparmor.d/abi/4.0")
 PROFILES = Path("/sys/kernel/security/apparmor/profiles")
+# The admitted parser selects reporting and fatal severity separately. Enable
+# only the reviewed categories; keep its other warning defaults unchanged.
 COMMON = ("--config-file=/dev/null", "--skip-cache", "--jobs=0",
-          "--Werror=rule-not-enforced", "--Werror=rule-downgraded", "--Werror=abi")
+          "--warn=rule-not-enforced", "--Werror=rule-not-enforced",
+          "--warn=rule-downgraded", "--Werror=rule-downgraded",
+          "--warn=abi", "--Werror=abi")
 CONTEXT = ("GITHUB_ACTIONS", "RUNNER_ENVIRONMENT", "RUNNER_OS", "GITHUB_REF",
            "GITHUB_EVENT_NAME", "GITHUB_REPOSITORY", "GITHUB_WORKFLOW_REF", "GITHUB_JOB",
            "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "ImageOS", "ImageVersion",
