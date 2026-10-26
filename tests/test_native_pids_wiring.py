@@ -15,6 +15,7 @@ TEST = "live_pids_limits_and_effects_match_engine"
 SELECTED = "native_health_metadata_tests::lifecycle::pids::" + TEST
 HANDOFF = "DOCKERLENS_NATIVE_LIFECYCLE_CLEANUP: owner=native_conformance_outer_v1 scope=outer_container_and_data_volume state=required"
 SETUP_REFUSAL = "DOCKERLENS_NATIVE_PIDS_SETUP_REFUSAL: code="
+IO_DETAIL = "DOCKERLENS_NATIVE_PIDS_IO:"
 
 
 class PidsWiringTests(unittest.TestCase):
@@ -296,6 +297,72 @@ else:
             result, _ = self.wrapper(SETUP_REFUSAL + "pids-outer", status=101, registry_kind=kind)
             self.assertNotEqual(result.returncode, 0)
             self.assertNotIn(SETUP_REFUSAL.encode(), result.stdout + result.stderr)
+
+    def test_constructor_io_projects_only_closed_paired_phase_and_kind_on_failure(self):
+        general = SETUP_REFUSAL + "pids-read"
+        for phase in ("ready", "bind", "confirm"):
+            for kind in ("reset", "not_connected", "bad_descriptor", "invalid_argument",
+                         "permission_denied", "resource", "other"):
+                detail = IO_DETAIL + f" phase={phase} kind={kind}"
+                with self.subTest(phase=phase, kind=kind):
+                    self.assertLessEqual(len(detail.encode("ascii")), 64)
+                    result, _ = self.wrapper(detail + "\n" + general + "\n" + detail + "\n" + general, status=101)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(result.stderr.count((general + "\n").encode()), 1)
+                    self.assertEqual(result.stderr.count((detail + "\n").encode()), 1)
+                    self.assertIn(b"(exit 101)", result.stderr)
+
+    def test_constructor_io_rejects_unpaired_conflicting_malformed_and_private_detail(self):
+        general = SETUP_REFUSAL + "pids-read"
+        detail = IO_DETAIL + " phase=ready kind=reset"
+        bad_details = [
+            IO_DETAIL,
+            IO_DETAIL + " phase=bootstrap_ready kind=reset",
+            IO_DETAIL + " phase=ready kind=ECONNRESET",
+            IO_DETAIL + " phase=ready kind=reset errno=104",
+            IO_DETAIL + " phase=ready kind=PRIVATE_PIDS_CANARY",
+            detail + " PRIVATE_PIDS_CANARY",
+            detail + "\r",
+            " " + detail,
+            detail + "\0PRIVATE_PIDS_CANARY",
+            detail + "\n" + IO_DETAIL + " phase=confirm kind=reset",
+            detail + "\n" + IO_DETAIL + " phase=ready kind=other",
+            detail + "\n" + IO_DETAIL + " PRIVATE_PIDS_CANARY",
+            IO_DETAIL + "x" * 70000,
+        ]
+        outputs = [detail, general, SETUP_REFUSAL + "pids-eof\n" + detail,
+                   SETUP_REFUSAL + "unclassified\n" + detail,
+                   general + "\n" + SETUP_REFUSAL + "pids-outer\n" + detail]
+        outputs.extend(general + "\n" + bad for bad in bad_details)
+        for output in outputs:
+            with self.subTest(length=len(output)):
+                result, _ = self.wrapper(output, status=101)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn(IO_DETAIL.encode(), result.stdout + result.stderr)
+                self.assertNotIn(b"PRIVATE_PIDS_CANARY", result.stdout + result.stderr)
+                self.assertIn(b"(exit 101)", result.stderr)
+        for target, name in [("native_pids", "other_pids_test"), ("native_nofile", "other_test")]:
+            result, _ = self.wrapper(general + "\n" + detail, status=101, target=target, test_name=name)
+            self.assertNotIn(IO_DETAIL.encode(), result.stdout + result.stderr)
+            self.assertNotIn(SETUP_REFUSAL.encode(), result.stdout + result.stderr)
+
+    def test_constructor_io_any_prefix_contradicts_success_even_without_valid_companion(self):
+        success = "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 100 filtered out;"
+        evidence = "DOCKERLENS_NATIVE_CHECK: pids_evidence"
+        detail = IO_DETAIL + " phase=bind kind=permission_denied"
+        for diagnostic in (detail, IO_DETAIL, IO_DETAIL + " PRIVATE_PIDS_CANARY",
+                           SETUP_REFUSAL + "pids-read\n" + detail):
+            for status, positive in [(0, ""), (0, success), (0, evidence),
+                                     (101, success), (101, evidence)]:
+                for output in (diagnostic + "\n" + positive, positive + "\n" + diagnostic):
+                    with self.subTest(diagnostic=diagnostic, status=status, positive=positive):
+                        result, _ = self.wrapper(output, status=status)
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertNotIn(IO_DETAIL.encode(), result.stdout + result.stderr)
+                        self.assertNotIn(b"PRIVATE_PIDS_CANARY", result.stdout + result.stderr)
+                        self.assertNotIn(evidence.encode(), result.stdout + result.stderr)
+                        self.assertNotIn(success.encode(), result.stdout + result.stderr)
+                        self.assertIn((SETUP_REFUSAL + "unclassified\n").encode(), result.stderr)
 
     def test_canonical27_is_after_kernel_reader_and_before_final_emission(self):
         source = (ROOT / "scripts/native-conformance.sh").read_text()

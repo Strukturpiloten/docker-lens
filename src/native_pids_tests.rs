@@ -84,6 +84,79 @@ fn pids_constructor_refused(error: &str) -> ! {
     panic!("private native PIDs setup refused");
 }
 
+// Constructor-only observation of a fatal recvmsg, not a diagnosis of its cause.
+// The first fault survives later cleanup; no protocol, deadline or retry changes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConstructorIoPhase {
+    Ready,
+    Bind,
+    Confirm,
+}
+
+impl ConstructorIoPhase {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Bind => "bind",
+            Self::Confirm => "confirm",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConstructorIoKind {
+    Reset,
+    NotConnected,
+    BadDescriptor,
+    InvalidArgument,
+    PermissionDenied,
+    Resource,
+    Other,
+}
+
+impl ConstructorIoKind {
+    fn from_errno(error: rustix::io::Errno) -> Self {
+        use rustix::io::Errno;
+        match error {
+            Errno::CONNRESET => Self::Reset,
+            Errno::NOTCONN => Self::NotConnected,
+            Errno::BADF | Errno::NOTSOCK => Self::BadDescriptor,
+            Errno::INVAL => Self::InvalidArgument,
+            Errno::ACCESS | Errno::PERM => Self::PermissionDenied,
+            Errno::NOMEM | Errno::NOBUFS => Self::Resource,
+            _ => Self::Other,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Reset => "reset",
+            Self::NotConnected => "not_connected",
+            Self::BadDescriptor => "bad_descriptor",
+            Self::InvalidArgument => "invalid_argument",
+            Self::PermissionDenied => "permission_denied",
+            Self::Resource => "resource",
+            Self::Other => "other",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ConstructorIoFault {
+    phase: ConstructorIoPhase,
+    kind: ConstructorIoKind,
+}
+
+impl ConstructorIoFault {
+    fn diagnostic(self) -> String {
+        format!(
+            "DOCKERLENS_NATIVE_PIDS_IO: phase={} kind={}",
+            self.phase.name(),
+            self.kind.name()
+        )
+    }
+}
+
 fn closed(value: &Value, fields: &[&str]) -> PidsResult<()> {
     let object = value.as_object().ok_or("pids-schema")?;
     if object.len() != fields.len() || fields.iter().any(|name| !object.contains_key(*name)) {
@@ -191,6 +264,8 @@ fn reserve(run: &HealthRun, units: usize, bytes: usize, cleanup: bool) -> PidsRe
 }
 
 struct RootWire {
+    constructor_phase: Option<ConstructorIoPhase>,
+    first_read_fault: Option<ConstructorIoFault>,
     stream: UnixStream,
     work: Instant,
     terminal: Instant,
@@ -213,6 +288,8 @@ impl RootWire {
             return Err("pids-deadline");
         }
         Ok(Self {
+            constructor_phase: None,
+            first_read_fault: None,
             stream,
             work,
             terminal,
@@ -274,6 +351,21 @@ impl RootWire {
         Ok(())
     }
 
+    fn latch_read_fault(&mut self, error: rustix::io::Errno) -> Option<ConstructorIoFault> {
+        if self.cleanup
+            || self.first_read_fault.is_some()
+            || matches!(error, rustix::io::Errno::AGAIN | rustix::io::Errno::INTR)
+        {
+            return None;
+        }
+        let fault = ConstructorIoFault {
+            phase: self.constructor_phase?,
+            kind: ConstructorIoKind::from_errno(error),
+        };
+        self.first_read_fault = Some(fault);
+        Some(fault)
+    }
+
     fn receive(&mut self, bytes: &mut [u8]) -> PidsResult<usize> {
         if bytes.is_empty() {
             return Err("pids-read");
@@ -306,7 +398,12 @@ impl RootWire {
                 }
                 Err(rustix::io::Errno::AGAIN) => self.pause()?,
                 Err(rustix::io::Errno::INTR) => self.active()?,
-                Err(_) => return Err("pids-read"),
+                Err(error) => {
+                    if let Some(fault) = self.latch_read_fault(error) {
+                        eprintln!("{}", fault.diagnostic());
+                    }
+                    return Err("pids-read");
+                }
             }
         }
     }
@@ -496,7 +593,10 @@ impl RootChannel {
             confirmed: false,
             finished: false,
         };
-        channel.wire.bootstrap(&capture.held)?;
+        channel.wire.constructor_phase = Some(ConstructorIoPhase::Ready);
+        let ready = channel.wire.bootstrap(&capture.held);
+        channel.wire.constructor_phase = None;
+        ready?;
         Ok(channel)
     }
 
@@ -570,6 +670,20 @@ impl RootChannel {
             }
             return Ok(response);
         }
+    }
+
+    fn constructor_status(
+        &mut self,
+        run: &HealthRun,
+        phase: ConstructorIoPhase,
+        operation: &str,
+        fields: Value,
+        expected: &str,
+    ) -> PidsResult<()> {
+        self.wire.constructor_phase = Some(phase);
+        let result = self.status(run, operation, fields, expected);
+        self.wire.constructor_phase = None;
+        result
     }
 
     fn status(
@@ -2260,13 +2374,19 @@ impl NativeProducer {
             snapshot: original.projection.clone(),
         };
         let mut root = RootChannel::launch(&run, &target, deadline_ns)?;
-        root.status(&run, "RootBindRuntime", json!({"context":{"backend":required("NATIVE_OUTER_ENGINE"),"candidate":run.candidate,"run":run.run,"lane":run.lane,"outer_id":original.id},
+        root.constructor_status(&run, ConstructorIoPhase::Bind, "RootBindRuntime", json!({"context":{"backend":required("NATIVE_OUTER_ENGINE"),"candidate":run.candidate,"run":run.run,"lane":run.lane,"outer_id":original.id},
             "outer_pid":original.pid,"outer_start":original.start,"owner_labels":{(LABEL):run.run},"external_source":worker.source.value()}), "pending")?;
         let second = OuterIdentity::acquire(&run, false)?;
         if original != second {
             return Err("pids-outer-changed");
         }
-        root.status(&run, "ConfirmRuntime", json!({}), "confirmed")?;
+        root.constructor_status(
+            &run,
+            ConstructorIoPhase::Confirm,
+            "ConfirmRuntime",
+            json!({}),
+            "confirmed",
+        )?;
         reserve(&run, 1, 16, false)?;
         let mut random = [0; 16];
         if File::open("/dev/urandom")
@@ -2953,6 +3073,103 @@ fn live_pids_limits_and_effects_match_engine() {
     // real worker barriers per role; it is never a public capability record.
     producer.target.publish_bounded(&proof, 128 * 1024);
     eprintln!("DOCKERLENS_NATIVE_CHECK: pids_evidence");
+}
+
+#[test]
+fn pids_constructor_io_has_literal_closed_phases_kinds_and_bounds() {
+    use rustix::io::Errno;
+    let phases = [
+        (ConstructorIoPhase::Ready, "ready"),
+        (ConstructorIoPhase::Bind, "bind"),
+        (ConstructorIoPhase::Confirm, "confirm"),
+    ];
+    let errors = [
+        (Errno::CONNRESET, "reset"),
+        (Errno::NOTCONN, "not_connected"),
+        (Errno::BADF, "bad_descriptor"),
+        (Errno::NOTSOCK, "bad_descriptor"),
+        (Errno::INVAL, "invalid_argument"),
+        (Errno::ACCESS, "permission_denied"),
+        (Errno::PERM, "permission_denied"),
+        (Errno::NOMEM, "resource"),
+        (Errno::NOBUFS, "resource"),
+        // Unrecognized errno is redacted, never rendered as a number or Debug.
+        (Errno::IO, "other"),
+        // Valid Linux boundary errno remains outside the named diagnostic kinds.
+        (Errno::from_raw_os_error(4095), "other"),
+    ];
+    for (phase, expected_phase) in phases {
+        for (error, expected_kind) in errors {
+            let line = ConstructorIoFault {
+                phase,
+                kind: ConstructorIoKind::from_errno(error),
+            }
+            .diagnostic();
+            assert_eq!(
+                line,
+                format!("DOCKERLENS_NATIVE_PIDS_IO: phase={expected_phase} kind={expected_kind}")
+            );
+            assert!(line.len() <= 64);
+            assert!(line.is_ascii());
+            assert!(!line.contains(['\n', '\r', '\0']));
+        }
+    }
+}
+
+#[test]
+fn pids_constructor_io_latches_first_fatal_only_and_ignores_cleanup() {
+    use rustix::io::Errno;
+    let (owner, _peer) = UnixStream::pair().unwrap();
+    let mut wire = RootWire::new(owner, Instant::now() + Duration::from_secs(50)).unwrap();
+    assert_eq!(wire.latch_read_fault(Errno::CONNRESET), None);
+    assert_eq!(wire.first_read_fault, None);
+    wire.constructor_phase = Some(ConstructorIoPhase::Ready);
+    for retry in [Errno::AGAIN, Errno::INTR] {
+        assert_eq!(wire.latch_read_fault(retry), None);
+        assert_eq!(wire.first_read_fault, None);
+    }
+    assert_eq!(wire.receive(&mut []), Err("pids-read"));
+    assert_eq!(wire.first_read_fault, None);
+    let first = ConstructorIoFault {
+        phase: ConstructorIoPhase::Ready,
+        kind: ConstructorIoKind::Reset,
+    };
+    assert_eq!(wire.latch_read_fault(Errno::CONNRESET), Some(first));
+    wire.constructor_phase = Some(ConstructorIoPhase::Bind);
+    assert_eq!(wire.latch_read_fault(Errno::ACCESS), None);
+    wire.constructor_phase = Some(ConstructorIoPhase::Confirm);
+    assert_eq!(wire.latch_read_fault(Errno::INVAL), None);
+    wire.constructor_phase = None;
+    wire.cleanup = true;
+    assert_eq!(wire.latch_read_fault(Errno::BADF), None);
+    assert_eq!(wire.first_read_fault, Some(first));
+    // Even accidental phase activation during cleanup cannot create a detail.
+    wire.first_read_fault = None;
+    wire.constructor_phase = Some(ConstructorIoPhase::Confirm);
+    assert_eq!(wire.latch_read_fault(Errno::BADF), None);
+    assert_eq!(wire.first_read_fault, None);
+    wire.cleanup = false;
+    for phase in [ConstructorIoPhase::Bind, ConstructorIoPhase::Confirm] {
+        wire.first_read_fault = None;
+        wire.constructor_phase = Some(phase);
+        assert_eq!(
+            wire.latch_read_fault(Errno::NOTCONN),
+            Some(ConstructorIoFault {
+                phase,
+                kind: ConstructorIoKind::NotConnected
+            })
+        );
+    }
+}
+
+#[test]
+fn pids_constructor_io_eof_is_not_a_fatal_recvmsg_fault() {
+    let (owner, peer) = UnixStream::pair().unwrap();
+    let mut wire = RootWire::new(owner, Instant::now() + Duration::from_secs(50)).unwrap();
+    wire.constructor_phase = Some(ConstructorIoPhase::Ready);
+    drop(peer);
+    assert_eq!(wire.exact(&mut [0; 8]), Err("pids-eof"));
+    assert_eq!(wire.first_read_fault, None);
 }
 
 #[test]

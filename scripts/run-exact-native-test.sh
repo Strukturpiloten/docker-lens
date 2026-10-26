@@ -173,8 +173,8 @@ fi
 pids_setup_refusal=
 if (( exact_pids && !raw_capture_invalid )); then
   # Validate the original file, not a Bash-normalized string. Only one distinct
-  # valid record may project; identical duplicates are deduplicated. Setup
-  # refusal contradicts native evidence/success and must remain a generic fail.
+  # valid general/detail record may project; identical duplicates deduplicate.
+  # Either prefix, even malformed/unpaired, contradicts evidence or success.
   setup_projection_status=0
   pids_setup_refusal=$(python3 -I -c '
 import os, re, stat, sys
@@ -191,7 +191,8 @@ try:
         raise ValueError()
     prefix = b"DOCKERLENS_NATIVE_PIDS_SETUP_REFUSAL: code="
     lines = data.split(b"\n")
-    seen = any(line.startswith(b"DOCKERLENS_NATIVE_PIDS_SETUP_REFUSAL:") for line in lines)
+    detail_prefix = b"DOCKERLENS_NATIVE_PIDS_IO:"
+    seen = any(line.startswith((b"DOCKERLENS_NATIVE_PIDS_SETUP_REFUSAL:", detail_prefix)) for line in lines)
     positive = any(line == b"DOCKERLENS_NATIVE_CHECK: pids_evidence" or line.startswith(b"test result: ok.") for line in lines)
     if seen and (positive or sys.argv[3] == "0"):
         sys.stdout.buffer.write(prefix + b"unclassified\n")
@@ -210,6 +211,7 @@ try:
         raise ValueError()
     allowed = set(codes) | {b"unclassified"}
     candidate, tainted = None, False
+    detail, detail_tainted = None, False
     for line in lines:
         if line.startswith(b"DOCKERLENS_NATIVE_PIDS_SETUP_REFUSAL:"):
             code = line[len(prefix):] if line.startswith(prefix) else None
@@ -219,8 +221,20 @@ try:
                 candidate = code
             elif candidate != code:
                 tainted = True
+        elif line.startswith(detail_prefix):
+            if (len(line) > 64 or re.fullmatch(
+                    rb"DOCKERLENS_NATIVE_PIDS_IO: phase=(ready|bind|confirm) kind=(reset|not_connected|bad_descriptor|invalid_argument|permission_denied|resource|other)", line) is None):
+                detail_tainted = True
+            elif detail is None:
+                detail = line
+            elif detail != line:
+                detail_tainted = True
     if seen and not tainted and candidate is not None:
         sys.stdout.buffer.write(prefix + candidate + b"\n")
+        # Detail is useful only with the same raw stream failure code. It never
+        # replaces the general refusal or attributes a privileged helper cause.
+        if candidate == b"pids-read" and detail is not None and not detail_tainted:
+            sys.stdout.buffer.write(detail + b"\n")
 except (OSError, ValueError):
     pass
 ' "$(dirname "$0")/../src/native_pids_setup_refusals.txt" "$capture_directory/run.raw" "$original_run_status" 2>/dev/null) || setup_projection_status=$?
