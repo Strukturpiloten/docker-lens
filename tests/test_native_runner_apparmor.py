@@ -40,6 +40,60 @@ BOX_HOSTED = HOSTED | {
 }
 
 
+# Independent behavioral expectations for AppArmor v4.0.1, not a real parser.
+# Exact source b0eb95457bc2de401920308869d016e696c73664, parser.h warning
+# categories/defaults and parser_main.c's separate warn/Werror options; ABI and
+# downgrade pwarn sites gate on warn, while common_warn_once's rule-not-enforced
+# fatal path is independent of its reporting mask. No upstream code is copied.
+WARNING_BITS_401 = {"rule-not-enforced": 1, "rule-downgraded": 2, "abi": 4,
+                    "config": 16, "cache": 32, "jobs": 128, "unexpected": 512, "override": 4096}
+DEFAULT_WARNING_MASK_401 = 16 | 32 | 128 | 512 | 4096
+
+
+def warning_masks_401(arguments):
+    reporting, severity = DEFAULT_WARNING_MASK_401, 0
+    for argument in arguments:
+        option, separator, category = argument.partition("=")
+        if separator and option in ("--warn", "--Werror"):
+            if category not in WARNING_BITS_401:
+                raise AssertionError("unsupported synthetic warning category")
+            if option == "--warn":
+                reporting |= WARNING_BITS_401[category]
+            else:
+                severity |= WARNING_BITS_401[category]
+    return reporting, severity
+
+
+def warning_effect_401(arguments, category):
+    reporting, severity = warning_masks_401(arguments)
+    selected = WARNING_BITS_401[category]
+    reported = bool(reporting & selected)
+    fatal = bool(severity & selected) and (reported or category == "rule-not-enforced")
+    return reported, fatal
+
+
+class WarningContract401Tests(unittest.TestCase):
+    def test_default_masks_do_not_enable_abi_or_downgrade_by_severity(self):
+        # Literal old severity-only configuration is the counterexample: an
+        # ABI/downgrade site is invisible, so checking stderr cannot catch it.
+        old = ("--Werror=rule-not-enforced", "--Werror=rule-downgraded", "--Werror=abi")
+        self.assertEqual(warning_masks_401(old), (4784, 7))
+        self.assertEqual(warning_effect_401(old, "abi"), (False, False))
+        self.assertEqual(warning_effect_401(old, "rule-downgraded"), (False, False))
+        self.assertEqual(warning_effect_401(old, "rule-not-enforced"), (False, True))
+
+    def test_reporting_and_fatal_severity_are_independent_for_pwarn_sites(self):
+        for category in ("abi", "rule-downgraded"):
+            with self.subTest(category=category):
+                self.assertEqual(warning_effect_401(("--warn=" + category,), category), (True, False))
+                self.assertEqual(warning_effect_401(("--warn=" + category, "--Werror=" + category), category), (True, True))
+
+    def test_rule_not_enforced_preserves_its_separate_fatal_path(self):
+        self.assertEqual(warning_effect_401((), "rule-not-enforced"), (False, False))
+        self.assertEqual(warning_effect_401(("--Werror=rule-not-enforced",), "rule-not-enforced"), (False, True))
+        self.assertEqual(warning_effect_401(("--warn=rule-not-enforced",), "rule-not-enforced"), (True, False))
+
+
 def definition(name, source=SOURCE):
     start = source.index("\n" + name + "() {") + 1
     return source[start:source.index("\n}\n", start) + 3]
@@ -313,6 +367,7 @@ class LifecycleTests(unittest.TestCase):
         self.query = self.stack.enter_context(mock.patch.object(APP.RunnerProfile, "query", autospec=True, side_effect=self.fake_query))
         self.profile_loaded = False
         self.parser_failure = None
+        self.compiler_warning = None
         self.version = b"AppArmor parser version 4.0.1\nCopyright test\n"
         self.missing_feature = None
         self.absence = True
@@ -348,6 +403,12 @@ class LifecycleTests(unittest.TestCase):
             if operation == "--version":
                 return self.version
             self.assertEqual(Path(argv[-1]).read_bytes(), APP.profile_bytes(self.profile.state["profile"]))
+            if self.compiler_warning is not None and operation in ("--skip-kernel-load", "--add"):
+                reported, fatal = warning_effect_401(argv[1:1 + len(APP.COMMON)], self.compiler_warning)
+                # The real query refuses both nonzero parser status and any
+                # stderr; an unreported masked warning supplies neither.
+                if reported or fatal:
+                    raise APP.Refused("synthetic_compiler_warning")
             if operation == "--add":
                 self.assertFalse(self.profile_loaded)
                 self.assertEqual(self.state()["load"], "intent")
@@ -417,6 +478,56 @@ class LifecycleTests(unittest.TestCase):
         with self.assertRaises(APP.Refused):
             self.prepare()
         self.assertEqual(self.profile.stage, "compile")
+        self.assertEqual(self.profile.cleanup()["cleanup"], "not_loaded")
+
+    def test_compile_and_add_use_enabled_fatal_masks_without_changing_other_defaults(self):
+        self.prepare()
+        self.profile.load()
+        selected = [argv for argv in self.commands if argv[0] == str(APP.PARSER)
+                    and argv[1 + len(APP.COMMON)] in ("--skip-kernel-load", "--add")]
+        self.assertEqual(len(selected), 2)
+        for argv in selected:
+            reporting, severity = warning_masks_401(argv[1:1 + len(APP.COMMON)])
+            self.assertEqual((reporting, severity), (4791, 7))
+            for category in ("abi", "rule-downgraded", "rule-not-enforced"):
+                self.assertEqual(warning_effect_401(argv[1:1 + len(APP.COMMON)], category), (True, True))
+        self.assertEqual(self.profile.cleanup()["cleanup"], "removed")
+
+    def test_abi_and_downgrade_diagnostics_refuse_during_compile_before_load(self):
+        for category in ("abi", "rule-downgraded"):
+            with self.subTest(category=category):
+                self.compiler_warning = category
+                with self.assertRaises(APP.Refused):
+                    self.prepare()
+                self.assertEqual(self.profile.stage, "compile")
+                self.assertEqual(self.state()["load"], "never")
+                self.assertFalse(self.profile_loaded)
+                self.assertFalse(any("--add" in argv for argv in self.commands))
+                self.assertEqual(self.profile.cleanup()["cleanup"], "not_loaded")
+                self.profile.path.rmdir()
+
+    def test_severity_only_counterexample_would_allow_masked_abi_and_downgrade(self):
+        old = ("--config-file=/dev/null", "--skip-cache", "--jobs=0", "--Werror=rule-not-enforced",
+               "--Werror=rule-downgraded", "--Werror=abi")
+        for category in ("abi", "rule-downgraded"):
+            with self.subTest(category=category), mock.patch.object(APP, "COMMON", old):
+                self.compiler_warning = category
+                self.prepare()
+                self.assertEqual(self.state()["load"], "prepared")
+                self.profile.load()
+                self.assertTrue(self.profile_loaded)
+                self.assertEqual(self.profile.cleanup()["cleanup"], "removed")
+                self.profile.path.rmdir()
+
+    def test_rule_not_enforced_remains_fatal_even_without_report_enablement(self):
+        old = ("--config-file=/dev/null", "--skip-cache", "--jobs=0", "--Werror=rule-not-enforced",
+               "--Werror=rule-downgraded", "--Werror=abi")
+        self.compiler_warning = "rule-not-enforced"
+        with mock.patch.object(APP, "COMMON", old), self.assertRaises(APP.Refused):
+            self.prepare()
+        self.assertEqual(self.profile.stage, "compile")
+        self.assertEqual(self.state()["load"], "never")
+        self.assertFalse(any("--add" in argv for argv in self.commands))
         self.assertEqual(self.profile.cleanup()["cleanup"], "not_loaded")
 
     def test_prerequisite_refusal_has_only_the_expected_fixed_stage(self):

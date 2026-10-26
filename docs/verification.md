@@ -207,6 +207,15 @@ native sequence and verified-label/removed-profile cleanup record before ordinar
 receipt publication and success. Negative controls preserve native failure and
 cancellation and block acceptance for missing completion, invalid/incomplete
 receipts, retained custody, resource/profile cleanup or publication failure.
+For the admitted AppArmor parser 4.0.1, category-specific warning enablement
+and fatal severity are separate: compile/add explicitly select both for ABI,
+rule-downgraded and rule-not-enforced while retaining other warning defaults.
+Independent synthetic compiler-mask controls cover the severity-only ABI and
+downgrade counterexample, refusal before loading, a warning-free lifecycle and
+the separate rule-not-enforced fatal path. These controls execute no parser or
+policy. The canonical native consumers and BoxFerry's exact reviewed-consumer
+source binding require fresh final-source rehearsals after this correction;
+immutable historical evidence and exact Ubuntu24/parser admission remain unchanged.
 Main push, trusted-main PR dispatch and standalone exact-main release dispatch
 retain their existing event/ref/actor/candidate guards; no reusable-workflow or
 untrusted PR context is added. Fresh integrated complete and native gates remain
