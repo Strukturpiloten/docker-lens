@@ -9,7 +9,9 @@ import ctypes
 import errno
 import fcntl
 import json
+import importlib.util
 import os
+from pathlib import Path
 import re
 import select
 import signal
@@ -39,6 +41,22 @@ class Refusal(Exception):
 def require(condition):
     if not condition:
         raise Refusal()
+
+
+_topology_path = Path(__file__).with_name("native_pids_topology.py").resolve()
+topology = sys.modules.get("native_pids_topology")
+if topology is None:
+    _topology_spec = importlib.util.spec_from_file_location("native_pids_topology", _topology_path)
+    topology = importlib.util.module_from_spec(_topology_spec)
+    sys.modules["native_pids_topology"] = topology
+    try:
+        _topology_spec.loader.exec_module(topology)
+    except BaseException:
+        del sys.modules["native_pids_topology"]
+        raise
+else:
+    require(getattr(topology, "__file__", None) is not None
+            and Path(topology.__file__).resolve() == _topology_path)
 
 
 _HOST_OSERROR_TYPES = (OSError, BlockingIOError, ChildProcessError, ConnectionError, BrokenPipeError,
@@ -603,14 +621,17 @@ class LinuxSource:
                 fd = _observe(self.open("cgroup.type", group.directories[-1], observer=detail), detail, "opened")
             try:
                 if detail is None:
-                    require(fs_magic(fd) == CGROUP_MAGIC and self.read_fd(fd, 32) == b"domain\n")
+                    require(fs_magic(fd) == CGROUP_MAGIC)
+                    raw_kind = self.read_fd(fd, 32)
                 else:
-                    require(_observe(fs_magic(fd, observer=detail) == CGROUP_MAGIC, detail, "m_guard")
-                        and _observe(self.read_fd(fd, 32, observer=detail), detail, "domain") == b"domain\n")
+                    require(_observe(fs_magic(fd, observer=detail) == CGROUP_MAGIC, detail, "m_guard"))
+                    raw_kind = _observe(self.read_fd(fd, 32, observer=detail), detail, "domain")
+                kind = topology.parse_type(raw_kind)
             finally:
                 _observe(None, detail, "cleanup_enter")
                 self.close_fd(fd)
                 _observe(None, detail, "cleanup_done")
+        return kind
 
     def check_mount(self, fd, record):
         fields = record.split()
@@ -704,7 +725,7 @@ class LinuxSource:
 
     def snapshot(self, proc, group):
         self.check_process(proc)
-        self.check_group(group)
+        first_kind = self.check_group(group)
         self.leaf(group)
         before = self.values(group)
         tasks = self.tasks(group, proc)
@@ -713,9 +734,9 @@ class LinuxSource:
         require(self.values(group) == before and self.tasks(group, proc) == tasks)
         require(getattr(self, "task_coordinates", ()) == coordinates)
         self.leaf(group)
-        self.check_group(group)
+        require(self.check_group(group) is first_kind)
         self.check_process(proc)
-        return {"maximum": before[0], "current": before[1], "events_max": before[2],
+        return {"maximum": before[0], "current": before[1], "events_max": before[2], "cgroup_type": first_kind.value,
                 "tasks": [list(task) for task in tasks],
                 "task_namespace_ids": [[tid, list(pids), list(groups)]
                                        for tid, pids, groups in coordinates]}

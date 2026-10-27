@@ -336,12 +336,12 @@ class KernelReaderTests(unittest.TestCase):
 
     def test_snapshot_accounts_all_tids_and_rejects_instability(self):
         self.source.check_process = lambda *_: None
-        self.source.check_group = lambda *_: None
+        self.source.check_group = lambda *_: b.topology.CgroupType.DOMAIN
         self.source.leaf = lambda *_: None
         self.source.values = lambda *_: (16, 2, 3)
         self.source.tasks = lambda *_: ((10, 11), (12, 13))
         self.assertEqual(self.source.snapshot(None, None), {
-            "maximum": 16, "current": 2, "events_max": 3, "tasks": [[10, 11], [12, 13]],
+            "maximum": 16, "current": 2, "events_max": 3, "cgroup_type": "domain", "tasks": [[10, 11], [12, 13]],
             "task_namespace_ids": [],
         })
         for facts in [iter([((10, 11),), ((10, 11),)]),
@@ -352,7 +352,7 @@ class KernelReaderTests(unittest.TestCase):
 
     def test_snapshot_rejects_persistent_empty_child_created_during_sampling(self):
         self.source.check_process = lambda *_: None
-        self.source.check_group = lambda *_: None
+        self.source.check_group = lambda *_: b.topology.CgroupType.DOMAIN
         child = False
         scans = []
         def leaf(_group):

@@ -1,4 +1,9 @@
-"""Independent finite type observations; authored fixtures are not native proof."""
+"""Independent finite type observations; authored fixtures are not native proof.
+
+Only the changed type verifier is compared through the immutable pretyped
+archive. The other nine methods still compare current code to frozen source;
+normalization and every mutation rejection remain deliberately narrow.
+"""
 import ast
 import hashlib
 import json
@@ -18,7 +23,7 @@ DETAILS = ("o_time", "o_fds", "o_opens", "o_other", "m_syscall", "m_guard", "m_o
 
 
 class TypeDetailTests(unittest.TestCase):
-    def test_every_altered_method_matches_frozen_source_after_only_metadata_erasure(self):
+    def test_unchanged_methods_and_archived_verifier_match_frozen_source_after_metadata_erasure(self):
         raw = (Path(__file__).parent / "fixtures/native_pids_type_detail_baseline_methods.json").read_bytes()
         self.assertEqual(hashlib.sha256(raw).hexdigest(), "518b3821527e594a0ee396ab049fdb94abcb2754463d89d44261917e8dbdf1f5")
         fixture = json.loads(raw)
@@ -29,7 +34,9 @@ class TypeDetailTests(unittest.TestCase):
                 self.assertEqual(hashlib.sha256(record["method_source"].encode()).hexdigest(), record["method_source_utf8_sha256"])
                 tree = ast.parse((Path(__file__).resolve().parents[1] / record["source_path"]).read_text())
                 body = tree.body if record["class_name"] is None else next(n.body for n in tree.body if isinstance(n, ast.ClassDef) and n.name == record["class_name"])
-                current = next(n for n in body if isinstance(n, ast.FunctionDef) and n.name == record["method_name"])
+                current = (locator_tests.archived_pretyped_method("LinuxSource", "check_group")
+                       if name == "LinuxSource.check_group" else
+                       next(n for n in body if isinstance(n, ast.FunctionDef) and n.name == record["method_name"]))
                 original = ast.parse("class Frozen:\n" + record["method_source"]).body[0].body[0] if record["class_name"] else ast.parse(record["method_source"]).body[0]
                 if name == "_group_escape":
                     self.assertEqual([ast.dump(n) for n in current.decorator_list], ["Name(id='contextmanager', ctx=Load())"])
@@ -98,7 +105,7 @@ class TypeDetailTests(unittest.TestCase):
     def test_metadata_erasure_rejects_unconditional_or_altered_actual_type_forwarding(self):
         for mutation in ("unconditional_open", "unconditional_predicate", "open_parent", "read_cap"):
             with self.subTest(mutation=mutation):
-                method = self.current_method("LinuxSource", "check_group")
+                method = locator_tests.archived_pretyped_method("LinuxSource", "check_group")
                 scope = method.body[-1]
                 if mutation == "unconditional_open":
                     scope.body[0:1] = scope.body[0].orelse
@@ -130,6 +137,7 @@ class TypeDetailTests(unittest.TestCase):
                 path.write_bytes(b"x" * 33)
             original_open, original_read, original_close = source.open, source.read_fd, source.close_fd
             original_require, original_startup = b.require, b.startup_require
+            original_parse = b.topology.parse_type
             errors, records, type_fds, trace = [], [], set(), []
             work_error, close_error = RuntimeError("PRIVATE_WORK"), RuntimeError("PRIVATE_CLOSE")
             completed = False
@@ -175,6 +183,7 @@ class TypeDetailTests(unittest.TestCase):
             def read(fd, maximum, **kwargs):
                 nonlocal completed
                 if fd in type_fds:
+                    self.assertEqual(maximum, 32)
                     trace.append("type.read")
                     checkpoints["read"] = (source.budget.reads, source.budget.bytes)
                     if token == "r_time":
@@ -190,13 +199,24 @@ class TypeDetailTests(unittest.TestCase):
                     completed = True
                 return body
             def require(condition):
-                if completed and token == "d_domain" and condition is True:
-                    raise work_error
                 try:
                     return original_require(condition)
                 except BaseException as error:
                     errors.append(error)
                     raise
+            def parse_type(raw):
+                # These exact bytes are valid now. Inject a later parser-boundary
+                # failure only after the real charged read, preserving diagnostic
+                # tokens without claiming a valid raw type must itself refuse.
+                self.assertTrue(completed)
+                try:
+                    kind = original_parse(raw)
+                except BaseException as error:
+                    errors.append(error)
+                    raise
+                if token in ("d_domain", "d_domthr", "d_thread"):
+                    raise work_error
+                return kind
             def startup(site, condition):
                 try:
                     return original_startup(site, condition)
@@ -211,7 +231,8 @@ class TypeDetailTests(unittest.TestCase):
                         raise close_error
             with patch.object(source, "open", side_effect=open_file), patch.object(source, "read_fd", side_effect=read), \
                     patch.object(source, "close_fd", side_effect=close), patch.object(b, "fs_magic", side_effect=magic), \
-                    patch.object(b, "require", side_effect=require), patch.object(b, "startup_require", side_effect=startup):
+                    patch.object(b, "require", side_effect=require), patch.object(b, "startup_require", side_effect=startup), \
+                    patch.object(b.topology, "parse_type", side_effect=parse_type):
                 from contextlib import ExitStack
                 with ExitStack() as stack:
                     if metadata is not None:
@@ -246,6 +267,13 @@ class TypeDetailTests(unittest.TestCase):
             if observed and metadata is None and not classify:
                 expected += ("cleanup" if cleanup else token,)
             self.assertEqual(records, [expected] if observed else [])
+            expected_work = ["type.open"]
+            if not token.startswith("o_"):
+                expected_work.append("type.magic")
+                if not token.startswith("m_"):
+                    expected_work.append("type.read")
+                expected_work.append("type.close")
+            self.assertEqual([event for event in trace if event.startswith("type.")], expected_work)
             if token in ("m_guard", "m_syscall", "m_other"):
                 self.assertNotIn("type.read", trace)
             if token.startswith("o_"):

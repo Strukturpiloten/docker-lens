@@ -272,18 +272,58 @@ class RootSessionTests(unittest.TestCase):
         self.assertEqual(result.stdout, b"")
         self.assertEqual(result.stderr, b"DOCKERLENS_NATIVE_PIDS_START: s=s_fd0 k=guard\nnative-pids-supervisor: refused\n")
 
-    def test_fixed_sibling_loader_rejects_wrong_cached_module_paths(self):
+    def test_fixed_sibling_loader_cold_and_cached_transitive_closure(self):
         script = str(Path(s.__file__).resolve())
-        code = ("import sys,types,runpy,pathlib\n"
-                "for name in ('native_pids_locator','native_pids_boundary'):\n"
-                " m=types.ModuleType(name);m.__file__='/untrusted/'+name+'.py';sys.modules[name]=m\n"
-                f"scope=runpy.run_path({script!r})\n"
-                f"expected=pathlib.Path({script!r}).parent\n"
-                "assert pathlib.Path(scope['locator'].__file__).resolve()==expected/'native_pids_locator.py'\n"
-                "assert pathlib.Path(scope['boundary'].__file__).resolve()==expected/'native_pids_boundary.py'\n")
+        code = ("import sys,runpy,pathlib\n"
+                f"script={script!r}\n"
+                "scope=runpy.run_path(script)\n"
+                "scope['locator']._discovery_module()\n"
+                "names=('native_pids_locator','native_pids_boundary','native_pids_discovery','native_pids_topology')\n"
+                "expected=pathlib.Path(script).parent\n"
+                "original={name:sys.modules[name] for name in names}\n"
+                "assert all(pathlib.Path(module.__file__).resolve()==expected/(name+'.py') for name,module in original.items())\n"
+                "scope=runpy.run_path(script)\n"
+                "scope['locator']._discovery_module()\n"
+                "assert all(sys.modules[name] is module for name,module in original.items())\n")
         result = subprocess.run([sys.executable, "-I", "-c", code],
                                 stdin=subprocess.DEVNULL, capture_output=True, timeout=2, check=False)
         self.assertEqual((result.returncode, result.stdout, result.stderr), (0, b"", b""))
+
+    def test_fixed_sibling_loader_rejects_wrong_cached_transitive_module_paths(self):
+        script = str(Path(s.__file__).resolve())
+        for name in ("native_pids_boundary", "native_pids_discovery", "native_pids_topology"):
+            for cached_path in (None, "/untrusted/module.py"):
+                with self.subTest(name=name, cached_path=cached_path):
+                    code = ("import sys,types,runpy\n"
+                            f"name={name!r}\n"
+                            "module=types.ModuleType(name)\n"
+                            f"module.__file__={cached_path!r}\n"
+                            "sys.modules[name]=module\n"
+                            "try:\n"
+                            f" scope=runpy.run_path({script!r})\n"
+                            " scope['locator']._discovery_module()\n"
+                            "except Exception as error:\n"
+                            " assert type(error).__name__ in ('ValueError','Refusal'),type(error).__name__\n"
+                            "else:\n"
+                            " raise AssertionError('untrusted cached source accepted')\n")
+                    result = subprocess.run([sys.executable, "-I", "-c", code],
+                                            stdin=subprocess.DEVNULL, capture_output=True, timeout=2, check=False)
+                    self.assertEqual((result.returncode, result.stdout, result.stderr), (0, b"", b""))
+
+    def test_supervisor_reloads_only_fixed_top_level_locator(self):
+        script = str(Path(s.__file__).resolve())
+        for cached_path in (None, "/untrusted/module.py"):
+            with self.subTest(cached_path=cached_path):
+                code = ("import sys,types,runpy,pathlib\n"
+                        "module=types.ModuleType('native_pids_locator')\n"
+                        f"module.__file__={cached_path!r}\n"
+                        "sys.modules['native_pids_locator']=module\n"
+                        f"scope=runpy.run_path({script!r})\n"
+                        "assert scope['locator'] is not module\n"
+                        f"assert pathlib.Path(scope['locator'].__file__).resolve()==pathlib.Path({script!r}).with_name('native_pids_locator.py')\n")
+                result = subprocess.run([sys.executable, "-I", "-c", code],
+                                        stdin=subprocess.DEVNULL, capture_output=True, timeout=2, check=False)
+                self.assertEqual((result.returncode, result.stdout, result.stderr), (0, b"", b""))
 
     def test_full_six_role_session_over_actual_descriptor_bootstrap_and_framed_ipc(self):
         from test_native_pids_locator import LocatorTests
@@ -1880,6 +1920,14 @@ class HostBindObservationTests(unittest.TestCase):
                 (tree.cg / "owned/cgroup.type").write_text(body)
                 failure = RuntimeError("PRIVATE_CLOSE")
                 close_original = tree.source.close_fd
+                original_parse = b.topology.parse_type
+                def parse(raw):
+                    kind = original_parse(raw)
+                    # Valid R/T are supported values. Preserve failure-detail
+                    # coverage by refusing only after the actual bounded read.
+                    if token in ("d_domthr", "d_thread"):
+                        raise b.Refusal()
+                    return kind
                 def close(fd):
                     selected = os.readlink("/proc/self/fd/" + str(fd)).endswith("/cgroup.type")
                     close_original(fd)
@@ -1889,8 +1937,9 @@ class HostBindObservationTests(unittest.TestCase):
                 with ExitStack() as stack:
                     stack.enter_context(patch.object(s, "_BIND", recorder))
                     stack.enter_context(patch.object(tree.source, "close_fd", side_effect=close))
+                    stack.enter_context(patch.object(b.topology, "parse_type", side_effect=parse))
                     output = stack.enter_context(patch.object(s.os, "write"))
-                    with self.assertRaises((b.Refusal, RuntimeError)) as caught:
+                    with self.assertRaises((b.Refusal, b.topology.TopologyRefusal, RuntimeError)) as caught:
                         session.handle(request, channel)
                     if token == "cleanup":
                         self.assertIs(caught.exception, failure)
@@ -1906,7 +1955,12 @@ class HostBindObservationTests(unittest.TestCase):
         def run(tree, session, channel, request, _calls):
             (tree.cg / "owned/cgroup.type").write_text("domain threaded\n")
             recorder = s.BindRecorder(); recorder.begin()
-            with patch.object(s, "_BIND", recorder), patch.object(s.os, "write", side_effect=KeyboardInterrupt("PRIVATE_WRITE")) as output:
+            original_parse = b.topology.parse_type
+            def parse(raw):
+                self.assertIs(original_parse(raw), b.topology.CgroupType.THREAD_ROOT)
+                raise b.Refusal()
+            with patch.object(s, "_BIND", recorder), patch.object(b.topology, "parse_type", side_effect=parse), \
+                    patch.object(s.os, "write", side_effect=KeyboardInterrupt("PRIVATE_WRITE")) as output:
                 with self.assertRaises(b.Refusal):
                     session.handle(request, channel)
             self.assertTrue(session.failed)

@@ -52,6 +52,7 @@ barrier is superseded while its historical evidence keeps its original status.
 - [0041: Original-owner PIDs27 experiment](0041-original-owner-pids-experiment.md)
 - [0042: Finite sudo monitor UID shape](0042-sudo-monitor-uid-shape.md)
 - [0043: Prepare thread-aware PIDs source coverage](0043-thread-aware-pids-source-contract.md)
+- [0044: Typed PIDs source and private proof v2](0044-typed-pids-source-and-proof-v2.md)
 
 ADR 0043 prepares pure topology contracts and controls only. It does not replace
 current collector guards, emit proof v2, establish physical budget fit, or qualify

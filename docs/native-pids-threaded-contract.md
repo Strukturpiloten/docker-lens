@@ -1,13 +1,13 @@
-# Prepared thread-aware PIDs source contract
+# Thread-aware PIDs source contract
 
-This is source-only preparation under
-[ADR 0043](decisions/0043-thread-aware-pids-source-contract.md). The private pure
-`scripts/native_pids_topology.py` helper parses types and plans discovery coverage
-over supplied observations. It performs no kernel I/O and is not imported by the
-production collector. A valid shape establishes neither authenticated custody,
-complete kernel discovery, observed stability, delegation nor native acceptance.
-Current collector guards, proof v1, source protocol, rootless systemd/PidsLimit
-requirements, resource ceilings and all 27 canonical calls remain unchanged.
+[ADR 0044](decisions/0044-typed-pids-source-and-proof-v2.md) integrates the
+[ADR 0043](decisions/0043-thread-aware-pids-source-contract.md) preparation into
+the fixed runtime source. The private pure topology helper validates observed
+roles; the discovery lease binds actual local leader membership and custody.
+Neither helper accepts caller-supplied native authority. Current private proof
+and readers use v2; root framing and worker/controller protocols remain v1.
+Rootless systemd/PidsLimit requirements, resource ceilings and all 27 canonical
+calls remain unchanged. Final-source and fresh native qualification are pending.
 
 ## Typed coverage and roles
 
@@ -53,7 +53,7 @@ reordering but must never hide duplicates or truncate input. There is no
 fallback enumeration and no all-TID candidate procfs census. This helper parses
 no process records and establishes none of those source facts.
 
-## Required future discovery lease
+## Required discovery lease
 
 There are exactly two existing discovery occasions: initial version-peer
 binding and LocateBatch after the six pre-inspects. Later retained-object
@@ -124,9 +124,9 @@ propagation, controls and capacity reuse. Complete ancestor/local-event/root
 exemption/headroom/global/NPROC/kernel/time guarantees above outer512 remain;
 bounded discovery must not truncate attribution.
 
-## Deferred proof and implementation gates
+## Private proof and implementation gates
 
-Positive wiring requires a separate private proof revision: `schema_version:2`,
+The current source and independent readers use the private proof revision: `schema_version:2`,
 `contract:pids-v2`, `candidate_membership:typed_procs_local_membership_v1` in
 source attribution and `cgroup_type` in each existing non-root controller row.
 The discriminator describes the algorithm; it authenticates no execution. Rust
@@ -136,19 +136,20 @@ effect, source/hash, context, worker, accounting and cleanup predicate. No raw
 candidate inventory is emitted. Mixed old/new sample shapes must refuse.
 Existing version-1 root framing and worker/controller protocols need not change;
 never bump them accidentally through a shared version constant. Historical
-proofs, fixtures and their meanings remain unchanged. No v2 proof is emitted or
-consumed by this preparation.
+proofs, fixtures and their meanings remain unchanged. The producer, launcher, immediate reader and emitter require v2;
+historical v1 proofs cannot qualify this candidate.
 
-Before semantic source wiring, explicitly supersede the current-source
-diagnostic AST-equivalence assertions that intentionally changed methods can no
-longer satisfy, including `tests/test_native_pids_locator.py` and
-`tests/native_pids_type_detail_support.py`. Preserve historical fixture bytes,
+ADR 0044 supersedes only current-source diagnostic AST-equivalence assertions
+for intentionally changed methods. The separately named pretyped diagnostic
+archive preserves exact source and hashes from commit
+`b4c9339fddeab7c107d02005448a13926e478a7d`; frozen comparisons retain the
+historical meaning of `tests/test_native_pids_locator.py` and the unchanged
+`tests/native_pids_type_detail_support.py` normalizer. Preserve historical fixture bytes,
 hashes and equivalence/mutation controls against their frozen implementation.
 Replace only inapplicable current/historical comparisons with independently
 reviewed typed-contract, operation-order, budget and diagnostic tests. Use a new
 named baseline only when justified; broader erasure or rewritten old fixtures
-must not disguise a semantic change as metadata-only. This preparation does not
-supersede any current positive guard or equivalence assertion.
+must not disguise a semantic change as metadata-only. No other current positive guard or historical equivalence assertion is superseded.
 
 Require exception-safe lease/transfer controls and a real-I/O authored full IPC
 transcript covering both discoveries, multithreaded daemon groups, six 16/33-task
@@ -183,32 +184,42 @@ remain deferred. No dependency, operational pin, pin location or shared workflow
 changes; existing Renovate ownership/extraction/grouping/approvals remain intact.
 
 
-## Prepared prototype and initial authored envelope
+## Current typed source authored envelope
 
-The private [discovery prototype](../scripts/native_pids_discovery.py) remains
-unwired. Its [synthetic controls](../tests/test_native_pids_discovery.py) cover
-local leader custody, complete worker acquisition, unique witness ownership,
-descriptor-number reuse and failure cleanup. These do not authenticate kernel
-objects or establish physical transcript fit.
+The [discovery lease](../scripts/native_pids_discovery.py) is selected by the
+production runtime locator for peer binding and complete worker matching.
+[Pure controls](../tests/test_native_pids_discovery.py) retain custody, local
+membership, unique witness ownership, descriptor reuse and failure cleanup.
+The [complete authored transcript](../tests/test_native_pids_discovery_transcript.py)
+uses the actual runtime locator and source classes, real bounded file I/O,
+socket framing and process lifecycle. Fixed adapters simulate kernel filesystem,
+namespace/pidfd, Engine and clock facts only. No selectable native provider or
+product API is added.
 
-The [initial transcript control](../tests/test_native_pids_discovery_transcript.py)
-reuses the existing complete owner/root IPC loop with fixed test-local matching
-adapters. It exercises both discoveries, all six roles and 24 samples, original
-request/debit counts, real socket framing and temporary filesystem I/O, charged
-fdinfo reads, unchanged resource ceilings, Source-owned descriptor closure, EOF
-and child reap. It forbids reading the authored threaded member's `cgroup.procs`.
-The configured domain is empty, outer PID1 resides in its ordinary init.scope,
-the single daemon task occupies a threaded child of a thread root, and measured
-workers and their attribution chains remain ordinary domains.
+Both models contain an empty configured domain, PID1 in init.scope, a threaded
+daemon, six childless domain/thread-root/threaded worker leaves at different
+depths, and an ancestor above the configured boundary. Literal expectations
+check all type/parent/current/event/task facts, 24 sample responses, two complete
+discoveries, 30 owner requests, 25 acknowledgments, 55 input frames and all source
+closure. Sampling cannot reopen removed leaves after SealMeasurements; retained
+outer/daemon custody still supports finalization. Threaded process-list reads
+and nonleader proc acquisition are rejected before I/O.
 
-This establishes only that explicitly authored mixed envelope. Kernel
-filesystem/mount/namespace/pidfd facts, Engine responses and the source clock
-remain simulated; short authored file shapes do not prove native read lengths,
-latency or deadline behavior. The adapters and cleanup hooks exist only in the
-test and cannot be selected by the root CLI or a product caller. Current
-collector guards, proof v1 and production source routing remain unchanged.
+| Authored model | Source bytes reserved | Read reservations | Open reservations | Peak FD reservations | Output bytes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| One-task daemon | 17,649,015 | 21,592 | 22,084 | 215 | 63,445 |
+| Three-task daemon | 17,694,094 | 21,620 | 22,098 | 215 | 63,517 |
 
-A multithreaded-daemon transcript, fully threaded worker and ancestor semantics,
-private proof v2, reviewed production caller integration and fresh native
-qualification remain separate gates. Do not substitute this initial passing
-case for those requirements or claim a universal maximum-size fitting envelope.
+One additional cap32 baseline read for the above-outer ancestor uses two actual
+regular-file read reservations, 59 reserved bytes and one open, included above.
+All original ceilings, the 180-second deadline and 46-second cleanup reserve
+remain unchanged. The three-task authored model leaves only 2,019 bytes below
+the output ceiling. More/deeper ancestors, different inode or counter lengths,
+short reads and native scheduling may exhaust a budget and must fail closed.
+These models prove no maximum-size fit or native latency. They do not publish
+the Rust private proof or qualify native execution.
+
+The preceding preparation used test-local matching adapters and ordinary worker
+chains. Its results remain historical observations, not evidence for this typed
+implementation. Fresh exact-candidate native qualification, original whole-lane
+cleanup, nofile28 and downstream acceptance remain required.

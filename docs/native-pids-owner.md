@@ -1,5 +1,22 @@
 # Original-owner PIDs27 experiment
 
+## Typed source rollout and private proof v2
+
+[ADR 0044](decisions/0044-typed-pids-source-and-proof-v2.md) wires actual local
+leader membership, complete domain/thread-root/threaded role and parent checks,
+and private proof v2 with independent Rust and Python validation. Root framing
+and worker/controller protocols remain v1. The production-selected source uses
+fixed-sibling topology/discovery helpers; no test provider is selectable.
+
+The complete authored IPC transcript covers both discoveries, six mixed typed
+worker chains, all 24 samples, and finalization after worker removal. Both one-
+and three-task daemon models fit the unchanged budgets; these simulated kernel,
+Engine and clock facts do not establish native qualification or general fitting
+bounds. See the [measured envelope](native-pids-threaded-contract.md#current-typed-source-authored-envelope).
+Complete final-source gates, independent review, fresh four-lane native evidence
+and whole-lane cleanup remain mandatory. Rootless systemd/delegation remains a
+separate prerequisite; no package release is requested yet.
+
 The Linux-only test module `src/native_pids_tests.rs` supplies canonical native
 invocation 27, followed immediately by the independent `native_pids_proof.py`
 reader. This is test-only source infrastructure. It does not admit PidsLimit,

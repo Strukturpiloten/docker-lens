@@ -43,6 +43,12 @@ outer cleanup, including without public emission. Only an unadmitted PIDs
 source outcome is added. Fresh exact-candidate four-lane 27-call qualification,
 whole-lane cleanup and milestone completion remain pending.
 
+The current [typed PIDs source](docs/native-pids-threaded-contract.md) supports
+explicit domain/thread-root/threaded roles with fixed local-membership discovery
+and private proof v2. Complete authored IPC envelopes fit the unchanged budgets;
+final-source checks and fresh native qualification remain required. Root framing
+and worker/controller protocols remain v1; no PIDs capability is admitted.
+
 The preserved [nofile proof](docs/native-nofile-contract.md) is registered as
 prepared test-only source, with its scoped private-proof bounds and custody
 controls. It is not a canonical invocation or emitter requirement: successful

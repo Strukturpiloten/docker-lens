@@ -394,7 +394,8 @@ else:
         self.assertEqual(rust_sites, sites)
         self.assertEqual(wrapper_sites, sites)
         used = set()
-        for name in ("native-pids-supervisor.py", "native_pids_boundary.py", "native_pids_locator.py"):
+        for name in ("native-pids-supervisor.py", "native_pids_boundary.py", "native_pids_locator.py",
+                     "native_pids_discovery.py", "native_pids_topology.py"):
             for node in ast.walk(ast.parse((ROOT / "scripts" / name).read_text())):
                 if isinstance(node, ast.Call) and node.args and isinstance(node.args[0], ast.Constant):
                     called = node.func.attr if isinstance(node.func, ast.Attribute) else node.func.id if isinstance(node.func, ast.Name) else ""

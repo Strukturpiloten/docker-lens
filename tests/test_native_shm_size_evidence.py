@@ -43,7 +43,7 @@ class SourceFamilyEvidenceTests(unittest.TestCase):
                         self.assertEqual(record[family + "_contract"], family.replace("_", "-") + "-v1")
                         self.assertEqual(record[family + "_outcomes"]["admission"], "unadmitted")
                         self.assertEqual(set(record[family + "_outcomes"]), {"admission", "scope", "outcome"})
-                    self.assertEqual(record["pids_contract"], "pids-v1")
+                    self.assertEqual(record["pids_contract"], "pids-v2")
                     self.assertEqual(record["pids_outcomes"]["qualification"], "requires_complete_lane_exit_and_fresh_aggregate")
                     for capability in ("ShmSize", "SupplementaryGroups", "SecurityOptions", "Sysctls", "SysctlIpv4Forward", "PidsLimit", "UlimitNofile"):
                         self.assertNotIn(capability, record["capability_outcome"])

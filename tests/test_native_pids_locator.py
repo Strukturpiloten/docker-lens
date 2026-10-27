@@ -1,4 +1,8 @@
-"""Independent source controls. Synthetic kernel trees are not native evidence."""
+"""Independent source controls; synthetic kernel trees are not native evidence.
+
+Changed typed methods use the separately pinned diagnostic-era archive for old
+AST equivalence. Current configured-role expectations below are literal controls.
+"""
 
 import ctypes
 import ast
@@ -21,6 +25,24 @@ import native_pids_locator as l
 from native_pids_type_detail_support import normalized_type_metadata
 
 b = l.boundary
+
+
+def archived_pretyped_method(owner, name):
+    """Read immutable diagnostic-era source; never normalize current typed work."""
+    raw = (Path(__file__).parent / "fixtures/native_pids_pretyped_diagnostic_methods.json").read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == "ea87e0004d598def956d35259b157834789fc3831308d01bcb99f568c94adee8"
+    fixture = json.loads(raw)
+    assert fixture["source_commit"] == "b4c9339fddeab7c107d02005448a13926e478a7d"
+    assert set(fixture["methods"]) == {
+        "LinuxSource.check_group", "LocatorSource.group",
+        "LocatorSource.configured_outer_group", "LocatorSource.check_group"}
+    record = fixture["methods"][owner + "." + name]
+    assert (record["class_name"], record["method_name"]) == (owner, name)
+    assert record["source_path"] == "scripts/" + (
+        "native_pids_boundary.py" if owner == "LinuxSource" else "native_pids_locator.py")
+    assert len(record["source_file_utf8_sha256"]) == 64
+    assert hashlib.sha256(record["method_source"].encode()).hexdigest() == record["method_source_utf8_sha256"]
+    return ast.parse("class FrozenPretyped:\n" + record["method_source"]).body[0].body[0]
 
 
 class KernelTree:
@@ -127,7 +149,7 @@ class KernelTree:
 
 
 class LocatorTests(unittest.TestCase):
-    def configured_fixture(self, fault=None, *, handled=False, cleanup=False):
+    def configured_fixture(self, fault=None, *, handled=False, cleanup=False, kind=None, values=(512, 0, 0)):
         """Independent operation trace; no daemon, namespace, or runtime probe."""
         source = l.LocatorSource.__new__(l.LocatorSource)
         process = SimpleNamespace(namespaces=(3, 4, 2))
@@ -159,8 +181,8 @@ class LocatorTests(unittest.TestCase):
                 finally:
                     raise failure
             source.guest_cgroup_mount = guest_cleanup
-        source.values = operation("max", (512,))
-        source.check_group = operation("recheck")
+        source.values = operation("max", values)
+        source.check_group = operation("recheck", b.topology.CgroupType.DOMAIN if kind is None else kind)
 
         def configured_check(observed_process, selected):
             trace.append("binding")
@@ -208,6 +230,49 @@ class LocatorTests(unittest.TestCase):
                     self.assertEqual(trace, expected)
                     self.assertEqual(records, [])
 
+    def test_current_configured_outer_literal_domain_roles_and_occupancy(self):
+        # Independent role table: a configured outer may be D/R, never T.
+        for kind, accepted in ((b.topology.CgroupType.DOMAIN, True),
+                               (b.topology.CgroupType.THREAD_ROOT, True),
+                               (b.topology.CgroupType.THREADED, False)):
+            for observed in (False, True):
+                with self.subTest(kind=kind, observed=observed):
+                    source, process, selected, trace, _failure, identity = self.configured_fixture(kind=kind)
+                    records = []
+                    with patch.object(b, "identity", side_effect=identity):
+                        if accepted:
+                            self.assertIs(source.configured_outer_group(process, records.append if observed else None), selected)
+                        else:
+                            with self.assertRaises(b.Refusal):
+                                source.configured_outer_group(process, records.append if observed else None)
+                    expected = ["pre", "host", "guest", "selection", "selection", "max", "recheck"]
+                    self.assertEqual(trace, expected + (["binding_identity", "binding", "final"] if accepted else []))
+                    self.assertEqual(records, [] if accepted or not observed else ["oc_recheck"])
+        for values in ((511, 0, 0), (513, 0, 0), (512, 513, 0)):
+            with self.subTest(values=values):
+                source, process, _selected, trace, _failure, identity = self.configured_fixture(values=values)
+                records = []
+                with patch.object(b, "identity", side_effect=identity), self.assertRaises(b.Refusal):
+                    source.configured_outer_group(process, records.append)
+                self.assertEqual(trace, ["pre", "host", "guest", "selection", "selection", "max"])
+                self.assertEqual(records, ["oc_max"])
+
+    def test_current_configured_outer_matches_held_inode_before_reading_limit(self):
+        for duplicate in (False, True):
+            with self.subTest(duplicate=duplicate):
+                source, process, current, trace, _failure, identity = self.configured_fixture()
+                if duplicate:
+                    current.identities = ((0, 12), (0, 12))
+                def wrong_inode(fd):
+                    value = identity(fd)
+                    return (0, 99) if fd == 12 and not duplicate else value
+                records = []
+                with patch.object(b, "identity", side_effect=wrong_inode):
+                    with self.assertRaisesRegex(l.LocatorRefusal, "ConfiguredOuterUnavailable"):
+                        source.configured_outer_group(process, records.append)
+                self.assertEqual(trace, ["pre", "host", "guest", "selection", "selection"])
+                self.assertEqual(records, ["oc_select"])
+
     def test_configured_outer_observer_failure_and_opaque_cleanup_preserve_exception(self):
         for cleanup in (False, True):
             source, process, _current, _trace, failure, identity = self.configured_fixture(
@@ -232,10 +297,8 @@ class LocatorTests(unittest.TestCase):
             self.assertIs(caught.exception, failure)
             self.assertEqual(records, ["oc_host"])
 
-    def test_configured_outer_operation_ast_preserves_original_statements(self):
-        tree = ast.parse(Path(l.__file__).read_text())
-        cls = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "LocatorSource")
-        method = next(node for node in cls.body if isinstance(node, ast.FunctionDef) and node.name == "configured_outer_group")
+    def test_frozen_configured_outer_operation_ast_preserves_original_statements(self):
+        method = archived_pretyped_method("LocatorSource", "configured_outer_group")
         self.assertEqual([arg.arg for arg in method.args.args], ["self", "process", "observer"])
         self.assertEqual(ast.dump(method.args.defaults[0]), "Constant(value=None)")
         sites = []
@@ -292,14 +355,12 @@ class LocatorTests(unittest.TestCase):
             "e996736bb4c01bf63e79460003c1ed7267313faef86be71ac1bca0ba9e25d980")
         fixture = json.loads(raw)
         self.assertEqual(fixture["source_commit"], "5b73e3c4dd93de9cb80ca4c0857e19d332a53b68")
-        tree = ast.parse(Path(l.__file__).read_text())
-        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "LocatorSource")
         for name in ("group", "configured_outer_group"):
             original = fixture["methods"]["LocatorSource." + name]
             self.assertEqual((original["source_path"], original["class_name"], original["method_name"]),
                 ("scripts/native_pids_locator.py", "LocatorSource", name))
             self.assertEqual(hashlib.sha256(original["method_source"].encode()).hexdigest(), original["method_source_utf8_sha256"])
-            method = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == name)
+            method = archived_pretyped_method("LocatorSource", name)
             self.assertEqual([arg.arg for arg in method.args.args], ["self", "process", "observer"])
             self.assertEqual(ast.dump(method.args.defaults[0]), "Constant(value=None)")
             if name == "group":
@@ -424,8 +485,7 @@ class LocatorTests(unittest.TestCase):
             self.assertEqual(original["source_path"], "scripts/" + Path(module.__file__).name)
             self.assertEqual((original["class_name"], original["method_name"]), (owner, "check_group"))
             self.assertEqual(hashlib.sha256(original["method_source"].encode()).hexdigest(), original["method_source_utf8_sha256"])
-            cls = next(n for n in ast.parse(Path(module.__file__).read_text()).body if isinstance(n, ast.ClassDef) and n.name == owner)
-            method = normalized_type_metadata(next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "check_group"))
+            method = normalized_type_metadata(archived_pretyped_method(owner, "check_group"))
             self.assertEqual([arg.arg for arg in method.args.args], ["self", "group", "observer"])
             self.assertEqual([ast.dump(n) for n in method.args.defaults], ["Constant(value=None)"])
             if owner == "LocatorSource":
@@ -451,13 +511,17 @@ class LocatorTests(unittest.TestCase):
         def run(tree):
             process = tree.source.process(100, 1000)
             calls = []
+            original_check = tree.source.check_group
             def old_group_check(group):
                 calls.append(group)
+                # Keep the one-argument call seam and retain its typed result.
+                return original_check(group)
             tree.source.check_group = old_group_check
             group = tree.source.group(process)
             self.assertEqual(calls, [group])
             def old_base(_self, candidate):
                 calls.append(candidate)
+                return b.topology.CgroupType.DOMAIN
             with patch.object(b.LinuxSource, "check_group", old_base), \
                     patch.object(b, "_group_exception_tag", side_effect=AssertionError("no classify")), \
                     patch.object(l, "_host_group_exception_tag", side_effect=AssertionError("no classify")):

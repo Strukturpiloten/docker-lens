@@ -15,8 +15,8 @@ import sys
 
 from native_network_attachment_proof import fingerprint, read_private_proof, unique_object
 
-CONTRACT = "pids-v1"
-FILENAME = "pids-v1.json"
+CONTRACT = "pids-v2"
+FILENAME = "pids-v2.json"
 LIMIT = 128 * 1024
 SLOTS = ("cli16", "cli64", "cli_unlimited", "rendered16", "rendered64", "rendered_unlimited")
 LANES = ("debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless")
@@ -75,6 +75,12 @@ def sequence(value, minimum, maximum=None):
 def identity(value, count):
     sequence(value, count)
     return tuple(integer(number, 0 if offset == 0 else 1) for offset, number in enumerate(value))
+
+
+def cgroup_type(value):
+    if type(value) is not str or value not in ("domain", "domain threaded", "threaded"):
+        fail()
+    return value
 
 
 def validate_context(context):
@@ -172,7 +178,8 @@ def validate_case(case, slot, nonce):
     first_attr = None
     first_globals = None
     for phase, (sample, expected_members) in enumerate(zip(samples, members)):
-        keys(sample, ("maximum", "current", "events_max", "tasks", "task_namespace_ids", "attribution", "globals"))
+        keys(sample, ("maximum", "current", "events_max", "tasks", "task_namespace_ids", "attribution", "globals", "cgroup_type"))
+        cgroup_type(sample["cgroup_type"])
         exact(sample["maximum"], maximum)
         exact(sample["current"], len(expected_members))
         integer(sample["events_max"])
@@ -196,7 +203,8 @@ def validate_case(case, slot, nonce):
         all_tasks.append(task_set)
         attr = sample["attribution"]
         keys(attr, ("event_semantics", "pids_localevents", "complete_chain", "outer_index",
-                    "reader_cgroup_namespace", "hierarchy_root", "controllers"))
+                    "reader_cgroup_namespace", "hierarchy_root", "controllers", "candidate_membership"))
+        exact(attr["candidate_membership"], "typed_procs_local_membership_v1")
         exact(attr["event_semantics"], "hierarchical_with_local_enforcer")
         exact(attr["pids_localevents"], False)
         exact(attr["complete_chain"], True)
@@ -215,10 +223,22 @@ def validate_case(case, slot, nonce):
         exact(rows[0]["maximum"], maximum)
         exact(rows[0]["current"], sample["current"])
         exact(rows[0]["events_max"], sample["events_max"])
+        exact(rows[0]["cgroup_type"], sample["cgroup_type"])
+        if cgroup_type(rows[outer]["cgroup_type"]) == "threaded":
+            fail()
         groups = set()
         for index, row in enumerate(rows):
             keys(row, ("identity", "maximum", "current", "events_max", "events_local_max",
-                       "current_samples", "events_samples", "events_local_samples"))
+                       "current_samples", "events_samples", "events_local_samples", "cgroup_type"))
+            kind = cgroup_type(row["cgroup_type"])
+            if index + 1 < len(rows):
+                parent_kind = cgroup_type(rows[index + 1]["cgroup_type"])
+                allowed_children = {"domain": ("domain", "domain threaded"),
+                                    "domain threaded": ("threaded",), "threaded": ("threaded",)}
+                if kind not in allowed_children[parent_kind]:
+                    fail()
+            # The final row's parent is the independently qualified genuine
+            # hierarchy root above, whose mixed-child exception is not a type.
             group = identity(row["identity"], 3)
             if group in groups or group == root_identity or (group[0], group[2]) != (root_identity[0], root_identity[2]):
                 fail()
@@ -238,6 +258,7 @@ def validate_case(case, slot, nonce):
                 previous = last_rows[index]
                 exact(row["identity"], previous["identity"])
                 exact(row["maximum"], previous["maximum"])
+                exact(row["cgroup_type"], previous["cgroup_type"])
                 delta = integer(row["events_max"]) - integer(previous["events_max"])
                 local_delta = integer(row["events_local_max"]) - integer(previous["events_local_max"])
                 causal = int(maximum == 16 and phase == 2)
@@ -272,6 +293,41 @@ def validate_case(case, slot, nonce):
             exact(static, first_globals)
         first_globals = static
     if all_tasks[0] != all_tasks[3] or all_tasks[1] != all_tasks[2] or not all_tasks[0] < all_tasks[1]:
+        fail()
+
+
+def validate_shared_topology(cases):
+    """Bind all 24 observations to one identity/kind/parent measurement scope."""
+    bindings = {}
+    leaves = set()
+    ancestor_groups = set()
+    common = None
+    for case in cases:
+        first = case["source_samples"][0]["attribution"]
+        leaf = identity(first["controllers"][0]["identity"], 3)
+        if leaf in leaves:
+            fail()
+        leaves.add(leaf)
+        for sample in case["source_samples"]:
+            attr = sample["attribution"]
+            rows = attr["controllers"]
+            root = identity(attr["hierarchy_root"]["identity"], 3)
+            selected = (identity(rows[attr["outer_index"]]["identity"], 3), root,
+                        identity(attr["reader_cgroup_namespace"], 2))
+            if common is None:
+                common = selected
+            elif selected != common:
+                fail()
+            for index, row in enumerate(rows):
+                group = identity(row["identity"], 3)
+                parent = identity(rows[index + 1]["identity"], 3) if index + 1 < len(rows) else root
+                binding = (row["cgroup_type"], parent)
+                if group in bindings and bindings[group] != binding:
+                    fail()
+                bindings[group] = binding
+                if index:
+                    ancestor_groups.add(group)
+    if leaves & ancestor_groups:
         fail()
 
 
@@ -505,7 +561,7 @@ def validate_pids_proof(proof, expected_context):
         validate_context(expected_context)
         keys(proof, ("schema_version", "contract", "scope", "capability_admission", "catalogue_admission", "context", "nonce",
                      "outer_before", "outer_after_confirmation", "outer_final", "artifact", "measured", "cases", "root", "cleanup", "budgets"))
-        for field, value in (("schema_version", 1), ("contract", CONTRACT), ("scope", "controlled_live_leaf_enforcement_only"),
+        for field, value in (("schema_version", 2), ("contract", CONTRACT), ("scope", "controlled_live_leaf_enforcement_only"),
                              ("capability_admission", []), ("catalogue_admission", False), ("context", expected_context)):
             exact(proof[field], value)
         digest(proof["nonce"], 32)
@@ -528,6 +584,7 @@ def validate_pids_proof(proof, expected_context):
         cases = sequence(proof["cases"], 6)
         for case, slot in zip(cases, SLOTS):
             validate_case(case, slot, proof["nonce"])
+        validate_shared_topology(cases)
         # Other proof sections are validated below against independent context
         # and literal request/evidence expectations; none select their reader.
         validate_artifact(proof["artifact"], expected_context)

@@ -1,4 +1,4 @@
-"""NON-WIRED typed discovery lease prototype; never a source-provider IPC API.
+"""Typed discovery lease for the fixed runtime source; never a source-provider IPC API.
 
 Only a fixed trusted in-process caller may supply Source and the matching
 callback. The callback must be pure on supplied facts: no extra source I/O,
@@ -12,12 +12,11 @@ only AFTER this lease closes successfully. Returned witnesses have one central
 owner; records must never close them separately. A failed/uncertain close is a
 ROOT abort, never a successful transfer or permission to retry a closed number.
 
-This synthetic-test preparation proves no complete real-I/O/IPC fitting envelope.
+Authored transcript controls prove only their measured fitting envelopes, not native behavior.
 128 graph FDs plus six selected ownership SETS (each normally 7 Process FDs and
 up to 15 namespace-parent FDs), graph witnesses and the original 16 fixed slots
 can exceed 256. Existing Budget must refuse before I/O; no allowance is raised.
-Production integration still requires reviewed caller/lease ownership, the full
-existing owner's measured real-I/O transcript, proof v2 and native qualification.
+Complete final-source review and fresh proof-v2 native qualification remain required.
 """
 
 from contextlib import contextmanager
@@ -25,8 +24,31 @@ from dataclasses import dataclass
 from enum import Enum
 import re
 
-import native_pids_locator as locator
-import native_pids_topology as topology
+import importlib.util
+from pathlib import Path
+import sys
+
+
+def _sibling(name):
+    path = Path(__file__).with_name(name + ".py").resolve()
+    module = sys.modules.get(name)
+    if module is not None:
+        if getattr(module, "__file__", None) is None or Path(module.__file__).resolve() != path:
+            raise ValueError("pids-import")
+        return module
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        del sys.modules[name]
+        raise
+    return module
+
+
+locator = _sibling("native_pids_locator")
+topology = _sibling("native_pids_topology")
 
 
 boundary = locator.boundary
@@ -82,6 +104,13 @@ class Selection:
     coverage_witness: Witness
 
 
+@dataclass(frozen=True)
+class TypeObservation:
+    identity: tuple
+    parent: tuple | None
+    kind: topology.CgroupType
+
+
 class _Cleanup:
     def __init__(self, source, baseline):
         self.source, self.baseline, self.first = source, frozenset(baseline), None
@@ -122,8 +151,9 @@ class DiscoveryTransfer:
     before I/O; any remaining uncertain ownership requires ROOT abort/Source
     teardown, not another close attempt on this object.
     """
-    def __init__(self, source, selections, witnesses, process_owned, witness_owned):
+    def __init__(self, source, selections, witnesses, process_owned, witness_owned, types):
         self.selections, self.witnesses = selections, witnesses
+        self.types = types
         self._source, self._closed = source, False
         self._process_owned, self._witness_owned = frozenset(process_owned), frozenset(witness_owned)
 
@@ -146,6 +176,22 @@ class DiscoveryTransfer:
         require(owned <= self._source.owned)
         preserve = self._source.owned - owned
         _Cleanup(self._source, preserve).release(preserve)
+
+    def handoff(self):
+        """Retire closing rights into the ORIGINAL Source, without closing FDs.
+
+        No caller FD set or new owner is accepted. The fixed locator must first
+        bind actual Groups/processes and release every graph witness.
+        """
+        require(not self._closed and not self._witness_owned
+                and self._process_owned <= self._source.owned)
+        self._closed = True
+        self._process_owned = frozenset()
+
+    def abort(self):
+        """Retire an untransferred scope; a failed earlier close is not retried."""
+        if not self._closed:
+            self.close()
 
 
 @dataclass(frozen=True)
@@ -366,5 +412,8 @@ def discover(source, outer, mode, consume):
             lease._retired = True
         cleanup.release(baseline)
         raise
+    types = tuple(TypeObservation((*node.identity, root_mount),
+                                 (*nodes[node.parent].identity, root_mount) if node.parent is not None else None,
+                                 node.kind) for node in nodes)
     cleanup.release(baseline | process_owned | witness_owned)
-    return DiscoveryTransfer(source, selections, tuple(witnesses.values()), process_owned, witness_owned)
+    return DiscoveryTransfer(source, selections, tuple(witnesses.values()), process_owned, witness_owned, types)

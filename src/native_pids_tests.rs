@@ -1,4 +1,6 @@
 //! Test-only original-owner PIDs experiment. No product executor or capability grant.
+//! Private proof v2 carries measured cgroup kinds and complete-chain attribution;
+//! root frames and worker/controller protocols retain their separate v1 contracts.
 
 use super::*;
 use crate::target::{Mount, PidsLimit};
@@ -16,7 +18,12 @@ use std::os::unix::net::UnixStream;
 use std::process::{Child, ChildStdin, ChildStdout};
 use std::sync::{Arc, OnceLock};
 
+// Root and controller/worker wire protocols remain v1 independently of the proof.
 const VERSION: u64 = 1;
+const PROOF_VERSION: u64 = 2;
+const PROOF_CONTRACT: &str = "pids-v2";
+const PROOF_FILENAME: &str = "pids-v2.json";
+const CANDIDATE_MEMBERSHIP: &str = "typed_procs_local_membership_v1";
 const FRAME: usize = 16 * 1024;
 const HELPER_CAPTURE: usize = 64 * 1024;
 const SLOTS: [&str; 6] = [
@@ -2488,6 +2495,22 @@ fn worker_children(event: &Value, count: usize) -> PidsResult<BTreeSet<u64>> {
     Ok(found)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CgroupKind {
+    Domain,
+    DomainThreaded,
+    Threaded,
+}
+
+fn cgroup_kind(value: &Value) -> PidsResult<CgroupKind> {
+    match value.as_str() {
+        Some("domain") => Ok(CgroupKind::Domain),
+        Some("domain threaded") => Ok(CgroupKind::DomainThreaded),
+        Some("threaded") => Ok(CgroupKind::Threaded),
+        _ => Err("pids-cgroup-type"),
+    }
+}
+
 fn validate_case(
     slot: &str,
     nonce: &str,
@@ -2621,6 +2644,7 @@ fn validate_case(
             sample,
             &[
                 "maximum",
+                "cgroup_type",
                 "current",
                 "events_max",
                 "tasks",
@@ -2645,6 +2669,7 @@ fn validate_case(
             attribution,
             &[
                 "event_semantics",
+                "candidate_membership",
                 "pids_localevents",
                 "complete_chain",
                 "outer_index",
@@ -2653,7 +2678,10 @@ fn validate_case(
                 "controllers",
             ],
         )?;
-        if attribution["event_semantics"] != "hierarchical_with_local_enforcer"
+        // This fixed tag identifies the measured algorithm; held-object custody
+        // and the full attribution/effect checks still establish its scope.
+        if attribution["candidate_membership"] != CANDIDATE_MEMBERSHIP
+            || attribution["event_semantics"] != "hierarchical_with_local_enforcer"
             || attribution["pids_localevents"] != false
             || attribution["complete_chain"] != true
         {
@@ -2694,8 +2722,13 @@ fn validate_case(
             || rows[0]["maximum"] != maximum
             || rows[0]["current"] != sample["current"]
             || rows[0]["events_max"] != sample["events_max"]
+            || rows[0]["cgroup_type"] != sample["cgroup_type"]
         {
             return Err("pids-ancestors");
+        }
+        cgroup_kind(&sample["cgroup_type"])?;
+        if cgroup_kind(&rows[outer]["cgroup_type"])? == CgroupKind::Threaded {
+            return Err("pids-outer-type");
         }
         let mut groups = BTreeSet::new();
         for (index, row) in rows.iter().enumerate() {
@@ -2703,6 +2736,7 @@ fn validate_case(
                 row,
                 &[
                     "identity",
+                    "cgroup_type",
                     "maximum",
                     "current",
                     "events_max",
@@ -2712,6 +2746,25 @@ fn validate_case(
                     "events_local_samples",
                 ],
             )?;
+            let kind = cgroup_kind(&row["cgroup_type"])?;
+            if let Some(parent) = rows.get(index + 1) {
+                let parent = cgroup_kind(&parent["cgroup_type"])?;
+                if !matches!(
+                    (parent, kind),
+                    (
+                        CgroupKind::Domain,
+                        CgroupKind::Domain | CgroupKind::DomainThreaded
+                    ) | (
+                        CgroupKind::DomainThreaded | CgroupKind::Threaded,
+                        CgroupKind::Threaded
+                    )
+                ) {
+                    return Err("pids-type-edge");
+                }
+            }
+            // The final row's parent is the separately qualified actual root,
+            // whose mixed-topology exception permits D/R/T children. No other
+            // node (including namespace-visible slash or outer512) gets it.
             let group = kernel_identity(&row["identity"], 3)?;
             if group[0] != hierarchy[0]
                 || group[2] != hierarchy[2]
@@ -2836,7 +2889,7 @@ fn validate_case(
             return Err("pids-ancestor-custody");
         }
         for index in 0..length {
-            for key in ["identity", "maximum"] {
+            for key in ["identity", "maximum", "cgroup_type"] {
                 if next["controllers"][index][key] != first["controllers"][index][key] {
                     return Err("pids-ancestor-custody");
                 }
@@ -2884,6 +2937,88 @@ fn validate_case(
     Ok(
         json!({"slot":slot,"worker_events":events,"source_samples":samples,"controlled_limit":maximum,"effect":"enforced_with_controls_unadmitted"}),
     )
+}
+
+// Independently reconcile every measurement, including shared ancestors above
+// outer512. A cgroup's held identity has one measured kind and immediate parent;
+// equal counters or type strings alone cannot substitute another object.
+fn validate_measurement_cases(cases: &[Value], nonce: &str) -> PidsResult<()> {
+    if cases.len() != SLOTS.len() {
+        return Err("pids-cases");
+    }
+    let mut objects = BTreeMap::new();
+    let mut leaves = BTreeSet::new();
+    let mut ancestors = BTreeSet::new();
+    let mut common_context = None;
+    for (case, slot) in cases.iter().zip(SLOTS) {
+        closed(
+            case,
+            &[
+                "slot",
+                "worker_events",
+                "source_samples",
+                "controlled_limit",
+                "effect",
+                "definition",
+            ],
+        )?;
+        let events = case["worker_events"].as_array().ok_or("pids-case")?;
+        let samples = case["source_samples"].as_array().ok_or("pids-case")?;
+        let checked = validate_case(slot, nonce, events, samples)?;
+        for key in ["slot", "controlled_limit", "effect"] {
+            if case[key] != checked[key] {
+                return Err("pids-case");
+            }
+        }
+        for (phase, sample) in samples.iter().enumerate() {
+            let attribution = &sample["attribution"];
+            let rows = attribution["controllers"]
+                .as_array()
+                .ok_or("pids-ancestors")?;
+            let root = kernel_identity(&attribution["hierarchy_root"]["identity"], 3)?;
+            let outer = unsigned(&attribution["outer_index"])? as usize;
+            let context = (
+                root.clone(),
+                kernel_identity(&attribution["reader_cgroup_namespace"], 2)?,
+                kernel_identity(&rows[outer]["identity"], 3)?,
+            );
+            if common_context
+                .as_ref()
+                .is_some_and(|first| first != &context)
+            {
+                return Err("pids-measurement-custody");
+            }
+            common_context = Some(context);
+            if phase == 0 && !leaves.insert(kernel_identity(&rows[0]["identity"], 3)?) {
+                return Err("pids-distinct-leaves");
+            }
+            for (index, row) in rows.iter().enumerate() {
+                let identity = kernel_identity(&row["identity"], 3)?;
+                if index != 0 {
+                    ancestors.insert(identity.clone());
+                }
+                let parent = if let Some(parent) = rows.get(index + 1) {
+                    kernel_identity(&parent["identity"], 3)?
+                } else {
+                    root.clone()
+                };
+                let relation = (cgroup_kind(&row["cgroup_type"])?, parent);
+                if objects
+                    .get(&identity)
+                    .is_some_and(|previous| previous != &relation)
+                {
+                    return Err("pids-measurement-custody");
+                }
+                objects.insert(identity, relation);
+            }
+        }
+    }
+    // Every worker leaf is childless in the measured scope. Reusing it as a
+    // parent anywhere contradicts that role even if kind/parent custody agrees.
+    if !leaves.is_disjoint(&ancestors) {
+        return Err("pids-childless-leaves");
+    }
+    Ok(())
 }
 
 fn validate_outer_owner_state(raw: &Value, id: &str, run: &str) -> PidsResult<()> {
@@ -2979,7 +3114,7 @@ impl NativeProducer {
             .collect();
         run.ids = vec![None; SLOTS.len()];
         run.attempted = vec![false; SLOTS.len()];
-        let target = ProofTarget::new_for("NATIVE_PIDS_PROOF_PATH", "pids-v1.json");
+        let target = ProofTarget::new_for("NATIVE_PIDS_PROOF_PATH", PROOF_FILENAME);
         if std::path::Path::new(&run.socket) != target.directory.join("socket/docker.sock") {
             return Err("pids-socket");
         }
@@ -3502,6 +3637,7 @@ impl NativeProducer {
             case["definition"] = definitions[index].clone();
             self.observations.push(case);
         }
+        validate_measurement_cases(&self.observations, &self.nonce)?;
         let decoded = self.capture_effective()?;
         self.worker.check()?;
         self.root
@@ -3647,7 +3783,8 @@ impl NativeProducer {
             "api_version":self.run.api,"mode":if self.run.mode == DaemonMode::Rootless {"rootless"} else {"rootful"},
             "outer_backend":required("NATIVE_OUTER_ENGINE"),"outer_id":self.original.id,"fixture_image":self.run.base,
             "outer":self.original.projection});
-        let proof = json!({"schema_version":1,"contract":"pids-v1","scope":"controlled_live_leaf_enforcement_only",
+        validate_measurement_cases(&self.observations, &self.nonce)?;
+        let proof = json!({"schema_version":PROOF_VERSION,"contract":PROOF_CONTRACT,"scope":"controlled_live_leaf_enforcement_only",
             "capability_admission":[],"catalogue_admission":false,"context":context,"nonce":self.nonce,
             "outer_before":self.original.private_value(),"outer_after_confirmation":self.confirmed_outer.private_value(),"outer_final":final_outer.private_value(),
             "artifact":self.worker.manifest,"measured":measured,"cases":self.observations,"root":root,
@@ -5061,17 +5198,360 @@ fn authored_case(slot: &str) -> (Vec<Value>, Vec<Value>) {
         let rows: Vec<_> = (0..3).map(|index| {
             let current = if index == 0 {tasks.len() as u64} else {100+tasks.len() as u64};
             let local = if index == 0 {event} else {0};
-            json!({"identity":[28,1001+index,77],"maximum":if index == 0 {maximum.clone()} else if index == 1 {json!(512)} else {json!("max")},
+            json!({"identity":[28,1001+index,77],"cgroup_type":"domain","maximum":if index == 0 {maximum.clone()} else if index == 1 {json!(512)} else {json!("max")},
                 "current":current,"current_samples":[current,current],"events_max":event,"events_samples":[event,event],"events_local_max":local,"events_local_samples":[local,local]})
         }).collect();
-        samples.push(json!({"maximum":maximum,"current":tasks.len(),"events_max":event,"tasks":reader,"task_namespace_ids":coordinates,
-            "attribution":{"event_semantics":"hierarchical_with_local_enforcer","pids_localevents":false,"complete_chain":true,"outer_index":1,
+        samples.push(json!({"maximum":maximum,"cgroup_type":"domain","current":tasks.len(),"events_max":event,"tasks":reader,"task_namespace_ids":coordinates,
+            "attribution":{"event_semantics":"hierarchical_with_local_enforcer","candidate_membership":"typed_procs_local_membership_v1","pids_localevents":false,"complete_chain":true,"outer_index":1,
                 "reader_cgroup_namespace":[5,4026531835_u64],"hierarchy_root":{"identity":[28,2,77],"pids_max_present":false,"cgroup_type_present":false,
                 "cgroup_events_present":false,"available_pids":true,"mount_root_is_slash":true,"qualification":"root_exempt"},"controllers":rows},
             "globals":{"threads_max":100000,"pid_max":4194304,"total_tasks":700,"total_tasks_samples":[700,700],"sched_policy":0,"nproc_soft":32768,"nproc_hard":32768,
                 "kernel_release":"6.17.0-fixture","kernel_version":"#1 independent authored expectation","kernel_machine":"x86_64"}}));
     }
     (events, samples)
+}
+
+// Authored literals exercise the independent reader, never a native provider.
+fn authored_typed_case(slot: &str, kinds: &[&str], outer: usize) -> (Vec<Value>, Vec<Value>) {
+    let (events, mut samples) = authored_case(slot);
+    for sample in &mut samples {
+        sample["cgroup_type"] = json!(kinds[0]);
+        let rows = sample["attribution"]["controllers"].as_array_mut().unwrap();
+        rows.truncate(kinds.len());
+        for (index, (row, kind)) in rows.iter_mut().zip(kinds).enumerate() {
+            row["cgroup_type"] = json!(kind);
+            if index != 0 {
+                row["maximum"] = if index == outer {
+                    json!(512)
+                } else {
+                    json!("max")
+                };
+            }
+        }
+        sample["attribution"]["outer_index"] = json!(outer);
+    }
+    (events, samples)
+}
+
+fn authored_measurement_cases() -> Vec<Value> {
+    SLOTS
+        .iter()
+        .enumerate()
+        .map(|(index, slot)| {
+            let (events, mut samples) = authored_case(slot);
+            for sample in &mut samples {
+                sample["attribution"]["controllers"][0]["identity"] = json!([28, 2000 + index, 77]);
+            }
+            let mut case =
+                validate_case(slot, "0123456789abcdef0123456789abcdef", &events, &samples).unwrap();
+            case["definition"] = json!({"authored": true});
+            case
+        })
+        .collect()
+}
+
+#[test]
+fn pids_v2_proof_is_separate_from_v1_wire_protocols() {
+    assert_eq!(VERSION, 1);
+    assert_eq!(PROOF_VERSION, 2);
+    assert_eq!(PROOF_CONTRACT, "pids-v2");
+    assert_eq!(PROOF_FILENAME, "pids-v2.json");
+    assert_eq!(CANDIDATE_MEMBERSHIP, "typed_procs_local_membership_v1");
+}
+
+#[test]
+fn pids_typed_reader_accepts_childless_d_r_t_and_actual_root_child() {
+    for (kinds, outer) in [
+        (vec!["domain", "domain", "domain"], 1),
+        (vec!["domain threaded", "domain", "domain"], 1),
+        (vec!["threaded", "domain threaded", "domain"], 1),
+        // The final non-root R is directly below the qualified genuine root.
+        (vec!["threaded", "domain threaded"], 1),
+        (vec!["threaded", "threaded", "domain threaded"], 2),
+    ] {
+        for slot in SLOTS {
+            let (events, samples) = authored_typed_case(slot, &kinds, outer);
+            assert!(
+                validate_case(slot, "0123456789abcdef0123456789abcdef", &events, &samples).is_ok()
+            );
+        }
+    }
+}
+
+#[test]
+fn pids_typed_reader_requires_closed_canonical_measurement_fields() {
+    let nonce = "0123456789abcdef0123456789abcdef";
+    let (events, samples) = authored_case("cli16");
+    for pointer in [
+        "/cgroup_type",
+        "/attribution/candidate_membership",
+        "/attribution/controllers/0/cgroup_type",
+        "/attribution/controllers/1/cgroup_type",
+        "/attribution/controllers/2/cgroup_type",
+    ] {
+        for replacement in [
+            Value::Null,
+            json!(1),
+            json!(true),
+            json!([]),
+            json!({}),
+            json!("domain\n"),
+            json!("Domain"),
+            json!("domain invalid"),
+            json!("pids-v1"),
+        ] {
+            let mut changed = samples.clone();
+            *changed[0].pointer_mut(pointer).unwrap() = replacement;
+            assert!(
+                validate_case("cli16", nonce, &events, &changed).is_err(),
+                "{pointer}"
+            );
+        }
+        let mut changed = samples.clone();
+        let (parent, key) = pointer.rsplit_once('/').unwrap();
+        changed[0]
+            .pointer_mut(parent)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove(key);
+        assert!(
+            validate_case("cli16", nonce, &events, &changed).is_err(),
+            "{pointer}"
+        );
+    }
+    for pointer in [
+        "",
+        "/attribution",
+        "/attribution/controllers/0",
+        "/attribution/hierarchy_root",
+    ] {
+        let mut changed = samples.clone();
+        changed[0]
+            .pointer_mut(pointer)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert("role".into(), json!("root"));
+        assert!(validate_case("cli16", nonce, &events, &changed).is_err());
+    }
+    // A valid canonical value in the wrong field is still refused.
+    let mut changed = samples.clone();
+    changed[0]["attribution"]["candidate_membership"] = json!("domain");
+    assert!(validate_case("cli16", nonce, &events, &changed).is_err());
+    changed = samples.clone();
+    changed[0]["cgroup_type"] = json!("domain threaded");
+    assert!(validate_case("cli16", nonce, &events, &changed).is_err());
+    // Partial legacy/current mixing is refused even when three phases are v2.
+    changed = samples.clone();
+    changed[2].as_object_mut().unwrap().remove("cgroup_type");
+    assert!(validate_case("cli16", nonce, &events, &changed).is_err());
+}
+
+#[test]
+fn pids_typed_reader_rejects_prohibited_edges_outer_t_and_type_drift() {
+    let nonce = "0123456789abcdef0123456789abcdef";
+    // Every prohibited parent→child pair, including hidden-prefix attempts to
+    // reuse the genuine-root exception for a non-root controller row.
+    for kinds in [
+        vec!["threaded", "domain", "domain"],
+        vec!["domain", "domain threaded", "domain"],
+        vec!["domain threaded", "domain threaded", "domain"],
+        vec!["domain", "domain", "threaded"],
+        vec!["threaded", "domain threaded", "threaded"],
+        vec!["domain", "domain", "domain threaded"],
+        vec!["threaded", "threaded", "domain threaded"],
+    ] {
+        let (events, samples) = authored_typed_case("cli16", &kinds, 1);
+        assert!(validate_case("cli16", nonce, &events, &samples).is_err());
+    }
+    let (events, mut samples) = authored_case("cli16");
+    // D→R leaf is valid in isolation but cannot change during measurements.
+    samples[2]["cgroup_type"] = json!("domain threaded");
+    samples[2]["attribution"]["controllers"][0]["cgroup_type"] = json!("domain threaded");
+    assert!(validate_case("cli16", nonce, &events, &samples).is_err());
+    let (events, mut samples) = authored_case("cli16");
+    samples[2]["attribution"]["hierarchy_root"]["identity"] = json!([28, 99, 77]);
+    assert!(validate_case("cli16", nonce, &events, &samples).is_err());
+}
+
+#[test]
+fn pids_threaded_reader_retains_task_enforcer_and_headroom_requirements() {
+    let nonce = "0123456789abcdef0123456789abcdef";
+    let (events, samples) =
+        authored_typed_case("cli16", &["threaded", "domain threaded", "domain"], 1);
+    for (pointer, replacement, refusal) in [
+        (
+            "/attribution/controllers/0/events_local_max",
+            json!(0),
+            "pids-enforcer",
+        ),
+        (
+            "/attribution/controllers/1/events_local_max",
+            json!(1),
+            "pids-enforcer",
+        ),
+        (
+            "/attribution/controllers/1/current",
+            json!(512),
+            "pids-headroom",
+        ),
+        ("/globals/threads_max", json!(700), "pids-global-headroom"),
+        ("/task_namespace_ids/0/2/2", json!(2), "pids-tasks"),
+        (
+            "/attribution/hierarchy_root/mount_root_is_slash",
+            json!(false),
+            "pids-hierarchy-root",
+        ),
+        (
+            "/attribution/hierarchy_root/cgroup_type_present",
+            json!(true),
+            "pids-hierarchy-root",
+        ),
+    ] {
+        let mut changed = samples.clone();
+        *changed[2].pointer_mut(pointer).unwrap() = replacement.clone();
+        // Keep each endpoint pair internally valid so the actual attribution
+        // or headroom predicate, rather than a malformed pair, must refuse.
+        let pair = if pointer.ends_with("events_local_max") {
+            Some(pointer.replace("events_local_max", "events_local_samples"))
+        } else if pointer.ends_with("/current") {
+            Some(pointer.replace("/current", "/current_samples"))
+        } else {
+            None
+        };
+        if let Some(pair) = pair {
+            *changed[2].pointer_mut(&pair).unwrap() = json!([replacement, replacement]);
+        }
+        assert_eq!(
+            validate_case("cli16", nonce, &events, &changed),
+            Err(refusal)
+        );
+    }
+    for (pointer, replacement, refusal) in [
+        ("/threads", json!(2), "pids-worker"),
+        ("/errno", json!(libc::ENOMEM), "pids-fork-effect"),
+        ("/fork_return", json!(0), "pids-fork-effect"),
+    ] {
+        let mut changed = events.clone();
+        *changed[3].pointer_mut(pointer).unwrap() = replacement;
+        assert_eq!(
+            validate_case("cli16", nonce, &changed, &samples),
+            Err(refusal)
+        );
+    }
+}
+
+#[test]
+fn pids_all_measurements_accept_coherent_r_and_t_leaves() {
+    let nonce = "0123456789abcdef0123456789abcdef";
+    for (leaf, outer) in [
+        ("domain threaded", "domain"),
+        ("threaded", "domain threaded"),
+    ] {
+        let mut cases = authored_measurement_cases();
+        for case in &mut cases {
+            for sample in case["source_samples"].as_array_mut().unwrap() {
+                sample["cgroup_type"] = json!(leaf);
+                sample["attribution"]["controllers"][0]["cgroup_type"] = json!(leaf);
+                sample["attribution"]["controllers"][1]["cgroup_type"] = json!(outer);
+            }
+        }
+        assert_eq!(validate_measurement_cases(&cases, nonce), Ok(()));
+    }
+}
+
+#[test]
+fn pids_all_measurements_bind_shared_types_parents_root_outer_and_namespace() {
+    let nonce = "0123456789abcdef0123456789abcdef";
+    let cases = authored_measurement_cases();
+    assert_eq!(validate_measurement_cases(&cases, nonce), Ok(()));
+    for (pointer, replacement) in [
+        ("/attribution/hierarchy_root/identity", json!([28, 99, 77])),
+        ("/attribution/reader_cgroup_namespace", json!([5, 99])),
+        ("/attribution/controllers/1/identity", json!([28, 99, 77])),
+        ("/attribution/controllers/2/identity", json!([28, 99, 77])),
+        ("/attribution/controllers/0/identity", json!([28, 2000, 77])),
+    ] {
+        let mut changed = cases.clone();
+        for sample in changed[1]["source_samples"].as_array_mut().unwrap() {
+            *sample.pointer_mut(pointer).unwrap() = replacement.clone();
+        }
+        // Every individual case remains valid; global custody must refuse.
+        let events = changed[1]["worker_events"].as_array().unwrap();
+        let samples = changed[1]["source_samples"].as_array().unwrap();
+        assert!(validate_case("cli64", nonce, events, samples).is_ok());
+        assert!(
+            validate_measurement_cases(&changed, nonce).is_err(),
+            "{pointer}"
+        );
+    }
+    let mut changed = cases.clone();
+    for sample in changed[1]["source_samples"].as_array_mut().unwrap() {
+        sample["cgroup_type"] = json!("threaded");
+        sample["attribution"]["controllers"][0]["cgroup_type"] = json!("threaded");
+        sample["attribution"]["controllers"][1]["cgroup_type"] = json!("domain threaded");
+    }
+    assert!(
+        validate_case(
+            "cli64",
+            nonce,
+            changed[1]["worker_events"].as_array().unwrap(),
+            changed[1]["source_samples"].as_array().unwrap()
+        )
+        .is_ok()
+    );
+    assert!(validate_measurement_cases(&changed, nonce).is_err());
+    let mut changed = cases.clone();
+    changed.swap(0, 1);
+    assert!(validate_measurement_cases(&changed, nonce).is_err());
+    assert!(validate_measurement_cases(&cases[..5], nonce).is_err());
+}
+
+#[test]
+fn pids_all_measurements_reject_worker_leaf_reused_as_an_ancestor() {
+    let nonce = "0123456789abcdef0123456789abcdef";
+    let mut cases = authored_measurement_cases();
+    // cli64's actual leaf has D kind and outer512 as parent. Use the same
+    // identity, kind, maximum and parent as an intermediate in cli_unlimited;
+    // all per-case predicates and global identity relations still agree.
+    let intermediate = cases[1]["source_samples"][0]["attribution"]["controllers"][0].clone();
+    for sample in cases[2]["source_samples"].as_array_mut().unwrap() {
+        sample["attribution"]["controllers"]
+            .as_array_mut()
+            .unwrap()
+            .insert(1, intermediate.clone());
+        sample["attribution"]["outer_index"] = json!(2);
+    }
+    assert!(
+        validate_case(
+            "cli_unlimited",
+            nonce,
+            cases[2]["worker_events"].as_array().unwrap(),
+            cases[2]["source_samples"].as_array().unwrap()
+        )
+        .is_ok()
+    );
+    assert_eq!(
+        validate_measurement_cases(&cases, nonce),
+        Err("pids-childless-leaves")
+    );
+}
+
+#[test]
+fn pids_all_measurements_allow_different_depths_and_outer_indices() {
+    let nonce = "0123456789abcdef0123456789abcdef";
+    let mut cases = authored_measurement_cases();
+    for sample in cases[1]["source_samples"].as_array_mut().unwrap() {
+        let mut intermediate = sample["attribution"]["controllers"][2].clone();
+        intermediate["identity"] = json!([28, 3000, 77]);
+        sample["attribution"]["controllers"]
+            .as_array_mut()
+            .unwrap()
+            .insert(1, intermediate);
+        sample["attribution"]["outer_index"] = json!(2);
+    }
+    assert_eq!(validate_measurement_cases(&cases, nonce), Ok(()));
 }
 
 #[test]

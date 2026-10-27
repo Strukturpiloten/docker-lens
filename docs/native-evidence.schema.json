@@ -181,7 +181,7 @@
       ],
       "properties": {
         "pids_contract": {
-          "const": "pids-v1"
+          "const": "pids-v2"
         },
         "pids_outcomes": {
           "$ref": "#/$defs/pids_native_source_outcomes"

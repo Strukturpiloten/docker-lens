@@ -18,7 +18,7 @@ OUTCOMES = {
 
 
 def change_proof(root, change):
-    path = root / "pids-v1.json"
+    path = root / "pids-v2.json"
     proof = json.loads(path.read_text())
     change(proof)
     path.write_text(json.dumps(proof))
@@ -54,20 +54,59 @@ class PidsEvidenceTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(len(result.args) - 2, 19)
                     record = json.loads(path.read_text())
-                    self.assertEqual(record["pids_contract"], "pids-v1")
+                    self.assertEqual(record["pids_contract"], "pids-v2")
                     self.assertEqual(record["pids_outcomes"], OUTCOMES)
                     self.assertEqual(len(record["capability_outcome"]), 31 if lane.startswith("debian11-") else 32)
                     self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 48 if lane.startswith("debian11-") else 50)
                     for capability in ("PidsLimit", "UlimitNofile"):
                         self.assertNotIn(capability, record["capability_outcome"])
                         self.assertNotIn(capability, record["admitted_shapes"])
-                    for private in (legacy.RUN_ID, "dl-pids-", "socket/pids-worker", "0123456789abcdef", "build_tools", "source_samples", "artifact_copy"):
+                    for private in (legacy.RUN_ID, "dl-pids-", "socket/pids-worker", "0123456789abcdef", "build_tools", "source_samples", "artifact_copy",
+                                    "cgroup_type", "candidate_membership", "typed_procs_local_membership_v1"):
                         self.assertNotIn(private, path.read_text())
                     self.assertEqual(record["rendering_api"], "1.41" if lane.startswith("debian11-") else "1.56")
                     self.assertEqual(record["acquisition_api"], "1.41" if lane.startswith("debian11-") else "1.49")
 
     def test_missing_proof_rejects_legacy_twenty_six_family_evidence(self):
         self.reject(pids_missing=True)
+
+    def test_old_mixed_and_incomplete_typed_proofs_cannot_publish(self):
+        for fault in ("old", "old_version", "old_contract", "old_filename", "missing_type",
+                      "wrong_algorithm", "kind_mismatch", "threaded_outer", "cross_case_kind"):
+            def mutate(root):
+                path = root / "pids-v2.json"
+                if fault == "old_filename":
+                    path.rename(root / "pids-v1.json")
+                    return
+                proof = json.loads(path.read_text())
+                sample = proof["cases"][0]["source_samples"][0]
+                if fault in ("old", "old_version"):
+                    proof["schema_version"] = 1
+                if fault in ("old", "old_contract"):
+                    proof["contract"] = "pids-v1"
+                if fault == "old":
+                    for case in proof["cases"]:
+                        for value in case["source_samples"]:
+                            del value["cgroup_type"]
+                            del value["attribution"]["candidate_membership"]
+                            for row in value["attribution"]["controllers"]:
+                                del row["cgroup_type"]
+                elif fault == "missing_type":
+                    del sample["attribution"]["controllers"][1]["cgroup_type"]
+                elif fault == "wrong_algorithm":
+                    sample["attribution"]["candidate_membership"] = SECRET
+                elif fault == "kind_mismatch":
+                    sample["cgroup_type"] = "domain threaded"
+                elif fault == "threaded_outer":
+                    sample["attribution"]["controllers"][1]["cgroup_type"] = "threaded"
+                elif fault == "cross_case_kind":
+                    for value in proof["cases"][-1]["source_samples"]:
+                        rows = value["attribution"]["controllers"]
+                        value["cgroup_type"] = rows[0]["cgroup_type"] = "threaded"
+                        rows[1]["cgroup_type"] = "domain threaded"
+                path.write_text(json.dumps(proof))
+            with self.subTest(fault=fault):
+                self.reject(mutate)
 
     def test_context_replay_and_forged_admission_refuse_the_whole_manifest(self):
         for key, value in (("candidate_sha", "e" * 40), ("run_id", "Stale123"),
@@ -88,7 +127,7 @@ class PidsEvidenceTests(unittest.TestCase):
     def test_internally_valid_other_run_and_backend_proofs_are_not_their_own_oracle(self):
         for replay in ("run", "backend", "engine", "outer"):
             def mutate(root):
-                path = root / "pids-v1.json"
+                path = root / "pids-v2.json"
                 original = json.loads(path.read_text())
                 context = original["context"]
                 if replay == "run":
@@ -106,7 +145,7 @@ class PidsEvidenceTests(unittest.TestCase):
                 proof["artifact"] = original["artifact"]
                 proof["measured"]["artifact_copy"]["sha256"] = original["artifact"]["sha256"]
                 self.assertEqual(reader.validate_pids_proof(proof, context),
-                                 {"contract": "pids-v1", "capability_admission": [], "catalogue_admission": False})
+                                 {"contract": "pids-v2", "capability_admission": [], "catalogue_admission": False})
                 path.write_text(json.dumps(proof))
             with self.subTest(replay=replay):
                 self.reject(mutate)
@@ -114,7 +153,7 @@ class PidsEvidenceTests(unittest.TestCase):
     def test_proof_custody_and_malformed_bytes_are_rechecked(self):
         for fault in ("mode", "symlink", "hardlink", "truncated", "oversize"):
             def mutate(root):
-                path = root / "pids-v1.json"
+                path = root / "pids-v2.json"
                 if fault == "mode":
                     path.chmod(0o644)
                 elif fault in ("symlink", "hardlink"):
@@ -176,7 +215,7 @@ class PidsEvidenceTests(unittest.TestCase):
         projection = schema["$defs"]["pids_native_source_projection"]
         self.assertFalse(projection["additionalProperties"])
         self.assertEqual(set(projection["required"]), {"pids_contract", "pids_outcomes"})
-        self.assertEqual(projection["properties"]["pids_contract"], {"const": "pids-v1"})
+        self.assertEqual(projection["properties"]["pids_contract"], {"const": "pids-v2"})
         outcomes = schema["$defs"]["pids_native_source_outcomes"]
         self.assertFalse(outcomes["additionalProperties"])
         self.assertEqual(set(outcomes["required"]), set(OUTCOMES))

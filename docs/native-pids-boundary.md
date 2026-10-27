@@ -64,8 +64,10 @@ bring the total to 241. Known exception tags retain their original bare format.
 
 The byte whitelist is exactly `domain`, `domain threaded`, `domain invalid`, and
 `threaded`, each with its required newline. Categorization returns the identical
-read object into the unchanged exact-domain comparison; it accepts no additional
-type. The original magic/domain AND expression and its short circuit remain.
+read object into the strict type parser under ADR 0044. Valid domain, thread-root
+and threaded values may pass their applicable role checks; a detail describes
+the read value and is not itself an unsupportedness claim. The magic guard still
+short-circuits before the existing cap32 read. Return occurs only after close.
 Metadata observes existing guard booleans, syscall status and return values; it
 adds no clock, source read, counter comparison, reservation, or persistent
 source/Budget/Group field. Metadata or classifier failure honestly retains a

@@ -20,6 +20,8 @@ NONCE = "0123456789abcdef0123456789abcdef"
 
 
 def case_fixture(slot):
+    leaf_inode = {"cli16": 6001, "cli64": 6002, "cli_unlimited": 6003,
+                  "rendered16": 6004, "rendered64": 6005, "rendered_unlimited": 6006}[slot]
     finite = slot.endswith("16")
     maximum = 16 if finite else (64 if slot.endswith("64") else "max")
     count = 15 if finite else 32
@@ -40,13 +42,15 @@ def case_fixture(slot):
         for index in range(3):
             current = len(members) if index == 0 else len(members) + 100
             local = event if index == 0 else 0
-            controllers.append({"identity": [28, 5001 + index, 77], "maximum": maximum if index == 0 else (512 if index == 1 else "max"),
+            controllers.append({"identity": [28, leaf_inode if index == 0 else 5001 + index, 77], "cgroup_type": "domain",
+                                "maximum": maximum if index == 0 else (512 if index == 1 else "max"),
                 "current": current, "events_max": event, "events_local_max": local, "current_samples": [current, current],
                 "events_samples": [event, event], "events_local_samples": [local, local]})
-        samples.append({"maximum": maximum, "current": len(members), "events_max": event,
+        samples.append({"maximum": maximum, "current": len(members), "events_max": event, "cgroup_type": "domain",
             "tasks": [[45000 + pid, 9000000 + pid] for pid in members],
             "task_namespace_ids": [[45000 + pid, [45000 + pid, 1000 + pid, pid], [45000 + pid, 1000 + pid, pid]] for pid in members],
             "attribution": {"event_semantics": "hierarchical_with_local_enforcer", "pids_localevents": False, "complete_chain": True,
+                "candidate_membership": "typed_procs_local_membership_v1",
                 "outer_index": 1, "reader_cgroup_namespace": [5, 4026531835],
                 "hierarchy_root": {"identity": [28, 2, 77], "pids_max_present": False, "cgroup_type_present": False,
                     "cgroup_events_present": False, "available_pids": True, "mount_root_is_slash": True, "qualification": "root_exempt"},
@@ -77,6 +81,26 @@ def artifact_fixture(candidate):
             "dependencies": {"size": 100, "sha256": "d" * 64},
             "crt": [tool(role, role=role, file_kind="archive" if role == "libc" else "elf") for role in ("start", "init", "fini", "begin", "end", "libc")],
             "hashed_input_bytes": 256, "scope": "installed-tools-and-consumed-crt-only-v1", "implementation_closure": "unresolved"}}
+
+
+def typed_chain(case, kinds, outer_index=1):
+    """Author a complete leaf-to-root chain without a production topology helper."""
+    leaf_inode = case["source_samples"][0]["attribution"]["controllers"][0]["identity"][1]
+    for sample in case["source_samples"]:
+        attr = sample["attribution"]
+        leaf, outer, ancestor = attr["controllers"][:3]
+        rows = []
+        for index, kind in enumerate(kinds):
+            row = deepcopy(leaf if index == 0 else outer if index == outer_index else ancestor)
+            row["cgroup_type"] = kind
+            if index:
+                row["identity"] = [28, 5002 if index == outer_index else
+                                   5003 if index > outer_index else 10000 + leaf_inode + index, 77]
+                row["maximum"] = 512 if index == outer_index else "max"
+            rows.append(row)
+        attr["controllers"] = rows
+        attr["outer_index"] = outer_index
+        sample["cgroup_type"] = kinds[0]
 
 
 def fixture(lane="upstream-rootful", backend="podman", *, expected_context=None):
@@ -121,7 +145,7 @@ def fixture(lane="upstream-rootful", backend="podman", *, expected_context=None)
         case["definition"] = {"slot": slot, "id": cid, "name": name, "pids_limit": maximum, "definition": document}
         cases.append(case)
     external = {"bytes": 200000, "reads": 100}
-    return {"schema_version": 1, "contract": "pids-v1", "scope": "controlled_live_leaf_enforcement_only", "capability_admission": [],
+    return {"schema_version": 2, "contract": "pids-v2", "scope": "controlled_live_leaf_enforcement_only", "capability_admission": [],
         "catalogue_admission": False, "context": context, "nonce": NONCE,
         "outer_before": outer, "outer_after_confirmation": deepcopy(outer), "outer_final": deepcopy(outer), "artifact": artifact_fixture(context["candidate_sha"]),
         "measured": {"daemon": {"release": context["engine_release"], "advertised_api": context["api_version"], "mode": context["mode"],
@@ -199,7 +223,128 @@ class PidsProofTests(unittest.TestCase):
             for backend in ("podman", "docker"):
                 proof = fixture(lane, backend)
                 self.assertEqual(reader.validate_pids_proof(proof, proof["context"]),
-                                 {"contract": "pids-v1", "capability_admission": [], "catalogue_admission": False})
+                                 {"contract": "pids-v2", "capability_admission": [], "catalogue_admission": False})
+
+    def test_literal_domain_thread_root_and_threaded_leaves_with_different_depths(self):
+        proof = fixture()
+        typed_chain(proof["cases"][1], ("domain threaded", "domain", "domain"))
+        typed_chain(proof["cases"][2], ("threaded", "domain threaded", "domain", "domain"), 2)
+        typed_chain(proof["cases"][3], ("threaded", "threaded", "domain threaded", "domain", "domain"), 3)
+        self.assertEqual(reader.validate_pids_proof(proof, proof["context"]),
+                         {"contract": "pids-v2", "capability_admission": [], "catalogue_admission": False})
+
+    def test_authenticated_root_may_directly_parent_domain_or_thread_root(self):
+        for kinds in (("domain", "domain"), ("threaded", "domain threaded")):
+            proof = fixture()
+            for case in proof["cases"]:
+                typed_chain(case, kinds)
+            reader.validate_pids_proof(proof, proof["context"])
+            for field, replacement in (("qualification", "namespace_visible_root"),
+                                       ("mount_root_is_slash", False), ("cgroup_type_present", True),
+                                       ("pids_max_present", True), ("cgroup_events_present", True)):
+                bad = deepcopy(proof)
+                for case in bad["cases"]:
+                    for sample in case["source_samples"]:
+                        sample["attribution"]["hierarchy_root"][field] = replacement
+                self.reject(bad)
+
+    def test_every_prohibited_nonroot_edge_and_configured_threaded_outer_refuses(self):
+        # Each pair is (child, parent); configured outer stays a separate D row.
+        for child, parent in (("threaded", "domain"), ("domain", "domain threaded"),
+                              ("domain threaded", "domain threaded"), ("domain", "threaded"),
+                              ("domain threaded", "threaded")):
+            case = case_fixture("cli16")
+            typed_chain(case, (child, parent, "domain"), 2)
+            with self.subTest(child=child, parent=parent), self.assertRaises(ValueError):
+                reader.validate_case(case, "cli16", NONCE)
+        case = case_fixture("cli16")
+        typed_chain(case, ("threaded", "threaded", "domain threaded"))
+        with self.assertRaises(ValueError):
+            reader.validate_case(case, "cli16", NONCE)
+
+    def test_versions_algorithm_types_and_leaf_row_equality_are_exact(self):
+        mutations = [(('schema_version',), 1), (('schema_version',), True), (('contract',), 'pids-v1')]
+        sample = ('cases', 0, 'source_samples', 0)
+        for value in (None, True, 1, [], {}, "domain\n", "domain invalid", "thread-root", "DOMAIN"):
+            mutations.extend(((sample + ('cgroup_type',), value),
+                              (sample + ('attribution', 'controllers', 0, 'cgroup_type'), value)))
+        mutations.extend(((sample + ('cgroup_type',), 'domain threaded'),
+                          (sample + ('attribution', 'candidate_membership'), 'local_procs_v1'),
+                          (sample + ('attribution', 'candidate_membership'), True),
+                          (sample + ('attribution', 'candidate_membership'), None)))
+        for path, value in mutations:
+            proof = fixture()
+            target = proof
+            for key in path[:-1]:
+                target = target[key]
+            target[path[-1]] = value
+            with self.subTest(path=path, value=value):
+                self.reject(proof)
+
+    def test_kind_and_parent_stability_bind_all_cases_not_just_each_case(self):
+        # These replacements preserve valid local edges and four-phase stability.
+        for fault in ("leaf_kind_drift", "shared_kind", "shared_parent", "root", "reader", "outer", "duplicate_leaf"):
+            proof = fixture()
+            case = proof["cases"][-1]
+            if fault == "leaf_kind_drift":
+                case["source_samples"][2]["cgroup_type"] = "domain threaded"
+                case["source_samples"][2]["attribution"]["controllers"][0]["cgroup_type"] = "domain threaded"
+            elif fault == "shared_kind":
+                for other in proof["cases"][:-1]:
+                    typed_chain(other, ("threaded", "domain threaded", "domain"))
+                typed_chain(case, ("domain", "domain", "domain"))
+            else:
+                for sample in case["source_samples"]:
+                    attr = sample["attribution"]
+                    if fault == "shared_parent":
+                        attr["controllers"][2]["identity"][1] = 9999
+                    elif fault == "root":
+                        attr["hierarchy_root"]["identity"][1] = 9999
+                    elif fault == "reader":
+                        attr["reader_cgroup_namespace"][1] += 1
+                    elif fault == "outer":
+                        attr["controllers"][1]["identity"][1] = 9999
+                    else:
+                        attr["controllers"][0]["identity"][1] = 6001
+            with self.subTest(fault=fault):
+                self.reject(proof)
+
+    def test_typed_leaves_retain_independent_effect_membership_and_cleanup_controls(self):
+        for kinds, outer in ((("domain threaded", "domain", "domain"), 1),
+                             (("threaded", "domain threaded", "domain", "domain"), 2)):
+            for fault in ("extra_thread", "membership", "enforcer", "headroom", "nproc", "cleanup"):
+                proof = fixture()
+                for case in proof["cases"]:
+                    typed_chain(case, kinds, outer)
+                sample = proof["cases"][0]["source_samples"][2]
+                if fault == "extra_thread":
+                    proof["cases"][0]["worker_events"][3]["threads"] = 2
+                elif fault == "membership":
+                    sample["task_namespace_ids"][0][2] = [999, 1001, 1]
+                elif fault == "enforcer":
+                    sample["attribution"]["controllers"][0]["events_local_max"] = 0
+                    sample["attribution"]["controllers"][0]["events_local_samples"] = [0, 0]
+                elif fault == "headroom":
+                    sample["globals"]["threads_max"] = sample["globals"]["total_tasks"]
+                elif fault == "nproc":
+                    sample["globals"]["nproc_soft"] = 1
+                else:
+                    proof["cleanup"]["source_handles"] = "unknown"
+                with self.subTest(kinds=kinds, fault=fault):
+                    self.reject(proof)
+
+    def test_a_distinct_worker_leaf_cannot_also_parent_another_case(self):
+        proof = fixture()
+        case = proof["cases"][1]
+        typed_chain(case, ("domain", "domain", "domain", "domain"), 2)
+        for sample in case["source_samples"]:
+            sample["attribution"]["controllers"][1]["identity"][1] = 6001
+        # Both local chains and the shared parent relation are otherwise valid;
+        # the first worker's required childless role is the violated predicate.
+        for case, slot in zip(proof["cases"], ("cli16", "cli64", "cli_unlimited",
+                                              "rendered16", "rendered64", "rendered_unlimited")):
+            reader.validate_case(case, slot, NONCE)
+        self.reject(proof)
 
     def test_raw_debian_engine_release_suffix_is_exact_and_never_normalized(self):
         for lane in reader.LANES:
@@ -213,7 +358,7 @@ class PidsProofTests(unittest.TestCase):
                         lane.startswith("debian11-") and release in ("20.10.5+dfsg1", "29.8.1+dfsg1"))
                     if admitted_syntax:
                         self.assertEqual(reader.validate_pids_proof(proof, context),
-                                         {"contract": "pids-v1", "capability_admission": [], "catalogue_admission": False})
+                                         {"contract": "pids-v2", "capability_admission": [], "catalogue_admission": False})
                         replayed = deepcopy(context)
                         replayed["engine_release"] = release.replace("+dfsg1", "") + ".0"
                         with self.assertRaisesRegex(ValueError, "^invalid private pids proof$"):

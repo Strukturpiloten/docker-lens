@@ -133,3 +133,45 @@ def check_transition(previous, current, phase):
         return
     _require(phase in (Phase.BETWEEN_LEASES, Phase.AFTER_SEAL))
     _require({previous, current} == {CgroupType.DOMAIN, CgroupType.THREAD_ROOT})
+
+
+class TypeScope:
+    """Internal source observations, never frame-supplied roles or authority.
+
+    current contains only this acquisition epoch's actual observations. Frozen
+    measurement chains cannot be seeded by last/bootstrap observations.
+    """
+    def __init__(self):
+        self.phase = "setup"
+        self.last, self.current, self.frozen = {}, {}, {}
+
+    def begin_locate(self):
+        _require(self.phase == "setup")
+        self.phase, self.current = "locating", {}
+
+    def observe(self, identity, kind, parent):
+        _require(type(kind) is CgroupType)
+        value = kind, parent
+        old = self.last.get(identity)
+        if old is not None:
+            _require(old[1] == parent)
+        if self.phase == "measuring" and identity in self.frozen:
+            _require(self.frozen[identity] == value)
+        elif self.phase == "locating" and identity in self.current:
+            # Discovery itself has its own immutable two-pass lease. Between
+            # that lease and final role validation, D/R may change only while
+            # the source revalidates the complete applicable chain.
+            check_transition(self.current[identity][0], kind, Phase.BETWEEN_LEASES)
+        elif old is not None:
+            check_transition(old[0], kind, Phase.AFTER_SEAL if self.phase == "sealed" else Phase.BETWEEN_LEASES)
+        self.last[identity] = self.current[identity] = value
+        return kind
+
+    def freeze(self, identities):
+        _require(self.phase == "locating" and identities and all(key in self.current for key in identities))
+        self.frozen = {key: self.current[key] for key in identities}
+        self.phase = "measuring"
+
+    def seal(self):
+        _require(self.phase == "measuring")
+        self.phase, self.current, self.frozen = "sealed", {}, {}

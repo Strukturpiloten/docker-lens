@@ -1,5 +1,16 @@
 # Architecture
 
+## Typed PIDs source and private proof v2
+
+[ADR 0044](decisions/0044-typed-pids-source-and-proof-v2.md) adds fixed-sibling
+thread-aware discovery, leader-local membership and complete typed ancestor
+validation to the original-owner PIDs27 source. A source-owned measurement phase
+freezes all six chains; independent Rust and Python readers validate proof v2.
+The [authored transcript](native-pids-threaded-contract.md#current-typed-source-authored-envelope)
+measures the actual selected source and IPC paths, including post-seal cleanup.
+It models kernel/Engine/clock facts and does not replace fresh native evidence.
+No product capability, source budget or operational dependency is added.
+
 ## Original-owner PIDs27 source integration
 
 [ADR 0041](decisions/0041-original-owner-pids-experiment.md) integrates the

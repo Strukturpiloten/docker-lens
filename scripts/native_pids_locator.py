@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unwired in-process inner Engine locator; never accepts PID authority over IPC.
+"""In-process inner Engine locator; never accepts PID authority over IPC.
 
 The original runtime owner must supply the retained outer Process/Group and
 independently chosen daemon expectation. See docs/native-pids-runtime.md.
@@ -22,12 +22,18 @@ from dataclasses import dataclass
 
 _boundary_path = Path(__file__).with_name("native_pids_boundary.py").resolve()
 boundary = sys.modules.get("native_pids_boundary")
-if (boundary is None or getattr(boundary, "__file__", None) is None
-        or Path(boundary.__file__).resolve() != _boundary_path):
+if boundary is None:
     _boundary_spec = importlib.util.spec_from_file_location("native_pids_boundary", _boundary_path)
     boundary = importlib.util.module_from_spec(_boundary_spec)
     sys.modules["native_pids_boundary"] = boundary
-    _boundary_spec.loader.exec_module(boundary)
+    try:
+        _boundary_spec.loader.exec_module(boundary)
+    except BaseException:
+        del sys.modules["native_pids_boundary"]
+        raise
+elif (getattr(boundary, "__file__", None) is None
+        or Path(boundary.__file__).resolve() != _boundary_path):
+    raise ValueError("pids-import")
 
 _spec = importlib.util.spec_from_file_location(
     "_pids_unix_http", Path(__file__).with_name("native-unix-http.py"))
@@ -41,6 +47,25 @@ VERSION_CAP = 4096
 FIXED_FD_RESERVE = 16
 ORDER = ("cli16", "cli64", "cli_unlimited", "rendered16", "rendered64", "rendered_unlimited")
 require = boundary.require
+topology = boundary.topology
+
+
+def _discovery_module():
+    # Lazy loading avoids discovery -> locator -> discovery during cold imports.
+    path = Path(__file__).with_name("native_pids_discovery.py").resolve()
+    module = sys.modules.get("native_pids_discovery")
+    if module is not None:
+        require(getattr(module, "__file__", None) is not None and Path(module.__file__).resolve() == path)
+        return module
+    spec = importlib.util.spec_from_file_location("native_pids_discovery", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["native_pids_discovery"] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        del sys.modules["native_pids_discovery"]
+        raise
+    return module
 
 
 @contextmanager
@@ -365,7 +390,85 @@ class LocatorSource(boundary.LinuxSource):
                     self.controller_cache[key] = (directory, (*key, self.fd_mount_id(directory)), tuple(held))
                 nodes.append(self.controller_cache[key])
             self.controller_groups[group.identities[-1]] = (root, tuple(reversed(nodes)))
+            self._typed_chain(group, self._leaf_types[group.identities[-1]])
         return group
+
+    def type_scope(self):
+        if not hasattr(self, "_type_scope"):
+            self._type_scope = topology.TypeScope()
+        return self._type_scope
+
+    def read_type(self, directory):
+        """One charged cap32 baseline/role read, returned only after close."""
+        fd = self.open("cgroup.type", directory)
+        try:
+            require(boundary.fs_magic(fd) == boundary.CGROUP_MAGIC)
+            kind = topology.parse_type(self.read_fd(fd, 32))
+        finally:
+            self.close_fd(fd)
+        return kind
+
+    def _typed_chain(self, group, leaf_kind):
+        """Validate actual held roles; no type read is added for presentation.
+
+        Setup/post-seal revalidation reads each ancestor once. During Locate,
+        reuse the current discovery/acquisition epoch; only uncovered ancestors
+        (not stale bootstrap observations) need a cap32 baseline read. During
+        measurements the existing attribution reads provide fresh row brackets.
+        """
+        root, nodes = self.controller_groups[group.identities[-1]]
+        scope = self.type_scope()
+        authenticated = getattr(self, "authenticated_parent_cgroup_namespace", None)
+        exempt = (not root["pids_max_present"] and not root["cgroup_type_present"]
+                  and not root["cgroup_events_present"] and root["available_pids"]
+                  and root["mount_root_is_slash"] and authenticated is not None
+                  and boundary.identity(authenticated) == boundary.identity(self.reader_cgroup_namespace))
+        observed = []
+        for index, (directory, identity, _held) in enumerate(nodes):
+            parent = nodes[index + 1][1] if index + 1 < len(nodes) else (
+                None if identity == root["identity"] else root["identity"])
+            if index == 0:
+                kind = leaf_kind
+            elif scope.phase in ("locating", "measuring"):
+                available = scope.current if scope.phase == "locating" else scope.frozen
+                if identity in available:
+                    kind = available[identity][0]
+                else:
+                    require(scope.phase == "locating")
+                    kind = self.read_type(directory)
+            else:
+                kind = self.read_type(directory)
+            observed.append((identity, kind, parent))
+        previous = None
+        for identity, kind, parent in reversed(observed):
+            if previous is None:
+                require(exempt or kind in (topology.CgroupType.DOMAIN, topology.CgroupType.THREAD_ROOT))
+            elif previous is topology.CgroupType.DOMAIN:
+                require(kind in (topology.CgroupType.DOMAIN, topology.CgroupType.THREAD_ROOT))
+            else:
+                require(kind is topology.CgroupType.THREADED)
+            scope.observe(identity, kind, parent)
+            previous = kind
+        return tuple(observed)
+
+    def adopt_discovery_types(self, transfer, outer):
+        root, nodes = self.controller_groups[outer.identities[-1]]
+        outer_identity = nodes[0][1]
+        outer_parent = nodes[1][1] if len(nodes) > 1 else (
+            None if outer_identity == root["identity"] else root["identity"])
+        require(transfer.types and transfer.types[0].identity == outer_identity
+                and transfer.types[0].kind in (topology.CgroupType.DOMAIN, topology.CgroupType.THREAD_ROOT))
+        scope = self.type_scope()
+        for observed in transfer.types:
+            scope.observe(observed.identity, observed.kind,
+                          outer_parent if observed.parent is None else observed.parent)
+
+    def freeze_measurement_types(self, groups):
+        identities = set()
+        for group in groups:
+            self._typed_chain(group, self._leaf_types[group.identities[-1]])
+            identities.update(node[1] for node in self.controller_groups[group.identities[-1]][1])
+        self.type_scope().freeze(identities)
 
     def root_file_present(self, directory, name):
         self.budget.read(256)  # fixed stat/absence metadata; no FD allocation
@@ -388,14 +491,19 @@ class LocatorSource(boundary.LinuxSource):
 
     def check_group(self, group, observer=None):
         if observer is None:
-            super().check_group(group)
+            kind = super().check_group(group)
         else:
-            super().check_group(group, observer=observer)
+            kind = super().check_group(group, observer=observer)
         with _host_group_escape(observer, "gv_cache"):
             cached = getattr(self, "controller_groups", {}).get(group.identities[-1])
             if cached is not None:
                 for node in cached[1]:
                     self.check_controller(*node)
+                self._typed_chain(group, kind)
+            if not hasattr(self, "_leaf_types"):
+                self._leaf_types = {}
+            self._leaf_types[group.identities[-1]] = kind
+        return kind
 
     def attribution(self, group):
         """Observed held prefix; an unqualified mount root is never invented."""
@@ -426,14 +534,19 @@ class LocatorSource(boundary.LinuxSource):
             self.check_controller(node_directory, node_identity, held)
             kind = self.open("cgroup.type", node_directory)
             try:
-                require(boundary.fs_magic(kind) == boundary.CGROUP_MAGIC and self.read_fd(kind, 32) == b"domain\n")
+                require(boundary.fs_magic(kind) == boundary.CGROUP_MAGIC)
+                observed_kind = topology.parse_type(self.read_fd(kind, 32))
             finally:
                 self.close_fd(kind)
+            parent = nodes[len(controllers) + 1][1] if len(controllers) + 1 < len(nodes) else (
+                None if node_identity == root["identity"] else root["identity"])
+            self.type_scope().observe(node_identity, observed_kind, parent)
             def events(fd):
                 value = self.read_fd(fd, 128)
                 require(re.fullmatch(rb"max (?:0|[1-9][0-9]{0,18})\n", value) is not None)
                 return boundary.integer(int(value[4:]), 0)
             controllers.append({"identity": list(node_identity),
+                "cgroup_type": observed_kind.value,
                 "maximum": boundary.number(self.read_fd(held[0], 32), True),
                 "current": boundary.number(self.read_fd(held[1], 32)),
                 "events_max": events(held[2]), "events_local_max": events(held[3])})
@@ -444,7 +557,20 @@ class LocatorSource(boundary.LinuxSource):
                        and root["available_pids"] and root["mount_root_is_slash"] and namespace_bound)
         qualification = "root_exempt" if root_exempt else (
             "observed_mount_prefix" if present else "unresolved_root_exemption")
+        # Revalidate every freshly observed edge; a namespace-visible slash does
+        # not supply the genuine hierarchy-root mixed-topology exception.
+        previous = None
+        for row in reversed(controllers):
+            kind = topology.CgroupType(row["cgroup_type"])
+            if previous is None:
+                require(root_exempt or kind in (topology.CgroupType.DOMAIN, topology.CgroupType.THREAD_ROOT))
+            elif previous is topology.CgroupType.DOMAIN:
+                require(kind in (topology.CgroupType.DOMAIN, topology.CgroupType.THREAD_ROOT))
+            else:
+                require(kind is topology.CgroupType.THREADED)
+            previous = kind
         return {"event_semantics": "hierarchical_with_local_enforcer", "pids_localevents": False,
+                "candidate_membership": "typed_procs_local_membership_v1",
                 "complete_chain": root_exempt, "outer_index": indexes[0],
                 "reader_cgroup_namespace": list(boundary.identity(self.reader_cgroup_namespace)),
                 "hierarchy_root": {"identity": list(root["identity"]), "pids_max_present": present,
@@ -453,7 +579,7 @@ class LocatorSource(boundary.LinuxSource):
                     "qualification": qualification}, "controllers": controllers}
 
     def snapshot(self, process, group):
-        require(not getattr(self.budget, "cleanup_only", False))
+        require(not getattr(self.budget, "cleanup_only", False) and self.type_scope().phase != "sealed")
         before, global_before = self.attribution(group), self.globals(process)
         sample = super().snapshot(process, group)
         after, global_after = self.attribution(group), self.globals(process)
@@ -461,7 +587,8 @@ class LocatorSource(boundary.LinuxSource):
                 == {key: value for key, value in after.items() if key != "controllers"})
         require(len(before["controllers"]) == len(after["controllers"]))
         for index, (old, observed) in enumerate(zip(before["controllers"], after["controllers"])):
-            require(old["identity"] == observed["identity"] and old["maximum"] == observed["maximum"])
+            require(old["identity"] == observed["identity"] and old["maximum"] == observed["maximum"]
+                    and old["cgroup_type"] == observed["cgroup_type"])
             require(observed["events_max"] >= old["events_max"]
                     and observed["events_local_max"] >= old["events_local_max"])
             if index == 0:
@@ -475,8 +602,9 @@ class LocatorSource(boundary.LinuxSource):
                 == {key: value for key, value in global_after.items() if key != "total_tasks"})
         global_after["total_tasks_samples"] = [global_before["total_tasks"], global_after["total_tasks"]]
         global_after["total_tasks"] = max(global_after["total_tasks_samples"])
-        self.check_group(group)
+        final_kind = self.check_group(group)
         leaf = after["controllers"][0]
+        require(final_kind.value == sample["cgroup_type"] == leaf["cgroup_type"])
         require((leaf["maximum"], leaf["current"], leaf["events_max"]) ==
                 (sample["maximum"], sample["current"], sample["events_max"]))
         sample.update(attribution=after, globals=global_after)
@@ -551,9 +679,10 @@ class LocatorSource(boundary.LinuxSource):
                 self.controller_groups[selected.identities[-1]] = (root, tuple(
                     node for node in nodes if tuple(node[1][:2]) in selected.identities))
         with _outer_escape(observer, "oc_max"):
-            require(self.values(selected)[0] == 512)
+            maximum, current, _events = self.values(selected)
+            require(maximum == 512 and current <= 512)
         with _outer_escape(observer, "oc_recheck"):
-            self.check_group(selected)
+            require(self.check_group(selected) in (topology.CgroupType.DOMAIN, topology.CgroupType.THREAD_ROOT))
             self.configured_outer_binding = (process, selected, guest, boundary.identity(guest), record)
             self.check_configured_outer(process, selected)
             self.check_process(process)
@@ -819,7 +948,7 @@ class RuntimeLocator:
                     == boundary.identity(self.source.reader_user_namespace))
         finally:
             self.source.close_fd(user)
-        self.source.check_group(self.outer_group)
+        require(self.source.check_group(self.outer_group) in (topology.CgroupType.DOMAIN, topology.CgroupType.THREAD_ROOT))
         maximum, current, _events = self.source.values(self.outer_group)
         require(maximum == 512 and current <= 512)
 
@@ -851,25 +980,35 @@ class RuntimeLocator:
         self.check_outer()
         previous = set(source.owned)
         live(original_peer_pidfd)
-        require(pid in source.candidates(self.outer_group))
-        start = boundary.start_from_stat(source.read(source.proc, str(pid) + "/stat", 1024), pid)
-        process = source.process(pid, start)
-        require(process.membership == source.candidate_memberships[pid])
-        facts, vector = status_vectors(source.read(process.directory, "status", 4096), pid)
-        require(facts[1] == (uid,) * 4)
-        chain = source.namespace_chain(process.namespaces[0], vector)
-        require(boundary.identity(self.outer.namespaces[0]) in chain)
-        executable = self.executable(process)
-        executable_fd = source.open("exe", process.directory, magic=True)
-        require(boundary.identity(executable_fd) == executable)
-        source.budget.fd()
-        original_peer = source.own(fcntl.fcntl(original_peer_pidfd, fcntl.F_DUPFD_CLOEXEC, 3))
-        live(original_peer)
-        self.daemon, self.daemon_chain, self.daemon_executable = process, chain, executable
-        self.daemon_executable_fd = executable_fd
-        self.daemon_peer_pidfd = original_peer
-        self.check_daemon()
-        self.retained.update(source.owned - previous)
+        discovery = _discovery_module()
+        outer_namespace = boundary.identity(self.outer.namespaces[0])
+        def consume(lease):
+            record = next((record for record in lease.candidates if record.pid == pid), None)
+            require(record is not None)
+            with lease.acquire(record) as candidate:
+                require(candidate.status[1] == (uid,) * 4 and outer_namespace in candidate.namespace_chain)
+                lease.select(discovery.Role.PEER, candidate)
+        transfer = discovery.discover(source, self.outer_group, discovery.Mode.PEER, consume)
+        try:
+            source.adopt_discovery_types(transfer, self.outer_group)
+            candidate = transfer.selections[0].candidate
+            process, chain = candidate.process, candidate.namespace_chain
+            executable = self.executable(process)
+            executable_fd = source.open("exe", process.directory, magic=True)
+            require(boundary.identity(executable_fd) == executable)
+            source.budget.fd()
+            original_peer = source.own(fcntl.fcntl(original_peer_pidfd, fcntl.F_DUPFD_CLOEXEC, 3))
+            live(original_peer)
+            self.daemon, self.daemon_chain, self.daemon_executable = process, chain, executable
+            self.daemon_executable_fd = executable_fd
+            self.daemon_peer_pidfd = original_peer
+            self.check_daemon()
+            transfer.release_witnesses()
+            transfer.handoff()
+            self.retained.update(source.owned - previous)
+        except BaseException:
+            transfer.abort()
+            raise
 
     def check_daemon(self):
         require(not self.failed and self.daemon is not None)
@@ -946,6 +1085,7 @@ class RuntimeLocator:
         return pid, started, restarts, tuple(sorted(config["Labels"].items()))
 
     def locate_batch(self, slots):
+        transfer = None
         try:
             require(not self.failed and not self.sealed and not self.bound and type(slots) is dict
                     and tuple(slots) == ORDER and len(set(slots.values())) == 6)
@@ -953,41 +1093,45 @@ class RuntimeLocator:
             if self.slot_label is not None:
                 require(all(dict(before[slot][3]).get(self.slot_label) == slot for slot in ORDER))
             daemon_ns = boundary.identity(self.daemon.namespaces[0])
-            matches = {slot: [] for slot in ORDER}
-            for pid in self.source.candidates(self.outer_group):
-                previous = set(self.source.owned)
-                keep = False
-                try:
-                    start = boundary.start_from_stat(self.source.read(self.source.proc, str(pid) + "/stat", 1024), pid)
-                    process = self.source.process(pid, start)
-                    require(process.membership == self.source.candidate_memberships[pid])
-                    facts, vector = status_vectors(self.source.read(process.directory, "status", 4096), pid)
-                    chain = self.source.namespace_chain(process.namespaces[0], vector)
-                    if daemon_ns not in chain:
-                        continue
-                    index = chain.index(daemon_ns)
-                    for slot in ORDER:
-                        if vector[index] == before[slot][0]:
-                            # Fixed fixtures require private init namespaces; the
-                            # daemon itself/host-PID containers cannot satisfy it.
-                            require(index < len(chain) - 1 and vector[-1] == 1)
-                            group = self.source.group(process)
-                            self.source.descendant(self.outer_group, group)
-                            self.source.leaf(group)
-                            expected = "max" if slot.endswith("unlimited") else (16 if slot.endswith("16") else 64)
-                            maximum, current, _events = self.source.values(group)
-                            require(maximum == expected and current == 1)
-                            matches[slot].append(RuntimeBoundProcess(slot, slots[slot], process, group, chain, before[slot]))
-                            keep = True
-                finally:
-                    if not keep:
-                        self.source.release_since(previous)
-            for slot in ORDER:
-                if not matches[slot]:
+            discovery = _discovery_module()
+            self.source.type_scope().begin_locate()
+            matched = set()
+            def consume(lease):
+                for record in lease.candidates:
+                    with lease.acquire(record) as candidate:
+                        chain, vector = candidate.namespace_chain, candidate.status[2]
+                        if daemon_ns not in chain:
+                            continue
+                        index = chain.index(daemon_ns)
+                        for slot in ORDER:
+                            if vector[index] == before[slot][0]:
+                                require(index < len(chain) - 1 and vector[-1] == 1)
+                                if slot in matched:
+                                    raise LocatorRefusal("AmbiguousMatch")
+                                matched.add(slot)
+                                lease.select(discovery.Role(slot), candidate)
+                if matched != set(ORDER):
                     raise LocatorRefusal("NoMatch")
-                if len(matches[slot]) != 1:
-                    raise LocatorRefusal("AmbiguousMatch")
-            result = {slot: matches[slot][0] for slot in ORDER}
+            transfer = discovery.discover(self.source, self.outer_group, discovery.Mode.WORKERS, consume)
+            self.source.adopt_discovery_types(transfer, self.outer_group)
+            observed_identities = {row.identity[:2]: row.identity for row in transfer.types}
+            result = {}
+            for selected in transfer.selections:
+                slot = selected.role.value
+                candidate = selected.candidate
+                process, chain = candidate.process, candidate.namespace_chain
+                group = self.source.group(process)  # complete traversal already closed
+                self.source.descendant(self.outer_group, group)
+                self.source.leaf(group)
+                expected = "max" if slot.endswith("unlimited") else (16 if slot.endswith("16") else 64)
+                maximum, current, _events = self.source.values(group)
+                require(maximum == expected and current == 1)
+                _root, nodes = self.source.controller_groups[group.identities[-1]]
+                require(nodes[0][1] == observed_identities[selected.local_witness.identity]
+                        and group.membership == selected.local_witness.membership == process.membership)
+                coverage = [node for node in nodes if node[1][:2] == selected.coverage_witness.identity]
+                require(len(coverage) == 1 and coverage[0][1] == observed_identities[selected.coverage_witness.identity])
+                result[slot] = RuntimeBoundProcess(slot, slots[slot], process, group, chain, before[slot])
             require(len({x.process.pid for x in result.values()}) == 6
                     and len({x.group.identities[-1] for x in result.values()}) == 6)
             for slot, item in result.items():
@@ -995,13 +1139,20 @@ class RuntimeLocator:
                 self.source.check_process(item.process)
                 self.source.check_group(item.group)
             self.check_daemon()
+            self.source.freeze_measurement_types(item.group for item in result.values())
+            transfer.release_witnesses()
+            transfer.handoff()
             self.bound = result
             return result  # live Python objects directly to collector, never JSON
         except LocatorRefusal:
             self.failed = True
+            if transfer is not None:
+                transfer.abort()
             raise
         except (Exception, KeyboardInterrupt):
             self.failed = True
+            if transfer is not None:
+                transfer.abort()
             raise LocatorRefusal() from None
 
     def recheck_batch(self):
@@ -1023,6 +1174,7 @@ class RuntimeLocator:
         self.recheck_batch()
         for item in self.bound.values():
             self.source.snapshot(item.process, item.group)
+        self.source.type_scope().seal()
         # Keep original outer/daemon/endpoint/source objects; release inner-only
         # descriptors before the owner intentionally destroys its leaf fixtures.
         self.source.release_since(self.retained)
