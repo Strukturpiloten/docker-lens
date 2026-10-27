@@ -1847,6 +1847,73 @@ class HostBindObservationTests(unittest.TestCase):
             self.assertEqual(output.call_count, 1)
             self.assertEqual(recorder.value, ("gh_root", "ENOENT"))
 
+    def test_type_detail_closed_forms_and_failed_writers_keep_one_attempt(self):
+        from test_native_pids_type_detail import DETAILS
+        self.assertEqual(s.HOST_TYPE_DETAILS, DETAILS)
+        for token in DETAILS:
+            for failure in (None, KeyboardInterrupt("PRIVATE_WRITE")):
+                recorder = s.BindRecorder(); recorder.begin()
+                with patch.object(s.os, "write", side_effect=failure) as output:
+                    recorder.escape("gv_type", "unclassified", token)
+                    recorder.escape("gh_verify", "unclassified")
+                self.assertEqual(recorder.value, ("gv_type", "unclassified", token))
+                self.assertEqual(output.call_count, 1)
+                line = f"DOCKERLENS_NATIVE_PIDS_BIND: s=w_gv_type e=unclassified d={token}\n".encode()
+                self.assertEqual(output.call_args.args[1], line)
+                self.assertLessEqual(len(line), 72)
+        for site, tag, detail in (("gv_type", "EACCES", "cleanup"), ("gv_files", "unclassified", "cleanup"),
+                ("gv_type", "unclassified", "PRIVATE"), ("oc_host", None, "cleanup"),
+                ("gv_type", "unclassified", PermissionError(13, "PRIVATE"))):
+            recorder = s.BindRecorder(); recorder.begin()
+            with patch.object(s.os, "write") as output:
+                recorder.escape(site, tag, detail)
+                recorder.escape("gh_verify", "unclassified")
+            self.assertTrue(recorder.seen)
+            self.assertIsNone(recorder.value)
+            output.assert_not_called()
+
+    def test_actual_factory_type_value_and_cleanup_details_preserve_failed_session(self):
+        for body, token in (("domain threaded\n", "d_domthr"), ("domain invalid\n", "d_dominv"),
+                ("threaded\n", "d_thread"), ("domain", "d_other"), ("domain\n", "cleanup")):
+            def run(tree, session, channel, request, _calls):
+                from contextlib import ExitStack
+                (tree.cg / "owned/cgroup.type").write_text(body)
+                failure = RuntimeError("PRIVATE_CLOSE")
+                close_original = tree.source.close_fd
+                def close(fd):
+                    selected = os.readlink("/proc/self/fd/" + str(fd)).endswith("/cgroup.type")
+                    close_original(fd)
+                    if selected and token == "cleanup":
+                        raise failure
+                recorder = s.BindRecorder(); recorder.begin()
+                with ExitStack() as stack:
+                    stack.enter_context(patch.object(s, "_BIND", recorder))
+                    stack.enter_context(patch.object(tree.source, "close_fd", side_effect=close))
+                    output = stack.enter_context(patch.object(s.os, "write"))
+                    with self.assertRaises((b.Refusal, RuntimeError)) as caught:
+                        session.handle(request, channel)
+                    if token == "cleanup":
+                        self.assertIs(caught.exception, failure)
+                    self.assertTrue(session.failed)
+                    self.assertEqual(recorder.value, ("gv_type", "unclassified", token))
+                    self.assertEqual(output.call_count, 1)
+                    self.assertEqual(output.call_args.args[1],
+                        f"DOCKERLENS_NATIVE_PIDS_BIND: s=w_gv_type e=unclassified d={token}\n".encode())
+            with self.subTest(detail=token):
+                RootFactoryTests().run_factory(run)
+
+    def test_actual_factory_detail_failed_write_never_retries_outer_fallback(self):
+        def run(tree, session, channel, request, _calls):
+            (tree.cg / "owned/cgroup.type").write_text("domain threaded\n")
+            recorder = s.BindRecorder(); recorder.begin()
+            with patch.object(s, "_BIND", recorder), patch.object(s.os, "write", side_effect=KeyboardInterrupt("PRIVATE_WRITE")) as output:
+                with self.assertRaises(b.Refusal):
+                    session.handle(request, channel)
+            self.assertTrue(session.failed)
+            self.assertEqual(recorder.value, ("gv_type", "unclassified", "d_domthr"))
+            self.assertEqual(output.call_count, 1)
+        RootFactoryTests().run_factory(run)
+
     def test_actual_verifier_stage_failed_writer_consumes_only_original_attempt(self):
         from contextlib import ExitStack
         from test_native_pids_locator import LocatorTests

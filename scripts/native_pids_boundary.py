@@ -65,20 +65,85 @@ def _group_exception_tag(error):
 
 
 @contextmanager
-def _group_escape(observer, site):
+def _group_escape(observer, site, detail=None):
     try:
         yield
     except BaseException as error:
         if observer is not None:
             try:
                 tag = _group_exception_tag(error)
+                token = detail.token if (site == "gv_type" and tag == "unclassified"
+                    and type(detail) is _TypeObservation and detail.valid
+                    and type(detail.token) is str and detail.token in _TYPE_DETAILS) else None
             except BaseException:
-                tag = "unclassified"
+                tag, token = "unclassified", None
             try:
-                observer(site, tag)
+                if token is None:
+                    observer(site, tag)
+                else:
+                    observer(site, tag, token)
             except BaseException:
                 pass
         raise
+
+
+_TYPE_DETAILS = ("o_time", "o_fds", "o_opens", "o_other", "m_syscall", "m_guard", "m_other",
+    "r_time", "r_reads", "r_bytes", "r_cap", "r_other", "d_domain", "d_domthr", "d_dominv",
+    "d_thread", "d_other", "cleanup")
+
+
+class _TypeObservation:
+    """Local metadata only; values never leave the exact closed classifier."""
+
+    def __init__(self):
+        self.token, self.saved, self.valid = "o_other", None, True
+
+    def note(self, kind, value):
+        if not self.valid:
+            return
+        if kind == "opened":
+            self.token = "m_other"
+        elif kind == "m_syscall" and value is True:
+            self.token = "m_syscall"
+        elif kind == "m_guard":
+            self.token = "r_other" if value is True else "m_guard"
+        elif kind in ("time", "fds", "opens", "reads", "bytes", "cap") and value is False:
+            self.token = self.token[:2] + kind
+        elif kind == "domain":
+            if type(value) is not bytes:
+                self.valid = False
+                return
+            self.token = {b"domain\n": "d_domain", b"domain threaded\n": "d_domthr",
+                b"domain invalid\n": "d_dominv", b"threaded\n": "d_thread"}.get(value, "d_other")
+        elif kind == "cleanup_enter":
+            self.saved, self.token = self.token, "cleanup"
+        elif kind == "cleanup_done":
+            self.token = self.saved
+        return True
+
+
+def _observe(value, observer, kind):
+    """Return the identical original value even if diagnostic metadata fails."""
+    if observer is not None:
+        try:
+            if observer.note(kind, value) is not True and type(observer) is _TypeObservation:
+                object.__setattr__(observer, "valid", False)
+        except BaseException:
+            try:
+                if type(observer) is _TypeObservation:
+                    object.__setattr__(observer, "valid", False)
+            except BaseException:
+                pass
+    return value
+
+
+def _type_observation(observer):
+    if observer is not None:
+        try:
+            return _TypeObservation()
+        except BaseException:
+            pass
+    return None
 
 
 # Optional test-only startup observer, installed only by the fixed supervisor.
@@ -166,23 +231,29 @@ class Budget:
         self.reads = self.bytes = self.fds = self.opens = self.output = self.frames = 0
         self.peak_fds = 0
 
-    def check(self):
-        startup_require("budget_deadline", self.clock() < self.work_ns)
+    def check(self, observer=None):
+        startup_require("budget_deadline", _observe(self.clock() < self.work_ns, observer, "time"))
 
-    def read(self, maximum):
-        self.check()
+    def read(self, maximum, observer=None):
+        if observer is None:
+            self.check()
+        else:
+            self.check(observer=observer)
         self.reads += 1
         self.bytes += maximum
-        startup_require("budget_reads", self.reads <= 65536)
-        startup_require("budget_bytes", self.bytes <= SOURCE_BYTES)
+        startup_require("budget_reads", _observe(self.reads <= 65536, observer, "reads"))
+        startup_require("budget_bytes", _observe(self.bytes <= SOURCE_BYTES, observer, "bytes"))
 
-    def fd(self):
-        self.check()
+    def fd(self, observer=None):
+        if observer is None:
+            self.check()
+        else:
+            self.check(observer=observer)
         self.fds += 1
         self.opens += 1
         self.peak_fds = max(self.peak_fds, self.fds)
-        startup_require("budget_fds", self.fds <= 256)
-        startup_require("budget_opens", self.opens <= 32768)
+        startup_require("budget_fds", _observe(self.fds <= 256, observer, "fds"))
+        startup_require("budget_opens", _observe(self.opens <= 32768, observer, "opens"))
 
     def emit(self, maximum):
         self.check()
@@ -219,11 +290,11 @@ def identity(fd):
     return info.st_dev, info.st_ino
 
 
-def fs_magic(fd):
+def fs_magic(fd, observer=None):
     # Linux statfs starts with a native long f_type. Oversize storage is intentional.
     storage = ctypes.create_string_buffer(256)
     libc = ctypes.CDLL(None, use_errno=True)
-    if libc.fstatfs(ctypes.c_int(fd), ctypes.byref(storage)) != 0:
+    if _observe(libc.fstatfs(ctypes.c_int(fd), ctypes.byref(storage)) != 0, observer, "m_syscall"):
         raise Refusal()
     return ctypes.c_long.from_buffer(storage).value
 
@@ -322,8 +393,11 @@ class LinuxSource:
         self.owned.add(fd)
         return fd
 
-    def open(self, name, parent=None, directory=False, magic=False):
-        self.budget.fd()
+    def open(self, name, parent=None, directory=False, magic=False, observer=None):
+        if observer is None:
+            self.budget.fd()
+        else:
+            self.budget.fd(observer=observer)
         flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK
         if directory:
             flags |= os.O_DIRECTORY
@@ -355,10 +429,13 @@ class LinuxSource:
             signal.signal(signal.SIGINT, previous)
         require(not failed and self.budget.clock() < self.budget.deadline_ns)
 
-    def read_fd(self, fd, maximum):
+    def read_fd(self, fd, maximum, observer=None):
         integer(maximum, 0, 65536)
         capacity = min(1024, maximum + 1)
-        self.budget.read(capacity)
+        if observer is None:
+            self.budget.read(capacity)
+        else:
+            self.budget.read(capacity, observer=observer)
         os.lseek(fd, 0, os.SEEK_SET)
         chunks = []
         size = 0
@@ -369,10 +446,13 @@ class LinuxSource:
             if not chunk:
                 break
             size += len(chunk)
-            require(size <= maximum)
+            require(_observe(size <= maximum, observer, "cap"))
             chunks.append(chunk)
             capacity = min(1024, maximum + 1 - size)
-            self.budget.read(capacity)
+            if observer is None:
+                self.budget.read(capacity)
+            else:
+                self.budget.read(capacity, observer=observer)
         return b"".join(chunks)
 
     def read(self, parent, name, maximum):
@@ -515,12 +595,22 @@ class LinuxSource:
                     require(identity(fd) == identity(held) and fs_magic(fd) == CGROUP_MAGIC)
                 finally:
                     self.close_fd(fd)
-        with _group_escape(observer, "gv_type"):
-            fd = self.open("cgroup.type", group.directories[-1])
+        detail = _type_observation(observer)
+        with _group_escape(observer, "gv_type", detail=detail):
+            if detail is None:
+                fd = self.open("cgroup.type", group.directories[-1])
+            else:
+                fd = _observe(self.open("cgroup.type", group.directories[-1], observer=detail), detail, "opened")
             try:
-                require(fs_magic(fd) == CGROUP_MAGIC and self.read_fd(fd, 32) == b"domain\n")
+                if detail is None:
+                    require(fs_magic(fd) == CGROUP_MAGIC and self.read_fd(fd, 32) == b"domain\n")
+                else:
+                    require(_observe(fs_magic(fd, observer=detail) == CGROUP_MAGIC, detail, "m_guard")
+                        and _observe(self.read_fd(fd, 32, observer=detail), detail, "domain") == b"domain\n")
             finally:
+                _observe(None, detail, "cleanup_enter")
                 self.close_fd(fd)
+                _observe(None, detail, "cleanup_done")
 
     def check_mount(self, fd, record):
         fields = record.split()

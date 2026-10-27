@@ -603,6 +603,37 @@ else:
                 self.assertEqual(result.stderr.count((general + "\n").encode()), 1)
                 self.assertEqual(result.stderr.count((detail + "\n").encode()), 1)
 
+    def type_detail_forms(self):
+        tokens = ("o_time", "o_fds", "o_opens", "o_other", "m_syscall", "m_guard", "m_other",
+            "r_time", "r_reads", "r_bytes", "r_cap", "r_other", "d_domain", "d_domthr", "d_dominv",
+            "d_thread", "d_other", "cleanup")
+        return [BIND_OBSERVATION + " s=w_gv_type e=unclassified d=" + token for token in tokens]
+
+    def test_type_details_are_18_closed_additions_to_223_bare_forms(self):
+        records = self.type_detail_forms()
+        self.assertEqual(len(set(records)) + len(self.host_pairs()), 241)
+        self.assertLessEqual(max(len(record + "\n") for record in records), 72)
+        for code, kind in (("pids-eof", "eof"), ("pids-read", "reset")):
+            prefix = SETUP_REFUSAL + code + "\n" + IO_DETAIL + f" phase=bind kind={kind}\n"
+            for record in records:
+                result, _ = self.wrapper(prefix + record + "\n" + record + "\n", status=101)
+                self.assertEqual(result.stderr.count((record + "\n").encode()), 1)
+                self.assertNotEqual(result.returncode, 0)
+        valid = records[0] + "\n"
+        bad = [valid.rstrip("\n"), valid.replace(" d=", "  d="), valid.replace("d=o_time", "d=PRIVATE"),
+            valid.replace("w_gv_type", "w_gv_files"), valid.replace("unclassified", "ENOENT"),
+            valid.replace("unclassified", "other_os"), valid.replace(" e=unclassified", ""),
+            valid.replace("d=o_time", "d=o_time d=o_time"), valid + records[1] + "\n",
+            valid + BIND_OBSERVATION + " s=w_gv_type e=unclassified\n", valid + STARTUP_REFUSAL + " invalid\n"]
+        prefix = SETUP_REFUSAL + "pids-eof\n" + IO_DETAIL + " phase=bind kind=eof\n"
+        for record in bad:
+            result, _ = self.wrapper(prefix + record, status=101, terminate_output=False)
+            self.assertNotIn(BIND_OBSERVATION.encode(), result.stdout + result.stderr)
+        for companions in (SETUP_REFUSAL + "pids-read\n" + IO_DETAIL + " phase=bind kind=eof\n",
+                SETUP_REFUSAL + "pids-eof\n" + IO_DETAIL + " phase=ready kind=eof\n"):
+            result, _ = self.wrapper(companions + valid, status=101)
+            self.assertNotIn(BIND_OBSERVATION.encode(), result.stdout + result.stderr)
+
     def test_host_strict_fields_partial_eof_conflicts_and_family_taint(self):
         prefix = SETUP_REFUSAL + "pids-eof\n" + IO_DETAIL + " phase=bind kind=eof\n"
         valid = BIND_OBSERVATION + " s=w_gh_read e=ENOENT\n"
@@ -643,6 +674,7 @@ else:
 
     def test_new_valid_and_malformed_host_prefixes_always_taint_positive_results(self):
         records = [BIND_OBSERVATION + f" s={site} e={tag}\n" for site, tag in self.host_pairs()]
+        records.extend(record + "\n" for record in self.type_detail_forms())
         records.extend((BIND_OBSERVATION + " s=w_gh_read e=PRIVATE_HOST_CANARY\n",
                         BIND_OBSERVATION + " s=w_gh_read\n"))
         for record in records:

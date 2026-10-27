@@ -50,6 +50,33 @@ retirement, snapshot, START/BIND conflict suppression, and same-stream failed
 bind EOF/reset companion requirements remain unchanged. No budget, guard,
 source charge, deadline, native evidence requirement, or cleanup action changes.
 
+Only `gv_type` with an `unclassified` escaping primitive tag may add the
+optional closed `d=` field. The 223 bare forms remain admitted; 18 detail forms
+bring the total to 241. Known exception tags retain their original bare format.
+
+| Detail | Already evaluated observation |
+| --- | --- |
+| `o_time`, `o_fds`, `o_opens`, `o_other` | Original open deadline/FD/open-count refusal, or another open escape |
+| `m_syscall`, `m_guard`, `m_other` | Original fstatfs status failure, false magic equality, or another magic escape |
+| `r_time`, `r_reads`, `r_bytes`, `r_cap`, `r_other` | Original read deadline/read-count/byte-count/file-cap refusal, or another read escape |
+| `d_domain`, `d_domthr`, `d_dominv`, `d_thread`, `d_other` | Returned bytes match an exact documented type literal, or the closed catch-all |
+| `cleanup` | Direct close operation escape, superseding any pending work detail |
+
+The byte whitelist is exactly `domain`, `domain threaded`, `domain invalid`, and
+`threaded`, each with its required newline. Categorization returns the identical
+read object into the unchanged exact-domain comparison; it accepts no additional
+type. The original magic/domain AND expression and its short circuit remain.
+Metadata observes existing guard booleans, syscall status and return values; it
+adds no clock, source read, counter comparison, reservation, or persistent
+source/Budget/Group field. Metadata or classifier failure honestly retains a
+bare record. A successful close restores the pending work detail; failed close
+retains only cleanup. Emission occurs after the entire original finally.
+Unknown, misplaced, duplicated, conflicting, non-type or known-error details
+refuse closed. The original 72-byte line and 1,024-byte capture limits remain.
+The separate type-detail baseline freezes every altered pre-edit primitive and
+recorder method from `ea69314435b036c94afb84ed8d09ba6ff967d583`, with source
+locations and SHA-256, alongside the unchanged historical fixtures.
+
 The separate immutable verifier baseline fixture records both original
 `check_group` methods from `ba22366407660447a7845d1dad5ff810de1587e0`, with
 per-method SHA-256 and source locations verified against that commit. Regression

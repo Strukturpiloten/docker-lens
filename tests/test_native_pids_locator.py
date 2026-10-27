@@ -18,6 +18,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import native_pids_locator as l
+from native_pids_type_detail_support import normalized_type_metadata
 
 b = l.boundary
 
@@ -109,7 +110,7 @@ class KernelTree:
         for name, target in (("pid", namespace), ("mnt", "mnt"), ("cgroup", "cgroup"), ("user", "user"), ("time", "time")):
             (directory / "ns" / name).symlink_to(self.ns / target)
 
-    def magic(self, fd):
+    def magic(self, fd, observer=None):
         path = os.readlink("/proc/self/fd/" + str(fd))
         return b.CGROUP_MAGIC if path.startswith(str(self.cg)) else b.PROC_MAGIC
 
@@ -424,7 +425,7 @@ class LocatorTests(unittest.TestCase):
             self.assertEqual((original["class_name"], original["method_name"]), (owner, "check_group"))
             self.assertEqual(hashlib.sha256(original["method_source"].encode()).hexdigest(), original["method_source_utf8_sha256"])
             cls = next(n for n in ast.parse(Path(module.__file__).read_text()).body if isinstance(n, ast.ClassDef) and n.name == owner)
-            method = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "check_group")
+            method = normalized_type_metadata(next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "check_group"))
             self.assertEqual([arg.arg for arg in method.args.args], ["self", "group", "observer"])
             self.assertEqual([ast.dump(n) for n in method.args.defaults], ["Constant(value=None)"])
             if owner == "LocatorSource":
@@ -545,7 +546,10 @@ class LocatorTests(unittest.TestCase):
                     if site not in ("gv_make", "gv_call"):
                         expected.append("gv_call")
                     expected.append("gh_verify")
-                    self.assertEqual(records, [(name, "unclassified") for name in expected])
+                    pairs = [(name, "unclassified") for name in expected]
+                    if site == "gv_type" and not classifier_fails:
+                        pairs[0] = (site, "unclassified", "o_other")
+                    self.assertEqual(records, pairs)
                     self.assertEqual(reads, [])
                 with self.subTest(site=site, classifier_fails=classifier_fails):
                     self.run_tree(True, run)
@@ -725,9 +729,9 @@ class LocatorTests(unittest.TestCase):
                             return _original(*args, **kwargs)
                         setattr(tree.source, name, call)
                     budget_check = tree.source.budget.check
-                    def check():
+                    def check(**kwargs):
                         trace.append("budget.check")
-                        return budget_check()
+                        return budget_check(**kwargs)
                     tree.source.budget.check = check
                     records = []
                     with patch.object(b, "_group_exception_tag", side_effect=AssertionError("success must not classify")) as base, \

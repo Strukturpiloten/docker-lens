@@ -145,6 +145,8 @@ HOST_BIND_SITES = ("gh_read", "gh_mount", "gh_walk", "gh_leaf", "gh_verify", "gh
 HOST_BIND_EXCEPTIONS = ("unclassified", "ENOENT", "EACCES", "EPERM", "EMFILE", "ENFILE", "ENOMEM",
     "ENOSPC", "EIO", "EINVAL", "ESPIPE", "EINTR", "other_os", "declared_unsupported_events")
 
+HOST_TYPE_DETAILS = ('o_time', 'o_fds', 'o_opens', 'o_other', 'm_syscall', 'm_guard', 'm_other', 'r_time', 'r_reads', 'r_bytes', 'r_cap', 'r_other', 'd_domain', 'd_domthr', 'd_dominv', 'd_thread', 'd_other', 'cleanup')
+
 
 class BindScope:
     __slots__ = ("recorder", "site")
@@ -187,20 +189,23 @@ class BindRecorder:
     def stop(self):
         self.active = False
 
-    def escape(self, site, exception=None):
+    def escape(self, site, exception=None, detail=None):
         if not self.active or self.seen:
             return
         self.seen = True
         try:
             if type(site) is not str:
                 return
-            if site in BIND_SITES and exception is None:
+            if site in BIND_SITES and exception is None and detail is None:
                 record = f"DOCKERLENS_NATIVE_PIDS_BIND: s=w_{site}\n"
                 self.value = site
             elif (site in HOST_BIND_SITES and type(exception) is str and exception in HOST_BIND_EXCEPTIONS
-                    and (exception != "declared_unsupported_events" or site in ("gh_root", "gh_nodes"))):
-                record = f"DOCKERLENS_NATIVE_PIDS_BIND: s=w_{site} e={exception}\n"
-                self.value = (site, exception)
+                    and (exception != "declared_unsupported_events" or site in ("gh_root", "gh_nodes"))
+                    and (detail is None or (site == "gv_type" and exception == "unclassified"
+                        and type(detail) is str and detail in HOST_TYPE_DETAILS))):
+                suffix = "" if detail is None else " d=" + detail
+                record = f"DOCKERLENS_NATIVE_PIDS_BIND: s=w_{site} e={exception}{suffix}\n"
+                self.value = (site, exception) if detail is None else (site, exception, detail)
             else:
                 return
             self.emitted = True

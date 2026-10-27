@@ -74,8 +74,9 @@ class RuntimeBudget(boundary.Budget):
         for _ in range(FIXED_FD_RESERVE):
             self.fd()
 
-    def check(self):
-        boundary.startup_require("budget_deadline", self.clock() < (self.deadline_ns if self.cleanup_only else self.work_ns))
+    def check(self, observer=None):
+        boundary.startup_require("budget_deadline", boundary._observe(
+            self.clock() < (self.deadline_ns if self.cleanup_only else self.work_ns), observer, "time"))
 
     def begin_cleanup(self):
         require(not self.cleanup_only)

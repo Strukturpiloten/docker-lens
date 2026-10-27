@@ -319,17 +319,78 @@ impl ClosedBindException {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ClosedTypeDetail {
+    OpenTime,
+    OpenFds,
+    OpenOpens,
+    OpenOther,
+    MagicSyscall,
+    MagicGuard,
+    MagicOther,
+    ReadTime,
+    ReadReads,
+    ReadBytes,
+    ReadCap,
+    ReadOther,
+    Domain,
+    DomainThreaded,
+    DomainInvalid,
+    Threaded,
+    DomainOther,
+    Cleanup,
+}
+
+const HOST_TYPE_DETAILS: &[(&str, ClosedTypeDetail)] = &[
+    ("o_time", ClosedTypeDetail::OpenTime),
+    ("o_fds", ClosedTypeDetail::OpenFds),
+    ("o_opens", ClosedTypeDetail::OpenOpens),
+    ("o_other", ClosedTypeDetail::OpenOther),
+    ("m_syscall", ClosedTypeDetail::MagicSyscall),
+    ("m_guard", ClosedTypeDetail::MagicGuard),
+    ("m_other", ClosedTypeDetail::MagicOther),
+    ("r_time", ClosedTypeDetail::ReadTime),
+    ("r_reads", ClosedTypeDetail::ReadReads),
+    ("r_bytes", ClosedTypeDetail::ReadBytes),
+    ("r_cap", ClosedTypeDetail::ReadCap),
+    ("r_other", ClosedTypeDetail::ReadOther),
+    ("d_domain", ClosedTypeDetail::Domain),
+    ("d_domthr", ClosedTypeDetail::DomainThreaded),
+    ("d_dominv", ClosedTypeDetail::DomainInvalid),
+    ("d_thread", ClosedTypeDetail::Threaded),
+    ("d_other", ClosedTypeDetail::DomainOther),
+    ("cleanup", ClosedTypeDetail::Cleanup),
+];
+
+impl ClosedTypeDetail {
+    fn parse(value: &str) -> Option<Self> {
+        HOST_TYPE_DETAILS
+            .iter()
+            .find_map(|(token, detail)| (*token == value).then_some(*detail))
+    }
+    fn token(self) -> Option<&'static str> {
+        HOST_TYPE_DETAILS
+            .iter()
+            .find_map(|(token, detail)| (*detail == self).then_some(*token))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ClosedBindSite {
     Legacy(usize),
     Host {
         site: usize,
         exception: ClosedBindException,
+        detail: Option<ClosedTypeDetail>,
     },
 }
 
 impl ClosedBindSite {
     fn host(site: usize, exception: ClosedBindException) -> Option<Self> {
-        let value = Self::Host { site, exception };
+        let value = Self::Host {
+            site,
+            exception,
+            detail: None,
+        };
         value.parts()?;
         Some(value)
     }
@@ -337,10 +398,19 @@ impl ClosedBindSite {
     fn parts(self) -> Option<(&'static str, Option<ClosedBindException>)> {
         match self {
             Self::Legacy(site) => Some((*BIND_SITES.get(site)?, None)),
-            Self::Host { site, exception } => {
+            Self::Host {
+                site,
+                exception,
+                detail,
+            } => {
                 let name = *HOST_BIND_SITES.get(site)?;
                 if exception == ClosedBindException::DeclaredUnsupportedEvents
                     && !["w_gh_root", "w_gh_nodes"].contains(&name)
+                {
+                    return None;
+                }
+                if detail.is_some()
+                    && (name != "w_gv_type" || exception != ClosedBindException::Unclassified)
                 {
                     return None;
                 }
@@ -350,6 +420,27 @@ impl ClosedBindSite {
         }
     }
 
+    fn with_detail(self, detail: ClosedTypeDetail) -> Option<Self> {
+        let Self::Host {
+            site, exception, ..
+        } = self
+        else {
+            return None;
+        };
+        let value = Self::Host {
+            site,
+            exception,
+            detail: Some(detail),
+        };
+        value.parts()?;
+        Some(value)
+    }
+    fn detail(self) -> Option<ClosedTypeDetail> {
+        match self {
+            Self::Host { detail, .. } => detail,
+            Self::Legacy(_) => None,
+        }
+    }
     fn site(self) -> Option<&'static str> {
         self.parts().map(|(site, _)| site)
     }
@@ -444,12 +535,22 @@ fn constructor_observation_from_capture(
             if line.len() > 71 {
                 return None;
             }
-            ClosedBindSite::host(
+            let (tag, detail) = if let Some((tag, detail)) = tag.split_once(" d=") {
+                (tag, Some(ClosedTypeDetail::parse(detail)?))
+            } else {
+                (tag, None)
+            };
+            let host = ClosedBindSite::host(
                 HOST_BIND_SITES
                     .iter()
                     .position(|allowed| *allowed == site)?,
                 ClosedBindException::parse(tag)?,
-            )?
+            )?;
+            if let Some(detail) = detail {
+                host.with_detail(detail)?
+            } else {
+                host
+            }
         } else {
             if line.len() > 63 {
                 return None;
@@ -477,11 +578,22 @@ fn write_bind_site(mut output: impl std::io::Write, observation: ClosedBindSite)
             (b" e=".as_slice(), tag.as_bytes())
         }
     };
+    let (detail_separator, detail_token) = match observation.detail() {
+        Some(value) => {
+            let Some(token) = value.token() else {
+                return;
+            };
+            (b" d=".as_slice(), token.as_bytes())
+        }
+        None => (b"".as_slice(), b"".as_slice()),
+    };
     let chunks: &[&[u8]] = &[
         b"DOCKERLENS_NATIVE_PIDS_BIND: s=",
         site.as_bytes(),
         separator,
         tag,
+        detail_separator,
+        detail_token,
         b"\n",
     ];
     let mut line = [0; 72];
@@ -3767,6 +3879,7 @@ fn pids_host_bind_223_pairs_are_closed_typed_bounded_and_round_trip() {
                     ClosedBindSite::Host {
                         site: index,
                         exception,
+                        detail: None,
                     },
                 );
                 assert!(output.is_empty());
@@ -3833,6 +3946,130 @@ fn pids_host_bind_223_pairs_are_closed_typed_bounded_and_round_trip() {
         ClosedBindSite::host(usize::MAX, ClosedBindException::Unclassified),
         None
     );
+}
+
+#[test]
+fn pids_type_details_add_only_18_finite_forms_to_223_bare_forms() {
+    let expected = [
+        "o_time",
+        "o_fds",
+        "o_opens",
+        "o_other",
+        "m_syscall",
+        "m_guard",
+        "m_other",
+        "r_time",
+        "r_reads",
+        "r_bytes",
+        "r_cap",
+        "r_other",
+        "d_domain",
+        "d_domthr",
+        "d_dominv",
+        "d_thread",
+        "d_other",
+        "cleanup",
+    ];
+    assert_eq!(
+        HOST_TYPE_DETAILS
+            .iter()
+            .map(|(token, _)| *token)
+            .collect::<Vec<_>>(),
+        expected
+    );
+    let index = HOST_BIND_SITES
+        .iter()
+        .position(|site| *site == "w_gv_type")
+        .unwrap();
+    let bare = ClosedBindSite::host(index, ClosedBindException::Unclassified).unwrap();
+    let mut count = 223;
+    for token in expected {
+        let detail = ClosedTypeDetail::parse(token).unwrap();
+        assert_eq!(detail.token(), Some(token));
+        let typed = bare.with_detail(detail).unwrap();
+        let line = format!("DOCKERLENS_NATIVE_PIDS_BIND: s=w_gv_type e=unclassified d={token}\n");
+        assert!(line.is_ascii() && line.len() <= 72);
+        let mut output = Vec::new();
+        write_bind_site(&mut output, typed);
+        assert_eq!(output, line.as_bytes());
+        let observed = Some(CapturedConstructorObservation::Bind(typed));
+        assert_eq!(
+            constructor_observation_from_capture(line.as_bytes(), false),
+            observed
+        );
+        assert_eq!(
+            constructor_observation_from_capture(format!("{line}{line}").as_bytes(), false),
+            observed
+        );
+        assert_eq!(
+            constructor_observation_from_capture(line.as_bytes(), true),
+            None
+        );
+        for malformed in [
+            line.trim_end().to_owned(),
+            line.replace(" d=", "  d="),
+            line.replace("w_gv_type", "w_gv_files"),
+            line.replace("unclassified", "ENOENT"),
+            line.replace("unclassified", "other_os"),
+            line.replace(" e=unclassified", ""),
+            line.replace(" d=", " d=PRIVATE d="),
+            format!("{line}DOCKERLENS_NATIVE_PIDS_BIND: s=w_gv_type e=unclassified\n"),
+            format!("{line}DOCKERLENS_NATIVE_PIDS_START: PRIVATE\n"),
+        ] {
+            assert_eq!(
+                constructor_observation_from_capture(malformed.as_bytes(), false),
+                None
+            );
+        }
+        let other = if token == "cleanup" {
+            "o_time"
+        } else {
+            "cleanup"
+        };
+        assert_eq!(
+            constructor_observation_from_capture(
+                format!(
+                    "{line}DOCKERLENS_NATIVE_PIDS_BIND: s=w_gv_type e=unclassified d={other}\n"
+                )
+                .as_bytes(),
+                false
+            ),
+            None
+        );
+        for (site, _) in HOST_BIND_SITES.iter().enumerate() {
+            for (_, exception) in HOST_BIND_EXCEPTIONS {
+                let legal = site == index && *exception == ClosedBindException::Unclassified;
+                if let Some(host) = ClosedBindSite::host(site, *exception) {
+                    assert_eq!(host.with_detail(detail).is_some(), legal);
+                }
+                if !legal {
+                    let mut output = Vec::new();
+                    write_bind_site(
+                        &mut output,
+                        ClosedBindSite::Host {
+                            site,
+                            exception: *exception,
+                            detail: Some(detail),
+                        },
+                    );
+                    assert!(output.is_empty());
+                }
+            }
+        }
+        for kind in [ConstructorIoKind::Eof, ConstructorIoKind::Reset] {
+            assert!(
+                ConstructorIoFault {
+                    phase: ConstructorIoPhase::Bind,
+                    kind
+                }
+                .allows_bind_observation()
+            );
+        }
+        assert_eq!(ClosedBindSite::Legacy(0).with_detail(detail), None);
+        count += 1;
+    }
+    assert_eq!(count, 241);
+    assert_eq!(ClosedTypeDetail::parse("PRIVATE"), None);
 }
 
 #[test]
@@ -3909,16 +4146,34 @@ fn pids_host_bind_writer_invalid_indices_and_write_failure_do_not_retry() {
             }
         }
     }
-    assert_eq!(calls.get(), 446);
+    let index = HOST_BIND_SITES
+        .iter()
+        .position(|site| *site == "w_gv_type")
+        .unwrap();
+    let bare = ClosedBindSite::host(index, ClosedBindException::Unclassified).unwrap();
+    for (_, detail) in HOST_TYPE_DETAILS {
+        for short in [false, true] {
+            write_bind_site(
+                Checked {
+                    calls: &calls,
+                    short,
+                },
+                bare.with_detail(*detail).unwrap(),
+            );
+        }
+    }
+    assert_eq!(calls.get(), 482);
     for invalid in [
         ClosedBindSite::Legacy(usize::MAX),
         ClosedBindSite::Host {
             site: usize::MAX,
             exception: ClosedBindException::Unclassified,
+            detail: None,
         },
         ClosedBindSite::Host {
             site: 0,
             exception: ClosedBindException::DeclaredUnsupportedEvents,
+            detail: None,
         },
     ] {
         write_bind_site(
@@ -3929,7 +4184,7 @@ fn pids_host_bind_writer_invalid_indices_and_write_failure_do_not_retry() {
             invalid,
         );
     }
-    assert_eq!(calls.get(), 446);
+    assert_eq!(calls.get(), 482);
 }
 
 #[test]
