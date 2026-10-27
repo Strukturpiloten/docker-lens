@@ -1016,8 +1016,17 @@ class BindObservationTests(unittest.TestCase):
         self.assertEqual(ast.dump(calls[0].keywords[0].value),
             "Attribute(value=Name(id='_BIND', ctx=Load()), attr='escape', ctx=Load())")
         calls[0].keywords.clear()
-        self.assertEqual(hashlib.sha256(ast.dump(method, include_attributes=False).encode()).hexdigest(),
-            "07cc4bc2d3671bd1f26fb1d280eeb09bc416a9d1479344f306ddbbf531fd2651")
+        raw = (Path(__file__).parent / "fixtures/native_pids_pre_observer_methods.json").read_bytes()
+        self.assertEqual(hashlib.sha256(raw).hexdigest(),
+            "b9b67119b1ce97aca44d7121e4f747dadcf41aa33f7d502743536838d997f46c")
+        fixture = json.loads(raw)
+        self.assertEqual(fixture["source_commit"], "8ac7fdf9e2162806d0a59178cdb48e485bbde629")
+        original = fixture["methods"]["supervisor_runtime_bound_handle"]
+        self.assertEqual(original["source_path"], "scripts/native-pids-supervisor.py")
+        self.assertEqual(hashlib.sha256(original["method_source"].encode()).hexdigest(),
+            original["method_source_utf8_sha256"])
+        expected = ast.parse("class FrozenOriginal:\n" + original["method_source"]).body[0].body[0]
+        self.assertEqual(ast.dump(method, include_attributes=False), ast.dump(expected, include_attributes=False))
 
     def test_reserve_exchange_records_only_the_existing_escaping_call(self):
         channel = s.Channel.__new__(s.Channel)

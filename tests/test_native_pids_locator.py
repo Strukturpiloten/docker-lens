@@ -255,10 +255,19 @@ class LocatorTests(unittest.TestCase):
         method.body = body
         method.args.args.pop()
         method.args.defaults.clear()
-        # Independently frozen HEAD8ac7fdf method, including every guard, call,
-        # FD operation, identity, charge and assignment in original order.
-        self.assertEqual(hashlib.sha256(ast.dump(method, include_attributes=False).encode()).hexdigest(),
-            "be046df135028d71f3ae8933d1f5e8064500773132f084b362946b94afbf3c93")
+        # Pin original source bytes, then parse both methods on this interpreter:
+        # ast.dump's treatment of empty fields differs across Python versions.
+        raw = (Path(__file__).parent / "fixtures/native_pids_pre_observer_methods.json").read_bytes()
+        self.assertEqual(hashlib.sha256(raw).hexdigest(),
+            "b9b67119b1ce97aca44d7121e4f747dadcf41aa33f7d502743536838d997f46c")
+        fixture = json.loads(raw)
+        self.assertEqual(fixture["source_commit"], "8ac7fdf9e2162806d0a59178cdb48e485bbde629")
+        original = fixture["methods"]["locator_configured_outer_group"]
+        self.assertEqual(original["source_path"], "scripts/native_pids_locator.py")
+        self.assertEqual(hashlib.sha256(original["method_source"].encode()).hexdigest(),
+            original["method_source_utf8_sha256"])
+        expected = ast.parse("class FrozenOriginal:\n" + original["method_source"]).body[0].body[0]
+        self.assertEqual(ast.dump(method, include_attributes=False), ast.dump(expected, include_attributes=False))
 
     def test_held_socket_inode_connect_and_path_replacement_refusal(self):
         with tempfile.TemporaryDirectory(prefix="dl-held-endpoint-") as directory:
