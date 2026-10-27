@@ -136,7 +136,7 @@ class LocatorTests(unittest.TestCase):
         failure = RuntimeError("PRIVATE_OUTER_CANARY")
 
         def operation(name, result=None):
-            def run(*_args):
+            def run(*_args, **_kwargs):
                 trace.append(name)
                 if handled and name == "host":
                     try:
@@ -247,7 +247,10 @@ class LocatorTests(unittest.TestCase):
                 self.assertEqual(ast.dump(call.args[0]), "Name(id='observer', ctx=Load())")
                 sites.append(call.args[1].value)
                 block_lengths.append(len(node.body))
-                body.extend(node.body)
+                if call.args[1].value == "oc_host":
+                    body.append(self.collapse_host_delegation(node.body[0]))
+                else:
+                    body.extend(node.body)
             else:
                 body.append(node)
         self.assertEqual(sites, ["oc_pre", "oc_host", "oc_guest", "oc_select", "oc_max", "oc_recheck"])
@@ -268,6 +271,235 @@ class LocatorTests(unittest.TestCase):
             original["method_source_utf8_sha256"])
         expected = ast.parse("class FrozenOriginal:\n" + original["method_source"]).body[0].body[0]
         self.assertEqual(ast.dump(method, include_attributes=False), ast.dump(expected, include_attributes=False))
+
+    def collapse_host_delegation(self, node):
+        self.assertIsInstance(node, ast.If)
+        self.assertEqual(ast.dump(node.test),
+            "Compare(left=Name(id='observer', ctx=Load()), ops=[Is()], comparators=[Constant(value=None)])")
+        self.assertEqual((len(node.body), len(node.orelse)), (1, 1))
+        unobserved, observed = node.body[0], node.orelse[0]
+        self.assertEqual(len(observed.value.keywords), 1)
+        self.assertEqual(observed.value.keywords[0].arg, "observer")
+        self.assertEqual(ast.dump(observed.value.keywords[0].value), "Name(id='observer', ctx=Load())")
+        observed.value.keywords.clear()
+        self.assertEqual(ast.dump(unobserved, include_attributes=False), ast.dump(observed, include_attributes=False))
+        return unobserved
+
+    def test_host_group_original_methods_and_partitions_use_pinned_5b_source(self):
+        raw = (Path(__file__).parent / "fixtures/native_pids_host_group_baseline_methods.json").read_bytes()
+        self.assertEqual(hashlib.sha256(raw).hexdigest(),
+            "e996736bb4c01bf63e79460003c1ed7267313faef86be71ac1bca0ba9e25d980")
+        fixture = json.loads(raw)
+        self.assertEqual(fixture["source_commit"], "5b73e3c4dd93de9cb80ca4c0857e19d332a53b68")
+        tree = ast.parse(Path(l.__file__).read_text())
+        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "LocatorSource")
+        for name in ("group", "configured_outer_group"):
+            original = fixture["methods"]["LocatorSource." + name]
+            self.assertEqual((original["source_path"], original["class_name"], original["method_name"]),
+                ("scripts/native_pids_locator.py", "LocatorSource", name))
+            self.assertEqual(hashlib.sha256(original["method_source"].encode()).hexdigest(), original["method_source_utf8_sha256"])
+            method = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == name)
+            self.assertEqual([arg.arg for arg in method.args.args], ["self", "process", "observer"])
+            self.assertEqual(ast.dump(method.args.defaults[0]), "Constant(value=None)")
+            if name == "group":
+                original_call = self.collapse_host_delegation(method.body[0])
+                blocks = method.body[1:-1]
+                self.assertEqual([n.items[0].context_expr.args[1].value for n in blocks], ["gh_root", "gh_nodes"])
+                self.assertEqual([len(n.body) for n in blocks], [8, 4])
+                for node in blocks:
+                    call = node.items[0].context_expr
+                    self.assertEqual(ast.dump(call.func), "Name(id='_host_group_escape', ctx=Load())")
+                    self.assertEqual(ast.dump(call.args[0]), "Name(id='observer', ctx=Load())")
+                self.assertIsInstance(method.body[-1], ast.Return)
+                method.body = [original_call] + [child for n in blocks for child in n.body] + [method.body[-1]]
+                method.args.args.pop(); method.args.defaults.clear()
+            else:
+                host = next(n for n in method.body if isinstance(n, ast.With)
+                    and n.items[0].context_expr.args[1].value == "oc_host")
+                self.assertEqual(len(host.body), 1)
+                host.body = [self.collapse_host_delegation(host.body[0])]
+            expected = ast.parse("class Original:\n" + original["method_source"]).body[0].body[0]
+            self.assertEqual(ast.dump(method, include_attributes=False), ast.dump(expected, include_attributes=False))
+
+    def install_host_failure(self, tree, site, failure, stack):
+        source = tree.source
+        if site in ("gh_read", "gh_mount"):
+            original = source.read
+            class MountBody(bytes):
+                def decode(self, *_args, **_kwargs):
+                    raise failure
+            def read(directory, name, maximum):
+                if name == "self/mountinfo":
+                    if site == "gh_read":
+                        raise failure
+                    return MountBody(original(directory, name, maximum))
+                return original(directory, name, maximum)
+            stack.enter_context(patch.object(source, "read", side_effect=read))
+        elif site in ("gh_walk", "gh_leaf", "gh_nodes"):
+            original = source.open
+            wanted = {"gh_walk": "/", "gh_leaf": "pids.max", "gh_nodes": "pids.events.local"}[site]
+            def open_file(name, *args, **kwargs):
+                if name == wanted:
+                    raise failure
+                return original(name, *args, **kwargs)
+            stack.enter_context(patch.object(source, "open", side_effect=open_file))
+        else:
+            method = "check_group" if site == "gh_verify" else "root_file_present"
+            stack.enter_context(patch.object(source, method, side_effect=failure))
+
+    def test_each_host_group_block_preserves_exact_direct_error_and_pair(self):
+        from contextlib import ExitStack
+        for site in ("gh_read", "gh_mount", "gh_walk", "gh_leaf", "gh_verify", "gh_root", "gh_nodes"):
+            def run(tree):
+                process = tree.source.process(100, 1000)
+                failure = PermissionError(13, "PRIVATE_HOST_CANARY")
+                records = []
+                with ExitStack() as stack:
+                    self.install_host_failure(tree, site, failure, stack)
+                    with self.assertRaises(PermissionError) as caught:
+                        tree.source.group(process, observer=lambda *pair: records.append(pair))
+                self.assertIs(caught.exception, failure)
+                self.assertEqual(records, [(site, "EACCES")])
+            with self.subTest(site=site):
+                self.run_tree(True, run)
+
+    def test_declared_events_are_local_exact_and_never_hidden_errno(self):
+        for site in ("gh_root", "gh_nodes"):
+            records = []
+            failure = l.LocatorRefusal("UnsupportedEventSemantics")
+            try:
+                with l._host_group_escape(lambda *pair: records.append(pair), site):
+                    try:
+                        raise FileNotFoundError(2, "PRIVATE_HIDDEN_CAUSE")
+                    except FileNotFoundError:
+                        raise failure from None
+            except l.LocatorRefusal as caught:
+                self.assertIs(caught, failure)
+            self.assertEqual(records, [(site, "declared_unsupported_events")])
+            self.assertEqual(b._group_exception_tag(failure), "unclassified")
+        reads = []
+        class Hostile(l.LocatorRefusal):
+            def __getattribute__(self, name):
+                reads.append(name)
+                raise AssertionError("PRIVATE_CATEGORY_READ")
+        class Text(str):
+            def __eq__(self, _other):
+                raise AssertionError("must not compare subclass")
+        for error in (l.LocatorRefusal("BindingFailed"), Hostile(), b.Refusal(), KeyboardInterrupt(), GeneratorExit()):
+            self.assertEqual(l._host_group_exception_tag(error), "unclassified")
+        error = l.LocatorRefusal()
+        for category in (Text("UnsupportedEventSemantics"), 13, None):
+            error.category = category
+            self.assertEqual(l._host_group_exception_tag(error), "unclassified")
+        del error.category
+        records = []
+        with self.assertRaises(l.LocatorRefusal) as caught:
+            with l._host_group_escape(lambda *pair: records.append(pair), "gh_root"):
+                raise error
+        self.assertIs(caught.exception, error)
+        self.assertEqual(records, [("gh_root", "unclassified")])
+        self.assertEqual(reads, [])
+
+    def test_new_host_helper_preserves_fatal_generator_identity_with_and_without_observer(self):
+        for error_type in (KeyboardInterrupt, SystemExit, GeneratorExit, StopIteration):
+            for observed in (False, True):
+                failure = error_type("PRIVATE_HOST_CANARY")
+                records = []
+                classify_original = l._host_group_exception_tag
+                with patch.object(l, "_host_group_exception_tag", wraps=classify_original) as classify:
+                    with self.assertRaises(error_type) as caught:
+                        with l._host_group_escape((lambda *pair: records.append(pair)) if observed else None, "gh_root"):
+                            raise failure
+                self.assertIs(caught.exception, failure)
+                self.assertEqual(records, [("gh_root", "unclassified")] if observed else [])
+                if observed:
+                    classify.assert_called_once_with(failure)
+                else:
+                    classify.assert_not_called()
+
+    def test_local_classifier_and_callback_failures_never_replace_or_retry_source(self):
+        for side_effect in (lambda _site: None, KeyboardInterrupt("observer failure")):
+            failure = l.LocatorRefusal("UnsupportedEventSemantics")
+            observer = unittest.mock.Mock(side_effect=side_effect)
+            with patch.object(l, "_host_group_exception_tag", side_effect=KeyboardInterrupt("classifier failure")) as classify:
+                with self.assertRaises(l.LocatorRefusal) as caught:
+                    with l._host_group_escape(observer, "gh_root"):
+                        raise failure
+            self.assertIs(caught.exception, failure)
+            classify.assert_called_once_with(failure)
+            observer.assert_called_once_with("gh_root", "unclassified")
+
+    def test_actual_translated_missing_local_event_has_declared_tag(self):
+        def run(tree):
+            process = tree.source.process(100, 1000)
+            (tree.cg / "owned/pids.events.local").unlink()
+            records = []
+            with self.assertRaises(l.LocatorRefusal) as caught:
+                tree.source.group(process, observer=lambda *pair: records.append(pair))
+            self.assertEqual(caught.exception.category, "UnsupportedEventSemantics")
+            self.assertEqual(records, [("gh_nodes", "declared_unsupported_events")])
+        self.run_tree(True, run)
+
+    def test_default_none_retains_one_argument_fakes_and_no_classification(self):
+        source, process, current, _trace, _failure, identity = self.configured_fixture()
+        calls = []
+        def old_group(proc):
+            calls.append(proc)
+            return current
+        source.group = old_group
+        with patch.object(b, "identity", side_effect=identity), \
+                patch.object(b, "_group_exception_tag", side_effect=AssertionError("no classification")) as base, \
+                patch.object(l, "_host_group_exception_tag", side_effect=AssertionError("no classification")) as local:
+            self.assertIs(source.configured_outer_group(process), current)
+            base.assert_not_called(); local.assert_not_called()
+        self.assertEqual(calls, [process])
+        # The default locator-to-base call must also keep the old one-argument seam.
+        failure = RuntimeError("after old-arity base")
+        class Record:
+            def split(self):
+                raise failure
+        result = SimpleNamespace(mount_record=Record())
+        def old_base(_self, proc):
+            calls.append(proc)
+            return result
+        with patch.object(b.LinuxSource, "group", old_base), \
+                patch.object(l, "_host_group_exception_tag", side_effect=AssertionError("no classification")) as local:
+            with self.assertRaises(RuntimeError) as caught:
+                l.LocatorSource.group(source, process)
+            self.assertIs(caught.exception, failure)
+            local.assert_not_called()
+        self.assertEqual(calls, [process, process])
+
+    def test_observed_and_default_source_operations_budgets_fds_and_caches_match(self):
+        for root_files in (False, True):
+            results = []
+            for observed in (False, True):
+                def run(tree):
+                    if root_files:
+                        tree.make_group(tree.cg, 512, [])
+                    process = tree.source.process(200, 2000)
+                    trace = []
+                    for name in ("open", "read", "read_fd", "close_fd", "check_mount", "check_group", "root_file_present"):
+                        original = getattr(tree.source, name)
+                        def call(*args, _name=name, _original=original, **kwargs):
+                            trace.append(_name)
+                            return _original(*args, **kwargs)
+                        setattr(tree.source, name, call)
+                    records = []
+                    with patch.object(b, "_group_exception_tag", side_effect=AssertionError("success must not classify")) as base, \
+                            patch.object(l, "_host_group_exception_tag", side_effect=AssertionError("success must not classify")) as local:
+                        for _ in range(2):
+                            tree.source.group(process, observer=(lambda *pair: records.append(pair)) if observed else None)
+                        base.assert_not_called(); local.assert_not_called()
+                    self.assertEqual(records, [])
+                    counters = tuple(getattr(tree.source.budget, name) for name in
+                        ("reads", "bytes", "fds", "opens", "output", "frames", "peak_fds", "deadline_ns", "work_ns"))
+                    results.append((tuple(trace), counters, len(tree.source.owned),
+                        len(tree.source.controller_cache), len(tree.source.controller_groups), len(tree.source.root_records)))
+                self.run_tree(True, run)
+            self.assertEqual(results[0], results[1])
+            self.assertGreater(results[0][2], 0)
+            self.assertGreaterEqual(results[0][3], 3 if root_files else 2)
 
     def test_held_socket_inode_connect_and_path_replacement_refusal(self):
         with tempfile.TemporaryDirectory(prefix="dl-held-endpoint-") as directory:

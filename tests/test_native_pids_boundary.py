@@ -1,6 +1,9 @@
 """Hermetic controls only: none of these tests is native runtime evidence."""
 
 import ctypes
+import ast
+import errno
+import hashlib
 import importlib.util
 import json
 import os
@@ -625,6 +628,154 @@ class ProtocolAndBudgetTests(unittest.TestCase):
                 finally:
                     os.close(parent_reader)
 
+
+
+class HostGroupObservationTests(unittest.TestCase):
+    ERRNOS = ((errno.ENOENT, "ENOENT"), (errno.EACCES, "EACCES"), (errno.EPERM, "EPERM"),
+        (errno.EMFILE, "EMFILE"), (errno.ENFILE, "ENFILE"), (errno.ENOMEM, "ENOMEM"),
+        (errno.ENOSPC, "ENOSPC"), (errno.EIO, "EIO"), (errno.EINVAL, "EINVAL"),
+        (errno.ESPIPE, "ESPIPE"), (errno.EINTR, "EINTR"))
+
+    def test_exact_builtin_errno_contract_and_factory_selected_subclasses(self):
+        classes = (OSError, BlockingIOError, ChildProcessError, ConnectionError, BrokenPipeError,
+            ConnectionAbortedError, ConnectionRefusedError, ConnectionResetError, FileExistsError,
+            FileNotFoundError, InterruptedError, IsADirectoryError, NotADirectoryError, PermissionError,
+            ProcessLookupError, TimeoutError)
+        self.assertEqual(b._HOST_OSERROR_TYPES, classes)
+        class IntSubclass(int):
+            pass
+        for cls in classes:
+            for number, expected in (*self.ERRNOS, (987654, "other_os"), (None, "unclassified"),
+                    (True, "unclassified"), (13.0, "unclassified"), ("13", "unclassified"),
+                    (IntSubclass(13), "unclassified")):
+                error = cls()
+                OSError.errno.__set__(error, number)
+                self.assertIs(type(error), cls)
+                self.assertEqual(b._group_exception_tag(error), expected)
+        for number, expected in self.ERRNOS:
+            error = OSError(number, "PRIVATE_HOST_CANARY", "/private/path")
+            self.assertTrue(any(type(error) is cls for cls in classes))
+            self.assertEqual(b._group_exception_tag(error), expected)
+
+    def test_custom_types_and_spoofed_class_have_no_exception_attribute_reads(self):
+        reads = []
+        class Hostile(OSError):
+            def __getattribute__(self, name):
+                reads.append(name)
+                raise AssertionError("PRIVATE_ATTRIBUTE_CANARY")
+        class Spoof(Exception):
+            @property
+            def __class__(self):
+                reads.append("__class__")
+                return OSError
+            @property
+            def errno(self):
+                reads.append("errno")
+                raise AssertionError("PRIVATE_ATTRIBUTE_CANARY")
+        for error in (Hostile(), Spoof(), b.Refusal(), KeyboardInterrupt(), GeneratorExit(), StopIteration()):
+            self.assertEqual(b._group_exception_tag(error), "unclassified")
+        self.assertEqual(reads, [])
+        error = Hostile()
+        records = []
+        try:
+            with b._group_escape(lambda *pair: records.append(pair), "gh_read"):
+                raise error
+        except BaseException as caught:
+            self.assertIs(caught, error)
+        self.assertEqual(records, [("gh_read", "unclassified")])
+        self.assertEqual(reads, [])
+
+    def test_scope_is_silent_on_default_success_and_handled_error(self):
+        failure = PermissionError(13, "PRIVATE_HOST_CANARY")
+        with patch.object(b, "_group_exception_tag", side_effect=AssertionError("must not classify")) as classify:
+            with self.assertRaises(PermissionError) as caught:
+                with b._group_escape(None, "gh_read"):
+                    raise failure
+            self.assertIs(caught.exception, failure)
+            records = []
+            with b._group_escape(lambda *pair: records.append(pair), "gh_read"):
+                try:
+                    raise FileNotFoundError(2, "expected optional file")
+                except FileNotFoundError:
+                    pass
+            classify.assert_not_called()
+            self.assertEqual(records, [])
+
+    def test_classifier_and_callback_failure_preserve_identity_without_retry(self):
+        for callback_mode in ("record", "raises", "one_arg"):
+            failure = PermissionError(13, "PRIVATE_HOST_CANARY")
+            attempts = []
+            def observer(*pair):
+                attempts.append(pair)
+                if callback_mode == "raises":
+                    raise KeyboardInterrupt("observer failure")
+                if callback_mode == "one_arg":
+                    [].append(*pair)
+            with patch.object(b, "_group_exception_tag", side_effect=KeyboardInterrupt("classifier failure")) as classify:
+                with self.assertRaises(PermissionError) as caught:
+                    with b._group_escape(observer, "gh_read"):
+                        raise failure
+            self.assertIs(caught.exception, failure)
+            classify.assert_called_once_with(failure)
+            self.assertEqual(attempts, [("gh_read", "unclassified")])
+
+    def test_new_host_helper_preserves_fatal_generator_identity_with_and_without_observer(self):
+        for error_type in (KeyboardInterrupt, SystemExit, GeneratorExit, StopIteration):
+            for observed in (False, True):
+                failure = error_type("PRIVATE_HOST_CANARY")
+                records = []
+                classify_original = b._group_exception_tag
+                with patch.object(b, "_group_exception_tag", wraps=classify_original) as classify:
+                    with self.assertRaises(error_type) as caught:
+                        with b._group_escape((lambda *pair: records.append(pair)) if observed else None, "gh_verify"):
+                            raise failure
+                self.assertIs(caught.exception, failure)
+                self.assertEqual(records, [("gh_verify", "unclassified")] if observed else [])
+                if observed:
+                    classify.assert_called_once_with(failure)
+                else:
+                    classify.assert_not_called()
+
+    def test_opaque_cleanup_tag_is_only_the_escaping_exception(self):
+        work, cleanup = PermissionError(13, "work"), FileNotFoundError(2, "cleanup")
+        records = []
+        with self.assertRaises(FileNotFoundError) as caught:
+            with b._group_escape(lambda *pair: records.append(pair), "gh_verify"):
+                try:
+                    raise work
+                finally:
+                    raise cleanup
+        self.assertIs(caught.exception, cleanup)
+        self.assertEqual(records, [("gh_verify", "ENOENT")])
+
+    def test_group_partition_matches_independent_frozen_source_on_this_interpreter(self):
+        raw = (Path(__file__).parent / "fixtures/native_pids_host_group_baseline_methods.json").read_bytes()
+        self.assertEqual(hashlib.sha256(raw).hexdigest(),
+            "e996736bb4c01bf63e79460003c1ed7267313faef86be71ac1bca0ba9e25d980")
+        fixture = json.loads(raw)
+        self.assertEqual(fixture["source_commit"], "5b73e3c4dd93de9cb80ca4c0857e19d332a53b68")
+        original = fixture["methods"]["LinuxSource.group"]
+        self.assertEqual((original["source_path"], original["class_name"], original["method_name"]),
+            ("scripts/native_pids_boundary.py", "LinuxSource", "group"))
+        self.assertEqual(hashlib.sha256(original["method_source"].encode()).hexdigest(), original["method_source_utf8_sha256"])
+        tree = ast.parse(Path(b.__file__).read_text())
+        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "LinuxSource")
+        method = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "group")
+        self.assertEqual([arg.arg for arg in method.args.args], ["self", "proc", "observer"])
+        self.assertEqual(ast.dump(method.args.defaults[0]), "Constant(value=None)")
+        blocks = method.body[:-1]
+        self.assertEqual([n.items[0].context_expr.args[1].value for n in blocks],
+            ["gh_read", "gh_mount", "gh_walk", "gh_leaf", "gh_verify"])
+        self.assertEqual([len(n.body) for n in blocks], [1, 4, 8, 2, 2])
+        for node in blocks:
+            call = node.items[0].context_expr
+            self.assertEqual(ast.dump(call.func), "Name(id='_group_escape', ctx=Load())")
+            self.assertEqual(ast.dump(call.args[0]), "Name(id='observer', ctx=Load())")
+        self.assertIsInstance(method.body[-1], ast.Return)
+        method.body = [child for n in blocks for child in n.body] + [method.body[-1]]
+        method.args.args.pop(); method.args.defaults.clear()
+        expected = ast.parse("class Original:\n" + original["method_source"]).body[0].body[0]
+        self.assertEqual(ast.dump(method, include_attributes=False), ast.dump(expected, include_attributes=False))
 
 if __name__ == "__main__":
     unittest.main()

@@ -1791,5 +1791,83 @@ class StartupDiagnosticTests(unittest.TestCase):
                 if result:
                     self.assertEqual(output.call_args.args[1], b"native-pids-supervisor: refused\n")
 
+
+class HostBindObservationTests(unittest.TestCase):
+    SITES = ("gh_read", "gh_mount", "gh_walk", "gh_leaf", "gh_verify", "gh_root", "gh_nodes")
+    TAGS = ("unclassified", "ENOENT", "EACCES", "EPERM", "EMFILE", "ENFILE", "ENOMEM", "ENOSPC",
+        "EIO", "EINVAL", "ESPIPE", "EINTR", "other_os", "declared_unsupported_events")
+
+    def test_every_legal_pair_is_one_closed_attempt_and_legacy_is_unchanged(self):
+        self.assertEqual(s.HOST_BIND_SITES, self.SITES)
+        self.assertEqual(s.HOST_BIND_EXCEPTIONS, self.TAGS)
+        self.assertEqual(len(s.BIND_SITES) + len(self.SITES), 32)
+        records = []
+        for site in self.SITES:
+            for tag in self.TAGS:
+                if tag == "declared_unsupported_events" and site not in ("gh_root", "gh_nodes"):
+                    continue
+                recorder = s.BindRecorder(); recorder.begin()
+                with patch.object(s.os, "write", return_value=1) as output:
+                    recorder.escape(site, tag)
+                    recorder.escape("oc_host")
+                    recorder.escape("outer_cgroup")
+                self.assertTrue(recorder.seen)
+                self.assertEqual(recorder.value, (site, tag))
+                self.assertEqual(output.call_count, 1)
+                line = output.call_args.args[1]
+                self.assertEqual(line, f"DOCKERLENS_NATIVE_PIDS_BIND: s=w_{site} e={tag}\n".encode())
+                self.assertTrue(line.isascii())
+                self.assertLessEqual(len(line), 72)
+                records.append(line)
+        self.assertEqual(len(set(records)), 93)
+        self.assertEqual(max(map(len, records)), 72)
+        for site in BindObservationTests.SITES:
+            recorder = s.BindRecorder(); recorder.begin()
+            with patch.object(s.os, "write") as output:
+                recorder.escape(site)
+            self.assertEqual(output.call_args.args[1], f"DOCKERLENS_NATIVE_PIDS_BIND: s=w_{site}\n".encode())
+
+    def test_invalid_pair_and_failed_write_consume_first_attempt_without_fallback(self):
+        pairs = [("gh_read", None), ("gh_verify", "declared_unsupported_events"),
+            ("oc_host", "EACCES"), ("gh_root", "PRIVATE_HOST_CANARY"), ("PRIVATE_HOST_CANARY", "ENOENT"),
+            ("gh_root", PermissionError(13, "private"))]
+        for site, tag in pairs:
+            recorder = s.BindRecorder(); recorder.begin()
+            with patch.object(s.os, "write") as output:
+                recorder.escape(site, tag)
+                recorder.escape("oc_host")
+            self.assertTrue(recorder.seen)
+            self.assertIsNone(recorder.value)
+            output.assert_not_called()
+        for effect in (OSError(5, "PRIVATE_WRITE_CANARY"), KeyboardInterrupt("PRIVATE_WRITE_CANARY")):
+            recorder = s.BindRecorder(); recorder.begin()
+            with patch.object(s.os, "write", side_effect=effect) as output:
+                recorder.escape("gh_root", "ENOENT")
+                recorder.escape("oc_host")
+            self.assertEqual(output.call_count, 1)
+            self.assertEqual(recorder.value, ("gh_root", "ENOENT"))
+
+    def test_all_actual_host_stages_beat_legacy_fallback_and_preserve_failure(self):
+        from contextlib import ExitStack
+        from test_native_pids_locator import LocatorTests
+        for site in self.SITES:
+            def run(tree, session, channel, request, _calls):
+                failure = PermissionError(13, "PRIVATE_HOST_CANARY")
+                recorder = s.BindRecorder(); recorder.begin()
+                with ExitStack() as stack:
+                    LocatorTests().install_host_failure(tree, site, failure, stack)
+                    stack.enter_context(patch.object(s, "_BIND", recorder))
+                    output = stack.enter_context(patch.object(s.os, "write"))
+                    with self.assertRaises(PermissionError) as caught:
+                        session.handle(request, channel)
+                self.assertIs(caught.exception, failure)
+                self.assertTrue(session.failed)
+                self.assertEqual(recorder.value, (site, "EACCES"))
+                self.assertEqual(output.call_count, 1)
+                self.assertEqual(output.call_args.args[1],
+                    f"DOCKERLENS_NATIVE_PIDS_BIND: s=w_{site} e=EACCES\n".encode())
+            with self.subTest(site=site):
+                RootFactoryTests().run_factory(run)
+
 if __name__ == "__main__":
     unittest.main()

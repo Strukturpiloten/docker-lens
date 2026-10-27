@@ -141,6 +141,9 @@ BIND_SITES = (
     "daemon_bind", "reserve_api", "outer_recheck", "pending_reply",
     "oc_pre", "oc_host", "oc_guest", "oc_select", "oc_max", "oc_recheck",
 )
+HOST_BIND_SITES = ("gh_read", "gh_mount", "gh_walk", "gh_leaf", "gh_verify", "gh_root", "gh_nodes")
+HOST_BIND_EXCEPTIONS = ("unclassified", "ENOENT", "EACCES", "EPERM", "EMFILE", "ENFILE", "ENOMEM",
+    "ENOSPC", "EIO", "EINVAL", "ESPIPE", "EINTR", "other_os", "declared_unsupported_events")
 
 
 class BindScope:
@@ -184,16 +187,24 @@ class BindRecorder:
     def stop(self):
         self.active = False
 
-    def escape(self, site):
+    def escape(self, site, exception=None):
         if not self.active or self.seen:
             return
         self.seen = True
         try:
-            if site not in BIND_SITES:
+            if type(site) is not str:
                 return
-            self.value = site
+            if site in BIND_SITES and exception is None:
+                record = f"DOCKERLENS_NATIVE_PIDS_BIND: s=w_{site}\n"
+                self.value = site
+            elif (site in HOST_BIND_SITES and type(exception) is str and exception in HOST_BIND_EXCEPTIONS
+                    and (exception != "declared_unsupported_events" or site in ("gh_root", "gh_nodes"))):
+                record = f"DOCKERLENS_NATIVE_PIDS_BIND: s=w_{site} e={exception}\n"
+                self.value = (site, exception)
+            else:
+                return
             self.emitted = True
-            os.write(2, f"DOCKERLENS_NATIVE_PIDS_BIND: s=w_{site}\n".encode("ascii"))
+            os.write(2, record.encode("ascii"))
         except BaseException:
             pass
 

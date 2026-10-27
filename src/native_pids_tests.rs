@@ -246,12 +246,102 @@ const BIND_SITES: &[&str] = &[
     "w_oc_recheck",
 ];
 
+const HOST_BIND_SITES: &[&str] = &[
+    "w_gh_read",
+    "w_gh_mount",
+    "w_gh_walk",
+    "w_gh_leaf",
+    "w_gh_verify",
+    "w_gh_root",
+    "w_gh_nodes",
+];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ClosedBindSite(usize);
+enum ClosedBindException {
+    Unclassified,
+    Enoent,
+    Eacces,
+    Eperm,
+    Emfile,
+    Enfile,
+    Enomem,
+    Enospc,
+    Eio,
+    Einval,
+    Espipe,
+    Eintr,
+    OtherOs,
+    DeclaredUnsupportedEvents,
+}
+
+const HOST_BIND_EXCEPTIONS: &[(&str, ClosedBindException)] = &[
+    ("unclassified", ClosedBindException::Unclassified),
+    ("ENOENT", ClosedBindException::Enoent),
+    ("EACCES", ClosedBindException::Eacces),
+    ("EPERM", ClosedBindException::Eperm),
+    ("EMFILE", ClosedBindException::Emfile),
+    ("ENFILE", ClosedBindException::Enfile),
+    ("ENOMEM", ClosedBindException::Enomem),
+    ("ENOSPC", ClosedBindException::Enospc),
+    ("EIO", ClosedBindException::Eio),
+    ("EINVAL", ClosedBindException::Einval),
+    ("ESPIPE", ClosedBindException::Espipe),
+    ("EINTR", ClosedBindException::Eintr),
+    ("other_os", ClosedBindException::OtherOs),
+    (
+        "declared_unsupported_events",
+        ClosedBindException::DeclaredUnsupportedEvents,
+    ),
+];
+
+impl ClosedBindException {
+    fn tag(self) -> Option<&'static str> {
+        HOST_BIND_EXCEPTIONS
+            .iter()
+            .find_map(|(tag, value)| (*value == self).then_some(*tag))
+    }
+
+    fn parse(tag: &str) -> Option<Self> {
+        HOST_BIND_EXCEPTIONS
+            .iter()
+            .find_map(|(allowed, value)| (*allowed == tag).then_some(*value))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ClosedBindSite {
+    Legacy(usize),
+    Host {
+        site: usize,
+        exception: ClosedBindException,
+    },
+}
 
 impl ClosedBindSite {
+    fn host(site: usize, exception: ClosedBindException) -> Option<Self> {
+        let value = Self::Host { site, exception };
+        value.parts()?;
+        Some(value)
+    }
+
+    fn parts(self) -> Option<(&'static str, Option<ClosedBindException>)> {
+        match self {
+            Self::Legacy(site) => Some((*BIND_SITES.get(site)?, None)),
+            Self::Host { site, exception } => {
+                let name = *HOST_BIND_SITES.get(site)?;
+                if exception == ClosedBindException::DeclaredUnsupportedEvents
+                    && !["w_gh_root", "w_gh_nodes"].contains(&name)
+                {
+                    return None;
+                }
+                exception.tag()?;
+                Some((name, Some(exception)))
+            }
+        }
+    }
+
     fn site(self) -> Option<&'static str> {
-        BIND_SITES.get(self.0).copied()
+        self.parts().map(|(site, _)| site)
     }
 }
 
@@ -338,15 +428,24 @@ fn constructor_observation_from_capture(
         if !line.starts_with(BIND_PREFIX.as_bytes()) {
             continue;
         }
-        if line.len() > 63 {
-            return None;
-        }
-        let site = line.strip_prefix(b"DOCKERLENS_NATIVE_PIDS_BIND: s=")?;
-        let observation = ClosedBindSite(
-            BIND_SITES
-                .iter()
-                .position(|allowed| allowed.as_bytes() == site)?,
-        );
+        let body = line.strip_prefix(b"DOCKERLENS_NATIVE_PIDS_BIND: s=")?;
+        let body = std::str::from_utf8(body).ok()?;
+        let observation = if let Some((site, tag)) = body.split_once(" e=") {
+            if line.len() > 71 {
+                return None;
+            }
+            ClosedBindSite::host(
+                HOST_BIND_SITES
+                    .iter()
+                    .position(|allowed| *allowed == site)?,
+                ClosedBindException::parse(tag)?,
+            )?
+        } else {
+            if line.len() > 63 {
+                return None;
+            }
+            ClosedBindSite::Legacy(BIND_SITES.iter().position(|allowed| *allowed == body)?)
+        };
         if candidate.is_some_and(|first| first != observation) {
             return None;
         }
@@ -356,11 +455,26 @@ fn constructor_observation_from_capture(
 }
 
 fn write_bind_site(mut output: impl std::io::Write, observation: ClosedBindSite) {
-    let Some(site) = observation.site() else {
+    let Some((site, exception)) = observation.parts() else {
         return;
     };
-    let chunks: &[&[u8]] = &[b"DOCKERLENS_NATIVE_PIDS_BIND: s=", site.as_bytes(), b"\n"];
-    let mut line = [0; 64];
+    let (separator, tag) = match exception {
+        None => (b"".as_slice(), b"".as_slice()),
+        Some(value) => {
+            let Some(tag) = value.tag() else {
+                return;
+            };
+            (b" e=".as_slice(), tag.as_bytes())
+        }
+    };
+    let chunks: &[&[u8]] = &[
+        b"DOCKERLENS_NATIVE_PIDS_BIND: s=",
+        site.as_bytes(),
+        separator,
+        tag,
+        b"\n",
+    ];
+    let mut line = [0; 72];
     let mut length = 0usize;
     for chunk in chunks {
         let Some(next) = length.checked_add(chunk.len()) else {
@@ -3517,7 +3631,7 @@ fn pids_bind_records_have_only_closed_worker_sites_and_no_kind() {
     let mut output = Vec::new();
     write_bind_site(&mut output, site);
     assert_eq!(output.as_slice(), literal);
-    assert_eq!(ClosedBindSite(usize::MAX).site(), None);
+    assert_eq!(ClosedBindSite::Legacy(usize::MAX).site(), None);
 }
 
 #[test]
@@ -3577,6 +3691,200 @@ fn pids_outer_cgroup_bind_literals_keep_the_closed_phase_gate() {
             }
         }
     }
+}
+
+#[test]
+fn pids_host_bind_93_pairs_are_closed_typed_bounded_and_round_trip() {
+    let sites = [
+        "w_gh_read",
+        "w_gh_mount",
+        "w_gh_walk",
+        "w_gh_leaf",
+        "w_gh_verify",
+        "w_gh_root",
+        "w_gh_nodes",
+    ];
+    let tags = [
+        "unclassified",
+        "ENOENT",
+        "EACCES",
+        "EPERM",
+        "EMFILE",
+        "ENFILE",
+        "ENOMEM",
+        "ENOSPC",
+        "EIO",
+        "EINVAL",
+        "ESPIPE",
+        "EINTR",
+        "other_os",
+        "declared_unsupported_events",
+    ];
+    assert_eq!(HOST_BIND_SITES, sites);
+    assert_eq!(
+        HOST_BIND_EXCEPTIONS
+            .iter()
+            .map(|(tag, _)| *tag)
+            .collect::<Vec<_>>(),
+        tags
+    );
+    let mut count = 0;
+    let mut longest = 0;
+    for (index, site) in sites.into_iter().enumerate() {
+        for tag in tags {
+            let exception = ClosedBindException::parse(tag).unwrap();
+            let legal =
+                tag != "declared_unsupported_events" || ["w_gh_root", "w_gh_nodes"].contains(&site);
+            let typed = ClosedBindSite::host(index, exception);
+            assert_eq!(typed.is_some(), legal);
+            let line = format!("DOCKERLENS_NATIVE_PIDS_BIND: s={site} e={tag}\n");
+            let observed = constructor_observation_from_capture(line.as_bytes(), false);
+            if !legal {
+                assert_eq!(observed, None);
+                let mut output = Vec::new();
+                write_bind_site(
+                    &mut output,
+                    ClosedBindSite::Host {
+                        site: index,
+                        exception,
+                    },
+                );
+                assert!(output.is_empty());
+                continue;
+            }
+            count += 1;
+            longest = longest.max(line.len());
+            assert!(line.is_ascii() && line.len() <= 72);
+            let typed = typed.unwrap();
+            assert_eq!(observed, Some(CapturedConstructorObservation::Bind(typed)));
+            assert_eq!(typed.parts(), Some((site, Some(exception))));
+            assert_eq!(
+                constructor_observation_from_capture(format!("{line}{line}").as_bytes(), false),
+                observed
+            );
+            for (code, kind) in [
+                ("pids-eof", ConstructorIoKind::Eof),
+                ("pids-read", ConstructorIoKind::Reset),
+            ] {
+                let io = ConstructorIoFault {
+                    phase: ConstructorIoPhase::Bind,
+                    kind,
+                };
+                assert!(
+                    [("pids-eof", "eof"), ("pids-read", "reset")].contains(&(code, kind.name()))
+                );
+                let mut output = Vec::new();
+                if io.allows_bind_observation() {
+                    write_bind_site(&mut output, typed);
+                }
+                assert_eq!(output, line.as_bytes());
+            }
+            for phase in [ConstructorIoPhase::Ready, ConstructorIoPhase::Confirm] {
+                assert!(
+                    !ConstructorIoFault {
+                        phase,
+                        kind: ConstructorIoKind::Eof
+                    }
+                    .allows_bind_observation()
+                );
+            }
+        }
+    }
+    assert_eq!(count, 93);
+    assert_eq!(longest, 72);
+    assert_eq!(ClosedBindException::parse("PRIVATE_HOST_CANARY"), None);
+    assert_eq!(
+        ClosedBindSite::host(usize::MAX, ClosedBindException::Unclassified),
+        None
+    );
+}
+
+#[test]
+fn pids_host_bind_strict_fields_conflicts_and_partial_eof_are_unobserved() {
+    let valid = "DOCKERLENS_NATIVE_PIDS_BIND: s=w_gh_read e=ENOENT\n";
+    let start = "DOCKERLENS_NATIVE_PIDS_START: PRIVATE_HOST_CANARY\n";
+    for bytes in [
+        b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_gh_read\n".to_vec(),
+        b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_oc_host e=ENOENT\n".to_vec(),
+        b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_gh_read e=declared_unsupported_events\n".to_vec(),
+        b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_gh_verify e=declared_unsupported_events\n".to_vec(),
+        b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_gh_read e=PRIVATE_HOST_CANARY\n".to_vec(),
+        b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_private e=ENOENT\n".to_vec(),
+        b"DOCKERLENS_NATIVE_PIDS_BIND: e=ENOENT s=w_gh_read\n".to_vec(),
+        b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_gh_read  e=ENOENT\n".to_vec(),
+        b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_gh_read e=ENOENT e=ENOENT\n".to_vec(),
+        b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_gh_read e=ENOENT k=guard\n".to_vec(),
+        b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_gh_read e=ENOENT\r\n".to_vec(),
+        b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_gh_read e=ENOENT\0\n".to_vec(),
+        valid.trim_end().as_bytes().to_vec(),
+        [valid.as_bytes(), &[b'x'; 1024], b"\n"].concat(),
+        format!("{valid}DOCKERLENS_NATIVE_PIDS_BIND: s=w_gh_read e=EACCES\n").into_bytes(),
+        format!("{valid}DOCKERLENS_NATIVE_PIDS_BIND: s=w_oc_host\n").into_bytes(),
+        format!("{valid}{start}").into_bytes(),
+        format!("{start}{valid}").into_bytes(),
+    ] {
+        assert_eq!(constructor_observation_from_capture(&bytes, false), None);
+        assert_eq!(startup_fault_from_capture(&bytes, false), None);
+    }
+    assert_eq!(
+        constructor_observation_from_capture(valid.as_bytes(), true),
+        None
+    );
+}
+
+#[test]
+fn pids_host_bind_writer_invalid_indices_and_write_failure_do_not_retry() {
+    struct Checked<'a> {
+        calls: &'a std::cell::Cell<usize>,
+        short: bool,
+    }
+    impl std::io::Write for Checked<'_> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.calls.set(self.calls.get() + 1);
+            assert!(bytes.len() <= 72);
+            assert!(bytes.starts_with(b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_gh_"));
+            if self.short {
+                Ok(1)
+            } else {
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            }
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            panic!("host BIND must not flush")
+        }
+    }
+    let calls = std::cell::Cell::new(0);
+    let valid = ClosedBindSite::host(6, ClosedBindException::DeclaredUnsupportedEvents).unwrap();
+    for short in [false, true] {
+        write_bind_site(
+            Checked {
+                calls: &calls,
+                short,
+            },
+            valid,
+        );
+    }
+    assert_eq!(calls.get(), 2);
+    for invalid in [
+        ClosedBindSite::Legacy(usize::MAX),
+        ClosedBindSite::Host {
+            site: usize::MAX,
+            exception: ClosedBindException::Unclassified,
+        },
+        ClosedBindSite::Host {
+            site: 0,
+            exception: ClosedBindException::DeclaredUnsupportedEvents,
+        },
+    ] {
+        write_bind_site(
+            Checked {
+                calls: &calls,
+                short: false,
+            },
+            invalid,
+        );
+    }
+    assert_eq!(calls.get(), 2);
 }
 
 #[test]
@@ -3661,7 +3969,7 @@ fn pids_bind_writer_never_flushes_or_retries_failed_or_short_writes() {
             calls: &calls,
             short: false,
         },
-        ClosedBindSite(usize::MAX),
+        ClosedBindSite::Legacy(usize::MAX),
     );
     assert_eq!(calls.get(), 2);
 }
@@ -3807,6 +4115,8 @@ fn pids_startup_reader_preserves_original_tuple_and_every_read() {
         b"DOCKERLENS_NATIVE_PIDS_START: s=w_parent_uid k=guard".to_vec(),
         b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_endpoint\n".to_vec(),
         b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_endpoint".to_vec(),
+        b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_gh_nodes e=declared_unsupported_events\n".to_vec(),
+        b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_gh_read e=ENOENT".to_vec(),
         b"DOCKERLENS_NATIVE_PIDS_START: s=w_parent_uid k=guard\nDOCKERLENS_NATIVE_PIDS_BIND: s=w_endpoint\n".to_vec(),
         vec![b'x'; 8193],
     ] {

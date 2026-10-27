@@ -69,7 +69,7 @@ sys.stdout.buffer.write(sys.stdin.buffer.read())
             self.assertEqual(result.stderr, b"native outer command refused\n")
 
     def wrapper(self, output, status=0, listing=None, *, target="native_pids", test_name=TEST,
-                registry=None, registry_kind="file", capture_failure=None):
+                registry=None, registry_kind="file", capture_failure=None, terminate_output=True):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "scripts").mkdir()
@@ -120,7 +120,8 @@ with open(os.environ["TRACE"], "a") as stream:
 if "--list" in sys.argv:
     sys.stdout.buffer.write(Path(os.environ["LISTING_PATH"]).read_bytes() + b"\\n")
 else:
-    sys.stdout.buffer.write(Path(os.environ["OUTPUT_PATH"]).read_bytes() + b"\\n")
+    sys.stdout.buffer.write(Path(os.environ["OUTPUT_PATH"]).read_bytes()
+                            + (b"\\n" if os.environ["TERMINATE_OUTPUT"] == "1" else b""))
     sys.exit(int(os.environ["STATUS"]))
 ''')
             cargo.chmod(0o700)
@@ -129,7 +130,7 @@ else:
                 env={**os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"], "TRACE": str(root / "trace"),
                      "NATIVE_LIFECYCLE_CLEANUP_OWNER": "native_conformance_outer_v1", "LISTING_PATH": str(root / "listing"),
                      "OUTPUT_PATH": str(root / "output"), "STATUS": str(status), "TMPDIR": str(capture_parent),
-                     "CAPTURE_FAILURE": capture_failure or ""})
+                     "CAPTURE_FAILURE": capture_failure or "", "TERMINATE_OUTPUT": "1" if terminate_output else "0"})
             if capture_failure != "cleanup":
                 self.assertEqual(list(capture_parent.iterdir()), [], "private raw captures must be removed")
             else:
@@ -553,6 +554,105 @@ else:
                     self.assertNotIn(success.encode(), result.stdout + result.stderr)
                     self.assertNotIn(evidence.encode(), result.stdout + result.stderr)
                     self.assertIn((SETUP_REFUSAL + "unclassified\n").encode(), result.stderr)
+
+    def host_pairs(self):
+        sites = ("w_gh_read", "w_gh_mount", "w_gh_walk", "w_gh_leaf", "w_gh_verify", "w_gh_root", "w_gh_nodes")
+        tags = ("unclassified", "ENOENT", "EACCES", "EPERM", "EMFILE", "ENFILE", "ENOMEM", "ENOSPC",
+            "EIO", "EINVAL", "ESPIPE", "EINTR", "other_os", "declared_unsupported_events")
+        return [(site, tag) for site in sites for tag in tags
+            if tag != "declared_unsupported_events" or site in ("w_gh_root", "w_gh_nodes")]
+
+    def test_host_catalogues_are_independent_closed_literals_and_93_pairs(self):
+        import ast
+        sites = ("gh_read", "gh_mount", "gh_walk", "gh_leaf", "gh_verify", "gh_root", "gh_nodes")
+        tags = ("unclassified", "ENOENT", "EACCES", "EPERM", "EMFILE", "ENFILE", "ENOMEM", "ENOSPC",
+            "EIO", "EINVAL", "ESPIPE", "EINTR", "other_os", "declared_unsupported_events")
+        tree = ast.parse((ROOT / "scripts/native-pids-supervisor.py").read_text())
+        declarations = {node.targets[0].id: ast.literal_eval(node.value) for node in tree.body
+            if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id in ("HOST_BIND_SITES", "HOST_BIND_EXCEPTIONS")}
+        self.assertEqual(declarations, {"HOST_BIND_SITES": sites, "HOST_BIND_EXCEPTIONS": tags})
+        used = set()
+        for path, helper in (("scripts/native_pids_boundary.py", "_group_escape"),
+                             ("scripts/native_pids_locator.py", "_host_group_escape")):
+            for node in ast.walk(ast.parse((ROOT / path).read_text())):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == helper:
+                    used.add(node.args[1].value)
+        self.assertEqual(used, set(sites))
+        rust = (ROOT / "src/native_pids_tests.rs").read_text()
+        rust_sites = re.findall(r'"([a-z_]+)"', rust.split("const HOST_BIND_SITES: &[&str] = &[", 1)[1].split("];", 1)[0])
+        rust_tags = re.findall(r'"([A-Za-z_]+)"', rust.split("const HOST_BIND_EXCEPTIONS:", 1)[1].split("];", 1)[0])
+        wrapper = (ROOT / "scripts/run-exact-native-test.sh").read_text()
+        wrapper_sites = re.search(r'host_bind_sites = set\(b"([a-z_ ]+)"\.split\(\)\)', wrapper)[1].split()
+        wrapper_tags = re.search(r'host_bind_exceptions = set\(b"([A-Za-z_ ]+)"\.split\(\)\)', wrapper)[1].split()
+        self.assertEqual(rust_sites, ["w_" + site for site in sites]); self.assertEqual(wrapper_sites, rust_sites)
+        self.assertEqual(rust_tags, list(tags)); self.assertEqual(wrapper_tags, list(tags))
+        pairs = self.host_pairs()
+        self.assertEqual(len(set(pairs)), 93)
+        self.assertEqual(max(len(BIND_OBSERVATION + f" s={site} e={tag}\n") for site, tag in pairs), 72)
+
+    def test_every_host_pair_projects_only_with_both_exact_eligible_pairs(self):
+        for code, kind in (("pids-eof", "eof"), ("pids-read", "reset")):
+            general, detail = SETUP_REFUSAL + code, IO_DETAIL + f" phase=bind kind={kind}"
+            for site, tag in self.host_pairs():
+                bind = BIND_OBSERVATION + f" s={site} e={tag}"
+                result, _ = self.wrapper(bind + "\n" + detail + "\n" + general + "\n" + bind + "\n", status=101)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(b"(exit 101)", result.stderr)
+                self.assertEqual(result.stderr.count((bind + "\n").encode()), 1, (site, tag, result.stderr))
+                self.assertEqual(result.stderr.count((general + "\n").encode()), 1)
+                self.assertEqual(result.stderr.count((detail + "\n").encode()), 1)
+
+    def test_host_strict_fields_partial_eof_conflicts_and_family_taint(self):
+        prefix = SETUP_REFUSAL + "pids-eof\n" + IO_DETAIL + " phase=bind kind=eof\n"
+        valid = BIND_OBSERVATION + " s=w_gh_read e=ENOENT\n"
+        records = [
+            BIND_OBSERVATION + " s=w_gh_read\n",
+            BIND_OBSERVATION + " s=w_oc_host e=ENOENT\n",
+            BIND_OBSERVATION + " s=w_gh_read e=declared_unsupported_events\n",
+            BIND_OBSERVATION + " s=w_gh_verify e=declared_unsupported_events\n",
+            BIND_OBSERVATION + " s=w_gh_read e=PRIVATE_HOST_CANARY\n",
+            BIND_OBSERVATION + " s=w_unknown e=ENOENT\n",
+            BIND_OBSERVATION + " e=ENOENT s=w_gh_read\n",
+            BIND_OBSERVATION + " s=w_gh_read  e=ENOENT\n",
+            BIND_OBSERVATION + " s=w_gh_read e=ENOENT e=ENOENT\n",
+            BIND_OBSERVATION + " s=w_gh_read e=ENOENT k=guard\n",
+            valid.rstrip("\n"), valid.rstrip("\n") + "\r\n", valid.rstrip("\n") + "\0\n",
+            valid + BIND_OBSERVATION + " s=w_gh_read e=EACCES\n",
+            valid + BIND_OBSERVATION + " s=w_oc_host\n",
+            valid + STARTUP_REFUSAL + " PRIVATE_HOST_CANARY\n",
+            STARTUP_REFUSAL + " PRIVATE_HOST_CANARY\n" + valid,
+            BIND_OBSERVATION + "x" * 70000,
+            "x" * 1048577 + "\n" + valid,
+        ]
+        for record in records:
+            result, _ = self.wrapper(prefix + record, status=101, terminate_output=False)
+            self.assertNotIn(BIND_OBSERVATION.encode(), result.stdout + result.stderr)
+            self.assertNotIn(STARTUP_REFUSAL.encode(), result.stdout + result.stderr)
+            self.assertNotIn(b"PRIVATE_HOST_CANARY", result.stdout + result.stderr)
+        for companions in (SETUP_REFUSAL + "pids-read\n" + IO_DETAIL + " phase=bind kind=eof\n",
+                SETUP_REFUSAL + "pids-eof\n" + IO_DETAIL + " phase=bind kind=reset\n",
+                SETUP_REFUSAL + "pids-eof\n" + IO_DETAIL + " phase=ready kind=eof\n",
+                SETUP_REFUSAL + "pids-eof\n" + IO_DETAIL + " phase=confirm kind=eof\n",
+                SETUP_REFUSAL + "pids-eof\n" + IO_DETAIL + " phase=bind kind=other\n"):
+            result, _ = self.wrapper(companions + valid, status=101)
+            self.assertNotIn(BIND_OBSERVATION.encode(), result.stdout + result.stderr)
+        for target, name in (("native_hostname", TEST), ("native_pids", TEST + "_foreign")):
+            result, _ = self.wrapper(prefix + valid, status=101, target=target, test_name=name)
+            self.assertNotIn(BIND_OBSERVATION.encode(), result.stdout + result.stderr)
+
+    def test_new_valid_and_malformed_host_prefixes_always_taint_positive_results(self):
+        for record in (BIND_OBSERVATION + " s=w_gh_nodes e=declared_unsupported_events\n",
+                       BIND_OBSERVATION + " s=w_gh_read e=PRIVATE_HOST_CANARY\n",
+                       BIND_OBSERVATION + " s=w_gh_read\n"):
+            for status, positive in ((0, ""), (0, "test result: ok. 1 passed; 0 failed\n"),
+                    (101, "DOCKERLENS_NATIVE_CHECK: pids_evidence\n")):
+                result, _ = self.wrapper(record + positive, status=status)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn(BIND_OBSERVATION.encode(), result.stdout + result.stderr)
+                self.assertNotIn(b"PRIVATE_HOST_CANARY", result.stdout + result.stderr)
+                self.assertNotIn(b"pids_evidence", result.stdout + result.stderr)
+                self.assertIn((SETUP_REFUSAL + "unclassified\n").encode(), result.stderr)
 
     def test_bind_catalogue_is_exact_and_separate_from_startup(self):
         import ast

@@ -6,6 +6,7 @@ Only the executable entry point constructs LinuxSource; source injection is for 
 """
 
 import ctypes
+import errno
 import fcntl
 import json
 import os
@@ -15,6 +16,7 @@ import signal
 import stat
 import sys
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 
@@ -37,6 +39,46 @@ class Refusal(Exception):
 def require(condition):
     if not condition:
         raise Refusal()
+
+
+_HOST_OSERROR_TYPES = (OSError, BlockingIOError, ChildProcessError, ConnectionError, BrokenPipeError,
+    ConnectionAbortedError, ConnectionRefusedError, ConnectionResetError, FileExistsError,
+    FileNotFoundError, InterruptedError, IsADirectoryError, NotADirectoryError, PermissionError,
+    ProcessLookupError, TimeoutError)
+_HOST_ERRNOS = ((errno.ENOENT, "ENOENT"), (errno.EACCES, "EACCES"), (errno.EPERM, "EPERM"),
+    (errno.EMFILE, "EMFILE"), (errno.ENFILE, "ENFILE"), (errno.ENOMEM, "ENOMEM"),
+    (errno.ENOSPC, "ENOSPC"), (errno.EIO, "EIO"), (errno.EINVAL, "EINVAL"),
+    (errno.ESPIPE, "ESPIPE"), (errno.EINTR, "EINTR"))
+
+
+def _group_exception_tag(error):
+    """Only exact reviewed builtins expose their base errno descriptor."""
+    if not any(type(error) is allowed for allowed in _HOST_OSERROR_TYPES):
+        return "unclassified"
+    number = OSError.errno.__get__(error, OSError)
+    if type(number) is not int:
+        return "unclassified"
+    for value, tag in _HOST_ERRNOS:
+        if number == value:
+            return tag
+    return "other_os"
+
+
+@contextmanager
+def _group_escape(observer, site):
+    try:
+        yield
+    except BaseException as error:
+        if observer is not None:
+            try:
+                tag = _group_exception_tag(error)
+            except BaseException:
+                tag = "unclassified"
+            try:
+                observer(site, tag)
+            except BaseException:
+                pass
+        raise
 
 
 # Optional test-only startup observer, installed only by the fixed supervisor.
@@ -399,44 +441,49 @@ class LinuxSource:
                 for fd in reopened:
                     self.close_fd(fd)
 
-    def group(self, proc):
+    def group(self, proc, observer=None):
         # Both files are in the reader's actual view. Never combine guest mountinfo
         # coordinates with host paths or guess runtime/container ID directories.
-        body = self.read(self.proc, "self/mountinfo", 65536)
-        mounts = []
-        for line in body.decode("ascii").splitlines():
-            fields = line.split()
-            require("-" in fields)
-            split = fields.index("-")
-            require(split >= 6 and len(fields) >= split + 4)
-            if fields[split + 1] == "cgroup2":
-                root = components(unescape_mount(fields[3]))
-                mount = components(unescape_mount(fields[4]))
-                if proc.membership[:len(root)] == root:
-                    mounts.append((root, mount, line))
-        # Multiple bind mounts could alias the same hierarchy; ambiguity is refusal.
-        require(len(mounts) == 1)
-        root, mount, mount_record = mounts[0]
-        fd = self.open("/", directory=True)
-        for name in mount:
-            child = self.open(name, fd, directory=True)
-            self.close_fd(fd)
-            fd = child
-        require(fs_magic(fd) == CGROUP_MAGIC)
-        self.check_mount(fd, mount_record)
-        directories = [fd]
-        names = proc.membership[len(root):]
-        require(len(names) <= 12)
-        for name in names:
-            child = self.open(name, directories[-1], directory=True)
-            require(fs_magic(child) == CGROUP_MAGIC)
-            directories.append(child)
-        held = tuple(self.open(name, directories[-1]) for name in FILES)
-        for file_fd in held:
-            require(fs_magic(file_fd) == CGROUP_MAGIC and stat.S_ISREG(os.fstat(file_fd).st_mode))
-            require(os.fstat(file_fd).st_dev == os.fstat(directories[-1]).st_dev)
-        group = Group(tuple(directories), names, tuple(identity(d) for d in directories), held, proc.membership, mount_record)
-        self.check_group(group)
+        with _group_escape(observer, "gh_read"):
+            body = self.read(self.proc, "self/mountinfo", 65536)
+        with _group_escape(observer, "gh_mount"):
+            mounts = []
+            for line in body.decode("ascii").splitlines():
+                fields = line.split()
+                require("-" in fields)
+                split = fields.index("-")
+                require(split >= 6 and len(fields) >= split + 4)
+                if fields[split + 1] == "cgroup2":
+                    root = components(unescape_mount(fields[3]))
+                    mount = components(unescape_mount(fields[4]))
+                    if proc.membership[:len(root)] == root:
+                        mounts.append((root, mount, line))
+            # Multiple bind mounts could alias the same hierarchy; ambiguity is refusal.
+            require(len(mounts) == 1)
+            root, mount, mount_record = mounts[0]
+        with _group_escape(observer, "gh_walk"):
+            fd = self.open("/", directory=True)
+            for name in mount:
+                child = self.open(name, fd, directory=True)
+                self.close_fd(fd)
+                fd = child
+            require(fs_magic(fd) == CGROUP_MAGIC)
+            self.check_mount(fd, mount_record)
+            directories = [fd]
+            names = proc.membership[len(root):]
+            require(len(names) <= 12)
+            for name in names:
+                child = self.open(name, directories[-1], directory=True)
+                require(fs_magic(child) == CGROUP_MAGIC)
+                directories.append(child)
+        with _group_escape(observer, "gh_leaf"):
+            held = tuple(self.open(name, directories[-1]) for name in FILES)
+            for file_fd in held:
+                require(fs_magic(file_fd) == CGROUP_MAGIC and stat.S_ISREG(os.fstat(file_fd).st_mode))
+                require(os.fstat(file_fd).st_dev == os.fstat(directories[-1]).st_dev)
+        with _group_escape(observer, "gh_verify"):
+            group = Group(tuple(directories), names, tuple(identity(d) for d in directories), held, proc.membership, mount_record)
+            self.check_group(group)
         return group
 
     def check_group(self, group):

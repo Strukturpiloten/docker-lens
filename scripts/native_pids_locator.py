@@ -149,6 +149,32 @@ class LocatorRefusal(boundary.Refusal):
         super().__init__(category)
 
 
+def _host_group_exception_tag(error):
+    if type(error) is LocatorRefusal:
+        category = object.__getattribute__(error, "category")
+        if type(category) is str and category == "UnsupportedEventSemantics":
+            return "declared_unsupported_events"
+        return "unclassified"
+    return boundary._group_exception_tag(error)
+
+
+@contextmanager
+def _host_group_escape(observer, site):
+    try:
+        yield
+    except BaseException as error:
+        if observer is not None:
+            try:
+                tag = _host_group_exception_tag(error)
+            except BaseException:
+                tag = "unclassified"
+            try:
+                observer(site, tag)
+            except BaseException:
+                pass
+        raise
+
+
 def status_vectors(body, pid):
     status = boundary.process_status(body, pid, leader=True)
     rows = [line.split()[1:] for line in body.splitlines() if line.startswith(b"NStgid:")]
@@ -294,45 +320,50 @@ class LocatorSource(boundary.LinuxSource):
                 "sched_policy": policy, "nproc_soft": limit(rows[0][0]), "nproc_hard": limit(rows[0][1]),
                 "kernel_release": identity[0], "kernel_version": identity[1], "kernel_machine": identity[2]}
 
-    def group(self, process):
-        group = super().group(process)
-        fields = group.mount_record.split()
-        separator = fields.index("-")
-        flags = set(fields[5].split(",")) | set(fields[separator + 3].split(","))
-        if "pids_localevents" in flags:
-            raise LocatorRefusal("UnsupportedEventSemantics")
-        if not hasattr(self, "controller_cache"):
-            self.controller_cache, self.controller_groups, self.root_records = {}, {}, {}
-        root_key = group.identities[0]
-        if root_key not in self.root_records:
-            directory = group.directories[0]
-            has_maximum = self.root_file_present(directory, "pids.max")
-            available = self.open("cgroup.controllers", directory)
-            require(boundary.fs_magic(available) == boundary.CGROUP_MAGIC)
-            words = self.read_fd(available, 512).split()
-            require(all(re.fullmatch(rb"[a-z_]{1,32}", word) is not None for word in words))
-            self.root_records[root_key] = {"directory": directory, "available": available,
-                "available_pids": b"pids" in words, "available_words": tuple(words), "pids_max_present": has_maximum,
-                "cgroup_type_present": self.root_file_present(directory, "cgroup.type"),
-                "cgroup_events_present": self.root_file_present(directory, "cgroup.events"),
-                "mount_root_is_slash": fields[3] == "/", "identity": (*root_key, self.fd_mount_id(directory))}
-        root = self.root_records[root_key]
-        nodes = []
-        start = 0 if root["pids_max_present"] else 1
-        for index in range(start, len(group.directories)):
-            directory, key = group.directories[index], group.identities[index]
-            if key not in self.controller_cache:
-                held = list(group.files[:3]) if index == len(group.directories) - 1 else [
-                    self.open(name, directory) for name in ("pids.max", "pids.current", "pids.events")]
-                try:
-                    held.append(self.open("pids.events.local", directory))
-                except FileNotFoundError:
-                    raise LocatorRefusal("UnsupportedEventSemantics") from None
-                require(all(boundary.fs_magic(fd) == boundary.CGROUP_MAGIC
-                            and stat.S_ISREG(os.fstat(fd).st_mode) for fd in held))
-                self.controller_cache[key] = (directory, (*key, self.fd_mount_id(directory)), tuple(held))
-            nodes.append(self.controller_cache[key])
-        self.controller_groups[group.identities[-1]] = (root, tuple(reversed(nodes)))
+    def group(self, process, observer=None):
+        if observer is None:
+            group = super().group(process)
+        else:
+            group = super().group(process, observer=observer)
+        with _host_group_escape(observer, "gh_root"):
+            fields = group.mount_record.split()
+            separator = fields.index("-")
+            flags = set(fields[5].split(",")) | set(fields[separator + 3].split(","))
+            if "pids_localevents" in flags:
+                raise LocatorRefusal("UnsupportedEventSemantics")
+            if not hasattr(self, "controller_cache"):
+                self.controller_cache, self.controller_groups, self.root_records = {}, {}, {}
+            root_key = group.identities[0]
+            if root_key not in self.root_records:
+                directory = group.directories[0]
+                has_maximum = self.root_file_present(directory, "pids.max")
+                available = self.open("cgroup.controllers", directory)
+                require(boundary.fs_magic(available) == boundary.CGROUP_MAGIC)
+                words = self.read_fd(available, 512).split()
+                require(all(re.fullmatch(rb"[a-z_]{1,32}", word) is not None for word in words))
+                self.root_records[root_key] = {"directory": directory, "available": available,
+                    "available_pids": b"pids" in words, "available_words": tuple(words), "pids_max_present": has_maximum,
+                    "cgroup_type_present": self.root_file_present(directory, "cgroup.type"),
+                    "cgroup_events_present": self.root_file_present(directory, "cgroup.events"),
+                    "mount_root_is_slash": fields[3] == "/", "identity": (*root_key, self.fd_mount_id(directory))}
+            root = self.root_records[root_key]
+        with _host_group_escape(observer, "gh_nodes"):
+            nodes = []
+            start = 0 if root["pids_max_present"] else 1
+            for index in range(start, len(group.directories)):
+                directory, key = group.directories[index], group.identities[index]
+                if key not in self.controller_cache:
+                    held = list(group.files[:3]) if index == len(group.directories) - 1 else [
+                        self.open(name, directory) for name in ("pids.max", "pids.current", "pids.events")]
+                    try:
+                        held.append(self.open("pids.events.local", directory))
+                    except FileNotFoundError:
+                        raise LocatorRefusal("UnsupportedEventSemantics") from None
+                    require(all(boundary.fs_magic(fd) == boundary.CGROUP_MAGIC
+                                and stat.S_ISREG(os.fstat(fd).st_mode) for fd in held))
+                    self.controller_cache[key] = (directory, (*key, self.fd_mount_id(directory)), tuple(held))
+                nodes.append(self.controller_cache[key])
+            self.controller_groups[group.identities[-1]] = (root, tuple(reversed(nodes)))
         return group
 
     def root_file_present(self, directory, name):
@@ -490,7 +521,10 @@ class LocatorSource(boundary.LinuxSource):
             require(boundary.identity(process.namespaces[2]) != boundary.identity(self.reader_cgroup_namespace))
             self.check_process(process)
         with _outer_escape(observer, "oc_host"):
-            current = self.group(process)
+            if observer is None:
+                current = self.group(process)
+            else:
+                current = self.group(process, observer=observer)
         with _outer_escape(observer, "oc_guest"):
             guest, record = self.guest_cgroup_mount(process)
         with _outer_escape(observer, "oc_select"):

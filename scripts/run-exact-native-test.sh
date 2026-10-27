@@ -219,9 +219,11 @@ try:
     family_conflict = (any(line.startswith(startup_prefix) for line in lines)
                        and any(line.startswith(bind_prefix) for line in lines))
     bind_sites = set(b"w_capture_adopt w_session_init w_request_read w_handler w_request_schema w_context_schema w_labels w_external_debit w_outer_args w_outer_process w_outer_vector w_outer_pidns w_outer_cgroup w_endpoint w_daemon_context w_daemon_bind w_reserve_api w_outer_recheck w_pending_reply w_oc_pre w_oc_host w_oc_guest w_oc_select w_oc_max w_oc_recheck".split())
+    host_bind_sites = set(b"w_gh_read w_gh_mount w_gh_walk w_gh_leaf w_gh_verify w_gh_root w_gh_nodes".split())
+    host_bind_exceptions = set(b"unclassified ENOENT EACCES EPERM EMFILE ENFILE ENOMEM ENOSPC EIO EINVAL ESPIPE EINTR other_os declared_unsupported_events".split())
     startup_sites = set(b"s_imports s_args s_fd0 s_socket_wrap s_root_uid s_root_deadline s_gate_pipe s_block_signals s_source_fork s_par_gate_close s_par_pgroup s_par_pidfd s_par_sockclose s_par_gate_send s_par_gate_done s_mon_handlers s_mon_unmask s_mon_wait s_peer_shape s_peer_cred s_peer_pidfd s_peer_cloexec s_peer_live w_kid_gate_close w_kid_pgroup w_kid_pdeath w_kid_parent w_kid_gate_read w_kid_gate_done w_kid_unmask w_source_peer_eq w_source_budget w_source_init w_locator_init w_source_api w_source_libc w_source_getdents w_source_proc w_source_procfs w_source_readfs w_source_read w_self_stat w_self_status w_self_pidns w_self_userns w_self_cgroupns w_self_timens w_parent_live w_parent_stat w_parent_process w_parent_uid w_parent_cgroup w_parent_time w_parent_link w_anc_load w_anc_uid w_anc_ppid w_anc_sudo w_anc_exe w_anc_recheck w_anc_end w_proc_pidfd w_proc_dir w_proc_fs w_proc_start w_proc_cgroup w_proc_root w_proc_ns w_proc_status w_proc_identity w_proc_check w_proc_timens w_proc_live w_proc_reopen w_proc_fdinfo w_stat_delimiter w_stat_state w_stat_start w_status_fields w_status_pid w_status_tgid w_status_uid w_status_nspid w_status_nstgid w_cgroup_record w_channel_fds w_chan_nonblock w_chan_cloexec w_boot_wait w_boot_recv w_boot_ancillary w_boot_accumulate w_boot_marker w_boot_count w_boot_stat w_boot_dir w_boot_mode w_boot_uid w_boot_cloexec w_ready_budget w_ready_wait w_ready_send w_budget_deadline w_budget_reads w_budget_bytes w_budget_fds w_budget_opens w_budget_output w_peer_shape w_peer_cred w_peer_pidfd w_peer_cloexec w_peer_live".split())
     startup_kinds = set(b"guard no_api import bad_arg denied missing unsupported resource io cancelled other".split())
-    for line in lines:
+    for line_index, line in enumerate(lines):
         if line.startswith(b"DOCKERLENS_NATIVE_PIDS_SETUP_REFUSAL:"):
             code = line[len(prefix):] if line.startswith(prefix) else None
             if len(line) > 64 or code not in allowed:
@@ -248,8 +250,12 @@ try:
             elif startup != line:
                 startup_tainted = True
         elif line.startswith(bind_prefix):
-            site = line[len(bind_prefix) + 3:] if line.startswith(bind_prefix + b" s=") else None
-            if len(line) > 63 or site not in bind_sites:
+            match = re.fullmatch(rb"DOCKERLENS_NATIVE_PIDS_BIND: s=(w_[a-z_]+)(?: e=([A-Za-z_]+))?", line)
+            legacy = (match is not None and match[1] in bind_sites and match[2] is None and len(line) <= 63)
+            host = (match is not None and match[1] in host_bind_sites and match[2] in host_bind_exceptions
+                    and (match[2] != b"declared_unsupported_events" or match[1] in (b"w_gh_root", b"w_gh_nodes"))
+                    and len(line) <= 71 and line_index < len(lines) - 1)
+            if not (legacy or host):
                 bind_tainted = True
             elif bind is None:
                 bind = line

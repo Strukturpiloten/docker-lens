@@ -2,20 +2,30 @@
 
 ## Current PIDs27 source gate
 
-A separate bounded BIND observation records only a named operation escaping by
+A separate bounded BIND observation records a named operation escaping by
 exception after bootstrap returns and through the complete pending reply. Its25
-fixed worker sites have no kind/guard/errno/cause field; opaque internal cleanup
-can produce the same call-escape outcome as internal work failure. START remains
-stopped after READY. Six internal outer-cgroup operation boundaries cover
-preconditions/namespaces, host ancestry, guest mount, exact selection, maximum
-validation and final rechecks. The generic outer-cgroup site remains the fallback
-for an unobserved escape; these sites never identify an internal cause. Only
-propagating whole-block exceptions invoke the explicit optional observer;
-handled inner errors that return successfully produce no record or positive taint.
-The vocabulary is fixed at25 sites with at most47 ASCII bytes before LF
-(48 including LF); no new values, source reads or resource charges are added.
-Binding activation does not cover the gap before bootstrap
-returns and does not prove handler entry from Rust's bind phase alone.
+legacy worker sites retain their original records without an exception field.
+Seven host-group sites refine the initial mountinfo read, mount selection,
+ancestry walk, leaf files, group verification, root metadata and included nodes.
+Only these new sites require a closed `e` tag for the direct escaping exception:
+11 reviewed errno names from exact builtin OSError types, `other_os`,
+`unclassified`, or the local declared unsupported-events category at root/nodes.
+The tag never identifies a root cause or reads a hidden translated exception.
+Custom subclasses remain unclassified without exception-property reads; handled
+optional-file errors followed by success emit nothing and do not taint success.
+Opaque internal cleanup can supersede work and supplies only its own direct tag.
+
+All32 sites share the original first-attempt slot. The legacy outer-cgroup and
+host-ancestry sites remain fallbacks when no refined record is observed. The
+single optional callback propagates explicitly only along configured outer-group
+acquisition; default-None calls keep their old one-argument delegation and do no
+classification. No global observer routing or START reactivation is added.
+Legacy records stay at most47 ASCII bytes before LF (48 including LF), with the
+original63-byte parser guard. New host records are at most71 bytes before LF
+(72 including LF); only their emission/writer capacity and parser guard change.
+There is no extra source read, syscall, resource charge, deadline, wait or retry.
+START remains stopped after READY. Binding activation does not cover the gap
+before bootstrap returns and does not prove handler entry from Rust phase alone.
 
 BIND reuses the sole1024-byte EOF-validating stderr reader, typed single slot,
 original retirement and one nonblocking snapshot. START/BIND conflicts suppress
