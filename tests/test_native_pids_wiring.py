@@ -556,15 +556,15 @@ else:
                     self.assertIn((SETUP_REFUSAL + "unclassified\n").encode(), result.stderr)
 
     def host_pairs(self):
-        sites = ("w_gh_read", "w_gh_mount", "w_gh_walk", "w_gh_leaf", "w_gh_verify", "w_gh_root", "w_gh_nodes")
+        sites = ("w_gh_read", "w_gh_mount", "w_gh_walk", "w_gh_leaf", "w_gh_verify", "w_gh_root", "w_gh_nodes", "w_gv_make", "w_gv_call", "w_gv_time", "w_gv_record", "w_gv_bind", "w_gv_ids", "w_gv_dirs", "w_gv_files", "w_gv_type", "w_gv_cache")
         tags = ("unclassified", "ENOENT", "EACCES", "EPERM", "EMFILE", "ENFILE", "ENOMEM", "ENOSPC",
             "EIO", "EINVAL", "ESPIPE", "EINTR", "other_os", "declared_unsupported_events")
         return [(site, tag) for site in sites for tag in tags
             if tag != "declared_unsupported_events" or site in ("w_gh_root", "w_gh_nodes")]
 
-    def test_host_catalogues_are_independent_closed_literals_and_93_pairs(self):
+    def test_host_catalogues_are_independent_closed_literals_and_223_pairs(self):
         import ast
-        sites = ("gh_read", "gh_mount", "gh_walk", "gh_leaf", "gh_verify", "gh_root", "gh_nodes")
+        sites = ("gh_read", "gh_mount", "gh_walk", "gh_leaf", "gh_verify", "gh_root", "gh_nodes", "gv_make", "gv_call", "gv_time", "gv_record", "gv_bind", "gv_ids", "gv_dirs", "gv_files", "gv_type", "gv_cache")
         tags = ("unclassified", "ENOENT", "EACCES", "EPERM", "EMFILE", "ENFILE", "ENOMEM", "ENOSPC",
             "EIO", "EINVAL", "ESPIPE", "EINTR", "other_os", "declared_unsupported_events")
         tree = ast.parse((ROOT / "scripts/native-pids-supervisor.py").read_text())
@@ -588,7 +588,7 @@ else:
         self.assertEqual(rust_sites, ["w_" + site for site in sites]); self.assertEqual(wrapper_sites, rust_sites)
         self.assertEqual(rust_tags, list(tags)); self.assertEqual(wrapper_tags, list(tags))
         pairs = self.host_pairs()
-        self.assertEqual(len(set(pairs)), 93)
+        self.assertEqual(len(set(pairs)), 223)
         self.assertEqual(max(len(BIND_OBSERVATION + f" s={site} e={tag}\n") for site, tag in pairs), 72)
 
     def test_every_host_pair_projects_only_with_both_exact_eligible_pairs(self):
@@ -642,9 +642,10 @@ else:
             self.assertNotIn(BIND_OBSERVATION.encode(), result.stdout + result.stderr)
 
     def test_new_valid_and_malformed_host_prefixes_always_taint_positive_results(self):
-        for record in (BIND_OBSERVATION + " s=w_gh_nodes e=declared_unsupported_events\n",
-                       BIND_OBSERVATION + " s=w_gh_read e=PRIVATE_HOST_CANARY\n",
-                       BIND_OBSERVATION + " s=w_gh_read\n"):
+        records = [BIND_OBSERVATION + f" s={site} e={tag}\n" for site, tag in self.host_pairs()]
+        records.extend((BIND_OBSERVATION + " s=w_gh_read e=PRIVATE_HOST_CANARY\n",
+                        BIND_OBSERVATION + " s=w_gh_read\n"))
+        for record in records:
             for status, positive in ((0, ""), (0, "test result: ok. 1 passed; 0 failed\n"),
                     (101, "DOCKERLENS_NATIVE_CHECK: pids_evidence\n")):
                 result, _ = self.wrapper(record + positive, status=status)

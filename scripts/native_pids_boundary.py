@@ -482,33 +482,45 @@ class LinuxSource:
                 require(fs_magic(file_fd) == CGROUP_MAGIC and stat.S_ISREG(os.fstat(file_fd).st_mode))
                 require(os.fstat(file_fd).st_dev == os.fstat(directories[-1]).st_dev)
         with _group_escape(observer, "gh_verify"):
-            group = Group(tuple(directories), names, tuple(identity(d) for d in directories), held, proc.membership, mount_record)
-            self.check_group(group)
+            with _group_escape(observer, "gv_make"):
+                group = Group(tuple(directories), names, tuple(identity(d) for d in directories), held, proc.membership, mount_record)
+            with _group_escape(observer, "gv_call"):
+                if observer is None:
+                    self.check_group(group)
+                else:
+                    self.check_group(group, observer=observer)
         return group
 
-    def check_group(self, group):
-        self.budget.check()
-        require(group.mount_record in self.read(self.proc, "self/mountinfo", 65536).decode("ascii").splitlines())
-        self.check_mount(group.directories[0], group.mount_record)
-        require(tuple(identity(d) for d in group.directories) == group.identities)
-        # Reopen only beneath held parents to detect removal/replacement of names.
-        for parent, name, expected in zip(group.directories, group.names, group.identities[1:]):
-            fd = self.open(name, parent, directory=True)
+    def check_group(self, group, observer=None):
+        with _group_escape(observer, "gv_time"):
+            self.budget.check()
+        with _group_escape(observer, "gv_record"):
+            require(group.mount_record in self.read(self.proc, "self/mountinfo", 65536).decode("ascii").splitlines())
+        with _group_escape(observer, "gv_bind"):
+            self.check_mount(group.directories[0], group.mount_record)
+        with _group_escape(observer, "gv_ids"):
+            require(tuple(identity(d) for d in group.directories) == group.identities)
+        with _group_escape(observer, "gv_dirs"):
+            # Reopen only beneath held parents to detect removal/replacement of names.
+            for parent, name, expected in zip(group.directories, group.names, group.identities[1:]):
+                fd = self.open(name, parent, directory=True)
+                try:
+                    require(identity(fd) == expected and fs_magic(fd) == CGROUP_MAGIC)
+                finally:
+                    self.close_fd(fd)
+        with _group_escape(observer, "gv_files"):
+            for name, held in zip(FILES, group.files):
+                fd = self.open(name, group.directories[-1])
+                try:
+                    require(identity(fd) == identity(held) and fs_magic(fd) == CGROUP_MAGIC)
+                finally:
+                    self.close_fd(fd)
+        with _group_escape(observer, "gv_type"):
+            fd = self.open("cgroup.type", group.directories[-1])
             try:
-                require(identity(fd) == expected and fs_magic(fd) == CGROUP_MAGIC)
+                require(fs_magic(fd) == CGROUP_MAGIC and self.read_fd(fd, 32) == b"domain\n")
             finally:
                 self.close_fd(fd)
-        for name, held in zip(FILES, group.files):
-            fd = self.open(name, group.directories[-1])
-            try:
-                require(identity(fd) == identity(held) and fs_magic(fd) == CGROUP_MAGIC)
-            finally:
-                self.close_fd(fd)
-        fd = self.open("cgroup.type", group.directories[-1])
-        try:
-            require(fs_magic(fd) == CGROUP_MAGIC and self.read_fd(fd, 32) == b"domain\n")
-        finally:
-            self.close_fd(fd)
 
     def check_mount(self, fd, record):
         fields = record.split()

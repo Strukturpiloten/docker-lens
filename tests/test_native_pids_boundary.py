@@ -748,6 +748,33 @@ class HostGroupObservationTests(unittest.TestCase):
         self.assertIs(caught.exception, cleanup)
         self.assertEqual(records, [("gh_verify", "ENOENT")])
 
+    def test_every_verifier_scope_preserves_hostile_errors_and_observer_failures(self):
+        reads = []
+        class Hostile(OSError):
+            def __getattribute__(self, name):
+                reads.append(name)
+                raise AssertionError("PRIVATE_ATTRIBUTE")
+        for site in ("gv_make", "gv_call", "gv_time", "gv_record", "gv_bind", "gv_ids", "gv_dirs", "gv_files", "gv_type", "gv_cache"):
+            for classifier_fails in (False, True):
+                for callback_fails in (False, True):
+                    failure, records = Hostile(), []
+                    def observer(*pair):
+                        records.append(pair)
+                        if callback_fails:
+                            raise KeyboardInterrupt("PRIVATE_CALLBACK")
+                    classifier = {"side_effect": KeyboardInterrupt("PRIVATE_CLASSIFIER")} if classifier_fails else {"wraps": b._group_exception_tag}
+                    with patch.object(b, "_group_exception_tag", **classifier) as classify:
+                        try:
+                            with b._group_escape(observer, site):
+                                raise failure
+                        except Hostile as caught:
+                            self.assertIs(caught, failure)
+                        else:
+                            self.fail("source error must escape")
+                    self.assertEqual(records, [(site, "unclassified")])
+                    self.assertEqual(classify.call_count, 1)
+        self.assertEqual(reads, [])
+
     def test_group_partition_matches_independent_frozen_source_on_this_interpreter(self):
         raw = (Path(__file__).parent / "fixtures/native_pids_host_group_baseline_methods.json").read_bytes()
         self.assertEqual(hashlib.sha256(raw).hexdigest(),
@@ -772,6 +799,21 @@ class HostGroupObservationTests(unittest.TestCase):
             self.assertEqual(ast.dump(call.func), "Name(id='_group_escape', ctx=Load())")
             self.assertEqual(ast.dump(call.args[0]), "Name(id='observer', ctx=Load())")
         self.assertIsInstance(method.body[-1], ast.Return)
+        verify = blocks[-1]
+        self.assertEqual([n.items[0].context_expr.args[1].value for n in verify.body], ["gv_make", "gv_call"])
+        make, dispatch = verify.body
+        self.assertEqual([len(make.body), len(dispatch.body)], [1, 1])
+        branch = dispatch.body[0]
+        self.assertEqual(ast.dump(branch.test),
+            "Compare(left=Name(id='observer', ctx=Load()), ops=[Is()], comparators=[Constant(value=None)])")
+        self.assertEqual((len(branch.body), len(branch.orelse)), (1, 1))
+        observed = branch.orelse[0]
+        self.assertEqual(len(observed.value.keywords), 1)
+        keyword = observed.value.keywords[0]
+        self.assertEqual((keyword.arg, ast.dump(keyword.value)), ("observer", "Name(id='observer', ctx=Load())"))
+        observed.value.keywords.clear()
+        self.assertEqual(ast.dump(branch.body[0]), ast.dump(observed))
+        verify.body = make.body + branch.body
         method.body = [child for n in blocks for child in n.body] + [method.body[-1]]
         method.args.args.pop(); method.args.defaults.clear()
         expected = ast.parse("class Original:\n" + original["method_source"]).body[0].body[0]

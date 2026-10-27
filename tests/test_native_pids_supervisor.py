@@ -1793,14 +1793,14 @@ class StartupDiagnosticTests(unittest.TestCase):
 
 
 class HostBindObservationTests(unittest.TestCase):
-    SITES = ("gh_read", "gh_mount", "gh_walk", "gh_leaf", "gh_verify", "gh_root", "gh_nodes")
+    SITES = ("gh_read", "gh_mount", "gh_walk", "gh_leaf", "gh_verify", "gh_root", "gh_nodes", "gv_make", "gv_call", "gv_time", "gv_record", "gv_bind", "gv_ids", "gv_dirs", "gv_files", "gv_type", "gv_cache")
     TAGS = ("unclassified", "ENOENT", "EACCES", "EPERM", "EMFILE", "ENFILE", "ENOMEM", "ENOSPC",
         "EIO", "EINVAL", "ESPIPE", "EINTR", "other_os", "declared_unsupported_events")
 
     def test_every_legal_pair_is_one_closed_attempt_and_legacy_is_unchanged(self):
         self.assertEqual(s.HOST_BIND_SITES, self.SITES)
         self.assertEqual(s.HOST_BIND_EXCEPTIONS, self.TAGS)
-        self.assertEqual(len(s.BIND_SITES) + len(self.SITES), 32)
+        self.assertEqual(len(s.BIND_SITES) + len(self.SITES), 42)
         records = []
         for site in self.SITES:
             for tag in self.TAGS:
@@ -1819,7 +1819,7 @@ class HostBindObservationTests(unittest.TestCase):
                 self.assertTrue(line.isascii())
                 self.assertLessEqual(len(line), 72)
                 records.append(line)
-        self.assertEqual(len(set(records)), 93)
+        self.assertEqual(len(set(records)), 223)
         self.assertEqual(max(map(len, records)), 72)
         for site in BindObservationTests.SITES:
             recorder = s.BindRecorder(); recorder.begin()
@@ -1846,6 +1846,29 @@ class HostBindObservationTests(unittest.TestCase):
                 recorder.escape("oc_host")
             self.assertEqual(output.call_count, 1)
             self.assertEqual(recorder.value, ("gh_root", "ENOENT"))
+
+    def test_actual_verifier_stage_failed_writer_consumes_only_original_attempt(self):
+        from contextlib import ExitStack
+        from test_native_pids_locator import LocatorTests
+        for site in self.SITES[7:]:
+            def run(tree, session, channel, request, _calls):
+                failure = PermissionError(13, "PRIVATE_SOURCE")
+                recorder = s.BindRecorder(); recorder.begin()
+                with ExitStack() as stack:
+                    LocatorTests().install_host_failure(tree, site, failure, stack)
+                    stack.enter_context(patch.object(s, "_BIND", recorder))
+                    output = stack.enter_context(patch.object(s.os, "write", side_effect=KeyboardInterrupt("PRIVATE_WRITE")))
+                    with self.assertRaises(PermissionError) as caught:
+                        session.handle(request, channel)
+                    self.assertIs(caught.exception, failure)
+                    self.assertTrue(session.failed)
+                    self.assertTrue(recorder.seen)
+                    self.assertEqual(recorder.value, (site, "EACCES"))
+                    self.assertEqual(output.call_count, 1)
+                    self.assertEqual(output.call_args.args[1],
+                        f"DOCKERLENS_NATIVE_PIDS_BIND: s=w_{site} e=EACCES\n".encode())
+            with self.subTest(site=site):
+                RootFactoryTests().run_factory(run)
 
     def test_all_actual_host_stages_beat_legacy_fallback_and_preserve_failure(self):
         from contextlib import ExitStack

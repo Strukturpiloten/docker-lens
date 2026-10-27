@@ -385,12 +385,16 @@ class LocatorSource(boundary.LinuxSource):
             finally:
                 self.close_fd(fd)
 
-    def check_group(self, group):
-        super().check_group(group)
-        cached = getattr(self, "controller_groups", {}).get(group.identities[-1])
-        if cached is not None:
-            for node in cached[1]:
-                self.check_controller(*node)
+    def check_group(self, group, observer=None):
+        if observer is None:
+            super().check_group(group)
+        else:
+            super().check_group(group, observer=observer)
+        with _host_group_escape(observer, "gv_cache"):
+            cached = getattr(self, "controller_groups", {}).get(group.identities[-1])
+            if cached is not None:
+                for node in cached[1]:
+                    self.check_controller(*node)
 
     def attribution(self, group):
         """Observed held prefix; an unqualified mount root is never invented."""

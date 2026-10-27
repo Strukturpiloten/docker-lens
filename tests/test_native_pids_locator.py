@@ -343,13 +343,55 @@ class LocatorTests(unittest.TestCase):
                     raise failure
                 return original(name, *args, **kwargs)
             stack.enter_context(patch.object(source, "open", side_effect=open_file))
+        elif site == "gh_verify":
+            original = b._group_escape
+            def scope(observer, name):
+                if name == "gv_make":
+                    raise failure
+                return original(observer, name)
+            stack.enter_context(patch.object(b, "_group_escape", side_effect=scope))
+        elif site == "gv_make":
+            stack.enter_context(patch.object(b, "Group", side_effect=failure))
+        elif site == "gv_call":
+            stack.enter_context(patch.object(source, "check_group", side_effect=failure))
+        elif site.startswith("gv_"):
+            from contextlib import ExitStack
+            original = source.check_group
+            def verify(group, *args, **kwargs):
+                with ExitStack() as local:
+                    if site == "gv_time":
+                        local.enter_context(patch.object(source.budget, "check", side_effect=failure))
+                    elif site == "gv_record":
+                        local.enter_context(patch.object(source, "read", side_effect=failure))
+                    elif site == "gv_bind":
+                        local.enter_context(patch.object(source, "check_mount", side_effect=failure))
+                    elif site == "gv_ids":
+                        local.enter_context(patch.object(b, "identity", side_effect=failure))
+                    elif site in ("gv_dirs", "gv_files", "gv_type"):
+                        open_original = source.open
+                        def open_file(name, *a, **kw):
+                            if ((site == "gv_dirs" and kw.get("directory") is True)
+                                    or (site == "gv_files" and name == "pids.max")
+                                    or (site == "gv_type" and name == "cgroup.type")):
+                                raise failure
+                            return open_original(name, *a, **kw)
+                        local.enter_context(patch.object(source, "open", side_effect=open_file))
+                    elif site == "gv_cache":
+                        class Cache:
+                            def get(self, _key):
+                                raise failure
+                        local.enter_context(patch.object(source, "controller_groups", Cache(), create=True))
+                    else:
+                        raise AssertionError("unreviewed injection site")
+                    return original(group, *args, **kwargs)
+            stack.enter_context(patch.object(source, "check_group", side_effect=verify))
         else:
-            method = "check_group" if site == "gh_verify" else "root_file_present"
-            stack.enter_context(patch.object(source, method, side_effect=failure))
+            self.assertEqual(site, "gh_root")
+            stack.enter_context(patch.object(source, "root_file_present", side_effect=failure))
 
     def test_each_host_group_block_preserves_exact_direct_error_and_pair(self):
         from contextlib import ExitStack
-        for site in ("gh_read", "gh_mount", "gh_walk", "gh_leaf", "gh_verify", "gh_root", "gh_nodes"):
+        for site in ("gh_read", "gh_mount", "gh_walk", "gh_leaf", "gh_verify", "gh_root", "gh_nodes", "gv_make", "gv_call", "gv_time", "gv_record", "gv_bind", "gv_ids", "gv_dirs", "gv_files", "gv_type", "gv_cache"):
             def run(tree):
                 process = tree.source.process(100, 1000)
                 failure = PermissionError(13, "PRIVATE_HOST_CANARY")
@@ -359,9 +401,206 @@ class LocatorTests(unittest.TestCase):
                     with self.assertRaises(PermissionError) as caught:
                         tree.source.group(process, observer=lambda *pair: records.append(pair))
                 self.assertIs(caught.exception, failure)
-                self.assertEqual(records, [(site, "EACCES")])
+                expected = [site]
+                if site.startswith("gv_"):
+                    if site not in ("gv_make", "gv_call"):
+                        expected.append("gv_call")
+                    expected.append("gh_verify")
+                self.assertEqual(records, [(name, "EACCES") for name in expected])
             with self.subTest(site=site):
                 self.run_tree(True, run)
+
+    def test_verifier_partitions_match_separate_frozen_candidate_methods(self):
+        raw = (Path(__file__).parent / "fixtures/native_pids_host_verify_baseline_methods.json").read_bytes()
+        self.assertEqual(hashlib.sha256(raw).hexdigest(),
+            "3f45885fde9e43639ece54f3b28f8eb6cbef401efc2422f663d08a2405d976ff")
+        fixture = json.loads(raw)
+        self.assertEqual(fixture["source_commit"], "ba22366407660447a7845d1dad5ff810de1587e0")
+        for module, owner, helper, sites in (
+                (b, "LinuxSource", "_group_escape", ("gv_time", "gv_record", "gv_bind", "gv_ids", "gv_dirs", "gv_files", "gv_type")),
+                (l, "LocatorSource", "_host_group_escape", ("gv_cache",))):
+            original = fixture["methods"][owner + ".check_group"]
+            self.assertEqual(original["source_path"], "scripts/" + Path(module.__file__).name)
+            self.assertEqual((original["class_name"], original["method_name"]), (owner, "check_group"))
+            self.assertEqual(hashlib.sha256(original["method_source"].encode()).hexdigest(), original["method_source_utf8_sha256"])
+            cls = next(n for n in ast.parse(Path(module.__file__).read_text()).body if isinstance(n, ast.ClassDef) and n.name == owner)
+            method = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "check_group")
+            self.assertEqual([arg.arg for arg in method.args.args], ["self", "group", "observer"])
+            self.assertEqual([ast.dump(n) for n in method.args.defaults], ["Constant(value=None)"])
+            if owner == "LocatorSource":
+                first = [self.collapse_host_delegation(method.body[0])]
+                blocks = method.body[1:]
+            else:
+                first, blocks = [], method.body
+            self.assertEqual(len(blocks), len(sites))
+            for block, site in zip(blocks, sites):
+                self.assertIsInstance(block, ast.With)
+                self.assertEqual(len(block.items), 1)
+                self.assertIsNone(block.items[0].optional_vars)
+                call = block.items[0].context_expr
+                self.assertEqual(ast.dump(call.func), "Name(id='" + helper + "', ctx=Load())")
+                self.assertEqual([ast.dump(n) for n in call.args], ["Name(id='observer', ctx=Load())", "Constant(value='" + site + "')"])
+                self.assertEqual(call.keywords, [])
+            method.body = first + [child for block in blocks for child in block.body]
+            method.args.args.pop(); method.args.defaults.clear()
+            expected = ast.parse("class Original:\n" + original["method_source"]).body[0].body[0]
+            self.assertEqual(ast.dump(method, include_attributes=False), ast.dump(expected, include_attributes=False))
+
+    def test_default_none_verifiers_preserve_both_old_one_argument_seams(self):
+        def run(tree):
+            process = tree.source.process(100, 1000)
+            calls = []
+            def old_group_check(group):
+                calls.append(group)
+            tree.source.check_group = old_group_check
+            group = tree.source.group(process)
+            self.assertEqual(calls, [group])
+            def old_base(_self, candidate):
+                calls.append(candidate)
+            with patch.object(b.LinuxSource, "check_group", old_base), \
+                    patch.object(b, "_group_exception_tag", side_effect=AssertionError("no classify")), \
+                    patch.object(l, "_host_group_exception_tag", side_effect=AssertionError("no classify")):
+                l.LocatorSource.check_group(tree.source, group)
+                l.LocatorSource.check_group(tree.source, group, observer=None)
+            self.assertEqual(calls, [group, group, group])
+        self.run_tree(True, run)
+
+    def test_verifier_loop_cleanup_reports_only_direct_escape_including_supersession(self):
+        for site in ("gv_dirs", "gv_files", "gv_type"):
+            for work_fails in (False, True):
+                for observed in (False, True):
+                    def run(tree):
+                        process = tree.source.process(100, 1000)
+                        group = tree.source.group(process)
+                        work, cleanup = PermissionError(13, "PRIVATE_WORK"), FileNotFoundError(2, "PRIVATE_CLOSE")
+                        selected, records = set(), []
+                        original_open, original_close = tree.source.open, tree.source.close_fd
+                        original_identity, original_read = b.identity, tree.source.read_fd
+                        def open_file(name, *args, **kwargs):
+                            fd = original_open(name, *args, **kwargs)
+                            if ((site == "gv_dirs" and kwargs.get("directory") is True)
+                                    or (site == "gv_files" and name == "pids.max")
+                                    or (site == "gv_type" and name == "cgroup.type")):
+                                selected.add(fd)
+                            return fd
+                        def close(fd):
+                            original_close(fd)
+                            if fd in selected:
+                                raise cleanup
+                        def identity(fd):
+                            if work_fails and fd in selected:
+                                raise work
+                            return original_identity(fd)
+                        def read(fd, maximum):
+                            if work_fails and fd in selected:
+                                raise work
+                            return original_read(fd, maximum)
+                        with patch.object(tree.source, "open", side_effect=open_file), \
+                                patch.object(tree.source, "close_fd", side_effect=close), \
+                                patch.object(b, "identity", side_effect=identity), \
+                                patch.object(tree.source, "read_fd", side_effect=read), \
+                                patch.object(b, "_group_exception_tag", wraps=b._group_exception_tag) as classify:
+                            before = len(tree.source.owned), tree.source.budget.fds
+                            with self.assertRaises(FileNotFoundError) as caught:
+                                tree.source.check_group(group, observer=(lambda *pair: records.append(pair)) if observed else None)
+                            self.assertIs(caught.exception, cleanup)
+                            self.assertEqual((len(tree.source.owned), tree.source.budget.fds), before)
+                            self.assertEqual(records, [(site, "ENOENT")] if observed else [])
+                            self.assertEqual(classify.call_count, int(observed))
+                            if observed:
+                                self.assertIs(classify.call_args.args[0], cleanup)
+                    with self.subTest(site=site, work_fails=work_fails, observed=observed):
+                        self.run_tree(True, run)
+
+    def test_each_verifier_actual_stage_preserves_hostile_error_and_observer_failure(self):
+        from contextlib import ExitStack
+        for site in ("gv_make", "gv_call", "gv_time", "gv_record", "gv_bind", "gv_ids", "gv_dirs", "gv_files", "gv_type", "gv_cache"):
+            for classifier_fails in (False, True):
+                def run(tree):
+                    process = tree.source.process(100, 1000)
+                    reads, records = [], []
+                    class Hostile(OSError):
+                        def __getattribute__(self, name):
+                            # Test-only ExitStack reads this while restoring injected patches.
+                            if name == "__traceback__":
+                                return BaseException.__getattribute__(self, name)
+                            reads.append(name)
+                            raise AssertionError("PRIVATE_ATTRIBUTE")
+                    failure = Hostile()
+                    def observer(*pair):
+                        records.append(pair)
+                        raise KeyboardInterrupt("PRIVATE_CALLBACK")
+                    with ExitStack() as stack:
+                        self.install_host_failure(tree, site, failure, stack)
+                        if classifier_fails:
+                            for module, name in ((b, "_group_exception_tag"), (l, "_host_group_exception_tag")):
+                                stack.enter_context(patch.object(module, name, side_effect=KeyboardInterrupt("PRIVATE_CLASSIFIER")))
+                        try:
+                            tree.source.group(process, observer=observer)
+                        except BaseException as caught:
+                            self.assertIs(caught, failure)
+                        else:
+                            self.fail("source error must escape")
+                    expected = [site]
+                    if site not in ("gv_make", "gv_call"):
+                        expected.append("gv_call")
+                    expected.append("gh_verify")
+                    self.assertEqual(records, [(name, "unclassified") for name in expected])
+                    self.assertEqual(reads, [])
+                with self.subTest(site=site, classifier_fails=classifier_fails):
+                    self.run_tree(True, run)
+
+    def test_constructor_identity_tuple_failure_is_gv_make(self):
+        def run(tree):
+            process = tree.source.process(100, 1000)
+            failure, records = PermissionError(13, "PRIVATE_IDENTITY"), []
+            with patch.object(b, "identity", side_effect=failure):
+                with self.assertRaises(PermissionError) as caught:
+                    tree.source.group(process, observer=lambda *pair: records.append(pair))
+            self.assertIs(caught.exception, failure)
+            self.assertEqual(records, [("gv_make", "EACCES"), ("gh_verify", "EACCES")])
+        self.run_tree(True, run)
+
+    def test_warm_controller_loop_failure_is_gv_cache(self):
+        def run(tree):
+            process = tree.source.process(100, 1000)
+            group = tree.source.group(process)
+            self.assertTrue(tree.source.controller_groups[group.identities[-1]][1])
+            failure, records = PermissionError(13, "PRIVATE_CONTROLLER"), []
+            with patch.object(tree.source, "check_controller", side_effect=failure) as check:
+                with self.assertRaises(PermissionError) as caught:
+                    tree.source.check_group(group, observer=lambda *pair: records.append(pair))
+            self.assertIs(caught.exception, failure)
+            self.assertEqual(check.call_count, 1)
+            self.assertEqual(records, [("gv_cache", "EACCES")])
+        self.run_tree(True, run)
+
+    def test_expired_verifier_deadline_is_equivalent_without_source_work(self):
+        results = []
+        for observed in (False, True):
+            def run(tree):
+                process = tree.source.process(100, 1000)
+                group = tree.source.group(process)
+                source, records, clocks = tree.source, [], []
+                def expired():
+                    clocks.append("clock")
+                    return source.budget.work_ns
+                source.budget.clock = expired
+                def snapshot():
+                    return (tuple(getattr(source.budget, name) for name in
+                        ("reads", "bytes", "fds", "opens", "output", "frames", "peak_fds", "deadline_ns", "work_ns")),
+                        len(source.owned), len(source.controller_cache), len(source.controller_groups), len(source.root_records))
+                before = snapshot()
+                with self.assertRaises(b.Refusal), \
+                        patch.object(source, "read", side_effect=AssertionError("expired before source I/O")), \
+                        patch.object(source, "open", side_effect=AssertionError("expired before source I/O")):
+                    source.check_group(group, observer=(lambda *pair: records.append(pair)) if observed else None)
+                self.assertEqual(snapshot(), before)
+                self.assertEqual(clocks, ["clock"])
+                self.assertEqual(records, [("gv_time", "unclassified")] if observed else [])
+                results.append((before, snapshot(), clocks))
+            self.run_tree(True, run)
+        self.assertEqual(results[0], results[1])
 
     def test_declared_events_are_local_exact_and_never_hidden_errno(self):
         for site in ("gh_root", "gh_nodes"):
@@ -485,6 +724,11 @@ class LocatorTests(unittest.TestCase):
                             trace.append(_name)
                             return _original(*args, **kwargs)
                         setattr(tree.source, name, call)
+                    budget_check = tree.source.budget.check
+                    def check():
+                        trace.append("budget.check")
+                        return budget_check()
+                    tree.source.budget.check = check
                     records = []
                     with patch.object(b, "_group_exception_tag", side_effect=AssertionError("success must not classify")) as base, \
                             patch.object(l, "_host_group_exception_tag", side_effect=AssertionError("success must not classify")) as local:

@@ -141,7 +141,7 @@ BIND_SITES = (
     "daemon_bind", "reserve_api", "outer_recheck", "pending_reply",
     "oc_pre", "oc_host", "oc_guest", "oc_select", "oc_max", "oc_recheck",
 )
-HOST_BIND_SITES = ("gh_read", "gh_mount", "gh_walk", "gh_leaf", "gh_verify", "gh_root", "gh_nodes")
+HOST_BIND_SITES = ("gh_read", "gh_mount", "gh_walk", "gh_leaf", "gh_verify", "gh_root", "gh_nodes", "gv_make", "gv_call", "gv_time", "gv_record", "gv_bind", "gv_ids", "gv_dirs", "gv_files", "gv_type", "gv_cache")
 HOST_BIND_EXCEPTIONS = ("unclassified", "ENOENT", "EACCES", "EPERM", "EMFILE", "ENFILE", "ENOMEM",
     "ENOSPC", "EIO", "EINVAL", "ESPIPE", "EINTR", "other_os", "declared_unsupported_events")
 

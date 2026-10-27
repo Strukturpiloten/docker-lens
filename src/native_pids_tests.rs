@@ -254,6 +254,16 @@ const HOST_BIND_SITES: &[&str] = &[
     "w_gh_verify",
     "w_gh_root",
     "w_gh_nodes",
+    "w_gv_make",
+    "w_gv_call",
+    "w_gv_time",
+    "w_gv_record",
+    "w_gv_bind",
+    "w_gv_ids",
+    "w_gv_dirs",
+    "w_gv_files",
+    "w_gv_type",
+    "w_gv_cache",
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3694,7 +3704,7 @@ fn pids_outer_cgroup_bind_literals_keep_the_closed_phase_gate() {
 }
 
 #[test]
-fn pids_host_bind_93_pairs_are_closed_typed_bounded_and_round_trip() {
+fn pids_host_bind_223_pairs_are_closed_typed_bounded_and_round_trip() {
     let sites = [
         "w_gh_read",
         "w_gh_mount",
@@ -3703,6 +3713,16 @@ fn pids_host_bind_93_pairs_are_closed_typed_bounded_and_round_trip() {
         "w_gh_verify",
         "w_gh_root",
         "w_gh_nodes",
+        "w_gv_make",
+        "w_gv_call",
+        "w_gv_time",
+        "w_gv_record",
+        "w_gv_bind",
+        "w_gv_ids",
+        "w_gv_dirs",
+        "w_gv_files",
+        "w_gv_type",
+        "w_gv_cache",
     ];
     let tags = [
         "unclassified",
@@ -3758,6 +3778,22 @@ fn pids_host_bind_93_pairs_are_closed_typed_bounded_and_round_trip() {
             let typed = typed.unwrap();
             assert_eq!(observed, Some(CapturedConstructorObservation::Bind(typed)));
             assert_eq!(typed.parts(), Some((site, Some(exception))));
+            for malformed in [
+                format!("DOCKERLENS_NATIVE_PIDS_BIND: s={site}\n"),
+                format!("DOCKERLENS_NATIVE_PIDS_BIND: s={site} e={tag} k=guard\n"),
+                format!("DOCKERLENS_NATIVE_PIDS_BIND: e={tag} s={site}\n"),
+                line.trim_end().to_owned(),
+                format!("{line}DOCKERLENS_NATIVE_PIDS_START: PRIVATE_HOST_CANARY\n"),
+            ] {
+                assert_eq!(
+                    constructor_observation_from_capture(malformed.as_bytes(), false),
+                    None
+                );
+            }
+            assert_eq!(
+                constructor_observation_from_capture(line.as_bytes(), true),
+                None
+            );
             assert_eq!(
                 constructor_observation_from_capture(format!("{line}{line}").as_bytes(), false),
                 observed
@@ -3790,7 +3826,7 @@ fn pids_host_bind_93_pairs_are_closed_typed_bounded_and_round_trip() {
             }
         }
     }
-    assert_eq!(count, 93);
+    assert_eq!(count, 223);
     assert_eq!(longest, 72);
     assert_eq!(ClosedBindException::parse("PRIVATE_HOST_CANARY"), None);
     assert_eq!(
@@ -3842,7 +3878,9 @@ fn pids_host_bind_writer_invalid_indices_and_write_failure_do_not_retry() {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
             self.calls.set(self.calls.get() + 1);
             assert!(bytes.len() <= 72);
-            assert!(bytes.starts_with(b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_gh_"));
+            assert!(HOST_BIND_SITES.iter().any(|site| {
+                bytes.starts_with(format!("DOCKERLENS_NATIVE_PIDS_BIND: s={site} e=").as_bytes())
+            }));
             if self.short {
                 Ok(1)
             } else {
@@ -3854,17 +3892,24 @@ fn pids_host_bind_writer_invalid_indices_and_write_failure_do_not_retry() {
         }
     }
     let calls = std::cell::Cell::new(0);
-    let valid = ClosedBindSite::host(6, ClosedBindException::DeclaredUnsupportedEvents).unwrap();
-    for short in [false, true] {
-        write_bind_site(
-            Checked {
-                calls: &calls,
-                short,
-            },
-            valid,
-        );
+    for index in 0..HOST_BIND_SITES.len() {
+        for (tag, _) in HOST_BIND_EXCEPTIONS {
+            let Some(valid) = ClosedBindSite::host(index, ClosedBindException::parse(tag).unwrap())
+            else {
+                continue;
+            };
+            for short in [false, true] {
+                write_bind_site(
+                    Checked {
+                        calls: &calls,
+                        short,
+                    },
+                    valid,
+                );
+            }
+        }
     }
-    assert_eq!(calls.get(), 2);
+    assert_eq!(calls.get(), 446);
     for invalid in [
         ClosedBindSite::Legacy(usize::MAX),
         ClosedBindSite::Host {
@@ -3884,7 +3929,7 @@ fn pids_host_bind_writer_invalid_indices_and_write_failure_do_not_retry() {
             invalid,
         );
     }
-    assert_eq!(calls.get(), 2);
+    assert_eq!(calls.get(), 446);
 }
 
 #[test]

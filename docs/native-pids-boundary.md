@@ -27,6 +27,35 @@ qualification remains pending. Root acknowledgments alone authenticate no
 container or completed experiment.
 The legacy pipe Session below does not acquire that authority by being wrapped.
 
+## Host verification call-escape observations
+
+The fixed supervisor retains `gh_verify` as the host-group verification fallback.
+Its nested closed sites distinguish construction (`gv_make`), dynamic verifier
+entry (`gv_call`), the initial deadline check (`gv_time`), mount-record read,
+decode and membership (`gv_record`), mount binding (`gv_bind`), held directory
+identities (`gv_ids`), the complete directory and file reopening loops
+(`gv_dirs`, `gv_files`), the complete cgroup.type operation (`gv_type`), and
+locator cache lookup/controller verification (`gv_cache`). Each operation includes
+its original cleanup: only the exception escaping after cleanup is classified.
+These names identify operations, not root causes, failed operands, or native
+acceptance.
+
+Only the observed outer-group route forwards the optional observer; default
+verifier calls retain their original one-argument form. The unchanged recorder
+consumes the first attempt before validation or writing, so outer fallback scopes
+cannot retry a failed record. The closed host catalogue has 223 legal site/tag
+pairs; `declared_unsupported_events` remains restricted to `gh_root`/`gh_nodes`.
+The 72-byte record allowance, sole 1,024-byte EOF-validating stderr capture,
+retirement, snapshot, START/BIND conflict suppression, and same-stream failed
+bind EOF/reset companion requirements remain unchanged. No budget, guard,
+source charge, deadline, native evidence requirement, or cleanup action changes.
+
+The separate immutable verifier baseline fixture records both original
+`check_group` methods from `ba22366407660447a7845d1dad5ff810de1587e0`, with
+per-method SHA-256 and source locations verified against that commit. Regression
+controls remove only the reviewed diagnostic scopes and observer plumbing before
+comparing their ASTs on the current interpreter. Historical fixtures remain intact.
+
 ## Measured window and authority
 
 The intended owner starts the collector after daemon startup and before releasing
