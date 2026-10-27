@@ -559,7 +559,8 @@ else:
         expected = ("capture_adopt", "session_init", "request_read", "handler", "request_schema",
             "context_schema", "labels", "external_debit", "outer_args", "outer_process", "outer_vector",
             "outer_pidns", "outer_cgroup", "endpoint", "daemon_context", "daemon_bind", "reserve_api",
-            "outer_recheck", "pending_reply")
+            "outer_recheck", "pending_reply",
+        "oc_pre", "oc_host", "oc_guest", "oc_select", "oc_max", "oc_recheck")
         tree = ast.parse((ROOT / "scripts/native-pids-supervisor.py").read_text())
         declared = next(ast.literal_eval(node.value) for node in tree.body if isinstance(node, ast.Assign)
             and any(isinstance(target, ast.Name) and target.id == "BIND_SITES" for target in node.targets))
@@ -569,7 +570,12 @@ else:
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "scope":
                 if isinstance(node.func.value, ast.Name) and node.func.value.id == "_BIND":
                     used.add(node.args[0].value)
+        locator = ast.parse((ROOT / "scripts/native_pids_locator.py").read_text())
+        for node in ast.walk(locator):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_outer_escape":
+                used.add(node.args[1].value)
         self.assertEqual(used, set(expected))
+        self.assertEqual(len(expected), 25)
         sites = ["w_" + name for name in expected]
         rust = (ROOT / "src/native_pids_tests.rs").read_text()
         rust_sites = re.findall(r'"([a-z_]+)"', rust.split("const BIND_SITES: &[&str] = &[", 1)[1].split("];", 1)[0])
@@ -582,6 +588,7 @@ else:
             self.assertTrue(line.isascii())
             self.assertLessEqual(len(line), 63)
             self.assertNotIn(" k=", line)
+        self.assertEqual(max(len(BIND_OBSERVATION + " s=" + site) for site in sites), 47)
         # Pure setup/normal stop only: bootstrap must return BEFORE activation,
         # and pending response must return BEFORE stop. No shared phase channel.
         source = (ROOT / "scripts/native-pids-supervisor.py").read_text()
@@ -596,7 +603,8 @@ else:
         sites = ("capture_adopt", "session_init", "request_read", "handler", "request_schema",
             "context_schema", "labels", "external_debit", "outer_args", "outer_process", "outer_vector",
             "outer_pidns", "outer_cgroup", "endpoint", "daemon_context", "daemon_bind", "reserve_api",
-            "outer_recheck", "pending_reply")
+            "outer_recheck", "pending_reply",
+        "oc_pre", "oc_host", "oc_guest", "oc_select", "oc_max", "oc_recheck")
         for code, kind in (("pids-eof", "eof"), ("pids-read", "reset")):
             general, detail = SETUP_REFUSAL + code, IO_DETAIL + f" phase=bind kind={kind}"
             for site in sites:

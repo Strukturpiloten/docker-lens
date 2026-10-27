@@ -17,6 +17,7 @@ import socket
 import stat
 import struct
 import sys
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 _boundary_path = Path(__file__).with_name("native_pids_boundary.py").resolve()
@@ -40,6 +41,20 @@ VERSION_CAP = 4096
 FIXED_FD_RESERVE = 16
 ORDER = ("cli16", "cli64", "cli_unlimited", "rendered16", "rendered64", "rendered_unlimited")
 require = boundary.require
+
+
+@contextmanager
+def _outer_escape(observer, site):
+    """Observe only an escaping whole operation; never change its exception."""
+    try:
+        yield
+    except BaseException:
+        if observer is not None:
+            try:
+                observer(site)
+            except BaseException:
+                pass
+        raise
 
 
 class RuntimeBudget(boundary.Budget):
@@ -463,40 +478,46 @@ class LocatorSource(boundary.LinuxSource):
             for fd in reversed(intermediates):
                 self.close_fd(fd)
 
-    def configured_outer_group(self, process):
+    def configured_outer_group(self, process, observer=None):
         """Bind the configured512 root by actual private guest mount identity.
 
         PID1 may already have moved to a descendant init.scope. The chosen node
         is the ONE actual guest-root cgroup inode on its held ancestor chain,
         never the nearest ancestor whose number happens to equal512.
         """
-        require(not hasattr(self, "configured_outer_binding"))
-        require(boundary.identity(process.namespaces[2]) != boundary.identity(self.reader_cgroup_namespace))
-        self.check_process(process)
-        current = self.group(process)
-        guest, record = self.guest_cgroup_mount(process)
-        matches = [index for index, node in enumerate(current.identities) if node == boundary.identity(guest)]
-        if len(matches) != 1 or matches[0] == 0:
-            raise LocatorRefusal("ConfiguredOuterUnavailable")
-        index = matches[0]
-        if index == len(current.directories) - 1:
-            selected = current
-        else:
-            directory = current.directories[index]
-            files = tuple(self.open(name, directory) for name in boundary.FILES)
-            require(all(boundary.fs_magic(fd) == boundary.CGROUP_MAGIC and stat.S_ISREG(os.fstat(fd).st_mode)
-                        for fd in files))
-            root_depth = len(current.membership) - len(current.names)
-            selected = boundary.Group(current.directories[:index + 1], current.names[:index],
-                current.identities[:index + 1], files, current.membership[:root_depth + index], current.mount_record)
-            root, nodes = self.controller_groups[current.identities[-1]]
-            self.controller_groups[selected.identities[-1]] = (root, tuple(
-                node for node in nodes if tuple(node[1][:2]) in selected.identities))
-        require(self.values(selected)[0] == 512)
-        self.check_group(selected)
-        self.configured_outer_binding = (process, selected, guest, boundary.identity(guest), record)
-        self.check_configured_outer(process, selected)
-        self.check_process(process)
+        with _outer_escape(observer, "oc_pre"):
+            require(not hasattr(self, "configured_outer_binding"))
+            require(boundary.identity(process.namespaces[2]) != boundary.identity(self.reader_cgroup_namespace))
+            self.check_process(process)
+        with _outer_escape(observer, "oc_host"):
+            current = self.group(process)
+        with _outer_escape(observer, "oc_guest"):
+            guest, record = self.guest_cgroup_mount(process)
+        with _outer_escape(observer, "oc_select"):
+            matches = [index for index, node in enumerate(current.identities) if node == boundary.identity(guest)]
+            if len(matches) != 1 or matches[0] == 0:
+                raise LocatorRefusal("ConfiguredOuterUnavailable")
+            index = matches[0]
+            if index == len(current.directories) - 1:
+                selected = current
+            else:
+                directory = current.directories[index]
+                files = tuple(self.open(name, directory) for name in boundary.FILES)
+                require(all(boundary.fs_magic(fd) == boundary.CGROUP_MAGIC and stat.S_ISREG(os.fstat(fd).st_mode)
+                            for fd in files))
+                root_depth = len(current.membership) - len(current.names)
+                selected = boundary.Group(current.directories[:index + 1], current.names[:index],
+                    current.identities[:index + 1], files, current.membership[:root_depth + index], current.mount_record)
+                root, nodes = self.controller_groups[current.identities[-1]]
+                self.controller_groups[selected.identities[-1]] = (root, tuple(
+                    node for node in nodes if tuple(node[1][:2]) in selected.identities))
+        with _outer_escape(observer, "oc_max"):
+            require(self.values(selected)[0] == 512)
+        with _outer_escape(observer, "oc_recheck"):
+            self.check_group(selected)
+            self.configured_outer_binding = (process, selected, guest, boundary.identity(guest), record)
+            self.check_configured_outer(process, selected)
+            self.check_process(process)
         return selected
 
     def check_configured_outer(self, process, group):

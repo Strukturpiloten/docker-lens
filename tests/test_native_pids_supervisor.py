@@ -600,6 +600,38 @@ class RootFactoryTests(unittest.TestCase):
             self.assertEqual(session.handle({"version": 1, "sequence": 3, "op": "LocateBatch", "slots": tree.ids}, channel)["status"], "ok")
         self.run_factory(run)
 
+    def test_outer_observer_preserves_actual_source_fd_budget_and_operation_trace(self):
+        results = []
+        for observed in (False, True):
+            def run(tree, _session, _channel, _request, _calls):
+                tree.make_group(tree.cg / "owned/init.scope", "max", [100])
+                (tree.cg / "owned/cgroup.procs").write_text("110\n")
+                (tree.cg / "owned/cgroup.threads").write_text("110\n")
+                (tree.proc / "100/cgroup").write_text("0::/owned/init.scope\n")
+                process = tree.source.process(100, 1000)
+                trace = []
+                for name in ("check_process", "group", "guest_cgroup_mount", "open", "read", "read_fd", "close_fd",
+                             "values", "check_group", "check_configured_outer"):
+                    original = getattr(tree.source, name)
+                    def operation(*args, _name=name, _original=original, **kwargs):
+                        trace.append(_name)
+                        return _original(*args, **kwargs)
+                    setattr(tree.source, name, operation)
+                recorder = s.BindRecorder()
+                recorder.begin()
+                with patch.object(s.os, "write") as output:
+                    selected = tree.source.configured_outer_group(process, recorder.escape if observed else None)
+                self.assertEqual(selected.membership, ("owned",))
+                self.assertFalse(recorder.seen)
+                output.assert_not_called()
+                counters = tuple(getattr(tree.source.budget, name) for name in
+                    ("reads", "bytes", "fds", "opens", "output", "frames", "peak_fds", "deadline_ns", "work_ns"))
+                results.append((tuple(trace), counters, len(tree.source.owned)))
+            self.run_factory(run)
+        self.assertEqual(results[0], results[1])
+        self.assertIn("open", results[0][0])
+        self.assertIn("close_fd", results[0][0])
+
     def test_no_nearest512_fallback_and_changed_guest_mount_record_refuse(self):
         for fault in ("wrong_root_limit", "mount_record"):
             def run(tree, session, channel, request, calls):
@@ -772,7 +804,8 @@ class BindObservationTests(unittest.TestCase):
     SITES = ("capture_adopt", "session_init", "request_read", "handler", "request_schema",
         "context_schema", "labels", "external_debit", "outer_args", "outer_process", "outer_vector",
         "outer_pidns", "outer_cgroup", "endpoint", "daemon_context", "daemon_bind", "reserve_api",
-        "outer_recheck", "pending_reply")
+        "outer_recheck", "pending_reply",
+        "oc_pre", "oc_host", "oc_guest", "oc_select", "oc_max", "oc_recheck")
 
     def test_every_literal_site_has_only_a_bounded_worker_call_escape(self):
         self.assertEqual(s.BIND_SITES, self.SITES)
@@ -925,6 +958,67 @@ class BindObservationTests(unittest.TestCase):
                 self.assertEqual(output.call_count, 1)
                 self.assertEqual(output.call_args.args[1], f"DOCKERLENS_NATIVE_PIDS_BIND: s=w_{site}\n".encode())
 
+    def test_actual_outer_blocks_emit_once_and_suppress_generic_fallback(self):
+        from test_native_pids_locator import LocatorTests
+        for operation, site in (("pre", "oc_pre"), ("host", "oc_host"), ("guest", "oc_guest"),
+                                ("select", "oc_select"), ("max", "oc_max"), ("recheck", "oc_recheck")):
+            with self.subTest(operation=operation):
+                source, process, _current, _trace, failure, identity = LocatorTests().configured_fixture(operation)
+                process.directory = 7
+                session, channel, _runtime, request = self.make_handler()
+                session.source.process.return_value = process
+                session.source.configured_outer_group.side_effect = source.configured_outer_group
+                recorder = s.BindRecorder()
+                recorder.begin()
+                with patch.object(s, "_BIND", recorder), patch.object(s.os, "write") as output, \
+                        patch.object(l, "status_vectors", return_value=((), (100, 1))), \
+                        patch.object(b, "identity", side_effect=identity):
+                    with self.assertRaises(RuntimeError) as caught:
+                        session.handle(request, channel)
+                self.assertIs(caught.exception, failure)
+                self.assertTrue(session.failed)
+                self.assertEqual(recorder.value, site)
+                self.assertEqual(output.call_count, 1)
+                self.assertEqual(output.call_args.args[1], f"DOCKERLENS_NATIVE_PIDS_BIND: s=w_{site}\n".encode())
+                session.source.configured_outer_group.assert_called_once_with(process, observer=recorder.escape)
+
+    def test_actual_handled_outer_error_returns_pending_without_observation_or_taint(self):
+        from test_native_pids_locator import LocatorTests
+        source, process, _current, _trace, _failure, identity = LocatorTests().configured_fixture(handled=True)
+        process.directory = 7
+        session, channel, runtime, request = self.make_handler()
+        session.source.process.return_value = process
+        session.source.configured_outer_group.side_effect = source.configured_outer_group
+        recorder = s.BindRecorder()
+        recorder.begin()
+        with patch.object(s, "_BIND", recorder), patch.object(s.os, "write") as output, \
+                patch.object(l, "status_vectors", return_value=((), (100, 1))), \
+                patch.object(b, "identity", side_effect=identity), patch.object(l, "HeldEndpoint"), \
+                patch.object(l, "RuntimeLocator", return_value=runtime):
+            self.assertEqual(session.handle(request, channel),
+                {"version": 1, "sequence": 1, "op": "RootBindRuntime", "status": "pending"})
+        self.assertFalse(session.failed)
+        self.assertFalse(recorder.seen)
+        self.assertIsNone(recorder.value)
+        output.assert_not_called()
+
+    def test_handler_ast_only_adds_explicit_observer_to_existing_call(self):
+        import ast
+        import hashlib
+        tree = ast.parse(Path(s.__file__).read_text())
+        cls = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "RuntimeBoundSession")
+        method = next(node for node in cls.body if isinstance(node, ast.FunctionDef) and node.name == "handle")
+        calls = [node for node in ast.walk(method) if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute) and node.func.attr == "configured_outer_group"]
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(calls[0].keywords), 1)
+        self.assertEqual(calls[0].keywords[0].arg, "observer")
+        self.assertEqual(ast.dump(calls[0].keywords[0].value),
+            "Attribute(value=Name(id='_BIND', ctx=Load()), attr='escape', ctx=Load())")
+        calls[0].keywords.clear()
+        self.assertEqual(hashlib.sha256(ast.dump(method, include_attributes=False).encode()).hexdigest(),
+            "07cc4bc2d3671bd1f26fb1d280eeb09bc416a9d1479344f306ddbbf531fd2651")
+
     def test_reserve_exchange_records_only_the_existing_escaping_call(self):
         channel = s.Channel.__new__(s.Channel)
         channel.sequence, channel.reservation = 1, 0
@@ -1025,7 +1119,7 @@ class BindObservationTests(unittest.TestCase):
         session.source.process.side_effect = lambda *_args: (log.append("outer_process"), outer)[1]
         session.source.read.side_effect = lambda *_args: (log.append("outer_status"), b"fixture")[1]
         session.source.namespace_chain.side_effect = lambda *_args: log.append("outer_pidns")
-        session.source.configured_outer_group.side_effect = lambda *_args: (log.append("outer_cgroup"), object())[1]
+        session.source.configured_outer_group.side_effect = lambda *_args, **_kwargs: (log.append("outer_cgroup"), object())[1]
         session.source.check_process.side_effect = lambda *_args: log.append("outer_recheck")
         session.source.close.side_effect = lambda: log.append("outer_disposal")
         channel.reserve_api.side_effect = lambda units, maximum: log.append(("reserve", units, maximum))

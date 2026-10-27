@@ -139,6 +139,7 @@ BIND_SITES = (
     "context_schema", "labels", "external_debit", "outer_args", "outer_process",
     "outer_vector", "outer_pidns", "outer_cgroup", "endpoint", "daemon_context",
     "daemon_bind", "reserve_api", "outer_recheck", "pending_reply",
+    "oc_pre", "oc_host", "oc_guest", "oc_select", "oc_max", "oc_recheck",
 )
 
 
@@ -574,7 +575,7 @@ class RuntimeBoundSession:
                     with _BIND.scope("outer_pidns"):
                         self.source.namespace_chain(outer.namespaces[0], vector)
                     with _BIND.scope("outer_cgroup"):
-                        group = self.source.configured_outer_group(outer)
+                        group = self.source.configured_outer_group(outer, observer=_BIND.escape)
                     with _BIND.scope("endpoint"):
                         endpoint = locator.HeldEndpoint(self.source, self.source.capture_directory)
                     with _BIND.scope("daemon_context"):

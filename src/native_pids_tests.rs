@@ -238,6 +238,12 @@ const BIND_SITES: &[&str] = &[
     "w_reserve_api",
     "w_outer_recheck",
     "w_pending_reply",
+    "w_oc_pre",
+    "w_oc_host",
+    "w_oc_guest",
+    "w_oc_select",
+    "w_oc_max",
+    "w_oc_recheck",
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3456,18 +3462,51 @@ fn live_pids_limits_and_effects_match_engine() {
 
 #[test]
 fn pids_bind_records_have_only_closed_worker_sites_and_no_kind() {
-    for site in BIND_SITES {
+    // Independent frozen wire vocabulary, not expectations derived from the parser.
+    let expected = [
+        "w_capture_adopt",
+        "w_session_init",
+        "w_request_read",
+        "w_handler",
+        "w_request_schema",
+        "w_context_schema",
+        "w_labels",
+        "w_external_debit",
+        "w_outer_args",
+        "w_outer_process",
+        "w_outer_vector",
+        "w_outer_pidns",
+        "w_outer_cgroup",
+        "w_endpoint",
+        "w_daemon_context",
+        "w_daemon_bind",
+        "w_reserve_api",
+        "w_outer_recheck",
+        "w_pending_reply",
+        "w_oc_pre",
+        "w_oc_host",
+        "w_oc_guest",
+        "w_oc_select",
+        "w_oc_max",
+        "w_oc_recheck",
+    ];
+    assert_eq!(BIND_SITES, expected);
+    assert_eq!(expected.len(), 25);
+    let mut longest = 0;
+    for site in expected {
         let line = format!("DOCKERLENS_NATIVE_PIDS_BIND: s={site}\n");
         assert!(line.is_ascii());
-        assert!(line.len() <= 64);
+        longest = longest.max(line.len());
+        assert!(line.len() <= 48);
         let Some(CapturedConstructorObservation::Bind(observed)) =
             constructor_observation_from_capture(line.as_bytes(), false)
         else {
             panic!("finite BIND site must parse");
         };
-        assert_eq!(observed.site(), Some(*site));
+        assert_eq!(observed.site(), Some(site));
         assert_eq!(startup_fault_from_capture(line.as_bytes(), false), None);
     }
+    assert_eq!(longest, 48);
     let literal = b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_outer_cgroup\n";
     let Some(CapturedConstructorObservation::Bind(site)) =
         constructor_observation_from_capture(literal, false)
@@ -3479,6 +3518,65 @@ fn pids_bind_records_have_only_closed_worker_sites_and_no_kind() {
     write_bind_site(&mut output, site);
     assert_eq!(output.as_slice(), literal);
     assert_eq!(ClosedBindSite(usize::MAX).site(), None);
+}
+
+#[test]
+fn pids_outer_cgroup_bind_literals_keep_the_closed_phase_gate() {
+    for (literal, expected) in [
+        (
+            b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_oc_pre\n".as_slice(),
+            "w_oc_pre",
+        ),
+        (
+            b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_oc_host\n".as_slice(),
+            "w_oc_host",
+        ),
+        (
+            b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_oc_guest\n".as_slice(),
+            "w_oc_guest",
+        ),
+        (
+            b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_oc_select\n".as_slice(),
+            "w_oc_select",
+        ),
+        (
+            b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_oc_max\n".as_slice(),
+            "w_oc_max",
+        ),
+        (
+            b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_oc_recheck\n".as_slice(),
+            "w_oc_recheck",
+        ),
+    ] {
+        let Some(CapturedConstructorObservation::Bind(site)) =
+            constructor_observation_from_capture(literal, false)
+        else {
+            panic!("literal refined BIND record must parse");
+        };
+        assert_eq!(site.site(), Some(expected));
+        for phase in [
+            ConstructorIoPhase::Ready,
+            ConstructorIoPhase::Bind,
+            ConstructorIoPhase::Confirm,
+        ] {
+            for kind in [
+                ConstructorIoKind::Eof,
+                ConstructorIoKind::Reset,
+                ConstructorIoKind::Other,
+            ] {
+                let io = ConstructorIoFault { phase, kind };
+                let mut output = Vec::new();
+                if io.allows_bind_observation() {
+                    write_bind_site(&mut output, site);
+                }
+                if [("bind", "eof"), ("bind", "reset")].contains(&(phase.name(), kind.name())) {
+                    assert_eq!(output, literal);
+                } else {
+                    assert!(output.is_empty());
+                }
+            }
+        }
+    }
 }
 
 #[test]

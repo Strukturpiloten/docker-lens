@@ -1,7 +1,9 @@
 """Independent source controls. Synthetic kernel trees are not native evidence."""
 
 import ctypes
+import ast
 import errno
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -124,6 +126,140 @@ class KernelTree:
 
 
 class LocatorTests(unittest.TestCase):
+    def configured_fixture(self, fault=None, *, handled=False, cleanup=False):
+        """Independent operation trace; no daemon, namespace, or runtime probe."""
+        source = l.LocatorSource.__new__(l.LocatorSource)
+        process = SimpleNamespace(namespaces=(3, 4, 2))
+        source.reader_cgroup_namespace = 1
+        current = SimpleNamespace(identities=((0, 11), (0, 12)), directories=(11, 12))
+        trace = []
+        failure = RuntimeError("PRIVATE_OUTER_CANARY")
+
+        def operation(name, result=None):
+            def run(*_args):
+                trace.append(name)
+                if handled and name == "host":
+                    try:
+                        raise OSError("handled source operation")
+                    except OSError:
+                        pass
+                if fault == name:
+                    raise failure
+                return result
+            return run
+
+        source.check_process = operation("pre")
+        source.group = operation("host", current)
+        source.guest_cgroup_mount = operation("guest", (12, "mount record"))
+        if cleanup:
+            def guest_cleanup(*_args):
+                try:
+                    return 12, "mount record"
+                finally:
+                    raise failure
+            source.guest_cgroup_mount = guest_cleanup
+        source.values = operation("max", (512,))
+        source.check_group = operation("recheck")
+
+        def configured_check(observed_process, selected):
+            trace.append("binding")
+            self.assertEqual(source.configured_outer_binding,
+                (process, current, 12, (0, 12), "mount record"))
+            self.assertIs(observed_process, process)
+            self.assertIs(selected, current)
+            source.check_process = operation("final")
+        source.check_configured_outer = configured_check
+
+        def identity(fd):
+            if fd == 12:
+                trace.append("selection" if "max" not in trace else "binding_identity")
+                if fault == "select":
+                    raise failure
+            return 0, fd
+        return source, process, current, trace, failure, identity
+
+    def test_configured_outer_observer_reports_only_six_propagating_blocks(self):
+        for operation, site in (("pre", "oc_pre"), ("host", "oc_host"), ("guest", "oc_guest"),
+                                ("select", "oc_select"), ("max", "oc_max"), ("recheck", "oc_recheck")):
+            for observed in (False, True):
+                with self.subTest(operation=operation, observed=observed):
+                    source, process, _current, _trace, failure, identity = self.configured_fixture(operation)
+                    records = []
+                    with patch.object(b, "identity", side_effect=identity):
+                        with self.assertRaises(RuntimeError) as caught:
+                            source.configured_outer_group(process, records.append if observed else None)
+                    self.assertIs(caught.exception, failure)
+                    self.assertEqual(records, [site] if observed else [])
+
+    def test_configured_outer_success_and_handled_error_have_no_observation(self):
+        expected = ["pre", "host", "guest", "selection", "selection", "max", "recheck", "binding_identity", "binding", "final"]
+        for handled in (False, True):
+            for observed in (False, True):
+                with self.subTest(handled=handled, observed=observed):
+                    source, process, current, trace, _failure, identity = self.configured_fixture(handled=handled)
+                    records = []
+                    with patch.object(b, "identity", side_effect=identity):
+                        if observed:
+                            selected = source.configured_outer_group(process, records.append)
+                        else:
+                            selected = source.configured_outer_group(process)
+                    self.assertIs(selected, current)
+                    self.assertEqual(trace, expected)
+                    self.assertEqual(records, [])
+
+    def test_configured_outer_observer_failure_and_opaque_cleanup_preserve_exception(self):
+        for cleanup in (False, True):
+            source, process, _current, _trace, failure, identity = self.configured_fixture(
+                "max" if not cleanup else None, cleanup=cleanup)
+            records = []
+            def broken_observer(site):
+                records.append(site)
+                raise KeyboardInterrupt("private observer failure")
+            with patch.object(b, "identity", side_effect=identity):
+                with self.assertRaises(RuntimeError) as caught:
+                    source.configured_outer_group(process, broken_observer)
+            self.assertIs(caught.exception, failure)
+            self.assertEqual(records, ["oc_guest" if cleanup else "oc_max"])
+
+    def test_outer_observer_preserves_fatal_and_generator_exception_identity(self):
+        for failure in (b.Refusal(), PermissionError(13, "private"), KeyboardInterrupt("private"),
+                        GeneratorExit("private"), StopIteration("private")):
+            records = []
+            with self.assertRaises(type(failure)) as caught:
+                with l._outer_escape(records.append, "oc_host"):
+                    raise failure
+            self.assertIs(caught.exception, failure)
+            self.assertEqual(records, ["oc_host"])
+
+    def test_configured_outer_operation_ast_preserves_original_statements(self):
+        tree = ast.parse(Path(l.__file__).read_text())
+        cls = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "LocatorSource")
+        method = next(node for node in cls.body if isinstance(node, ast.FunctionDef) and node.name == "configured_outer_group")
+        self.assertEqual([arg.arg for arg in method.args.args], ["self", "process", "observer"])
+        self.assertEqual(ast.dump(method.args.defaults[0]), "Constant(value=None)")
+        sites = []
+        block_lengths = []
+        body = []
+        for node in method.body:
+            if isinstance(node, ast.With):
+                call = node.items[0].context_expr
+                self.assertEqual(ast.dump(call.func), "Name(id='_outer_escape', ctx=Load())")
+                self.assertEqual(ast.dump(call.args[0]), "Name(id='observer', ctx=Load())")
+                sites.append(call.args[1].value)
+                block_lengths.append(len(node.body))
+                body.extend(node.body)
+            else:
+                body.append(node)
+        self.assertEqual(sites, ["oc_pre", "oc_host", "oc_guest", "oc_select", "oc_max", "oc_recheck"])
+        self.assertEqual(block_lengths, [3, 1, 1, 4, 1, 4])
+        method.body = body
+        method.args.args.pop()
+        method.args.defaults.clear()
+        # Independently frozen HEAD8ac7fdf method, including every guard, call,
+        # FD operation, identity, charge and assignment in original order.
+        self.assertEqual(hashlib.sha256(ast.dump(method, include_attributes=False).encode()).hexdigest(),
+            "be046df135028d71f3ae8933d1f5e8064500773132f084b362946b94afbf3c93")
+
     def test_held_socket_inode_connect_and_path_replacement_refusal(self):
         with tempfile.TemporaryDirectory(prefix="dl-held-endpoint-") as directory:
             capture = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)

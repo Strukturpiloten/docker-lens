@@ -3,10 +3,18 @@
 ## Current PIDs27 source gate
 
 A separate bounded BIND observation records only a named operation escaping by
-exception after bootstrap returns and through the complete pending reply. Its19
+exception after bootstrap returns and through the complete pending reply. Its25
 fixed worker sites have no kind/guard/errno/cause field; opaque internal cleanup
 can produce the same call-escape outcome as internal work failure. START remains
-stopped after READY. Binding activation does not cover the gap before bootstrap
+stopped after READY. Six internal outer-cgroup operation boundaries cover
+preconditions/namespaces, host ancestry, guest mount, exact selection, maximum
+validation and final rechecks. The generic outer-cgroup site remains the fallback
+for an unobserved escape; these sites never identify an internal cause. Only
+propagating whole-block exceptions invoke the explicit optional observer;
+handled inner errors that return successfully produce no record or positive taint.
+The vocabulary is fixed at25 sites with at most47 ASCII bytes before LF
+(48 including LF); no new values, source reads or resource charges are added.
+Binding activation does not cover the gap before bootstrap
 returns and does not prove handler entry from Rust's bind phase alone.
 
 BIND reuses the sole1024-byte EOF-validating stderr reader, typed single slot,
