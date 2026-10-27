@@ -72,6 +72,18 @@ checkout and must not perform those writes.
 
 ## Agent roles and verification
 
+Use [`presentation_worker`](.codex/agents/presentation-worker.toml) with `gpt-6.1-terra` and
+`medium` reasoning for bounded documentation, website presentation, visual inspection, and small
+presentation fixes with explicit expected behavior. Escalate architecture, native-format semantics,
+security, migrations, and ambiguous changes to a Sol agent. A Sol reviewer independently checks the
+result; Terra does not replace required review or complete gates. Task-specific Terra effort may be
+`medium`, `high`, or `xhigh`. This role grants no additional permissions or browser/API mutation,
+publication, or deployment authority. The allocation follows [OpenAI model guidance](https://learn.chatgpt.com/docs/model-selection)
+and [Terra capabilities](https://developers.openai.com/api/docs/models/gpt-6.1-terra); compare
+representative results rather than assuming superiority.
+Start a new trusted project session to load changed role definitions; editing TOML does not switch
+already running agents.
+
 Model defaults belong in [`.codex/config.toml`](.codex/config.toml); task-specific models and
 reasoning belong in [`.codex/agents/`](.codex/agents/). The primary manager always uses
 `gpt-6-sol` with `xhigh` reasoning. Default subagents use `gpt-6.1-sol` with `medium` reasoning.
@@ -79,7 +91,7 @@ Implementation, specification research, and independent review use `gpt-6.1-sol`
 reasoning; check-only verification uses `gpt-6-luna` with `high`
 reasoning. Use Luna for bounded read-only exploration and Sol for difficult failure diagnosis;
 reserve Astra at `xhigh` for particularly difficult architectural questions.
-Task-specific subagents may use `gpt-6.1-sol` or `gpt-6-luna` with `medium`, `high`, or `xhigh`
+Task-specific subagents may use `gpt-6.1-sol`, `gpt-6.1-terra`, or `gpt-6-luna` with `medium`, `high`, or `xhigh`
 reasoning. Use `gpt-6-astra` only with `xhigh` reasoning for particularly difficult architectural
 questions.
 These model settings do not expand the workspace scope or grant additional permissions.

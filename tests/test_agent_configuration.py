@@ -22,6 +22,7 @@ class AgentConfigurationTests(unittest.TestCase):
             ("implementation-worker", "gpt-6.1-sol", "high", "workspace-write"),
             ("specification-researcher", "gpt-6.1-sol", "high", "read-only"),
             ("reviewer", "gpt-6.1-sol", "high", "read-only"),
+            ("presentation-worker", "gpt-6.1-terra", "medium", "workspace-write"),
             ("verifier", "gpt-6-luna", "high", "workspace-write"),
         ):
             with self.subTest(role=role):
@@ -35,6 +36,14 @@ class AgentConfigurationTests(unittest.TestCase):
                 instructions = config["developer_instructions"]
                 self.assertIn("AGENTS.md", instructions)
                 self.assertIn("GitHub writes", instructions)
+                if role == "presentation-worker":
+                    for required in (
+                        "explicit file ownership",
+                        "Escalate architecture, native-format semantics, security, migrations",
+                        "Browser and application inspection is read-only",
+                        "A Sol reviewer independently checks the original requirements",
+                    ):
+                        self.assertIn(required, instructions)
                 if role == "reviewer":
                     self.assertIn("original user requirements", instructions)
                     self.assertIn("independent expected results", instructions)
@@ -70,7 +79,7 @@ class AgentConfigurationTests(unittest.TestCase):
             "Implementation, specification research, and independent review use "
             "`gpt-6.1-sol` with `high` reasoning",
             "check-only verification uses `gpt-6-luna` with `high` reasoning",
-            "Task-specific subagents may use `gpt-6.1-sol` or `gpt-6-luna` with "
+            "Task-specific subagents may use `gpt-6.1-sol`, `gpt-6.1-terra`, or `gpt-6-luna` with "
             "`medium`, `high`, or `xhigh` reasoning",
             "Use `gpt-6-astra` only with `xhigh` reasoning for particularly "
             "difficult architectural questions",
