@@ -2,6 +2,24 @@
 
 ## Current PIDs27 source gate
 
+A separate bounded BIND observation records only a named operation escaping by
+exception after bootstrap returns and through the complete pending reply. Its19
+fixed worker sites have no kind/guard/errno/cause field; opaque internal cleanup
+can produce the same call-escape outcome as internal work failure. START remains
+stopped after READY. Binding activation does not cover the gap before bootstrap
+returns and does not prove handler entry from Rust's bind phase alone.
+
+BIND reuses the sole1024-byte EOF-validating stderr reader, typed single slot,
+original retirement and one nonblocking snapshot. START/BIND conflicts suppress
+both site observations before phase selection. It projects only same-stream
+failed exact-PIDs pids-eof/bind-eof or pids-read/bind-reset companions. Missing,
+late, malformed or conflicting data remains unobserved; no extra read/wait/channel
+or raw fallback is added. Later ConfirmRuntime, measurement and outer disposal
+are outside BIND. Inert controls preserve original call/budget order, exception
+identity and neutral opaque-cleanup meaning; they do not identify a native cause.
+No dependency/pin or other product consumer is changed; downstream whole-source
+authorization and fresh exact-source native qualification remain separate.
+
 Constructor I/O observations include closed `kind=eof` at the original
 zero-byte exact-read refusal, separately from recvmsg errno categories. Original
 `pids-eof`, frame/ancillary checks and expected successful terminal EOF remain

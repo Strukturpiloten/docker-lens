@@ -193,7 +193,8 @@ try:
     lines = data.split(b"\n")
     detail_prefix = b"DOCKERLENS_NATIVE_PIDS_IO:"
     startup_prefix = b"DOCKERLENS_NATIVE_PIDS_START:"
-    seen = any(line.startswith((b"DOCKERLENS_NATIVE_PIDS_SETUP_REFUSAL:", detail_prefix, startup_prefix)) for line in lines)
+    bind_prefix = b"DOCKERLENS_NATIVE_PIDS_BIND:"
+    seen = any(line.startswith((b"DOCKERLENS_NATIVE_PIDS_SETUP_REFUSAL:", detail_prefix, startup_prefix, bind_prefix)) for line in lines)
     positive = any(line == b"DOCKERLENS_NATIVE_CHECK: pids_evidence" or line.startswith(b"test result: ok.") for line in lines)
     if seen and (positive or sys.argv[3] == "0"):
         sys.stdout.buffer.write(prefix + b"unclassified\n")
@@ -214,6 +215,10 @@ try:
     candidate, tainted = None, False
     detail, detail_tainted = None, False
     startup, startup_tainted = None, False
+    bind, bind_tainted = None, False
+    family_conflict = (any(line.startswith(startup_prefix) for line in lines)
+                       and any(line.startswith(bind_prefix) for line in lines))
+    bind_sites = set(b"w_capture_adopt w_session_init w_request_read w_handler w_request_schema w_context_schema w_labels w_external_debit w_outer_args w_outer_process w_outer_vector w_outer_pidns w_outer_cgroup w_endpoint w_daemon_context w_daemon_bind w_reserve_api w_outer_recheck w_pending_reply".split())
     startup_sites = set(b"s_imports s_args s_fd0 s_socket_wrap s_root_uid s_root_deadline s_gate_pipe s_block_signals s_source_fork s_par_gate_close s_par_pgroup s_par_pidfd s_par_sockclose s_par_gate_send s_par_gate_done s_mon_handlers s_mon_unmask s_mon_wait s_peer_shape s_peer_cred s_peer_pidfd s_peer_cloexec s_peer_live w_kid_gate_close w_kid_pgroup w_kid_pdeath w_kid_parent w_kid_gate_read w_kid_gate_done w_kid_unmask w_source_peer_eq w_source_budget w_source_init w_locator_init w_source_api w_source_libc w_source_getdents w_source_proc w_source_procfs w_source_readfs w_source_read w_self_stat w_self_status w_self_pidns w_self_userns w_self_cgroupns w_self_timens w_parent_live w_parent_stat w_parent_process w_parent_uid w_parent_cgroup w_parent_time w_parent_link w_anc_load w_anc_uid w_anc_ppid w_anc_sudo w_anc_exe w_anc_recheck w_anc_end w_proc_pidfd w_proc_dir w_proc_fs w_proc_start w_proc_cgroup w_proc_root w_proc_ns w_proc_status w_proc_identity w_proc_check w_proc_timens w_proc_live w_proc_reopen w_proc_fdinfo w_stat_delimiter w_stat_state w_stat_start w_status_fields w_status_pid w_status_tgid w_status_uid w_status_nspid w_status_nstgid w_cgroup_record w_channel_fds w_chan_nonblock w_chan_cloexec w_boot_wait w_boot_recv w_boot_ancillary w_boot_accumulate w_boot_marker w_boot_count w_boot_stat w_boot_dir w_boot_mode w_boot_uid w_boot_cloexec w_ready_budget w_ready_wait w_ready_send w_budget_deadline w_budget_reads w_budget_bytes w_budget_fds w_budget_opens w_budget_output w_peer_shape w_peer_cred w_peer_pidfd w_peer_cloexec w_peer_live".split())
     startup_kinds = set(b"guard no_api import bad_arg denied missing unsupported resource io cancelled other".split())
     for line in lines:
@@ -242,6 +247,14 @@ try:
                 startup = line
             elif startup != line:
                 startup_tainted = True
+        elif line.startswith(bind_prefix):
+            site = line[len(bind_prefix) + 3:] if line.startswith(bind_prefix + b" s=") else None
+            if len(line) > 63 or site not in bind_sites:
+                bind_tainted = True
+            elif bind is None:
+                bind = line
+            elif bind != line:
+                bind_tainted = True
     if seen and not tainted and candidate is not None:
         sys.stdout.buffer.write(prefix + candidate + b"\n")
         # Detail is useful only with the same raw stream failure code. It never
@@ -253,8 +266,12 @@ try:
                 sys.stdout.buffer.write(detail + b"\n")
                 ready = (detail == b"DOCKERLENS_NATIVE_PIDS_IO: phase=ready kind=eof" if eof else
                          detail == b"DOCKERLENS_NATIVE_PIDS_IO: phase=ready kind=reset")
-                if ready and startup is not None and not startup_tainted:
+                if ready and startup is not None and not startup_tainted and not family_conflict:
                     sys.stdout.buffer.write(startup + b"\n")
+                bind_pair = (detail == b"DOCKERLENS_NATIVE_PIDS_IO: phase=bind kind=eof" if eof else
+                             detail == b"DOCKERLENS_NATIVE_PIDS_IO: phase=bind kind=reset")
+                if bind_pair and bind is not None and not bind_tainted and not family_conflict:
+                    sys.stdout.buffer.write(bind + b"\n")
 except (OSError, ValueError):
     pass
 ' "$(dirname "$0")/../src/native_pids_setup_refusals.txt" "$capture_directory/run.raw" "$original_run_status" 2>/dev/null) || setup_projection_status=$?

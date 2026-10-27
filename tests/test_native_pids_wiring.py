@@ -17,6 +17,7 @@ HANDOFF = "DOCKERLENS_NATIVE_LIFECYCLE_CLEANUP: owner=native_conformance_outer_v
 SETUP_REFUSAL = "DOCKERLENS_NATIVE_PIDS_SETUP_REFUSAL: code="
 IO_DETAIL = "DOCKERLENS_NATIVE_PIDS_IO:"
 STARTUP_REFUSAL = "DOCKERLENS_NATIVE_PIDS_START:"
+BIND_OBSERVATION = "DOCKERLENS_NATIVE_PIDS_BIND:"
 
 
 class PidsWiringTests(unittest.TestCase):
@@ -397,6 +398,8 @@ else:
                 if isinstance(node, ast.Call) and node.args and isinstance(node.args[0], ast.Constant):
                     called = node.func.attr if isinstance(node.func, ast.Attribute) else node.func.id if isinstance(node.func, ast.Name) else ""
                     if called in ("scope", "fault", "startup_scope", "startup_fault", "startup_require"):
+                        if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name) and node.func.value.id == "_BIND":
+                            continue
                         used.add(node.args[0].value)
         declared = set(values["SUPERVISOR_SITES"] + values["WORKER_SITES"] + values["PEER_SITES"])
         self.assertEqual(used, declared)
@@ -547,6 +550,122 @@ else:
                     self.assertNotIn(IO_DETAIL.encode(), result.stdout + result.stderr)
                     self.assertNotIn(STARTUP_REFUSAL.encode(), result.stdout + result.stderr)
                     self.assertNotIn(b"PRIVATE_EOF_CANARY", result.stdout + result.stderr)
+                    self.assertNotIn(success.encode(), result.stdout + result.stderr)
+                    self.assertNotIn(evidence.encode(), result.stdout + result.stderr)
+                    self.assertIn((SETUP_REFUSAL + "unclassified\n").encode(), result.stderr)
+
+    def test_bind_catalogue_is_exact_and_separate_from_startup(self):
+        import ast
+        expected = ("capture_adopt", "session_init", "request_read", "handler", "request_schema",
+            "context_schema", "labels", "external_debit", "outer_args", "outer_process", "outer_vector",
+            "outer_pidns", "outer_cgroup", "endpoint", "daemon_context", "daemon_bind", "reserve_api",
+            "outer_recheck", "pending_reply")
+        tree = ast.parse((ROOT / "scripts/native-pids-supervisor.py").read_text())
+        declared = next(ast.literal_eval(node.value) for node in tree.body if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == "BIND_SITES" for target in node.targets))
+        self.assertEqual(declared, expected)
+        used = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "scope":
+                if isinstance(node.func.value, ast.Name) and node.func.value.id == "_BIND":
+                    used.add(node.args[0].value)
+        self.assertEqual(used, set(expected))
+        sites = ["w_" + name for name in expected]
+        rust = (ROOT / "src/native_pids_tests.rs").read_text()
+        rust_sites = re.findall(r'"([a-z_]+)"', rust.split("const BIND_SITES: &[&str] = &[", 1)[1].split("];", 1)[0])
+        wrapper = (ROOT / "scripts/run-exact-native-test.sh").read_text()
+        wrapper_sites = re.search(r'bind_sites = set\(b"([a-z_ ]+)"\.split\(\)\)', wrapper)[1].split()
+        self.assertEqual(rust_sites, sites)
+        self.assertEqual(wrapper_sites, sites)
+        for site in sites:
+            line = BIND_OBSERVATION + " s=" + site
+            self.assertTrue(line.isascii())
+            self.assertLessEqual(len(line), 63)
+            self.assertNotIn(" k=", line)
+        # Pure setup/normal stop only: bootstrap must return BEFORE activation,
+        # and pending response must return BEFORE stop. No shared phase channel.
+        source = (ROOT / "scripts/native-pids-supervisor.py").read_text()
+        factory = source.split("def source_server(", 1)[1].split("def monitor(", 1)[0]
+        self.assertLess(factory.index("capture = channel.bootstrap("), factory.index("_BIND.begin()"))
+        self.assertLess(factory.index("_BIND.begin()"), factory.index('_BIND.scope("capture_adopt")'))
+        server = source.split("def serve_session(", 1)[1].split("def source_server(", 1)[0]
+        self.assertLess(server.index("channel.response(session.handle("), server.index("_BIND.stop()"))
+        self.assertLess(server.index("_BIND.stop()"), server.index("finally:"))
+
+    def test_bind_projects_every_site_only_with_exact_consistent_bind_pair(self):
+        sites = ("capture_adopt", "session_init", "request_read", "handler", "request_schema",
+            "context_schema", "labels", "external_debit", "outer_args", "outer_process", "outer_vector",
+            "outer_pidns", "outer_cgroup", "endpoint", "daemon_context", "daemon_bind", "reserve_api",
+            "outer_recheck", "pending_reply")
+        for code, kind in (("pids-eof", "eof"), ("pids-read", "reset")):
+            general, detail = SETUP_REFUSAL + code, IO_DETAIL + f" phase=bind kind={kind}"
+            for site in sites:
+                bind = BIND_OBSERVATION + " s=w_" + site
+                result, _ = self.wrapper(bind + "\n" + detail + "\n" + general + "\n" + bind, status=101)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stderr.count((bind + "\n").encode()), 1)
+                self.assertEqual(result.stderr.count((general + "\n").encode()), 1)
+                self.assertEqual(result.stderr.count((detail + "\n").encode()), 1)
+                self.assertIn(b"(exit 101)", result.stderr)
+
+    def test_bind_rejects_missing_wrong_phase_errno_code_and_foreign_selector(self):
+        bind = BIND_OBSERVATION + " s=w_outer_cgroup"
+        eof, read = SETUP_REFUSAL + "pids-eof", SETUP_REFUSAL + "pids-read"
+        detail = IO_DETAIL + " phase=bind kind=eof"
+        for prefix in ("", eof, detail, read + "\n" + detail,
+                       eof + "\n" + IO_DETAIL + " phase=bind kind=reset",
+                       read + "\n" + IO_DETAIL + " phase=bind kind=other",
+                       eof + "\n" + IO_DETAIL + " phase=ready kind=eof",
+                       eof + "\n" + IO_DETAIL + " phase=confirm kind=eof",
+                       eof + "\n" + detail + "\n" + read,
+                       eof + "\n" + detail + "\n" + IO_DETAIL + " phase=ready kind=eof"):
+            result, _ = self.wrapper(prefix + "\n" + bind, status=101)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn(BIND_OBSERVATION.encode(), result.stdout + result.stderr)
+        for target, name in (("native_pids", "other_test"), ("native_nofile", "other_test")):
+            result, _ = self.wrapper(eof + "\n" + detail + "\n" + bind, status=101, target=target, test_name=name)
+            self.assertNotIn(BIND_OBSERVATION.encode(), result.stdout + result.stderr)
+
+    def test_bind_and_start_conflicts_suppress_both_sites_before_phase_selection(self):
+        for code, detail in (("pids-eof", "phase=bind kind=eof"), ("pids-read", "phase=bind kind=reset"),
+                             ("pids-eof", "phase=ready kind=eof"), ("pids-read", "phase=ready kind=reset")):
+            general, io = SETUP_REFUSAL + code, IO_DETAIL + " " + detail
+            for bind in (BIND_OBSERVATION + " s=w_endpoint", BIND_OBSERVATION + " PRIVATE_BIND_CANARY"):
+                for start in (STARTUP_REFUSAL + " s=w_parent_uid k=guard", STARTUP_REFUSAL + " PRIVATE_BIND_CANARY"):
+                    for records in (bind + "\n" + start, start + "\n" + bind):
+                        result, _ = self.wrapper(general + "\n" + io + "\n" + records, status=101)
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertNotIn(BIND_OBSERVATION.encode(), result.stdout + result.stderr)
+                        self.assertNotIn(STARTUP_REFUSAL.encode(), result.stdout + result.stderr)
+                        self.assertNotIn(b"PRIVATE_BIND_CANARY", result.stdout + result.stderr)
+                        self.assertIn((general + "\n").encode(), result.stderr)
+                        self.assertIn((io + "\n").encode(), result.stderr)
+
+    def test_bind_unknown_kind_suffix_private_nul_and_overflow_are_unobserved(self):
+        companions = SETUP_REFUSAL + "pids-eof\n" + IO_DETAIL + " phase=bind kind=eof\n"
+        valid = BIND_OBSERVATION + " s=w_endpoint"
+        for record in (BIND_OBSERVATION, BIND_OBSERVATION + " PRIVATE_BIND_CANARY",
+                       valid + " k=guard", valid + " PRIVATE_BIND_CANARY", valid + "\r", valid + "\0",
+                       valid + "\0PRIVATE_BIND_CANARY", BIND_OBSERVATION + " s=s_endpoint",
+                       BIND_OBSERVATION + " s=w_PRIVATE_BIND_CANARY", valid + "\n" + BIND_OBSERVATION + " s=w_handler",
+                       BIND_OBSERVATION + "x" * 70000, "x" * 1048577 + "\n" + valid):
+            result, _ = self.wrapper(companions + record, status=101)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn(BIND_OBSERVATION.encode(), result.stdout + result.stderr)
+            self.assertNotIn(b"PRIVATE_BIND_CANARY", result.stdout + result.stderr)
+            self.assertIn(b"(exit 101)", result.stderr)
+
+    def test_any_bind_prefix_taints_positive_results_even_without_companions(self):
+        success = "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 100 filtered out;"
+        evidence = "DOCKERLENS_NATIVE_CHECK: pids_evidence"
+        for record in (BIND_OBSERVATION, BIND_OBSERVATION + " PRIVATE_BIND_CANARY",
+                       BIND_OBSERVATION + " s=w_endpoint"):
+            for status, positive in ((0, ""), (0, success), (0, evidence), (101, success), (101, evidence)):
+                for output in (record + "\n" + positive, positive + "\n" + record):
+                    result, _ = self.wrapper(output, status=status, registry=b"")
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertNotIn(BIND_OBSERVATION.encode(), result.stdout + result.stderr)
+                    self.assertNotIn(b"PRIVATE_BIND_CANARY", result.stdout + result.stderr)
                     self.assertNotIn(success.encode(), result.stdout + result.stderr)
                     self.assertNotIn(evidence.encode(), result.stdout + result.stderr)
                     self.assertIn((SETUP_REFUSAL + "unclassified\n").encode(), result.stderr)

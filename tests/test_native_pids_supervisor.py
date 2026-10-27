@@ -768,6 +768,313 @@ class RootFactoryTests(unittest.TestCase):
                 self.run_factory(run)
 
 
+class BindObservationTests(unittest.TestCase):
+    SITES = ("capture_adopt", "session_init", "request_read", "handler", "request_schema",
+        "context_schema", "labels", "external_debit", "outer_args", "outer_process", "outer_vector",
+        "outer_pidns", "outer_cgroup", "endpoint", "daemon_context", "daemon_bind", "reserve_api",
+        "outer_recheck", "pending_reply")
+
+    def test_every_literal_site_has_only_a_bounded_worker_call_escape(self):
+        self.assertEqual(s.BIND_SITES, self.SITES)
+        for site in self.SITES:
+            for error in (b.Refusal(), PermissionError(13, "PRIVATE_BIND_CANARY"), RuntimeError("PRIVATE_BIND_CANARY")):
+                recorder = s.BindRecorder()
+                recorder.begin()
+                # BIND must not inspect START's cleanup-origin exclusion.
+                error._dockerlens_startup_cleanup = True
+                with patch.object(s.os, "write") as output:
+                    with self.assertRaises(type(error)) as caught:
+                        with recorder.scope(site):
+                            raise error
+                self.assertIs(caught.exception, error)
+                self.assertEqual(output.call_count, 1)
+                line = output.call_args.args[1]
+                self.assertEqual(line, f"DOCKERLENS_NATIVE_PIDS_BIND: s=w_{site}\n".encode())
+                self.assertLessEqual(len(line), 64)
+                self.assertTrue(line.isascii())
+                self.assertNotIn(b"kind", line)
+                self.assertNotIn(b" k=", line)
+                self.assertNotIn(b"PRIVATE_BIND_CANARY", line)
+
+    def test_nested_opaque_cleanup_and_work_have_same_neutral_escape_meaning(self):
+        for cleanup in (False, True):
+            recorder = s.BindRecorder()
+            recorder.begin()
+            work, close = RuntimeError("work"), OSError(5, "opaque cleanup")
+            final = close if cleanup else work
+            with patch.object(s.os, "write") as output:
+                with self.assertRaises(type(final)) as caught:
+                    with recorder.scope("handler"):
+                        with recorder.scope("outer_process"):
+                            try:
+                                raise work
+                            finally:
+                                if cleanup:
+                                    raise close
+            self.assertIs(caught.exception, final)
+            self.assertEqual(recorder.value, "outer_process")
+            self.assertEqual(output.call_count, 1)
+            self.assertEqual(output.call_args.args[1], b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_outer_process\n")
+
+    def test_outer_cleanup_is_not_observed_and_cannot_replace_prior_escape(self):
+        for failing_call in (False, True):
+            recorder = s.BindRecorder()
+            recorder.begin()
+            work, close = RuntimeError("work"), OSError(5, "outer cleanup")
+            with patch.object(s.os, "write") as output:
+                with self.assertRaises(OSError) as caught:
+                    try:
+                        with recorder.scope("outer_cgroup"):
+                            if failing_call:
+                                raise work
+                    finally:
+                        raise close
+            self.assertIs(caught.exception, close)
+            self.assertEqual(recorder.value, "outer_cgroup" if failing_call else None)
+            self.assertEqual(output.call_count, int(failing_call))
+
+    def test_unknown_site_write_failure_short_write_and_inactivity_have_no_fallback(self):
+        recorder = s.BindRecorder()
+        with patch.object(s.os, "write") as output:
+            recorder.escape("outer_process")
+            recorder.begin()
+            recorder.escape("PRIVATE_BIND_CANARY")
+            recorder.escape("handler")
+        output.assert_not_called()
+        self.assertTrue(recorder.seen)
+        self.assertIsNone(recorder.value)
+        for effect in (OSError("private write refusal"), 1):
+            recorder.reset()
+            recorder.begin()
+            with patch.object(s.os, "write", side_effect=effect if isinstance(effect, BaseException) else None,
+                              return_value=effect if isinstance(effect, int) else None) as output:
+                recorder.escape("endpoint")
+                recorder.escape("handler")
+            self.assertEqual(output.call_count, 1)
+            self.assertEqual(recorder.value, "endpoint")
+        recorder.stop()
+        with patch.object(s.os, "write") as output:
+            recorder.escape("outer_recheck")
+        output.assert_not_called()
+
+    def test_recorder_callback_failure_never_replaces_call_escape(self):
+        recorder = s.BindRecorder()
+        recorder.begin()
+        failure = RuntimeError("original call")
+        with patch.object(recorder, "escape", side_effect=ValueError("private observer failure")), patch.object(s.os, "write") as output:
+            with self.assertRaises(RuntimeError) as caught:
+                with recorder.scope("outer_process"):
+                    raise failure
+        self.assertIs(caught.exception, failure)
+        output.assert_not_called()
+        self.assertIsNone(recorder.value)
+
+    def make_handler(self):
+        from types import SimpleNamespace
+        budget = unittest.mock.Mock()
+        source = unittest.mock.Mock()
+        source.budget, source.capture_directory, source.owned = budget, 4, {4}
+        outer = SimpleNamespace(directory=7, namespaces=(8, 9, 10))
+        source.process.return_value = outer
+        session = s.RuntimeBoundSession.__new__(s.RuntimeBoundSession)
+        session.source, session.budget = source, budget
+        session.phase, session.failed = "unbound", False
+        session.context = session.runtime = session.measurements = session.accounting = None
+        channel, runtime = unittest.mock.Mock(), unittest.mock.Mock()
+        request = {"version": 1, "sequence": 1, "op": "RootBindRuntime", "outer_pid": 100, "outer_start": 1000,
+            "context": {"backend": "docker", "candidate": "a" * 40, "run": "fixture", "lane": "upstream-rootful", "outer_id": "b" * 64},
+            "owner_labels": {s.OWNER_LABEL: "fixture"}, "external_source": {"bytes": 1024, "reads": 16}}
+        return session, channel, runtime, request
+
+    def test_all_rootbind_operation_sites_preserve_original_failure_and_failed_state(self):
+        import contextlib
+        for site in ("handler", "request_schema", "context_schema", "labels", "external_debit", "outer_args",
+                     "outer_process", "outer_vector", "outer_pidns", "outer_cgroup", "endpoint", "daemon_context",
+                     "daemon_bind", "outer_recheck"):
+            session, channel, runtime, request = self.make_handler()
+            recorder = s.BindRecorder()
+            recorder.begin()
+            failure = RuntimeError("PRIVATE_BIND_CANARY")
+            with contextlib.ExitStack() as stack:
+                stack.enter_context(patch.object(s, "_BIND", recorder))
+                output = stack.enter_context(patch.object(s.os, "write"))
+                vectors = stack.enter_context(patch.object(l, "status_vectors", return_value=((), (100, 1))))
+                endpoint = stack.enter_context(patch.object(l, "HeldEndpoint"))
+                factory = stack.enter_context(patch.object(l, "RuntimeLocator", return_value=runtime))
+                if site == "handler": session.budget.check.side_effect = failure
+                elif site == "request_schema": request["unreviewed"] = True
+                elif site == "context_schema": request["context"]["backend"] = "unreviewed"
+                elif site == "labels": request["owner_labels"] = {}
+                elif site == "external_debit": session.budget.debit_external.side_effect = failure
+                elif site == "outer_args": request["outer_pid"] = 0
+                elif site == "outer_process": session.source.process.side_effect = failure
+                elif site == "outer_vector": vectors.side_effect = failure
+                elif site == "outer_pidns": session.source.namespace_chain.side_effect = failure
+                elif site == "outer_cgroup": session.source.configured_outer_group.side_effect = failure
+                elif site == "endpoint": endpoint.side_effect = failure
+                elif site == "daemon_context": factory.side_effect = failure
+                elif site == "daemon_bind": runtime.bind_runtime.side_effect = failure
+                else: session.source.check_process.side_effect = failure
+                expected = b.Refusal if site in ("request_schema", "context_schema", "labels", "outer_args") else RuntimeError
+                with self.assertRaises(expected) as caught:
+                    session.handle(request, channel)
+                if expected is RuntimeError:
+                    self.assertIs(caught.exception, failure)
+                self.assertTrue(session.failed)
+                self.assertEqual(recorder.value, site)
+                self.assertEqual(output.call_count, 1)
+                self.assertEqual(output.call_args.args[1], f"DOCKERLENS_NATIVE_PIDS_BIND: s=w_{site}\n".encode())
+
+    def test_reserve_exchange_records_only_the_existing_escaping_call(self):
+        channel = s.Channel.__new__(s.Channel)
+        channel.sequence, channel.reservation = 1, 0
+        channel.response, channel.object = unittest.mock.Mock(), unittest.mock.Mock()
+        failure = RuntimeError("private ack")
+        channel.object.side_effect = failure
+        recorder = s.BindRecorder()
+        recorder.begin()
+        with patch.object(s, "_BIND", recorder), patch.object(s.os, "write") as output:
+            with self.assertRaises(RuntimeError) as caught:
+                channel.reserve_api(1, 4096)
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(recorder.value, "reserve_api")
+        self.assertEqual(output.call_count, 1)
+        self.assertEqual(channel.reservation, 1)
+        channel.response.assert_called_once_with({"version": 1, "sequence": 1, "op": "ReserveApi",
+            "reservation": 1, "units": 1, "max_body_bytes": 4096})
+        channel.object.assert_called_once_with()
+
+    def test_pending_response_is_complete_before_disable_and_later_phases_are_silent(self):
+        for partial in (False, True):
+            session, channel, runtime, request = self.make_handler()
+            recorder = s.BindRecorder()
+            recorder.begin()
+            failure = RuntimeError("partial pending" if partial else "later request")
+            channel.request.side_effect = [request, {"version": 1, "sequence": 2, "op": "ConfirmRuntime"}, failure]
+            def response(value):
+                if value["status"] == "pending":
+                    self.assertTrue(recorder.active)
+                    if partial: raise failure
+                else:
+                    self.assertFalse(recorder.active)
+            channel.response.side_effect = response
+            with patch.object(s, "_BIND", recorder), patch.object(s.os, "write") as output, \
+                    patch.object(l, "status_vectors", return_value=((), (100, 1))), \
+                    patch.object(l, "HeldEndpoint"), patch.object(l, "RuntimeLocator", return_value=runtime):
+                with self.assertRaises(RuntimeError) as caught:
+                    s.serve_session(channel, session)
+            self.assertIs(caught.exception, failure)
+            self.assertEqual(recorder.value, "pending_reply" if partial else None)
+            self.assertEqual(recorder.active, partial)
+            self.assertEqual(output.call_count, int(partial))
+            session.source.close.assert_called_once_with()
+            session.budget.check.assert_has_calls([unittest.mock.call()] * (1 if partial else 2))
+            session.budget.debit_external.assert_called_once_with(1024, 16)
+            session.source.process.assert_called_once_with(100, 1000)
+
+    def test_post_ready_prehandler_sites_and_bootstrap_gap_are_explicit(self):
+        import contextlib
+        from types import SimpleNamespace
+        for site in (None, "capture_adopt", "session_init", "request_read"):
+            recorder, startup = s.BindRecorder(), s.StartupRecorder("w", True)
+            source, channel = unittest.mock.Mock(), unittest.mock.Mock()
+            source.owned = {4}
+            failure = RuntimeError("PRIVATE_BIND_CANARY")
+            def bootstrap(_uid):
+                self.assertFalse(recorder.active)
+                startup.stop()
+                if site is None: raise failure  # after READY/before return is unobserved
+                return 4
+            def adopt(_fd):
+                self.assertTrue(recorder.active)
+                self.assertFalse(startup.active)
+                if site == "capture_adopt": raise failure
+            channel.bootstrap.side_effect, source.adopt_capture_directory.side_effect = bootstrap, adopt
+            channel.request.side_effect = failure
+            session = SimpleNamespace(phase="unbound", source=source)
+            with contextlib.ExitStack() as stack:
+                for target, name, value in [(s, "_BIND", recorder), (s, "_STARTUP", startup), (b, "STARTUP_OBSERVER", startup)]:
+                    stack.enter_context(patch.object(target, name, value))
+                output = stack.enter_context(patch.object(s.os, "write"))
+                stack.enter_context(patch.object(s.os, "close"))
+                stack.enter_context(patch.object(s, "peer_socket", return_value=(1, 2, 3, 5)))
+                stack.enter_context(patch.object(l, "RuntimeBudget"))
+                stack.enter_context(patch.object(l, "LocatorSource", return_value=source))
+                stack.enter_context(patch.object(s, "guard_parent"))
+                stack.enter_context(patch.object(s, "Channel", return_value=channel))
+                factory = stack.enter_context(patch.object(s, "RuntimeBoundSession", return_value=session))
+                if site == "session_init": factory.side_effect = failure
+                with self.assertRaises(RuntimeError) as caught:
+                    s.source_server(unittest.mock.Mock(), 123, (1, 2, 3, 6), 7)
+                self.assertIs(caught.exception, failure)
+                self.assertEqual(recorder.value, site)
+                self.assertEqual(output.call_count, int(site is not None))
+                self.assertFalse(startup.active)
+                self.assertIsNone(startup.value)
+
+    def test_successful_bind_keeps_source_budget_and_operation_transcript(self):
+        session, channel, runtime, request = self.make_handler()
+        recorder = s.BindRecorder()
+        recorder.begin()
+        log = []
+        later = RuntimeError("after complete pending")
+        channel.request.side_effect = [request, later]
+        session.budget.check.side_effect = lambda: log.append("budget_check")
+        session.budget.debit_external.side_effect = lambda _bytes, _reads: log.append("external_debit")
+        outer = session.source.process.return_value
+        session.source.process.side_effect = lambda *_args: (log.append("outer_process"), outer)[1]
+        session.source.read.side_effect = lambda *_args: (log.append("outer_status"), b"fixture")[1]
+        session.source.namespace_chain.side_effect = lambda *_args: log.append("outer_pidns")
+        session.source.configured_outer_group.side_effect = lambda *_args: (log.append("outer_cgroup"), object())[1]
+        session.source.check_process.side_effect = lambda *_args: log.append("outer_recheck")
+        session.source.close.side_effect = lambda: log.append("outer_disposal")
+        channel.reserve_api.side_effect = lambda units, maximum: log.append(("reserve", units, maximum))
+        def bind(_engine, reserve_probe):
+            log.append("daemon_bind")
+            reserve_probe()
+        runtime.bind_runtime.side_effect = bind
+        def response(value):
+            self.assertTrue(recorder.active)
+            self.assertEqual(value, {"version": 1, "sequence": 1, "op": "RootBindRuntime", "status": "pending"})
+            log.append("complete_pending")
+        channel.response.side_effect = response
+        with patch.object(s, "_BIND", recorder), patch.object(s.os, "write") as output, \
+                patch.object(l, "status_vectors", side_effect=lambda *_args: (log.append("outer_vector"), ((), (100, 1)))[1]), \
+                patch.object(l, "HeldEndpoint", side_effect=lambda *_args: (log.append("endpoint"), object())[1]), \
+                patch.object(l, "RuntimeLocator", side_effect=lambda *_args, **_options: (log.append("daemon_context"), runtime)[1]):
+            with self.assertRaises(RuntimeError) as caught:
+                s.serve_session(channel, session)
+        self.assertIs(caught.exception, later)
+        output.assert_not_called()
+        self.assertFalse(recorder.active)
+        self.assertIsNone(recorder.value)
+        self.assertEqual(log, ["budget_check", "external_debit", "outer_process", "outer_status", "outer_vector",
+            "outer_pidns", "outer_cgroup", "endpoint", "daemon_context", "daemon_bind", ("reserve", 1, 4096),
+            "outer_recheck", "complete_pending", "outer_disposal"])
+        self.assertEqual(session.accounting.receipt(), {"inspect_calls_reserved": 0, "inspect_body_bytes_reserved": 0,
+            "runtime_probe_calls_reserved": 1, "runtime_probe_body_bytes_reserved": 4096})
+        self.assertEqual(channel.request.call_count, 2)
+        session.budget.debit_external.assert_called_once_with(1024, 16)
+
+    def test_outer_session_disposal_only_never_authors_a_bind_site(self):
+        from types import SimpleNamespace
+        source, channel = unittest.mock.Mock(), unittest.mock.Mock()
+        source.owned = {4}
+        failure = OSError(5, "outer disposal")
+        source.close.side_effect = failure
+        session = SimpleNamespace(phase="finished", source=source)
+        recorder = s.BindRecorder()
+        recorder.begin()
+        with patch.object(s, "_BIND", recorder), patch.object(s.os, "write") as output:
+            with self.assertRaises(OSError) as caught:
+                s.serve_session(channel, session)
+        self.assertIs(caught.exception, failure)
+        output.assert_not_called()
+        self.assertIsNone(recorder.value)
+        channel.request.assert_not_called()
+        channel.response.assert_not_called()
+
+
 class HeldAncestryFixture:
     """Independent inert kernel model for the guard, not a source authority."""
 

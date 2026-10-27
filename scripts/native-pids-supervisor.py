@@ -133,6 +133,81 @@ class StartupRecorder:
         return RecorderScope(self, site) if self.active else _INACTIVE_SCOPE
 
 
+# Neutral CALL-ESCAPE sites, not guards/errnos/causes or internal work faults.
+BIND_SITES = (
+    "capture_adopt", "session_init", "request_read", "handler", "request_schema",
+    "context_schema", "labels", "external_debit", "outer_args", "outer_process",
+    "outer_vector", "outer_pidns", "outer_cgroup", "endpoint", "daemon_context",
+    "daemon_bind", "reserve_api", "outer_recheck", "pending_reply",
+)
+
+
+class BindScope:
+    __slots__ = ("recorder", "site")
+
+    def __init__(self, recorder, site):
+        self.recorder, self.site = recorder, site
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _kind, error, _traceback):
+        if error is not None and self.recorder is not None:
+            try:
+                self.recorder.escape(self.site)
+            except BaseException:
+                pass
+        return False
+
+
+_INACTIVE_BIND_SCOPE = BindScope(None, None)
+
+
+class BindRecorder:
+    """One worker call-escape record, including opaque internal cleanup.
+
+    Never inspect the exception or START's cleanup-origin marker. This says only
+    that the named operation escaped, not why or where its internals first failed.
+    """
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.active = self.seen = self.emitted = False
+        self.value = None
+
+    def begin(self):
+        self.active = True
+
+    def stop(self):
+        self.active = False
+
+    def escape(self, site):
+        if not self.active or self.seen:
+            return
+        self.seen = True
+        try:
+            if site not in BIND_SITES:
+                return
+            self.value = site
+            self.emitted = True
+            os.write(2, f"DOCKERLENS_NATIVE_PIDS_BIND: s=w_{site}\n".encode("ascii"))
+        except BaseException:
+            pass
+
+    def scope(self, site):
+        if self.active:
+            try:
+                return BindScope(self, site)
+            except BaseException:
+                pass
+        return _INACTIVE_BIND_SCOPE
+
+
+_BIND = BindRecorder()
+
+
 _STARTUP = StartupRecorder(active=__name__ == "__main__")
 with _STARTUP.scope("imports"):
     import array
@@ -334,17 +409,18 @@ class Channel:
         return value
 
     def reserve_api(self, units, maximum):
-        require(units == 1 and maximum in (locator.VERSION_CAP, locator.INSPECT_CAP))
-        self.reservation += 1
-        require(self.reservation <= 31 and self.sequence > 0)
-        self.response({"version": VERSION, "sequence": self.sequence, "op": "ReserveApi",
-                       "reservation": self.reservation, "units": 1, "max_body_bytes": maximum})
-        acknowledgment = self.object()  # same outstanding owner request, not new work
-        boundary.closed(acknowledgment, ("version", "sequence", "op", "reservation"))
-        require(acknowledgment["sequence"] == self.sequence
-                and acknowledgment["op"] == "ApiReservationAccepted"
-                and type(acknowledgment["reservation"]) is int
-                and acknowledgment["reservation"] == self.reservation)
+        with _BIND.scope("reserve_api"):
+            require(units == 1 and maximum in (locator.VERSION_CAP, locator.INSPECT_CAP))
+            self.reservation += 1
+            require(self.reservation <= 31 and self.sequence > 0)
+            self.response({"version": VERSION, "sequence": self.sequence, "op": "ReserveApi",
+                           "reservation": self.reservation, "units": 1, "max_body_bytes": maximum})
+            acknowledgment = self.object()  # same outstanding owner request, not new work
+            boundary.closed(acknowledgment, ("version", "sequence", "op", "reservation"))
+            require(acknowledgment["sequence"] == self.sequence
+                    and acknowledgment["op"] == "ApiReservationAccepted"
+                    and type(acknowledgment["reservation"]) is int
+                    and acknowledgment["reservation"] == self.reservation)
 
     def eof(self):
         part, _rights = self.receive(1)
@@ -463,72 +539,86 @@ class RuntimeBoundSession:
         self.context, self.runtime, self.measurements, self.accounting = None, None, None, None
 
     def handle(self, request, channel):
-        try:
-            require(not self.failed and self.phase != "finished")
-            self.budget.check()
-            common = ("version", "sequence", "op")
-            operation = request.get("op")
-            if operation == "RootBindRuntime":
-                boundary.closed(request, common + ("context", "outer_pid", "outer_start", "owner_labels", "external_source"))
-                require(self.phase == "unbound")
-                context = request["context"]
-                boundary.closed(context, ("backend", "candidate", "run", "lane", "outer_id"))
-                require(context["backend"] in ("docker", "podman") and context["lane"] in LANES
-                        and all(type(value) is str for value in context.values())
-                        and locator.re.fullmatch(r"[a-f0-9]{40}", context["candidate"]) is not None
-                        and locator.re.fullmatch(r"[a-f0-9]{64}", context["outer_id"]) is not None
-                        and locator.re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", context["run"]) is not None)
-                require(request["owner_labels"] == {OWNER_LABEL: context["run"]})
-                external = request["external_source"]
-                boundary.closed(external, ("bytes", "reads"))
-                self.budget.debit_external(external["bytes"], external["reads"])
-                pid = boundary.integer(request["outer_pid"], high=(1 << 31) - 1)
-                start = boundary.integer(request["outer_start"])
-                outer = self.source.process(pid, start)
-                _facts, vector = locator.status_vectors(self.source.read(outer.directory, "status", 4096), pid)
-                require(len(vector) >= 2 and vector[-1] == 1)
-                self.source.namespace_chain(outer.namespaces[0], vector)
-                group = self.source.configured_outer_group(outer)
-                endpoint = locator.HeldEndpoint(self.source, self.source.capture_directory)
-                uid, executable, engine, api = LANES[context["lane"]]
-                self.accounting = locator.ParentReservations(channel.reserve_api)
-                runtime = locator.RuntimeLocator(self.source, outer, group, endpoint,
-                    locator.DaemonExpectation(uid, executable, True), api,
-                    {OWNER_LABEL: context["run"]}, self.accounting, slot_label=SLOT_LABEL)
-                runtime.bind_runtime(engine, self.accounting.reserve_probe)
-                self.source.check_process(outer)
-                self.context, self.runtime = dict(context), runtime
-                self.phase = "pending"
-                result = {"status": "pending"}
-            elif operation == "ConfirmRuntime":
-                boundary.closed(request, common)
-                require(self.phase == "pending")
-                # The canonical owner sends this ONLY after its second actual
-                # selected-runtime inspection equals its original CID facts.
-                # This request itself is not evidence that those calls ran.
-                self.runtime.check_daemon()
-                self.phase = "confirmed"
-                result = {"status": "confirmed"}
-            elif operation == "LocateBatch":
-                boundary.closed(request, common + ("slots",))
-                require(self.phase == "confirmed" and type(request["slots"]) is dict
-                        and tuple(request["slots"]) == locator.ORDER)
-                self.measurements = RootSession(self.runtime, request["slots"])
-                reply = self.measurements.handle({key: request[key] for key in common}, channel)
-                self.phase = self.measurements.phase
-                return reply
-            else:
-                require(self.measurements is not None)
-                reply = self.measurements.handle(request, channel)
-                self.phase = self.measurements.phase
-                if self.phase == "finished":
-                    reply["reservations"] = self.accounting.receipt()
-                    reply["source_ledger"] = self.budget.ledger(len(self.source.owned))
-                return reply
-            return {"version": VERSION, "sequence": request["sequence"], "op": operation, **result}
-        except BaseException:
-            self.failed = True
-            raise
+        with _BIND.scope("handler"):
+            try:
+                require(not self.failed and self.phase != "finished")
+                self.budget.check()
+                common = ("version", "sequence", "op")
+                operation = request.get("op")
+                if operation == "RootBindRuntime":
+                    with _BIND.scope("request_schema"):
+                        boundary.closed(request, common + ("context", "outer_pid", "outer_start", "owner_labels", "external_source"))
+                        require(self.phase == "unbound")
+                    with _BIND.scope("context_schema"):
+                        context = request["context"]
+                        boundary.closed(context, ("backend", "candidate", "run", "lane", "outer_id"))
+                        require(context["backend"] in ("docker", "podman") and context["lane"] in LANES
+                                and all(type(value) is str for value in context.values())
+                                and locator.re.fullmatch(r"[a-f0-9]{40}", context["candidate"]) is not None
+                                and locator.re.fullmatch(r"[a-f0-9]{64}", context["outer_id"]) is not None
+                                and locator.re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", context["run"]) is not None)
+                    with _BIND.scope("labels"):
+                        require(request["owner_labels"] == {OWNER_LABEL: context["run"]})
+                    with _BIND.scope("external_debit"):
+                        external = request["external_source"]
+                        boundary.closed(external, ("bytes", "reads"))
+                        self.budget.debit_external(external["bytes"], external["reads"])
+                    with _BIND.scope("outer_args"):
+                        pid = boundary.integer(request["outer_pid"], high=(1 << 31) - 1)
+                        start = boundary.integer(request["outer_start"])
+                    with _BIND.scope("outer_process"):
+                        outer = self.source.process(pid, start)
+                    with _BIND.scope("outer_vector"):
+                        _facts, vector = locator.status_vectors(self.source.read(outer.directory, "status", 4096), pid)
+                        require(len(vector) >= 2 and vector[-1] == 1)
+                    with _BIND.scope("outer_pidns"):
+                        self.source.namespace_chain(outer.namespaces[0], vector)
+                    with _BIND.scope("outer_cgroup"):
+                        group = self.source.configured_outer_group(outer)
+                    with _BIND.scope("endpoint"):
+                        endpoint = locator.HeldEndpoint(self.source, self.source.capture_directory)
+                    with _BIND.scope("daemon_context"):
+                        uid, executable, engine, api = LANES[context["lane"]]
+                        self.accounting = locator.ParentReservations(channel.reserve_api)
+                        runtime = locator.RuntimeLocator(self.source, outer, group, endpoint,
+                            locator.DaemonExpectation(uid, executable, True), api,
+                            {OWNER_LABEL: context["run"]}, self.accounting, slot_label=SLOT_LABEL)
+                    with _BIND.scope("daemon_bind"):
+                        runtime.bind_runtime(engine, self.accounting.reserve_probe)
+                    with _BIND.scope("outer_recheck"):
+                        self.source.check_process(outer)
+                    self.context, self.runtime = dict(context), runtime
+                    self.phase = "pending"
+                    result = {"status": "pending"}
+                elif operation == "ConfirmRuntime":
+                    boundary.closed(request, common)
+                    require(self.phase == "pending")
+                    # The canonical owner sends this ONLY after its second actual
+                    # selected-runtime inspection equals its original CID facts.
+                    # This request itself is not evidence that those calls ran.
+                    self.runtime.check_daemon()
+                    self.phase = "confirmed"
+                    result = {"status": "confirmed"}
+                elif operation == "LocateBatch":
+                    boundary.closed(request, common + ("slots",))
+                    require(self.phase == "confirmed" and type(request["slots"]) is dict
+                            and tuple(request["slots"]) == locator.ORDER)
+                    self.measurements = RootSession(self.runtime, request["slots"])
+                    reply = self.measurements.handle({key: request[key] for key in common}, channel)
+                    self.phase = self.measurements.phase
+                    return reply
+                else:
+                    require(self.measurements is not None)
+                    reply = self.measurements.handle(request, channel)
+                    self.phase = self.measurements.phase
+                    if self.phase == "finished":
+                        reply["reservations"] = self.accounting.receipt()
+                        reply["source_ledger"] = self.budget.ledger(len(self.source.owned))
+                    return reply
+                return {"version": VERSION, "sequence": request["sequence"], "op": operation, **result}
+            except BaseException:
+                self.failed = True
+                raise
 
 
 def guard_parent(source, peer, supervisor_pid):
@@ -601,8 +691,13 @@ def serve_session(channel, session):
     """One request in flight; terminal acknowledgment follows EOF and cleanup."""
     try:
         while session.phase != "finished":
-            request = channel.request()
-            channel.response(session.handle(request, channel))
+            with _BIND.scope("request_read"):
+                request = channel.request()
+            with _BIND.scope("pending_reply"):
+                channel.response(session.handle(request, channel))
+            if session.phase == "pending":
+                # Only a FULL original pending response disables observation.
+                _BIND.stop()
     finally:
         with boundary.startup_cleanup():
             if session.source.owned:
@@ -626,9 +721,15 @@ def source_server(stream, deadline_ns, peer, supervisor_pid):
         guard_parent(source, peer, supervisor_pid)
         channel = Channel(stream, budget, peer[3])
         capture = channel.bootstrap(peer[1])
-        source.adopt_capture_directory(capture)
+        # Bootstrap/READY and its final cleanup have already returned. The gap
+        # before activation is unobserved; START stays stopped permanently.
+        _BIND.begin()
+        with _BIND.scope("capture_adopt"):
+            source.adopt_capture_directory(capture)
         capture = None  # transfer is irreversible; never close a reused number
-        serve_session(channel, RuntimeBoundSession(source))
+        with _BIND.scope("session_init"):
+            session = RuntimeBoundSession(source)
+        serve_session(channel, session)
     finally:
         with boundary.startup_cleanup():
             failed = False
@@ -717,6 +818,7 @@ def supervise(stream, deadline_ns):
         if child == 0:
             # Fork copies memory: reset role/latch before the first child work.
             _STARTUP.reset("w")
+            _BIND.reset()
             try:
                 with _STARTUP.scope("kid_gate_close"):
                     os.close(gate_write)

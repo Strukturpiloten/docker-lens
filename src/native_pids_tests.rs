@@ -217,6 +217,44 @@ const STARTUP_KINDS: &[&str] = &[
     "other",
 ];
 
+const BIND_PREFIX: &str = "DOCKERLENS_NATIVE_PIDS_BIND:";
+const BIND_SITES: &[&str] = &[
+    "w_capture_adopt",
+    "w_session_init",
+    "w_request_read",
+    "w_handler",
+    "w_request_schema",
+    "w_context_schema",
+    "w_labels",
+    "w_external_debit",
+    "w_outer_args",
+    "w_outer_process",
+    "w_outer_vector",
+    "w_outer_pidns",
+    "w_outer_cgroup",
+    "w_endpoint",
+    "w_daemon_context",
+    "w_daemon_bind",
+    "w_reserve_api",
+    "w_outer_recheck",
+    "w_pending_reply",
+];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ClosedBindSite(usize);
+
+impl ClosedBindSite {
+    fn site(self) -> Option<&'static str> {
+        BIND_SITES.get(self.0).copied()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CapturedConstructorObservation {
+    Startup(ClosedStartupFault),
+    Bind(ClosedBindSite),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ClosedStartupFault {
     site: usize,
@@ -233,7 +271,14 @@ impl ClosedStartupFault {
 }
 
 fn startup_fault_from_capture(bytes: &[u8], overflow: bool) -> Option<ClosedStartupFault> {
-    if overflow || bytes.len() > 1024 || bytes.contains(&0) || !bytes.ends_with(b"\n") {
+    if overflow
+        || bytes.len() > 1024
+        || bytes.contains(&0)
+        || !bytes.ends_with(b"\n")
+        || bytes
+            .split(|byte| *byte == b'\n')
+            .any(|line| line.starts_with(BIND_PREFIX.as_bytes()))
+    {
         return None;
     }
     let mut candidate = None;
@@ -257,6 +302,71 @@ fn startup_fault_from_capture(bytes: &[u8], overflow: bool) -> Option<ClosedStar
         candidate = Some(fault);
     }
     candidate
+}
+
+fn constructor_observation_from_capture(
+    bytes: &[u8],
+    overflow: bool,
+) -> Option<CapturedConstructorObservation> {
+    let bind = bytes
+        .split(|byte| *byte == b'\n')
+        .any(|line| line.starts_with(BIND_PREFIX.as_bytes()));
+    if !bind {
+        return startup_fault_from_capture(bytes, overflow)
+            .map(CapturedConstructorObservation::Startup);
+    }
+    // Resolve cross-family conflicts BEFORE any Rust-phase selection. Even an
+    // unknown/malformed START prefix taints a BIND capture (and conversely).
+    if overflow
+        || bytes.len() > 1024
+        || bytes.contains(&0)
+        || !bytes.ends_with(b"\n")
+        || bytes
+            .split(|byte| *byte == b'\n')
+            .any(|line| line.starts_with(STARTUP_PREFIX.as_bytes()))
+    {
+        return None;
+    }
+    let mut candidate = None;
+    for line in bytes.split(|byte| *byte == b'\n') {
+        if !line.starts_with(BIND_PREFIX.as_bytes()) {
+            continue;
+        }
+        if line.len() > 63 {
+            return None;
+        }
+        let site = line.strip_prefix(b"DOCKERLENS_NATIVE_PIDS_BIND: s=")?;
+        let observation = ClosedBindSite(
+            BIND_SITES
+                .iter()
+                .position(|allowed| allowed.as_bytes() == site)?,
+        );
+        if candidate.is_some_and(|first| first != observation) {
+            return None;
+        }
+        candidate = Some(observation);
+    }
+    candidate.map(CapturedConstructorObservation::Bind)
+}
+
+fn write_bind_site(mut output: impl std::io::Write, observation: ClosedBindSite) {
+    let Some(site) = observation.site() else {
+        return;
+    };
+    let chunks: &[&[u8]] = &[b"DOCKERLENS_NATIVE_PIDS_BIND: s=", site.as_bytes(), b"\n"];
+    let mut line = [0; 64];
+    let mut length = 0usize;
+    for chunk in chunks {
+        let Some(next) = length.checked_add(chunk.len()) else {
+            return;
+        };
+        let Some(destination) = line.get_mut(length..next) else {
+            return;
+        };
+        destination.copy_from_slice(chunk);
+        length = next;
+    }
+    let _ = output.write(&line[..length]);
 }
 
 fn write_startup_fault(mut output: impl std::io::Write, fault: ClosedStartupFault) {
@@ -288,12 +398,12 @@ fn write_startup_fault(mut output: impl std::io::Write, fault: ClosedStartupFaul
 
 fn root_stderr_capture(
     source: impl Read,
-    startup: &OnceLock<ClosedStartupFault>,
+    startup: &OnceLock<CapturedConstructorObservation>,
 ) -> (Vec<u8>, bool) {
     // stream owns exactly the original reads, cap and EOF. No partial capture,
     // overflow or reader panic may publish. Preserve its tuple for success join.
     let capture = stream(source, 1024);
-    if let Some(fault) = startup_fault_from_capture(&capture.0, capture.1) {
+    if let Some(fault) = constructor_observation_from_capture(&capture.0, capture.1) {
         let _ = startup.set(fault);
     }
     capture
@@ -368,6 +478,11 @@ struct ConstructorIoFault {
 impl ConstructorIoFault {
     fn allows_startup_observation(self) -> bool {
         self.phase == ConstructorIoPhase::Ready
+            && matches!(self.kind, ConstructorIoKind::Reset | ConstructorIoKind::Eof)
+    }
+
+    fn allows_bind_observation(self) -> bool {
+        self.phase == ConstructorIoPhase::Bind
             && matches!(self.kind, ConstructorIoKind::Reset | ConstructorIoKind::Eof)
     }
 
@@ -740,7 +855,7 @@ struct RootChannel {
     wire: RootWire,
     child: Child,
     stderr: Option<std::thread::JoinHandle<(Vec<u8>, bool)>>,
-    startup: Arc<OnceLock<ClosedStartupFault>>,
+    startup: Arc<OnceLock<CapturedConstructorObservation>>,
     reservation: u64,
     inspect_calls: u64,
     inspect_bytes: u64,
@@ -1068,13 +1183,18 @@ impl Drop for RootChannel {
         // One nonblocking snapshot after the ORIGINAL retirement. Success still
         // joins; failure still detaches. Late/no EOF or reader panic is silent.
         let startup = self.startup.get().copied();
-        if self
-            .wire
-            .first_read_fault
-            .is_some_and(ConstructorIoFault::allows_startup_observation)
-            && let Some(fault) = startup
-        {
-            write_startup_fault(std::io::stderr().lock(), fault);
+        match (self.wire.first_read_fault, startup) {
+            (Some(io), Some(CapturedConstructorObservation::Startup(fault)))
+                if io.allows_startup_observation() =>
+            {
+                write_startup_fault(std::io::stderr().lock(), fault);
+            }
+            (Some(io), Some(CapturedConstructorObservation::Bind(site)))
+                if io.allows_bind_observation() =>
+            {
+                write_bind_site(std::io::stderr().lock(), site);
+            }
+            _ => {}
         }
     }
 }
@@ -3335,6 +3455,161 @@ fn live_pids_limits_and_effects_match_engine() {
 }
 
 #[test]
+fn pids_bind_records_have_only_closed_worker_sites_and_no_kind() {
+    for site in BIND_SITES {
+        let line = format!("DOCKERLENS_NATIVE_PIDS_BIND: s={site}\n");
+        assert!(line.is_ascii());
+        assert!(line.len() <= 64);
+        let Some(CapturedConstructorObservation::Bind(observed)) =
+            constructor_observation_from_capture(line.as_bytes(), false)
+        else {
+            panic!("finite BIND site must parse");
+        };
+        assert_eq!(observed.site(), Some(*site));
+        assert_eq!(startup_fault_from_capture(line.as_bytes(), false), None);
+    }
+    let literal = b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_outer_cgroup\n";
+    let Some(CapturedConstructorObservation::Bind(site)) =
+        constructor_observation_from_capture(literal, false)
+    else {
+        panic!("literal BIND record must parse");
+    };
+    assert_eq!(site.site(), Some("w_outer_cgroup"));
+    let mut output = Vec::new();
+    write_bind_site(&mut output, site);
+    assert_eq!(output.as_slice(), literal);
+    assert_eq!(ClosedBindSite(usize::MAX).site(), None);
+}
+
+#[test]
+fn pids_bind_conflicts_taint_both_families_before_phase_selection() {
+    let bind = "DOCKERLENS_NATIVE_PIDS_BIND: s=w_outer_cgroup\n";
+    let start = "DOCKERLENS_NATIVE_PIDS_START: s=w_parent_uid k=guard\n";
+    let expected = constructor_observation_from_capture(bind.as_bytes(), false).unwrap();
+    assert_eq!(
+        constructor_observation_from_capture(format!("{bind}{bind}").as_bytes(), false),
+        Some(expected)
+    );
+    for bytes in [
+        format!("{start}{bind}").into_bytes(),
+        format!("{bind}{start}").into_bytes(),
+        format!("{bind}DOCKERLENS_NATIVE_PIDS_START:\n").into_bytes(),
+        format!("{start}DOCKERLENS_NATIVE_PIDS_BIND:\n").into_bytes(),
+        format!("{bind}DOCKERLENS_NATIVE_PIDS_BIND: s=w_endpoint\n").into_bytes(),
+        b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_outer_cgroup k=guard\n".to_vec(),
+        b"DOCKERLENS_NATIVE_PIDS_BIND: s=s_outer_cgroup\n".to_vec(),
+        b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_PRIVATE_CANARY\n".to_vec(),
+        b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_outer_cgroup PRIVATE_CANARY\n".to_vec(),
+        b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_outer_cgroup\r\n".to_vec(),
+        b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_outer_cgroup\0\n".to_vec(),
+        bind.trim_end().as_bytes().to_vec(),
+        [bind.as_bytes(), &[b'x'; 1024], b"\n"].concat(),
+    ] {
+        assert_eq!(constructor_observation_from_capture(&bytes, false), None);
+        // The legacy-only helper cannot accidentally ignore BIND taint either.
+        assert_eq!(startup_fault_from_capture(&bytes, false), None);
+    }
+    assert_eq!(
+        constructor_observation_from_capture(bind.as_bytes(), true),
+        None
+    );
+}
+
+#[test]
+fn pids_bind_writer_never_flushes_or_retries_failed_or_short_writes() {
+    struct Checked<'a> {
+        calls: &'a std::cell::Cell<usize>,
+        short: bool,
+    }
+    impl std::io::Write for Checked<'_> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.calls.set(self.calls.get() + 1);
+            assert!(bytes.len() <= 64);
+            assert!(bytes.starts_with(b"DOCKERLENS_NATIVE_PIDS_BIND:"));
+            if self.short {
+                Ok(1)
+            } else {
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            }
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            panic!("BIND observation must not flush")
+        }
+    }
+    let Some(CapturedConstructorObservation::Bind(site)) =
+        constructor_observation_from_capture(b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_endpoint\n", false)
+    else {
+        panic!("literal BIND record must parse")
+    };
+    let calls = std::cell::Cell::new(0);
+    write_bind_site(
+        Checked {
+            calls: &calls,
+            short: false,
+        },
+        site,
+    );
+    assert_eq!(calls.get(), 1);
+    write_bind_site(
+        Checked {
+            calls: &calls,
+            short: true,
+        },
+        site,
+    );
+    assert_eq!(calls.get(), 2);
+    write_bind_site(
+        Checked {
+            calls: &calls,
+            short: false,
+        },
+        ClosedBindSite(usize::MAX),
+    );
+    assert_eq!(calls.get(), 2);
+}
+
+#[test]
+fn pids_bind_late_slot_and_closed_phase_pairs_stay_unobserved_elsewhere() {
+    let slot = OnceLock::new();
+    let snapshot = slot.get().copied();
+    root_stderr_capture(
+        std::io::Cursor::new(b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_endpoint\n"),
+        &slot,
+    );
+    assert_eq!(snapshot, None);
+    assert!(matches!(
+        slot.get(),
+        Some(CapturedConstructorObservation::Bind(_))
+    ));
+    for phase in [
+        ConstructorIoPhase::Ready,
+        ConstructorIoPhase::Bind,
+        ConstructorIoPhase::Confirm,
+    ] {
+        for kind in [
+            ConstructorIoKind::Reset,
+            ConstructorIoKind::Eof,
+            ConstructorIoKind::Other,
+            ConstructorIoKind::NotConnected,
+            ConstructorIoKind::BadDescriptor,
+            ConstructorIoKind::InvalidArgument,
+            ConstructorIoKind::PermissionDenied,
+            ConstructorIoKind::Resource,
+        ] {
+            let io = ConstructorIoFault { phase, kind };
+            assert_eq!(
+                io.allows_bind_observation(),
+                [("bind", "reset"), ("bind", "eof")].contains(&(phase.name(), kind.name()))
+            );
+            assert_eq!(
+                io.allows_startup_observation(),
+                [("ready", "reset"), ("ready", "eof")].contains(&(phase.name(), kind.name()))
+            );
+        }
+    }
+}
+
+#[test]
 fn pids_startup_records_have_closed_origins_kinds_and_literal_bounds() {
     for site in STARTUP_SITES {
         for kind in STARTUP_KINDS {
@@ -3432,6 +3707,9 @@ fn pids_startup_reader_preserves_original_tuple_and_every_read() {
     for bytes in [
         b"DOCKERLENS_NATIVE_PIDS_START: s=w_parent_uid k=guard\n".to_vec(),
         b"DOCKERLENS_NATIVE_PIDS_START: s=w_parent_uid k=guard".to_vec(),
+        b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_endpoint\n".to_vec(),
+        b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_endpoint".to_vec(),
+        b"DOCKERLENS_NATIVE_PIDS_START: s=w_parent_uid k=guard\nDOCKERLENS_NATIVE_PIDS_BIND: s=w_endpoint\n".to_vec(),
         vec![b'x'; 8193],
     ] {
         let original_calls = std::cell::Cell::new(0);
@@ -3455,7 +3733,7 @@ fn pids_startup_reader_preserves_original_tuple_and_every_read() {
         assert_eq!(observed_calls.get(), original_calls.get());
         assert_eq!(
             slot.get().copied(),
-            startup_fault_from_capture(&original.0, original.1)
+            constructor_observation_from_capture(&original.0, original.1)
         );
     }
 }
@@ -3499,12 +3777,17 @@ fn pids_startup_no_eof_panic_and_late_publication_do_not_change_snapshot() {
     struct Incomplete {
         supplied: bool,
         panic: bool,
+        bind: bool,
     }
     impl Read for Incomplete {
         fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
             if !self.supplied {
                 self.supplied = true;
-                let record = b"DOCKERLENS_NATIVE_PIDS_START: s=w_parent_uid k=guard\n";
+                let record: &[u8] = if self.bind {
+                    b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_endpoint\n"
+                } else {
+                    b"DOCKERLENS_NATIVE_PIDS_START: s=w_parent_uid k=guard\n"
+                };
                 bytes[..record.len()].copy_from_slice(record);
                 return Ok(record.len());
             }
@@ -3512,19 +3795,22 @@ fn pids_startup_no_eof_panic_and_late_publication_do_not_change_snapshot() {
             Err(std::io::ErrorKind::WouldBlock.into())
         }
     }
-    for panic in [false, true] {
-        let slot = OnceLock::new();
-        let result = std::panic::catch_unwind(|| {
-            root_stderr_capture(
-                Incomplete {
-                    supplied: false,
-                    panic,
-                },
-                &slot,
-            )
-        });
-        assert!(result.is_err());
-        assert_eq!(slot.get(), None);
+    for bind in [false, true] {
+        for panic in [false, true] {
+            let slot = OnceLock::new();
+            let result = std::panic::catch_unwind(|| {
+                root_stderr_capture(
+                    Incomplete {
+                        supplied: false,
+                        panic,
+                        bind,
+                    },
+                    &slot,
+                )
+            });
+            assert!(result.is_err());
+            assert_eq!(slot.get(), None);
+        }
     }
     let slot = OnceLock::new();
     // This is the sole nonblocking failure snapshot. A later EOF publication
