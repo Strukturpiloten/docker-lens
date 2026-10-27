@@ -47,6 +47,16 @@ barrier is superseded while its historical evidence keeps its original status.
 - [0036: Guarded CommandClear raw-source projection](0036-command-clear-native-source-projection.md)
 - [0037: Reviewed CommandClear cohort](0037-reviewed-command-clear-cohort.md)
 - [0038: Maintained profile for the exact Box consumer](0038-maintained-profile-for-box-consumer.md)
+- [0039: Measured live PIDs boundary](0039-measured-pids-boundary.md)
+- [0040: Runtime-associated PIDs source session](0040-pids-runtime-source-session.md)
+- [0041: Original-owner PIDs27 experiment](0041-original-owner-pids-experiment.md)
+- [0042: Finite sudo monitor UID shape](0042-sudo-monitor-uid-shape.md)
+- [0043: Prepare thread-aware PIDs source coverage](0043-thread-aware-pids-source-contract.md)
+
+ADR 0043 prepares pure topology contracts and controls only. It does not replace
+current collector guards, emit proof v2, establish physical budget fit, or qualify
+native execution. Its explicit implementation and independent-review gates remain.
+
 
 ADR 0038 adds only the separately enumerated BoxFerry reviewed-consumer identity
 to the test-only maintained profile helper; native contexts and receipts retain
