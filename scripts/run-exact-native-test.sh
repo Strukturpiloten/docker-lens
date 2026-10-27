@@ -227,7 +227,7 @@ try:
                 tainted = True
         elif line.startswith(detail_prefix):
             if (len(line) > 64 or re.fullmatch(
-                    rb"DOCKERLENS_NATIVE_PIDS_IO: phase=(ready|bind|confirm) kind=(reset|not_connected|bad_descriptor|invalid_argument|permission_denied|resource|other)", line) is None):
+                    rb"DOCKERLENS_NATIVE_PIDS_IO: phase=(ready|bind|confirm) kind=(reset|not_connected|bad_descriptor|invalid_argument|permission_denied|resource|other|eof)", line) is None):
                 detail_tainted = True
             elif detail is None:
                 detail = line
@@ -246,11 +246,15 @@ try:
         sys.stdout.buffer.write(prefix + candidate + b"\n")
         # Detail is useful only with the same raw stream failure code. It never
         # replaces the general refusal or attributes a privileged helper cause.
-        if candidate == b"pids-read" and detail is not None and not detail_tainted:
-            sys.stdout.buffer.write(detail + b"\n")
-            if (detail == b"DOCKERLENS_NATIVE_PIDS_IO: phase=ready kind=reset"
-                    and startup is not None and not startup_tainted):
-                sys.stdout.buffer.write(startup + b"\n")
+        if detail is not None and not detail_tainted:
+            eof = detail.endswith(b" kind=eof")
+            paired = (candidate == b"pids-eof" and eof) or (candidate == b"pids-read" and not eof)
+            if paired:
+                sys.stdout.buffer.write(detail + b"\n")
+                ready = (detail == b"DOCKERLENS_NATIVE_PIDS_IO: phase=ready kind=eof" if eof else
+                         detail == b"DOCKERLENS_NATIVE_PIDS_IO: phase=ready kind=reset")
+                if ready and startup is not None and not startup_tainted:
+                    sys.stdout.buffer.write(startup + b"\n")
 except (OSError, ValueError):
     pass
 ' "$(dirname "$0")/../src/native_pids_setup_refusals.txt" "$capture_directory/run.raw" "$original_run_status" 2>/dev/null) || setup_projection_status=$?

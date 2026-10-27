@@ -327,6 +327,8 @@ enum ConstructorIoKind {
     PermissionDenied,
     Resource,
     Other,
+    // A zero-byte exact read, not an OS error or a helper cause.
+    Eof,
 }
 
 impl ConstructorIoKind {
@@ -352,6 +354,7 @@ impl ConstructorIoKind {
             Self::PermissionDenied => "permission_denied",
             Self::Resource => "resource",
             Self::Other => "other",
+            Self::Eof => "eof",
         }
     }
 }
@@ -363,6 +366,11 @@ struct ConstructorIoFault {
 }
 
 impl ConstructorIoFault {
+    fn allows_startup_observation(self) -> bool {
+        self.phase == ConstructorIoPhase::Ready
+            && matches!(self.kind, ConstructorIoKind::Reset | ConstructorIoKind::Eof)
+    }
+
     fn diagnostic(self) -> String {
         format!(
             "DOCKERLENS_NATIVE_PIDS_IO: phase={} kind={}",
@@ -581,6 +589,18 @@ impl RootWire {
         Some(fault)
     }
 
+    fn latch_eof_fault(&mut self) -> Option<ConstructorIoFault> {
+        if self.cleanup || self.first_read_fault.is_some() {
+            return None;
+        }
+        let fault = ConstructorIoFault {
+            phase: self.constructor_phase?,
+            kind: ConstructorIoKind::Eof,
+        };
+        self.first_read_fault = Some(fault);
+        Some(fault)
+    }
+
     fn receive(&mut self, bytes: &mut [u8]) -> PidsResult<usize> {
         if bytes.is_empty() {
             return Err("pids-read");
@@ -628,6 +648,15 @@ impl RootWire {
         while offset < bytes.len() {
             let size = self.receive(&mut bytes[offset..])?;
             if size == 0 {
+                // Only the original failing exact read observes EOF. The
+                // expected terminal receive()==0 remains successful and silent.
+                if let Some(fault) = self.latch_eof_fault() {
+                    let _ = writeln!(
+                        std::io::stderr().lock(),
+                        "DOCKERLENS_NATIVE_PIDS_IO: phase={} kind=eof",
+                        fault.phase.name()
+                    );
+                }
                 return Err("pids-eof");
             }
             offset += size;
@@ -1039,11 +1068,10 @@ impl Drop for RootChannel {
         // One nonblocking snapshot after the ORIGINAL retirement. Success still
         // joins; failure still detaches. Late/no EOF or reader panic is silent.
         let startup = self.startup.get().copied();
-        if self.wire.first_read_fault
-            == Some(ConstructorIoFault {
-                phase: ConstructorIoPhase::Ready,
-                kind: ConstructorIoKind::Reset,
-            })
+        if self
+            .wire
+            .first_read_fault
+            .is_some_and(ConstructorIoFault::allows_startup_observation)
             && let Some(fault) = startup
         {
             write_startup_fault(std::io::stderr().lock(), fault);
@@ -3598,13 +3626,168 @@ fn pids_constructor_io_latches_first_fatal_only_and_ignores_cleanup() {
 }
 
 #[test]
-fn pids_constructor_io_eof_is_not_a_fatal_recvmsg_fault() {
-    let (owner, peer) = UnixStream::pair().unwrap();
+fn pids_constructor_io_exact_eof_has_closed_phase_and_preserves_error() {
+    for (phase, name) in [
+        (ConstructorIoPhase::Ready, "ready"),
+        (ConstructorIoPhase::Bind, "bind"),
+        (ConstructorIoPhase::Confirm, "confirm"),
+    ] {
+        let (owner, peer) = UnixStream::pair().unwrap();
+        let mut wire = RootWire::new(owner, Instant::now() + Duration::from_secs(50)).unwrap();
+        wire.constructor_phase = Some(phase);
+        drop(peer);
+        assert_eq!(wire.exact(&mut [0; 8]), Err("pids-eof"));
+        let fault = wire.first_read_fault.unwrap();
+        assert_eq!(
+            fault,
+            ConstructorIoFault {
+                phase,
+                kind: ConstructorIoKind::Eof
+            }
+        );
+        assert_eq!(
+            fault.diagnostic(),
+            format!("DOCKERLENS_NATIVE_PIDS_IO: phase={name} kind=eof")
+        );
+        assert!(fault.diagnostic().is_ascii());
+        assert!(fault.diagnostic().len() <= 64);
+        assert_eq!(wire.received, 0);
+        assert_eq!(wire.captured, 0);
+    }
+}
+
+#[test]
+fn pids_constructor_io_partial_ready_and_frames_preserve_eof_and_byte_counts() {
+    let (owner, mut peer) = UnixStream::pair().unwrap();
     let mut wire = RootWire::new(owner, Instant::now() + Duration::from_secs(50)).unwrap();
     wire.constructor_phase = Some(ConstructorIoPhase::Ready);
+    std::io::Write::write_all(&mut peer, b"BFRE").unwrap();
     drop(peer);
     assert_eq!(wire.exact(&mut [0; 8]), Err("pids-eof"));
+    assert_eq!(wire.received, 4);
+    assert_eq!(wire.first_read_fault.unwrap().kind, ConstructorIoKind::Eof);
+    // Partial length prefix and partial positive-length frame body. Neither
+    // becomes a complete frame, a schema error or an invented recvmsg errno.
+    for phase in [ConstructorIoPhase::Bind, ConstructorIoPhase::Confirm] {
+        for bytes in [vec![0, 0], vec![0, 0, 0, 4, b'{', b'}']] {
+            let (owner, mut peer) = UnixStream::pair().unwrap();
+            let mut wire = RootWire::new(owner, Instant::now() + Duration::from_secs(50)).unwrap();
+            wire.constructor_phase = Some(phase);
+            std::io::Write::write_all(&mut peer, &bytes).unwrap();
+            drop(peer);
+            assert_eq!(wire.object(), Err("pids-eof"));
+            assert_eq!(wire.received, bytes.len());
+            assert_eq!(wire.captured, bytes.len());
+            assert_eq!(wire.last_frame, 0);
+            assert_eq!(
+                wire.first_read_fault,
+                Some(ConstructorIoFault {
+                    phase,
+                    kind: ConstructorIoKind::Eof
+                })
+            );
+        }
+    }
+}
+
+#[test]
+fn pids_constructor_io_valid_frame_and_expected_terminal_eof_remain_silent() {
+    let (owner, mut peer) = UnixStream::pair().unwrap();
+    let mut wire = RootWire::new(owner, Instant::now() + Duration::from_secs(50)).unwrap();
+    wire.constructor_phase = Some(ConstructorIoPhase::Confirm);
+    std::io::Write::write_all(&mut peer, b"\0\0\0\x02{}").unwrap();
+    drop(peer);
+    assert_eq!(wire.object(), Ok(json!({})));
     assert_eq!(wire.first_read_fault, None);
+    wire.constructor_phase = None;
+    wire.cleanup = true;
+    assert_eq!(wire.receive(&mut [0; 1]), Ok(0));
+    assert_eq!(wire.first_read_fault, None);
+    assert_eq!(wire.received, 6);
+    assert_eq!(wire.captured, 6);
+    // Even an active phase does not convert a direct, successful EOF receive
+    // into an exact-read failure. The original finalize uses receive directly.
+    wire.cleanup = false;
+    wire.constructor_phase = Some(ConstructorIoPhase::Ready);
+    assert_eq!(wire.receive(&mut [0; 1]), Ok(0));
+    assert_eq!(wire.first_read_fault, None);
+}
+
+#[test]
+fn pids_constructor_io_eof_inactive_cleanup_empty_and_invalid_frame_do_not_latch() {
+    for (phase, cleanup) in [(None, false), (Some(ConstructorIoPhase::Ready), true)] {
+        let (owner, peer) = UnixStream::pair().unwrap();
+        let mut wire = RootWire::new(owner, Instant::now() + Duration::from_secs(50)).unwrap();
+        wire.constructor_phase = phase;
+        wire.cleanup = cleanup;
+        drop(peer);
+        assert_eq!(wire.exact(&mut [0; 1]), Err("pids-eof"));
+        assert_eq!(wire.first_read_fault, None);
+    }
+    let (owner, mut peer) = UnixStream::pair().unwrap();
+    let mut wire = RootWire::new(owner, Instant::now() + Duration::from_secs(50)).unwrap();
+    wire.constructor_phase = Some(ConstructorIoPhase::Bind);
+    assert_eq!(wire.exact(&mut []), Ok(()));
+    assert_eq!(wire.receive(&mut []), Err("pids-read"));
+    assert_eq!(wire.first_read_fault, None);
+    std::io::Write::write_all(&mut peer, b"\0\0\0\0").unwrap();
+    drop(peer);
+    assert_eq!(wire.object(), Err("pids-frame"));
+    assert_eq!(wire.first_read_fault, None);
+    assert_eq!(wire.received, 4);
+}
+
+#[test]
+fn pids_constructor_io_first_eof_and_first_errno_cannot_replace_each_other() {
+    use rustix::io::Errno;
+    let (owner, _peer) = UnixStream::pair().unwrap();
+    let mut wire = RootWire::new(owner, Instant::now() + Duration::from_secs(50)).unwrap();
+    wire.constructor_phase = Some(ConstructorIoPhase::Ready);
+    for retry in [Errno::AGAIN, Errno::INTR] {
+        assert_eq!(wire.latch_read_fault(retry), None);
+    }
+    let eof = ConstructorIoFault {
+        phase: ConstructorIoPhase::Ready,
+        kind: ConstructorIoKind::Eof,
+    };
+    assert_eq!(wire.latch_eof_fault(), Some(eof));
+    assert_eq!(wire.latch_read_fault(Errno::CONNRESET), None);
+    wire.constructor_phase = Some(ConstructorIoPhase::Bind);
+    assert_eq!(wire.latch_eof_fault(), None);
+    wire.cleanup = true;
+    assert_eq!(wire.latch_eof_fault(), None);
+    assert_eq!(wire.first_read_fault, Some(eof));
+    wire.cleanup = false;
+    wire.first_read_fault = None;
+    let reset = wire.latch_read_fault(Errno::CONNRESET).unwrap();
+    assert_eq!(wire.latch_eof_fault(), None);
+    assert_eq!(wire.first_read_fault, Some(reset));
+}
+
+#[test]
+fn pids_constructor_startup_context_is_only_ready_reset_or_ready_eof() {
+    for phase in [
+        ConstructorIoPhase::Ready,
+        ConstructorIoPhase::Bind,
+        ConstructorIoPhase::Confirm,
+    ] {
+        for kind in [
+            ConstructorIoKind::Reset,
+            ConstructorIoKind::Eof,
+            ConstructorIoKind::NotConnected,
+            ConstructorIoKind::BadDescriptor,
+            ConstructorIoKind::InvalidArgument,
+            ConstructorIoKind::PermissionDenied,
+            ConstructorIoKind::Resource,
+            ConstructorIoKind::Other,
+        ] {
+            let eligible = ConstructorIoFault { phase, kind }.allows_startup_observation();
+            assert_eq!(
+                eligible,
+                [("ready", "reset"), ("ready", "eof")].contains(&(phase.name(), kind.name()))
+            );
+        }
+    }
 }
 
 #[test]

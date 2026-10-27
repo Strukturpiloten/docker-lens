@@ -2,6 +2,18 @@
 
 ## Current PIDs27 source gate
 
+Constructor I/O observations include closed `kind=eof` at the original
+zero-byte exact-read refusal, separately from recvmsg errno categories. Original
+`pids-eof`, frame/ancillary checks and expected successful terminal EOF remain
+unchanged. Startup detail may project only with same-stream failed exact-PIDs
+`pids-eof` plus `ready/eof`, or the existing `pids-read` plus `ready/reset` pair.
+The sole bounded stderr reader, EOF validation, original retirement and one
+nonblocking snapshot remain unchanged; absent/late/invalid data stays unobserved.
+Rust controls cover partial READY/frame EOF, constructor phases, expected-success
+EOF and first-fault retention; inert wrapper controls cover pairing, conflicts,
+positive contradictions and privacy. EOF is neither an errno nor an explanation
+of helper refusal. A next startup site is known only after fresh native evidence.
+
 The [finite sudo credential correction](decisions/0042-sudo-monitor-uid-shape.md)
 has inert full-guard controls in `tests/test_native_pids_supervisor.py`. They
 independently enumerate root/peer/foreign UID vectors and roles, verify the exact

@@ -477,6 +477,80 @@ else:
                     self.assertNotIn(success.encode(), result.stdout + result.stderr)
                     self.assertIn((SETUP_REFUSAL + "unclassified\n").encode(), result.stderr)
 
+    def test_constructor_eof_pairs_closed_phase_and_preserves_original_failure(self):
+        general = SETUP_REFUSAL + "pids-eof"
+        startup = STARTUP_REFUSAL + " s=s_fd0 k=guard"
+        for phase in ("ready", "bind", "confirm"):
+            detail = IO_DETAIL + f" phase={phase} kind=eof"
+            result, _ = self.wrapper(startup + "\n" + detail + "\n" + general + "\n" + detail + "\n" + startup, status=101)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(result.stderr.count((general + "\n").encode()), 1)
+            self.assertEqual(result.stderr.count((detail + "\n").encode()), 1)
+            self.assertEqual(result.stderr.count((startup + "\n").encode()), int(phase == "ready"))
+            self.assertIn(b"(exit 101)", result.stderr)
+
+    def test_constructor_eof_rejects_mismatched_missing_conflicting_and_foreign_pairs(self):
+        eof = SETUP_REFUSAL + "pids-eof"
+        read = SETUP_REFUSAL + "pids-read"
+        detail = IO_DETAIL + " phase=ready kind=eof"
+        reset = IO_DETAIL + " phase=ready kind=reset"
+        startup = STARTUP_REFUSAL + " s=w_parent_uid k=guard"
+        for prefix in (eof, detail, read + "\n" + detail, eof + "\n" + reset,
+                       SETUP_REFUSAL + "pids-outer\n" + detail,
+                       eof + "\n" + IO_DETAIL + " phase=ready kind=other",
+                       eof + "\n" + read + "\n" + detail,
+                       eof + "\n" + detail + "\n" + reset):
+            result, _ = self.wrapper(prefix + "\n" + startup, status=101)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn(STARTUP_REFUSAL.encode(), result.stdout + result.stderr)
+            self.assertNotIn(IO_DETAIL.encode(), result.stdout + result.stderr)
+            self.assertIn(b"(exit 101)", result.stderr)
+        for target, name in (("native_pids", "other_pids_test"), ("native_nofile", "other_test")):
+            result, _ = self.wrapper(eof + "\n" + detail + "\n" + startup, status=101, target=target, test_name=name)
+            self.assertNotIn(SETUP_REFUSAL.encode(), result.stdout + result.stderr)
+            self.assertNotIn(IO_DETAIL.encode(), result.stdout + result.stderr)
+            self.assertNotIn(STARTUP_REFUSAL.encode(), result.stdout + result.stderr)
+
+    def test_constructor_eof_unknown_private_and_nul_records_remain_unobserved(self):
+        general = SETUP_REFUSAL + "pids-eof\n"
+        detail = IO_DETAIL + " phase=ready kind=eof"
+        startup = STARTUP_REFUSAL + " s=w_parent_uid k=guard"
+        for malformed in (detail + " PRIVATE_EOF_CANARY", detail + "\r", detail + "\0PRIVATE_EOF_CANARY",
+                          IO_DETAIL + " phase=ready kind=e\\x6ff",
+                          IO_DETAIL + " phase=ready kind=EOF",
+                          IO_DETAIL + " phase=PRIVATE_EOF_CANARY kind=eof"):
+            result, _ = self.wrapper(general + malformed + "\n" + startup, status=101)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn(IO_DETAIL.encode(), result.stdout + result.stderr)
+            self.assertNotIn(STARTUP_REFUSAL.encode(), result.stdout + result.stderr)
+            self.assertNotIn(b"PRIVATE_EOF_CANARY", result.stdout + result.stderr)
+        for malformed in (startup + "\0", startup + " PRIVATE_EOF_CANARY",
+                          STARTUP_REFUSAL + " s=w_PRIVATE_EOF_CANARY k=guard",
+                          startup + "\n" + STARTUP_REFUSAL + " s=s_peer_live k=io",
+                          STARTUP_REFUSAL + "x" * 70000):
+            result, _ = self.wrapper(general + detail + "\n" + malformed, status=101)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn(STARTUP_REFUSAL.encode(), result.stdout + result.stderr)
+            self.assertNotIn(b"PRIVATE_EOF_CANARY", result.stdout + result.stderr)
+
+    def test_constructor_eof_prefixes_and_paired_startup_contradict_all_positive_results(self):
+        general = SETUP_REFUSAL + "pids-eof"
+        detail = IO_DETAIL + " phase=ready kind=eof"
+        startup = STARTUP_REFUSAL + " s=w_parent_uid k=guard"
+        success = "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 100 filtered out;"
+        evidence = "DOCKERLENS_NATIVE_CHECK: pids_evidence"
+        for diagnostic in (detail, detail + " PRIVATE_EOF_CANARY", general + "\n" + detail + "\n" + startup):
+            for status, positive in ((0, ""), (0, success), (101, success), (101, evidence)):
+                for output in (diagnostic + "\n" + positive, positive + "\n" + diagnostic):
+                    result, _ = self.wrapper(output, status=status)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertNotIn(IO_DETAIL.encode(), result.stdout + result.stderr)
+                    self.assertNotIn(STARTUP_REFUSAL.encode(), result.stdout + result.stderr)
+                    self.assertNotIn(b"PRIVATE_EOF_CANARY", result.stdout + result.stderr)
+                    self.assertNotIn(success.encode(), result.stdout + result.stderr)
+                    self.assertNotIn(evidence.encode(), result.stdout + result.stderr)
+                    self.assertIn((SETUP_REFUSAL + "unclassified\n").encode(), result.stderr)
+
     def test_canonical27_is_after_kernel_reader_and_before_final_emission(self):
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         calls = re.findall(r'run-exact-native-test\.sh" ([a-z_0-9]+) ([a-z_0-9]+)', source)
