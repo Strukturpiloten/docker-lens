@@ -1,5 +1,28 @@
 # Verification
 
+## Current launcher PIDs prerequisite
+
+The canonical launcher checks its already-queried inner cgroup metadata before
+the first native invocation: cgroup v2 for all lanes, systemd for rootless, and
+systemd or cgroupfs for rootful. Unavailable and malformed metadata have distinct
+closed refusals, without raw query values. Refusal retains the existing EXIT
+cleanup owner and cannot skip the requirement or produce successful evidence.
+Rootless lanes need a systemd-backed fixture; none/v2 remains incompatible.
+
+`tests/test_native_pids_prerequisite.py` exercises the actual launcher block
+with inert query stubs, independent literal supported/refused fixtures, failed
+queries with plausible output, privacy canaries and an executable EXIT trap.
+It also pins the full ordered 27-call list and placement before workload and
+prebuild. These hermetic checks establish no delegation or enforcement. The
+Rust context remains authoritative, including `PidsLimit`; complete final-source
+and fresh exact-candidate four-lane qualification remain required. Run
+`40517600553` failed before that context in upstream-rootful and both rootless
+lanes; early metadata refusal neither explains those failures nor repairs them.
+
+The launcher remains the canonical local/main/reviewed-PR/Release consumer.
+No operational pin, dependency, download, workflow or pin location changes;
+existing Renovate image extraction, ownership, grouping and approvals remain.
+
 ## Current PIDs27 source gate
 
 A separate bounded BIND observation records a named operation escaping by

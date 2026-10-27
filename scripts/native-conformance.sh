@@ -1168,10 +1168,37 @@ export NATIVE_BIND_RELABEL_DAEMON_UID
 NATIVE_BIND_RELABEL_DAEMON_UID=$(python3 "$script_dir/native-daemon-uid.py" "$outer_container_id" "$expected_mode" \
   "$native_outer_engine" "$run_dir")
 docker_root=$(timeout 15 "${inner_docker[@]}" info --format '{{.DockerRootDir}}')
-inner_cgroup=$(timeout 15 "${inner_docker[@]}" info --format '{{.CgroupVersion}}')
+inner_cgroup_status=0
+inner_cgroup=$(timeout 15 "${inner_docker[@]}" info --format '{{.CgroupVersion}}' 2>/dev/null) || inner_cgroup_status=$?
 # Report only fixed fields and validated package revision strings. In particular,
 # never print Docker info or package-manager output containing host/user values.
-inner_cgroup_driver=$(timeout 15 "${inner_docker[@]}" info --format '{{.CgroupDriver}}' 2>/dev/null) || inner_cgroup_driver=unavailable
+inner_cgroup_driver_status=0
+inner_cgroup_driver=$(timeout 15 "${inner_docker[@]}" info --format '{{.CgroupDriver}}' 2>/dev/null) || inner_cgroup_driver_status=$?
+# Necessary metadata prerequisites only. The original Rust PIDs context remains
+# authoritative, including PidsLimit; no delegation or enforcement follows here.
+native_pids_prerequisite() {
+  local mode=$1 version=$2 driver=$3 version_status=$4 driver_status=$5 reason=
+  if (( version_status != 0 )) || [[ -z $version ]]; then
+    reason=cgroup_version_unavailable
+  elif [[ ! $version =~ ^[12]$ ]]; then
+    reason=cgroup_version_malformed
+  elif (( driver_status != 0 )) || [[ -z $driver ]]; then
+    reason=cgroup_driver_unavailable
+  elif [[ ! $driver =~ ^(cgroupfs|systemd|none)$ ]]; then
+    reason=cgroup_driver_malformed
+  elif [[ $version != 2 ]]; then
+    reason=cgroup_v2_required
+  elif [[ $mode == rootless && $driver != systemd ]]; then
+    reason=rootless_systemd_fixture_required
+  elif [[ $mode == rootful && $driver == none ]]; then
+    reason=rootful_cgroup_driver_required
+  fi
+  if [[ -n $reason ]]; then
+    echo "native PIDs prerequisite refused: $reason; cgroup v2 required; rootless lanes require a systemd-backed fixture; rootful lanes require systemd or cgroupfs" >&2
+    return 1
+  fi
+}
+native_pids_prerequisite "$expected_mode" "$inner_cgroup" "$inner_cgroup_driver" "$inner_cgroup_status" "$inner_cgroup_driver_status"
 [[ $inner_cgroup =~ ^[12]$ ]] || inner_cgroup=unavailable
 [[ $inner_cgroup_driver =~ ^(cgroupfs|systemd|none)$ ]] || inner_cgroup_driver=unavailable
 native_package_version() {

@@ -11,6 +11,22 @@ seams in [ADR 0040](decisions/0040-pids-runtime-source-session.md). Linux valida
 does not add macOS native testing or Windows support. The public library keeps
 its unsafe-code prohibition and has no new executor or public transport API.
 
+## Launcher prerequisites
+
+The launcher reuses its existing inner cgroup version and driver queries to
+refuse an incompatible fixture before any of the 27 native invocations or the
+PIDs prebuild. Cgroup v2 is necessary in every lane. Rootless lanes require a
+systemd-backed fixture; rootful lanes permit systemd or cgroupfs. Query failure,
+missing metadata and malformed metadata produce closed, value-free errors and
+retain the original lane EXIT cleanup owner. No new probe or fixture repair is
+performed, and the original invocation order, budgets and prebuild gate remain.
+
+Passing this check establishes only necessary reported metadata. The original
+Rust `PidsSession::context` still requires `PidsLimit` and the complete context;
+actual delegation, attribution, enforcement and cleanup require the unchanged
+experiment and independent reader. Rootless none/v2 cannot qualify PIDs27.
+The early refusal does not provide a successful native lane or a fallback.
+
 ## Custody and the original budget
 
 The original `HealthRun` retains its immutable 180-second terminal deadline,
