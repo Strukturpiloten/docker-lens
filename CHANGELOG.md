@@ -2,9 +2,44 @@
 
 ## Unreleased
 
+- Add bounded discovery and explicit selection by canonical container or
+  network ID, volume name, container name, name prefix, or label. Captures retain
+  opaque selected-root references and reasons; discovery can return protected
+  list metadata without inspecting containers.
+
+- Expand protected typed container runtime, mount, network and IPAM observations,
+  including request-bound container and network identities and active endpoint
+  membership. These are snapshot evidence, not proof of authored ownership.
+
+- Add capability-gated standalone `ContainerSettings` and typed network intent
+  and attachments, including bridge, internal and external networks, IPAM,
+  aliases and static addresses. Unsupported shapes and profiles fail closed;
+  planning and rendering remain inert.
+
+- Represent existing named volumes as explicit prerequisites, and preserve
+  protected labels for newly created volumes. Consumers must review complete
+  artifact obligations; an external volume is not implicitly created.
+
+- Update public struct and enum construction for the expanded model: supply
+  `ContainerIntent.settings` and typed networks, use the
+  `TargetResource::Network` tuple form and volume labels, and account for
+  `DecodedInventory` provenance fields and `DecodedVersion.resource_support`.
+
+- Extend the test-only PIDs27 source to validate domain, domain-threaded and
+  threaded cgroup roles, local leader membership and typed ancestor chains.
+  Its private `pids-v2` proof carries the observed types and is checked by
+  independent readers; root framing and worker/controller protocols remain v1.
+  The source outcome remains unadmitted. Fresh exact-candidate four-lane PIDs27
+  qualification and cleanup, nofile28, and consumer acceptance remain pending.
+
+- Select the independently reviewed guarded CommandClear source cohort for
+  candidate rehearsal on the four exact profiles. It requires an explicit Exec
+  entrypoint; EntrypointClear remains withheld. Fresh final-candidate native
+  and consumer gates remain required before production admission or release.
+
 - Align the exact JSON parser dependency with the current reviewed consumer
-  graph. Keep registry integrity and require fresh native qualification; this
-  dependency change adds no capability or release admission.
+  graph at `serde_json =1.0.154`. Keep registry integrity and require fresh native
+  qualification; this dependency change adds no capability or release admission.
 
 - Prepare the preserved nofile producer, strict reader and custody controls as
   registered test-only source. Keep default private proofs at16KiB and allow
@@ -18,8 +53,14 @@
   resource/deadline/cleanup bounds. Add only closed unadmitted observations;
   PIDs/nofile, fresh native qualification and milestone completion remain due.
 
-- Recover observation-scoped PIDs/cgroup reports and the inert finite-rootless-PIDs
-  destination obligation. Complete artifacts retain schema-4 prerequisites;
+- Decode `/info` PIDs limit, cgroup driver and cgroup version as independently
+  available observation-scoped reports. Missing, null, empty and redacted values
+  remain distinct; malformed present types fail with value-free errors. Public
+  `ResourceSupportObservation` struct literals must supply the added fields or
+  use `missing(observation_id)`.
+
+- Recover the inert finite-rootless-PIDs destination obligation. Complete
+  artifacts retain schema-4 prerequisites;
   pure destination assessment remains delegation/enforcement-unverified.
   Preserve existing capability gates, request bytes and schema 1/2/3 output when
   the new obligation is absent. No native or catalogue admission is implied.
@@ -37,14 +78,16 @@
   image defaults, four paired process effects and dedicated once-only cleanup;
   reuse selected-backend snapshot charging and original limits. Require the
   complete private proof in the harness and emitter, projecting only a closed
-  unadmitted observation. No raw capability, catalogue or product API changes;
-  calls 24–28 and fresh qualification remain pending.
+  unadmitted observation at that checkpoint. ADRs 0036 and 0037 subsequently
+  selected the guarded CommandClear source cohort described above; fresh
+  qualification remains pending.
 - Recover the committed hostname producer and strict private reader as mandatory
   invocation 22, with independent harness/emitter validation and a separate
   one-child cleanup-owner scope. Preserve all first 21 requirements, budgets,
   backend accounting and experimental non-acceptance. Only a closed unadmitted
   observation is emitted; no hostname capability, raw shape-map or catalogue
-  admission is added. Calls 24–28 and fresh qualification remain pending.
+  admission is added at that checkpoint. Calls 24–27 have since been recovered
+  as source; fresh qualification, nofile28 and consumer gates remain pending.
 - Recover the preserved health-interval configuration boundary and lifecycle
   default/zero effects as mandatory calls 20 and 21, with strict private proof
   validation and closed unadmitted observations. Preserve the original nineteen,
