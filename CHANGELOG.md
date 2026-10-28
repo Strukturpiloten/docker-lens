@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Align the exact JSON parser dependency with the current reviewed consumer
+  graph. Keep registry integrity and require fresh native qualification; this
+  dependency change adds no capability or release admission.
+
 - Prepare the preserved nofile producer, strict reader and custody controls as
   registered test-only source. Keep default private proofs at16KiB and allow
   only the explicit bounded nofile path up to512KiB. Do not invoke canonical28

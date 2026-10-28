@@ -226,8 +226,11 @@ checks its matching lock record/checksum and unique Cargo ownership, rather than
 duplicating an operational version or checksum outside Cargo. Historical native
 source/profile evidence and intentional fixtures remain immutable.
 
-The decoder pins serde_json 1.0.151 for pure Engine JSON parsing and BoxFerry's
-reviewed consumer floor. The bounded Unix-socket connector pins socket2 0.6.5
+The decoder's exact serde_json requirement in `Cargo.toml` owns the reviewed
+Engine JSON parser version. Its registry checksum and complete resolution are
+recorded in `Cargo.lock`; consumers must resolve the reviewed dependency rather
+than downgrade their own locked parser to an older DockerLens requirement.
+The bounded Unix-socket connector pins socket2 0.6.5
 for connect_timeout. Cargo.lock
 records their dependency graphs and registry checksums. Renovate owns Cargo
 manifest pins and lockfile through its Cargo manager. rust-toolchain.toml pins
