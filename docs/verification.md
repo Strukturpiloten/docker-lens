@@ -152,9 +152,10 @@ application acceptance is claimed.
 The recovered [nofile contract](native-nofile-contract.md) has a registered
 ignored producer and pure custody/accounting controls, but no canonical wrapper
 invocation, mandatory emitter reader or public observation. The current native
-coordinator still requires26 calls. Never use this source preparation to run28
-around unresolved strict PIDs27. Default private-proof bounds remain16KiB; the
-explicit nofile publisher/reader alone may select at most512KiB, independently
+coordinator requires PIDs invocation 27 after the first 26 calls. Never use this
+source preparation to run28 around unresolved strict PIDs27. Default private-proof
+bounds remain16KiB; the explicit nofile publisher/reader alone may select at
+most512KiB, independently
 retaining the64KiB metadata bound, exclusive publication, stable no-follow reads
 and held-directory custody. Both source accounting and byte-boundary controls
 require final integrated Rust/full gates; they are not native effect evidence.

@@ -7,8 +7,8 @@ that preserved source is provenance, not adoption of canonical wiring here.
 This stage adds no canonical invocation, emitter requirement or public nofile
 projection. The ignored producer is registered privately with its shared
 accounting dependencies. PIDs invocation 27 remains
-unresolved and must not be skipped or bypassed to run 28. The current 26-call
-coordinator and its mandatory readers remain unchanged.
+unresolved and must not be skipped or bypassed to run 28. The current coordinator
+requires PIDs invocation 27 after the first 26 calls and their mandatory readers.
 
 This preparation defines neither a passing native lane nor capability support;
 native qualification remains unverified. Primary integration owns compilation,
