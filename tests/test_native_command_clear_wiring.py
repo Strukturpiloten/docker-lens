@@ -67,7 +67,7 @@ else:
     def test_twenty_third_registration_and_mandatory_independent_reader(self):
         harness = (ROOT / "scripts/native-conformance.sh").read_text()
         calls = assert_current_cohort(self, harness)
-        self.assertEqual(len(calls), 27)
+        self.assertEqual(len(calls), 28)
         self.assertEqual(calls[21:23], [("native_hostname", "live_hostname_matches_engine"), (TARGET, TEST)])
         self.assertEqual(calls.count((TARGET, TEST)), 1)
         hostname_reader = harness.index('python3 "$script_dir/native_hostname_proof.py"')
@@ -84,7 +84,7 @@ else:
         self.assertLess(harness.index('\n)\n', owner), command)
         hostname_owner = harness.index('(\n  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1\n', owner + 1)
         self.assertLess(harness.index('\n)\n', hostname_owner), command)
-        self.assertEqual(harness.count('export NATIVE_LIFECYCLE_CLEANUP_OWNER='), 6)
+        self.assertEqual(harness.count('export NATIVE_LIFECYCLE_CLEANUP_OWNER='), 7)
         self.assertLess(reader, harness.index('if [[ -n ${apparmor_profile:-} ]]; then', reader))
         emitter = harness.index('python3 "$script_dir/native-evidence.py"')
         protocol = harness[emitter:harness.index('\n  fi\n}', emitter)].replace('\\\n', ' ')
@@ -233,6 +233,7 @@ else:
         from test_native_shm_size_proof import fixture as shm_fixture
         from test_native_supplementary_groups_proof import fixture as groups_fixture
         from test_native_kernel_settings_proof import fixture as kernel_fixture
+        from test_native_nofile_proof import fixture as nofile_fixture
 
         harness = (ROOT / "scripts/native-conformance.sh").read_text()
         start = harness.index('python3 "$script_dir/native_hostname_proof.py"')
@@ -242,7 +243,7 @@ else:
             for fault in ("none", "hostname_missing", "hostname_context", "command_missing",
                           "command_effect", "command_cleanup", "native_failure",
                           "shm_size_missing", "supplementary_groups_missing", "kernel_settings_missing",
-                          "pids_prebuild_failure", "pids_native_failure", "pids_reader_failure"):
+                          "pids_prebuild_failure", "pids_native_failure", "pids_reader_failure", "nofile_missing"):
                 with self.subTest(lane=lane, fault=fault), tempfile.TemporaryDirectory() as temporary:
                     root = Path(temporary)
                     (root / "socket").mkdir(mode=0o700)
@@ -255,7 +256,7 @@ target = str(pathlib.Path(os.environ["script_dir"]) / "build-native-pids-worker.
 reader = str(pathlib.Path(os.environ["script_dir"]) / "native_pids_proof.py")
 if sys.argv[1] not in (target, reader):
     allowed = {str(pathlib.Path(os.environ["script_dir"]) / ("native_" + family + "_proof.py"))
-               for family in ("hostname", "shm_size", "supplementary_groups", "kernel_settings")}
+               for family in ("hostname", "shm_size", "supplementary_groups", "kernel_settings", "nofile")}
     assert sys.argv[1] in allowed | {"-", "-c"}
     if sys.argv[1] == "-c":
         assert sys.argv[2:] == ["import time; print(time.monotonic_ns() + 180_000_000_000)"]
@@ -301,6 +302,7 @@ else:
                         NATIVE_SUPPLEMENTARY_GROUPS_CANDIDATE_SHA=context["candidate_sha"],
                         NATIVE_KERNEL_SETTINGS_CANDIDATE_SHA=context["candidate_sha"],
                         NATIVE_PIDS_CANDIDATE_SHA=context["candidate_sha"],
+                        NATIVE_NOFILE_CANDIDATE_SHA=context["candidate_sha"],
                         NATIVE_OUTER_IMAGE=context["outer"]["image"],
                         NATIVE_OUTER_ENGINE="podman",
                         NATIVE_FIXTURE_IMAGE=context["fixture_image"], image=context["outer"]["image"],
@@ -323,10 +325,15 @@ else:
                             path.write_text(json.dumps(proof))
                             path.chmod(0o600)
                     for family, fixture in (("shm_size", shm_fixture), ("supplementary_groups", groups_fixture),
-                                            ("kernel_settings", kernel_fixture)):
+                                            ("kernel_settings", kernel_fixture), ("nofile", nofile_fixture)):
                         if fault != family + "_missing":
                             proof = fixture(lane)
                             proof["context"] = json.loads(json.dumps(context))
+                            if family == "nofile":
+                                for case in proof["cases"]:
+                                    for item in case["containers"]:
+                                        item["owner"] = context["run_id"]
+                                        item["name"] = f"dl-nf-{context['run_id']}-{case['case']}-{item['role']}"
                             path = root / (family.replace("_", "-") + "-v1.json")
                             path.write_text(json.dumps(proof))
                             path.chmod(0o600)
@@ -347,19 +354,21 @@ else:
                                             capture_output=True, text=True, timeout=5)
                     events = trace.read_text().splitlines() if trace.exists() else []
                     expected = [] if fault.startswith("hostname_") else [f"{TARGET} {TEST}"]
-                    if fault == "none" or fault.startswith("pids_") or fault in ("shm_size_missing", "supplementary_groups_missing", "kernel_settings_missing"):
+                    if fault == "none" or fault.startswith(("pids_", "nofile_")) or fault in ("shm_size_missing", "supplementary_groups_missing", "kernel_settings_missing"):
                         for family, test in (("shm_size", "live_shm_size_effects_match_engine"),
                                              ("supplementary_groups", "live_supplementary_groups_match_engine"),
                                              ("kernel_settings", "live_kernel_settings_match_engine")):
                             expected.append("native_" + family + " " + test)
                             if fault == family + "_missing":
                                 break
-                    if fault == "none" or fault.startswith("pids_"):
+                    if fault == "none" or fault.startswith(("pids_", "nofile_")):
                         expected.append("pids-prebuild")
                         if fault != "pids_prebuild_failure":
                             expected.append("native_pids live_pids_limits_and_effects_match_engine")
                             if fault != "pids_native_failure":
                                 expected.append("pids-reader")
+                    if fault in ("none", "nofile_missing"):
+                        expected.append("native_nofile live_nofile_limits_and_effects_match_engine")
                     if fault == "none":
                         expected.append("public")
                     self.assertEqual(events, expected)

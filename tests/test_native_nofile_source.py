@@ -154,7 +154,7 @@ class NofileSourceTests(unittest.TestCase):
         self.assertNotIn('implDrop', source)
         self.assertNotIn('run.cleanup()', source)
 
-    def test_prepared_source_binds_backend_before_io_without_double_charging(self):
+    def test_canonical_source_binds_backend_before_io_without_double_charging(self):
         source = self.compact()
         live = source.split('fnlive_nofile_limits_and_effects_match_engine(){', 1)[1]
         self.assertLess(live.index('letouter_backend=source_outer_backend();'), live.index('ProofTarget::new_for('))
@@ -167,8 +167,8 @@ class NofileSourceTests(unittest.TestCase):
         self.assertIn('.checked_add(2*ORDINARY_CAPTURE_ENVELOPE+outer_backend.snapshot_extra_bytes())', acquisition)
         self.assertNotIn('charge_outer_snapshot(', self.raw())
         harness = (ROOT / 'scripts/native-conformance.sh').read_text()
-        self.assertNotIn('native_nofile live_nofile_limits_and_effects_match_engine', harness)
-        self.assertNotIn('read_nofile_proof', (ROOT / 'scripts/native-evidence.py').read_text())
+        self.assertEqual(harness.count('native_nofile live_nofile_limits_and_effects_match_engine'), 1)
+        self.assertIn('read_nofile_proof', (ROOT / 'scripts/native-evidence.py').read_text())
 
 
 if __name__ == '__main__':

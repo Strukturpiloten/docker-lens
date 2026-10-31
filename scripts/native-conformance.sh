@@ -1498,6 +1498,8 @@ export NATIVE_KERNEL_SETTINGS_PROOF_PATH="$run_dir/kernel-settings-v1.json"
 export NATIVE_KERNEL_SETTINGS_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 export NATIVE_PIDS_PROOF_PATH="$run_dir/pids-v2.json"
 export NATIVE_PIDS_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
+export NATIVE_NOFILE_PROOF_PATH="$run_dir/nofile-v1.json"
+export NATIVE_NOFILE_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 export NATIVE_PORT_START_DIAGNOSTIC_PATH="$run_dir/diagnostics/port-start-window.json"
 export NATIVE_PORT_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 export NATIVE_HEALTH_METADATA_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
@@ -1875,6 +1877,16 @@ fi
 python3 "$script_dir/native_pids_proof.py" "$run_dir" "$NATIVE_PIDS_CANDIDATE_SHA" "$run_id" \
   "$lane" "$server_version" "$api_version" "$expected_mode" "$NATIVE_FIXTURE_IMAGE" \
   "$NATIVE_OUTER_CONTAINER_ID" "$NATIVE_OUTER_IMAGE"
+
+# Invocation 28 owns only its one child, after PIDs27 and its strict reader.
+(
+  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1
+  "$(dirname "$0")/run-exact-native-test.sh" native_nofile live_nofile_limits_and_effects_match_engine
+)
+# Mandatory independent validation, including without public evidence emission.
+python3 "$script_dir/native_nofile_proof.py" "$run_dir" "$NATIVE_NOFILE_CANDIDATE_SHA" "$run_id" \
+  "$lane" "$server_version" "$api_version" "$expected_mode" "$installed_docker_package" \
+  "$NATIVE_FIXTURE_IMAGE" "$image" "$NATIVE_OUTER_CONTAINER_ID" "$NATIVE_BIND_RELABEL_DAEMON_UID"
 
 publish_native_evidence() {
   local candidate_sha dirty

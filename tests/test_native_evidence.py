@@ -23,6 +23,7 @@ from test_native_shm_size_proof import fixture as shm_size_fixture
 from test_native_supplementary_groups_proof import fixture as supplementary_groups_fixture
 from test_native_kernel_settings_proof import fixture as kernel_settings_fixture
 from test_native_pids_proof import materialize_pids_proof
+from test_native_nofile_proof import fixture as nofile_fixture
 from test_native_runtime_filesystem_proof import fixture as runtime_filesystem_fixture
 from test_native_tmpfs_effect_proof import fixture as tmpfs_effect_fixture
 from test_native_health_start_interval_boundary_proof import fixture as health_boundary_fixture
@@ -377,6 +378,7 @@ class NativeEvidenceTests(unittest.TestCase):
                  supplementary_groups: object = None, supplementary_groups_missing: bool = False,
                  kernel_settings: object = None, kernel_settings_missing: bool = False,
                  pids_missing: bool = False, pids_mutate=None,
+                 nofile: object = None, nofile_missing: bool = False,
                  outer_backend: str = "podman",
                  port_proof_override: object = None) -> tuple[subprocess.CompletedProcess[str], Path]:
         temporary = tempfile.TemporaryDirectory()
@@ -523,6 +525,16 @@ class NativeEvidenceTests(unittest.TestCase):
                 family_path = root / (family_name + "-v1.json")
                 family_path.write_text(json.dumps(payload if override is None else override), encoding="utf-8")
                 family_path.chmod(0o600)
+        if not nofile_missing:
+            payload = nofile_fixture(lane, outer_backend=outer_backend if outer_backend in ("podman", "docker") else "podman")
+            payload["context"].update(external["context"])
+            for case in payload["cases"]:
+                for item in case["containers"]:
+                    item["owner"] = RUN_ID
+                    item["name"] = f"dl-nf-{RUN_ID}-{case['case']}-{item['role']}"
+            nofile_path = root / "nofile-v1.json"
+            nofile_path.write_text(json.dumps(payload if nofile is None else nofile), encoding="utf-8")
+            nofile_path.chmod(0o600)
         if not pids_missing:
             pids_context = {
                 "candidate_sha": sha, "run_id": RUN_ID, "lane": lane,

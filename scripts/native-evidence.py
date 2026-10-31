@@ -19,6 +19,9 @@ from native_supplementary_groups_proof import (
 from native_kernel_settings_proof import (
     CONTRACT as KERNEL_SETTINGS_CONTRACT, FILENAME as KERNEL_SETTINGS_FILENAME, read_kernel_settings_proof,
 )
+from native_nofile_proof import (
+    CONTRACT as NOFILE_CONTRACT, FILENAME as NOFILE_FILENAME, read_nofile_proof,
+)
 from native_identity_proof import CASES as IDENTITY_CASES, CONTRACT as IDENTITY_CONTRACT, validate_identity_v2
 from native_health_metadata_proof import CONTRACT as HEALTH_METADATA_CONTRACT, read_health_metadata_proof
 from native_stop_signal_proof import (
@@ -558,6 +561,14 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
         capture_dir / SUPPLEMENTARY_GROUPS_FILENAME, capture_dir, external_context, outer_backend=outer_backend)
     read_kernel_settings_proof(
         capture_dir / KERNEL_SETTINGS_FILENAME, capture_dir, external_context, outer_backend=outer_backend)
+    nofile = read_nofile_proof(
+        capture_dir / NOFILE_FILENAME, capture_dir, external_context, outer_backend=outer_backend)
+    if (type(nofile) is not dict
+            or set(nofile) != {"contract", "capability_admission", "catalogue_admission"}
+            or type(nofile["contract"]) is not str or nofile["contract"] != NOFILE_CONTRACT
+            or type(nofile["capability_admission"]) is not list or nofile["capability_admission"] != []
+            or nofile["catalogue_admission"] is not False):
+        raise ValueError("invalid private nofile reader result")
 
     # Only these closed mappings follow the complete, validated native proof
     # files above. They extend raw lane evidence, never the reviewed catalogue.

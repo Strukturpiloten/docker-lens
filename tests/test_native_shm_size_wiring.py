@@ -73,25 +73,26 @@ else:
             ended = int(time.time())
             return result, [json.loads(line) for line in trace.read_text().splitlines()], began, ended
 
-    def test_twenty_seven_registrations_preserve_first_twenty_six_and_owner_block_bytes(self):
+    def test_twenty_eight_registrations_preserve_first_twenty_six_and_owner_block_bytes(self):
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         call_prefix = '"$(dirname "$0")/run-exact-native-test.sh" '
         calls = native_calls(source)
         self.assertEqual(calls[:26], ORIGINAL_CALLS + [(TARGET, TEST),
             ("native_supplementary_groups", "live_supplementary_groups_match_engine"),
             ("native_kernel_settings", "live_kernel_settings_match_engine")])
-        self.assertEqual(len(calls), 27)
+        self.assertEqual(len(calls), 28)
         scope_prefix = '(\n  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1\n'
         old_block = scope_prefix + "\n".join(call_prefix + " ".join(call) for call in ORIGINAL_CALLS[16:21]) + '\n)'
         new_block = scope_prefix + call_prefix + f'{TARGET} {TEST}\n)'
         self.assertEqual(source.count(old_block), 1)
         self.assertEqual(source.count(new_block), 1)
-        self.assertEqual(source.count("export NATIVE_LIFECYCLE_CLEANUP_OWNER="), 6)
+        self.assertEqual(source.count("export NATIVE_LIFECYCLE_CLEANUP_OWNER="), 7)
         self.assertEqual([native_calls(block) for block in re.findall(r'^[ \t]*\(\n[ \t]+export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1\n(.*?)^[ \t]*\)', source, re.S | re.M)],
                          [ORIGINAL_CALLS[16:21], [ORIGINAL_CALLS[21]], [(TARGET, TEST)],
                           [("native_supplementary_groups", "live_supplementary_groups_match_engine")],
                           [("native_kernel_settings", "live_kernel_settings_match_engine")],
-                          [("native_pids", "live_pids_limits_and_effects_match_engine")]])
+                          [("native_pids", "live_pids_limits_and_effects_match_engine")],
+                          [("native_nofile", "live_nofile_limits_and_effects_match_engine")]])
         self.assertLess(source.index('COMMAND_CLEAR_PROOF\n\n'), source.index(new_block))
         reader = source.index('python3 "$script_dir/native_shm_size_proof.py"')
         self.assertLess(source.index(new_block), reader)

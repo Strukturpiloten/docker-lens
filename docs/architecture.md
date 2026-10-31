@@ -1,5 +1,19 @@
 # Architecture
 
+## Canonical nofile28 source integration
+
+[ADR 0045](decisions/0045-canonical-nofile-source-integration.md) appends only
+the prepared nofile child after the unchanged original 27 calls and mandatory
+immediate PIDs27 reader. It has a separate one-child cleanup-owner scope and
+retains the original wrapper deadline and cleanup reserve. The existing
+12-fact nofile reader runs immediately, including without evidence emission;
+the 19-argument emitter revalidates with independent lane/context and selected
+outer-backend facts and requires the exact three-key unadmitted result. It
+adds no public nofile projection, schema, capability or catalogue grant.
+Original lane EXIT cleanup remains mandatory. Full final-source checks and fresh
+exact-candidate four-lane 28-call qualification remain pending; source wiring
+cannot bypass strict rootless PIDs/delegation or hosted-runtime prerequisites.
+
 ## Typed PIDs source and private proof v2
 
 [ADR 0044](decisions/0044-typed-pids-source-and-proof-v2.md) adds fixed-sibling
@@ -21,7 +35,7 @@ selected-actor inspection, one exclusive root session, original accounting and
 deadlines, six independent CLI/rendered effect controls, fixed-chunk copy I/O
 receipts and supervised inner cleanup. Its source outcome remains unadmitted;
 full exact-candidate native qualification and original lane EXIT cleanup remain
-required. The outer is retained for later prepared nofile28. Earlier first26
+required. The outer is retained for the following nofile28 child. Earlier first26
 checkpoint descriptions below retain their historical evidence and scope.
 
 ## Guarded CommandClear raw source and explicit candidate admission
@@ -42,17 +56,18 @@ semantic prerequisite. Source run40119803977/attempt1 independently qualifies
 source a36e42fb, not the later admission head. Complete and fresh exact-final-head
 four-lane26 gates/review and actual consumer gates remain required.
 
-The [nofile producer](native-nofile-contract.md) is separately registered as
-prepared test-only source. Its default-private-proof boundary remains16KiB;
-only the explicit nofile publisher/reader selects a bounded512KiB limit, with
-its separate64KiB metadata ceiling and existing stable-file/directory custody.
-It is not wired into the canonical26-call coordinator or emitter. Strict PIDs27
-and its original-boundary authority must precede eventual nofile28; no prepared
-source or ignored test grants native acceptance or a capability.
+The [nofile producer](native-nofile-contract.md) retains its recovered
+source/custody contract and ignored test registration. ADR 0045 now supplies the
+canonical28 wrapper and mandatory readers; it adopts none of the preserved
+runtime/broker rewrite. The default private-proof bound remains 16KiB, while
+only nofile's explicit publisher/reader selects at most 512KiB with a separate
+64KiB metadata ceiling and existing stable-file/directory custody. Strict PIDs27
+and its original-boundary authority must succeed first; no ignored source test
+grants native acceptance or a capability.
 
-## Current source-only calls 24–26 recovery
+## Preceding source-only calls 24–26 recovery
 
-The current coordinator extends the preceding 23-call checkpoint below with
+The earlier recovery extended the preceding 23-call checkpoint below with
 the preserved ShmSize, supplementary-groups and kernel-settings children in
 positions 23/24/25 (26 invocations total). The original five-child owner block,
 separate hostname scope and token-free command-clear call remain unchanged;

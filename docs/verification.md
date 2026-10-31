@@ -1,5 +1,26 @@
 # Verification
 
+## Canonical nofile28 verification boundary
+
+[ADR 0045](decisions/0045-canonical-nofile-source-integration.md) preserves the
+first 27 calls and immediate strict PIDs reader before one nofile child and its
+mandatory 12-fact reader. The reader runs even without public evidence, and the
+emitter independently repeats validation using the selected outer backend and
+external context. A missing or invalid nofile proof prevents any output. The
+19-argument ABI, public maps/schema, catalogue and capability admission remain
+unchanged. Finite, exact-unlimited, finite-normalized and specifically
+attributable known-ID start-refusal outcomes remain distinct private facts.
+
+Focused synthetic controls exercise order, PIDs fail-fast behavior, separate
+owner scope, once-bound deadline, bounded/token-free diagnostics, all four lanes
+and both outer backends, reader custody/context/refusal and unchanged emission.
+They do not execute a native fixture. Independent review, complete final-edit
+gates, fresh exact-candidate four-lane 28-call evidence, actual proof/time/output
+fit and original lane EXIT cleanup remain required. Rootless PIDs/delegation and
+hosted-runtime prerequisites are mandatory; nofile cannot be run around them.
+Historical 26/27-call receipts do not qualify this changed candidate, BoxFerry
+applications, release or publication.
+
 ## Typed source rollout and private proof v2
 
 [ADR 0044](decisions/0044-typed-pids-source-and-proof-v2.md) wires actual local
@@ -29,7 +50,7 @@ Rootless lanes need a systemd-backed fixture; none/v2 remains incompatible.
 `tests/test_native_pids_prerequisite.py` exercises the actual launcher block
 with inert query stubs, independent literal supported/refused fixtures, failed
 queries with plausible output, privacy canaries and an executable EXIT trap.
-It also pins the full ordered 27-call list and placement before workload and
+It also pins the original ordered 27-call prefix and its mandatory placement before workload and
 prebuild. These hermetic checks establish no delegation or enforcement. The
 Rust context remains authoritative, including `PidsLimit`; complete final-source
 and fresh exact-candidate four-lane qualification remain required. Run
@@ -108,8 +129,8 @@ checks actual private artifact/source/raw-tool hashes and static ELF structure.
 The emitter repeats the reader and adds only an unadmitted source outcome.
 No PidsLimit capability or catalogue grant follows. Pure checks and source
 integration do not qualify a lane: complete final-source checks, genuine fresh
-exact-candidate 27-call four-lane runs, original lane EXIT cleanup and independent
-review remain due. Nofile28 is prepared separately. Historical first26 run
+exact-candidate current 28-call four-lane runs, original lane EXIT cleanup and independent
+review remain due. Nofile28 follows only a successful PIDs27 and strict reader. Historical first26 run
 claims below remain unchanged and cannot qualify the new candidate.
 
 ## Guarded CommandClear source qualification and candidate rehearsal
@@ -147,22 +168,20 @@ ADR 0019's trusted-harness/public-projection tier and
 ADR 0012's actual consumer obligations remain. No private-payload replay or
 application acceptance is claimed.
 
-## Prepared nofile source, not canonical28
+## Recovered nofile source and bounded canonical integration
 
-The recovered [nofile contract](native-nofile-contract.md) has a registered
-ignored producer and pure custody/accounting controls, but no canonical wrapper
-invocation, mandatory emitter reader or public observation. The current native
-coordinator requires PIDs invocation 27 after the first 26 calls. Never use this
-source preparation to run28 around unresolved strict PIDs27. Default private-proof
-bounds remain16KiB; the explicit nofile publisher/reader alone may select at
-most512KiB, independently
-retaining the64KiB metadata bound, exclusive publication, stable no-follow reads
-and held-directory custody. Both source accounting and byte-boundary controls
-require final integrated Rust/full gates; they are not native effect evidence.
+The [nofile contract](native-nofile-contract.md) retains its ignored producer,
+private reader and custody/accounting controls. ADR 0045 now wires canonical28
+and mandatory emitter validation, without a public nofile observation. PIDs27
+and its strict immediate reader remain required before nofile. Default private
+proofs stay at 16KiB; only nofile's explicit publisher/reader selects at most
+512KiB, retaining the separate 64KiB metadata ceiling, exclusive publication,
+stable no-follow reads and held-directory custody. Synthetic bounds and source
+controls are not native effect evidence or a bypass for unresolved prerequisites.
 
-## Current source-only calls 24–26 recovery
+## Preceding source-only calls 24–26 recovery
 
-The current mandatory source sequence has 26 exact invocations. Preserved
+The earlier source recovery established 26 exact invocations. Preserved
 `shm-size-v1`, `supplementary-groups-v1` and `kernel-settings-v1` follow the
 unchanged first 23, each in a separate one-child owner scope and each followed
 immediately by its strict private reader, even without evidence emission. Five
