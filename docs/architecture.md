@@ -1,6 +1,173 @@
 # Architecture
 
+## Hostname/resolver private proof v2
+
+The current [hostname/resolver contract](native-hostname-contract.md) and
+[ADR 0046](decisions/0046-hostname-resolver-source-proof-v2.md) expand
+invocation 22 under its existing HealthRun/owner with four fresh resolver fixtures,
+while preserving all four hostname controls. Private schema 2/hostname-v2.json
+requires both sections; public hostname-v1, the 19-argument emitter and capability/
+catalogue maps remain unchanged. The same 28 invocation names and seven owner
+scopes remain, but resolver failure now can prevent reaching PIDs27. PIDs27 and
+its immediate reader still precede nofile28. Earlier qualification is not reusable;
+source checks and actual combined native byte/time fit remain pending. No resolver
+connectivity, IPv6-network, application-acceptance or publication claim follows.
+
+
+## Canonical nofile28 source integration
+
+[ADR 0045](decisions/0045-canonical-nofile-source-integration.md) appends only
+the prepared nofile child after the unchanged original 27 calls and mandatory
+immediate PIDs27 reader. It has a separate one-child cleanup-owner scope and
+retains the original wrapper deadline and cleanup reserve. The existing
+12-fact nofile reader runs immediately, including without evidence emission;
+the 19-argument emitter revalidates with independent lane/context and selected
+outer-backend facts and requires the exact three-key unadmitted result. It
+adds no public nofile projection, schema, capability or catalogue grant.
+Original lane EXIT cleanup remains mandatory. Full final-source checks and fresh
+exact-candidate four-lane 28-call qualification remain pending; source wiring
+cannot bypass strict rootless PIDs/delegation or hosted-runtime prerequisites.
+
+## Typed PIDs source and private proof v2
+
+[ADR 0044](decisions/0044-typed-pids-source-and-proof-v2.md) adds fixed-sibling
+thread-aware discovery, leader-local membership and complete typed ancestor
+validation to the original-owner PIDs27 source. A source-owned measurement phase
+freezes all six chains; independent Rust and Python readers validate proof v2.
+The [authored transcript](native-pids-threaded-contract.md#current-typed-source-authored-envelope)
+measures the actual selected source and IPC paths, including post-seal cleanup.
+It models kernel/Engine/clock facts and does not replace fresh native evidence.
+No product capability, source budget or operational dependency is added.
+
+## Original-owner PIDs27 source integration
+
+[ADR 0041](decisions/0041-original-owner-pids-experiment.md) integrates the
+Linux-only original-owner producer, fixed static guest controller and strict
+independent private reader as canonical invocation 27, after the unchanged
+first 26 calls. The [owner contract](native-pids-owner.md) preserves actual
+selected-actor inspection, one exclusive root session, original accounting and
+deadlines, six independent CLI/rendered effect controls, fixed-chunk copy I/O
+receipts and supervised inner cleanup. Its source outcome remains unadmitted;
+full exact-candidate native qualification and original lane EXIT cleanup remain
+required. The outer is retained for the following nofile28 child. Earlier first26
+checkpoint descriptions below retain their historical evidence and scope.
+
+## Guarded CommandClear raw source and explicit candidate admission
+
+[ADR 0036](decisions/0036-command-clear-native-source-projection.md) versions the
+command-clear public family as `command-clear-native-source-v1`. Only after the
+unchanged complete four-control proof/ordered reader return, append available
+CommandClear/[ClearCommand] to every existing raw group and require closed
+`raw_source_only` / catalogue `unadmitted` metadata with the explicit Exec-entrypoint
+guard. EntrypointClear remains only a control. An executable validator couples
+version/fields/scope and full baseline maps before publication; accepting catalogue
+policy rejects unselected family versions. Historical unadmitted payloads keep
+their old meaning. [ADR 0037](decisions/0037-reviewed-command-clear-cohort.md)
+separately selects only the reviewed CommandClear singleton on the four sealed
+profiles for candidate rehearsal; EntrypointClear remains withheld. No public
+Rust/private ABI, 26-call order, native I/O or pin changes. Old native26 is a
+semantic prerequisite. Source run40119803977/attempt1 independently qualifies
+source a36e42fb, not the later admission head. Complete and fresh exact-final-head
+four-lane26 gates/review and actual consumer gates remain required.
+
+The [nofile producer](native-nofile-contract.md) retains its recovered
+source/custody contract and ignored test registration. ADR 0045 now supplies the
+canonical28 wrapper and mandatory readers; it adopts none of the preserved
+runtime/broker rewrite. The default private-proof bound remains 16KiB, while
+only nofile's explicit publisher/reader selects at most 512KiB with a separate
+64KiB metadata ceiling and existing stable-file/directory custody. Strict PIDs27
+and its original-boundary authority must succeed first; no ignored source test
+grants native acceptance or a capability.
+
+## Preceding source-only calls 24–26 recovery
+
+The earlier recovery extended the preceding 23-call checkpoint below with
+the preserved ShmSize, supplementary-groups and kernel-settings children in
+positions 23/24/25 (26 invocations total). The original five-child owner block,
+separate hostname scope and token-free command-clear call remain unchanged;
+each new child has a separate one-child scope and immediate mandatory strict
+reader. Five owner scopes result. The maintained profile policy and #125 inert
+public API remain unchanged. PIDs/nofile and their authority machinery are not
+recovered by this phase.
+
+Pure readers bind canonical selected-backend costs separately from proof and
+context data, with no absent/unknown backend fallback. Existing snapshots own
+actual charges. New private helpers calculate exact final totals and checked
+pending-final reserves only: two Docker extras in the final ledger, one pending
+extra after acquisition. The 180-second deadline, 400-call/4-MiB aggregate,
+100-call/2-MiB cleanup reserve and original stream/body/proof caps remain intact.
+Kernel cleanup retains complete-body ownership projection and known-ID guard.
+Emitter output adds only closed unadmitted observations; capability maps,
+catalogue, dependencies, pins and public request semantics do not change.
+Source controls do not qualify native behavior; final complete and genuine
+exact-candidate 26-invocation four-lane gates and independent review remain due.
+
+## Preceding 23-call checkpoint and maintained policy
+
+The first #31 recovery stage reuses the preserved
+[health-interval boundary](native-health-start-interval-boundary-contract.md) and
+[lifecycle default/zero effects](native-lifecycle-default-effects-contract.md)
+producers in their existing lifecycle test module. The original nineteen calls
+retain their order, followed by these two recovered calls under the same
+authenticated cleanup-owner scope. Strict private readers use independently
+constructed harness context and emit closed unadmitted observations only; no
+capability map, catalogue, product API or pin changes. The Debian parser-refused
+name has one original-run/lane/API/invocation-bound, body-free read-only absence
+allowance, never a mutation slot or generic request expansion. The current
+topology, diagnostics and deadlines remain intact. The scoped runner-profile
+policy below supersedes only the experimental non-acceptance barrier; native
+observations remain capability-unadmitted.
+The recovered [hostname producer](native-hostname-contract.md) follows as call 22
+under a separate one-child cleanup-owner scope, preserving the original five-child
+block. Its strict private reader always runs immediately, including without an
+evidence destination. The emitter independently revalidates the fixed private
+proof and adds only a closed unadmitted observation, retaining its nineteen-argument
+ABI. No ContainerHostname capability or raw shape-map group is admitted. This
+restores the hostname portion of the source closure.
+
+The preserved [command/entrypoint-clear proof](native-command-clear-contract.md)
+follows as invocation 23 after the hostname reader, outside both lifecycle token
+scopes. Its dedicated cleanup owner delegates the health-specific destructor
+without claiming success, and retains once-only attempted/verified cleanup.
+The shared private Drop predicate preserves ordinary ownership when delegation
+is false. Current outer snapshots charge the selected backend before I/O under
+the existing timer/capture owner. Both unconditional inline validation and the
+nineteen-argument emitter independently require the complete two-shape private
+return. That recovery checkpoint emitted only an unadmitted observation; ADR 0036
+above now adds its guarded raw-source singleton, not catalogue/public API
+admission. This restores the first 23-call closure, not the full
+preserved 28-call inventory.
+
+Native test subprocesses share the canonical test-only
+[outer command boundary](native-outer-runtime.md), including Rust's cfg(test)-only
+literal argv builder. It reuses the coordinator's selected backend/private client
+configuration beneath each original timeout/capture owner. Outer-proof snapshot
+normalization binds actual image-ID and repository-digest evidence; guest and
+inner Engine oracle results remain untouched. No product executor/API is added.
+
+Native orchestration uses the canonical [test-only outer runtime](native-outer-runtime.md):
+local default rootful Podman, explicitly selected verified rootful Docker only in
+admitted hosted jobs. It introduces no product executor/API and changes none of
+the capture/decoder/target boundaries. The shared host store, exact inner fixture
+ownership and fresh complete/native qualification obligations remain.
+
+Hosted outer-Docker upstream-rootless additionally requires the maintained
+[per-job userns profile](native-outer-runtime.md#maintained-github-runner-upstream-rootless-userns-prerequisite)
+in the three exact admitted native workflows. Exact owned-task kernel-label,
+custody and profile-removal proof precede ordinary receipt publication; missing
+proof fails the lane and aggregate. This adds no local-host policy, cgroup/PIDs
+authority, product capability or release admission.
+
 ## Data flow
+
+The recovered [destination-PIDs contract](destination-pids-prerequisite.md) adds
+observation-scoped reports from the existing captured `/info` response, not a new
+request. A pure assessor requires explicitly selected destination scope and
+matching metadata; even its compatible outcome leaves delegation and enforcement
+unverified. Finite rootless PIDs rendering, after existing capability validation,
+retains an unresolved typed obligation and selects complete-artifact schema 4.
+Other request/schema 1/2/3 bytes remain unchanged. ADRs 0020/0021 define these
+boundaries; no executor, native authority or capability admission is added.
 
 1. An explicitly supplied endpoint and selector create a bounded read request
    plan. Every operation belongs to the closed `ReadRequest` enum.
@@ -35,8 +202,8 @@
    health and timing, runtime settings, and restart policy.
    Command inheritance means omitting the native field, not promising an image
    default survives an entrypoint override. Command clear requires an explicit
-   exec entrypoint at intent validation; even that pair remains capability-gated
-   pending exact native proof. No planning step inspects the image.
+   exec entrypoint at intent validation; only that pair is admitted by ADR 0037's
+   exact source records. EntrypointClear remains withheld. No planning step inspects the image.
    The public planner admits
    only profiles resolved from the reviewed catalog; caller-authored positive
    daemon claims cannot authorize planning. A profile distinguishes upstream
@@ -44,11 +211,11 @@
    advertised maximum API, negotiated acquisition API, tested rendering API,
    and daemon mode. Catalog discovery returns its SHA-256 evidence key. The
    candidate catalog selects four exact records from independently reviewed
-   run `38106164571`, attempt 1, source
-   `ef8b40c2d392c3983a3ebdc54730812352fe6b39`, under ADR 0019.
-   Only StopSignal is added beyond ADR 0018's retained complete groups.
-   Debian admits exactly 30 capabilities/47 shapes; upstream adds only the
-   complete IPv6 port group for 31/49. All six historical cohorts remain
+   run `40119803977`, attempt 1, source
+   `a36e42fbaeee6585c954948c9fe3a8686d86018b`, under ADR 0037.
+   Only CommandClear/[ClearCommand] is added beyond ADR 0019's complete groups.
+   Debian admits exactly 31 capabilities/48 shapes; upstream adds only the
+   complete IPv6 port group for 32/50. All seven historical cohorts remain
    immutable. ADR 0012's six actual authored fixture volume-only consumer gate
    and fresh reviewed actual Nextcloud/Supabase bind and desired external
    expectation consumers remain required.
@@ -145,7 +312,7 @@ and historical evidence remain unchanged. ADR 0018 selects authenticated source
 run `37788762974` at Debian 29/46 and upstream 30/48 for candidate rehearsal;
 ADR 0019 retains those groups and adds only the StopSignal singleton.
 Definitions or offline controls grant no native compatibility. Fresh
-authenticated exact-final-candidate sixteen-test four-lane execution,
+authenticated exact-final-candidate twenty-six-test four-lane execution,
 independent review and the separate ADR 0012/0016/0018/0019 consumer gates remain
 required before ready/merge. No source run qualifies a changed candidate.
 

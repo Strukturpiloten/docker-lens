@@ -1,5 +1,16 @@
 # DockerLens
 
+The current [hostname/resolver contract](docs/native-hostname-contract.md) and
+[ADR 0046](docs/decisions/0046-hostname-resolver-source-proof-v2.md) expand
+invocation 22 under its existing HealthRun/owner with four fresh resolver fixtures,
+while preserving all four hostname controls. Private schema 2/hostname-v2.json
+requires both sections; public hostname-v1, the 19-argument emitter and capability/
+catalogue maps remain unchanged. The same 28 invocation names and seven owner
+scopes remain, but resolver failure now can prevent reaching PIDs27. PIDs27 and
+its immediate reader still precede nofile28. Earlier qualification is not reusable;
+source checks and actual combined native byte/time fit remain pending. No resolver
+connectivity, IPv6-network, application-acceptance or publication claim follows.
+
 Building DockerLens requires Rust 1.98.1 or newer. The repository pins Rust
 1.98.1 for development, linting, documentation, and validation.
 
@@ -11,19 +22,70 @@ source records are available for inert rendering. Each changed candidate and
 release must pass fresh complete and four-lane native gates before a
 compatibility claim.
 
+The bounded #31 recovery restores the preserved health-interval boundary and
+lifecycle default/zero source producers as canonical invocations 20 and 21, then
+the [hostname source proof](docs/native-hostname-contract.md) as invocation 22 and
+[command/entrypoint-clear](docs/native-command-clear-contract.md) as invocation 23. The
+original nineteen, current fixture topology/diagnostics, pins, cleanup and
+maintained scoped AppArmor prerequisite remain mandatory. These remain source-only;
+[ADR 0036](docs/decisions/0036-command-clear-native-source-projection.md) adds only
+guarded CommandClear/[ClearCommand] to raw source maps, with versioned catalogue
+`unadmitted` status. [ADR 0037](docs/decisions/0037-reviewed-command-clear-cohort.md)
+separately selects only CommandClear for candidate rehearsal under its existing
+explicit Exec-entrypoint guard. EntrypointClear remains withheld. Other observations
+grant no new capability.
+The preserved 28-call
+inventory remains pending reconciliation; twenty-three is not milestone completion.
+Historical evidence does not qualify this changed candidate.
+
+The next recovered source-only closure adds
+[ShmSize](docs/native-shm-size-contract.md),
+[numeric supplementary groups](docs/native-supplementary-groups-contract.md) and
+[diagonal kernel settings](docs/native-kernel-settings-contract.md) as mandatory
+calls 24–26. Each has a separate one-child owner scope and immediate strict
+reader, including without public emission. Backend accounting is independently
+bound to canonical Podman/Docker selection; original limits and the maintained
+profile policy remain unchanged. The current source sequence appends the
+[original-owner PIDs experiment](docs/native-pids-owner.md) as call 27 under
+[ADR 0041](docs/decisions/0041-original-owner-pids-experiment.md), in a sixth
+owner scope after the unchanged first 26 calls. Its bounded prebuild, six-case
+producer and immediate independent reader run before deferred publication or
+outer cleanup, including without public emission. Only an unadmitted PIDs
+source outcome is added. Fresh exact-candidate four-lane qualification of the
+current 28-call lane, whole-lane cleanup and milestone completion remain pending.
+
+The current [typed PIDs source](docs/native-pids-threaded-contract.md) supports
+explicit domain/thread-root/threaded roles with fixed local-membership discovery
+and private proof v2. Complete authored IPC envelopes fit the unchanged budgets;
+final-source checks and fresh native qualification remain required. Root framing
+and worker/controller protocols remain v1; no PIDs capability is admitted.
+
+The [nofile proof](docs/native-nofile-contract.md) is canonical test-only
+invocation 28 under [ADR 0045](docs/decisions/0045-canonical-nofile-source-integration.md).
+It runs in its own one-child cleanup-owner scope only after all original 27
+calls and the immediate strict PIDs reader succeed. Its independent reader is
+mandatory even without public evidence; the emitter repeats validation without
+adding a nofile field or capability. The producer remains ignored outside the
+native harness. Source wiring is not native execution, full28 completion or
+capability admission; strict PIDs prerequisites cannot be bypassed.
+
 The planned native work is tracked in [DockerLens #3](https://github.com/Strukturpiloten/docker-lens/issues/3).
 Typed networks, protected runtime settings and conditional bind-source review
 are available as inert data. The candidate selects the independently reviewed
-configured stop-signal source cohort from run `38106164571`, attempt 1, under
-[ADR 0019](docs/decisions/0019-reviewed-stop-signal-cohort.md). Exact Debian
-profiles admit 30 capabilities/47 shapes; upstream profiles add only the
-complete IPv6 port group, for 31/49. The machine records preserve all six
+CommandClear source cohort from run `40119803977`, attempt 1, source
+`a36e42fbaeee6585c954948c9fe3a8686d86018b`, under
+[ADR 0037](docs/decisions/0037-reviewed-command-clear-cohort.md). Exact Debian
+profiles admit 31 capabilities/48 shapes; upstream profiles add only the
+complete IPv6 port group, for 32/50. The machine records preserve all seven
 earlier cohorts byte-exact.
 
 The selection retains complete common IPv4/repeated/exposed-only/ephemeral port,
 container-label/shell-health/start-period, network-label/alias/multiple-attachment,
 and shared/private bind configured-retention groups and the complete
-external-network Internal false/true expectation group, adding only StopSignal.
+external-network Internal false/true expectation and StopSignal groups, adding
+only CommandClear/[ClearCommand]. It retains authored Cmd `[]` with explicit
+Exec entrypoint; the omitted-Cmd control intentionally has the same process
+effect. No arbitrary-image success or new effect relative to omission is claimed.
 Native symbolic TERM/INT trap effects are bounded source evidence, not a promise
 of arbitrary-image or application shutdown behavior. None remains
 unconstrained; explicit booleans select inert schema 3 and never network mutation.
@@ -35,7 +97,7 @@ representations retain their existing behavior.
 
 This is candidate pre-merge rehearsal admission. Production merge, main
 admission and release remain blocked until fresh exact-final-candidate complete
-and four-lane sixteen-test native gates, fresh independently reviewed volume-only
+and four-lane twenty-eight-test native gates, fresh independently reviewed volume-only
 consumer rehearsals of all six actual authored fixtures under
 [ADR 0012](docs/decisions/0012-candidate-volume-label-admission.md), and reviewed
 BoxFerry consumers of the actual Nextcloud/Supabase binds and desired external
@@ -53,6 +115,14 @@ Debian 11 Docker Engine support is bounded by exact reviewed native evidence; De
 Compose compatibility and Swarm mode are separate discussion topics.
 
 ## Contract boundaries
+
+The recovered [finite rootless PIDs destination contract](docs/destination-pids-prerequisite.md)
+retains observation-scoped PIDs/cgroup metadata and an unresolved typed destination
+obligation. Metadata compatibility never proves controller delegation or enforcement.
+Existing PIDs capability gates and reviewed profiles remain unchanged. Where an
+admitted finite rootless setting requires that obligation, complete output uses
+schema 4; other schema 1/2/3 output and request bytes remain unchanged. Downstream
+schema support and fresh integrated verification remain required.
 
 - A caller supplies an absolute Unix-socket endpoint and bounded selector. No
   daemon is discovered. Cancellation is checked between bounded I/O polls.
@@ -107,3 +177,16 @@ evidence for live #10 acquisition and #12 target
 request conformance is required before any compatibility claim. See
 [architecture](docs/architecture.md) and
 [verification](docs/verification.md).
+
+The [test-only outer runtime](docs/native-outer-runtime.md) defaults locally to
+rootful Podman; admitted hosted native jobs explicitly select verified local
+rootful Docker. Both orchestrate owned inner fixtures in the existing shared host
+store, never use the host daemon as the test subject or mount its socket into a
+guest. There is no runtime fallback. This backend still needs fresh exact-candidate
+four-lane qualification; mocked controls are not native evidence.
+
+Hosted outer-Docker upstream-rootless uses a maintained, per-job
+[userns profile prerequisite](docs/native-outer-runtime.md#maintained-github-runner-upstream-rootless-userns-prerequisite)
+with exact owned-task label and removal checks before ordinary lane acceptance.
+Local hosts retain their existing policy; this prerequisite grants no cgroup/PIDs
+authority, product capability or release admission.

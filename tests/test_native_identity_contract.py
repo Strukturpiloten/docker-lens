@@ -82,8 +82,19 @@ class ParameterizedIdentityTests(unittest.TestCase):
                     self.assertEqual(evidence["admitted_shapes"][capability], [capability])
                     self.assertEqual(evidence["capability_outcome"][capability], "available")
                 self.assertNotIn("SupplementaryGroups", evidence["admitted_shapes"])
-                for private in ("dl-identity", RUN_ID, "runtime_uid", "rejection_phase", "configured"):
+                for private in ("dl-identity", RUN_ID, "runtime_uid", "rejection_phase"):
                     self.assertNotIn(private, destination.read_text())
+                # Closed configured_absent outcomes are public vocabulary; the
+                # actual private member stays forbidden at every JSON depth,
+                # independent of whitespace or escaped key serialization.
+                pending = [evidence]
+                while pending:
+                    value = pending.pop()
+                    if isinstance(value, dict):
+                        self.assertNotIn("configured", value)
+                        pending.extend(value.values())
+                    elif isinstance(value, list):
+                        pending.extend(value)
                 for case in proof_v2()["cases"]:
                     for record in case["containers"]:
                         self.assertNotIn(record["id"], destination.read_text())
@@ -228,7 +239,7 @@ class ParameterizedIdentityTests(unittest.TestCase):
                 str(destination), "upstream-rootful",
                 "ghcr.io/strukturpiloten/docker-29-rootful:v29.8.1@sha256:" + "b" * 64,
                 "rootful", "", SHA, RUN_ID]
-            rejected = subprocess.run(command, env={**os.environ, "NATIVE_FIXTURE_IMAGE": legacy.HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, timeout=5)
+            rejected = subprocess.run(command, env={**os.environ, "NATIVE_OUTER_ENGINE": "podman", "NATIVE_FIXTURE_IMAGE": legacy.HEALTH_FIXTURE_IMAGE, "NATIVE_OUTER_CONTAINER_ID": "f" * 64, "NATIVE_BIND_RELABEL_DAEMON_UID": "0"}, capture_output=True, text=True, timeout=5)
             self.assertNotEqual(rejected.returncode, 0)
             self.assertFalse(destination.exists())
             self.assertEqual(rejected.stderr.strip(), "native evidence rejected")

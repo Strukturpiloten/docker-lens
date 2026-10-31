@@ -1,6 +1,37 @@
 # Architecture decisions
 
+- [0046: Hostname and resolver source proof v2](0046-hostname-resolver-source-proof-v2.md)
+  expands invocation 22 under its existing owner and limits, requires private v2,
+  and retains public hostname-v1; earlier qualification cannot qualify the change.
+
+- [0045: Canonical nofile28 source integration](0045-canonical-nofile-source-integration.md)
+  appends one private nofile child after mandatory PIDs27/reader, retaining
+  original ownership/deadlines/EXIT cleanup and unchanged public admission;
+  exact-candidate native qualification remains pending.
+
+- [0042: Finite sudo ancestor UID shape](0042-sudo-monitor-uid-shape.md)
+  admits only the exact positive-peer/root-effective/saved/filesystem shape for
+  non-supervisor links still bound to the existing fixed sudo and ancestry checks;
+  native qualification and the observed run's UID/role remain unresolved.
+- [0041: Original-owner PIDs27 source integration](0041-original-owner-pids-experiment.md)
+  adopts the Linux-only owner/controller/private reader and canonical call27,
+  preserving source-only unadmitted status and fresh native qualification.
+
+- [0040: In-process PIDs runtime source session](0040-pids-runtime-source-session.md)
+  adds held inner-peer/namespace association and prepared root supervision;
+  original owner integration and native qualification remain pending.
+
+- [0039: Prepared measured PIDs boundary](0039-measured-pids-boundary.md) defines
+  an unwired post-daemon-start/pre-workload collector only. Historical ADRs
+  0022–0035 remain unadopted. Current ADRs 0041/0045 now supply PIDs27/nofile28
+  source integration; final native qualification remains pending.
+
 Durable native boundaries and evidence/admission contracts:
+
+ADR 0004 now maintains the narrowly scoped GitHub-runner upstream-rootless
+userns profile prerequisite. Proven native completion and profile cleanup may
+produce ordinary evidence; the former experiment's deliberate non-success
+barrier is superseded while its historical evidence keeps its original status.
 
 - [0001: Native boundaries](0001-native-boundaries.md)
 - [0002: Capture and offline target profiles](0002-capture-and-offline-target-profiles.md)
@@ -21,9 +52,42 @@ Durable native boundaries and evidence/admission contracts:
 - [0017: External-network internal expectation](0017-external-network-internal-expectation.md)
 - [0018: Reviewed external-network cohort](0018-reviewed-external-network-cohort.md)
 - [0019: Reviewed configured stop-signal cohort](0019-reviewed-stop-signal-cohort.md)
+- [0020: Observation-scoped cgroup and PIDs reports](0020-observation-scoped-cgroup-reports.md)
+- [0021: Unresolved rootless PIDs destination obligation](0021-rootless-pids-destination-obligation.md)
+- [0036: Guarded CommandClear raw-source projection](0036-command-clear-native-source-projection.md)
+- [0037: Reviewed CommandClear cohort](0037-reviewed-command-clear-cohort.md)
+- [0038: Maintained profile for the exact Box consumer](0038-maintained-profile-for-box-consumer.md)
+- [0039: Measured live PIDs boundary](0039-measured-pids-boundary.md)
+- [0040: Runtime-associated PIDs source session](0040-pids-runtime-source-session.md)
+- [0041: Original-owner PIDs27 experiment](0041-original-owner-pids-experiment.md)
+- [0042: Finite sudo monitor UID shape](0042-sudo-monitor-uid-shape.md)
+- [0043: Prepare thread-aware PIDs source coverage](0043-thread-aware-pids-source-contract.md)
+- [0044: Typed PIDs source and private proof v2](0044-typed-pids-source-and-proof-v2.md)
 
-ADR 0019 selects only the complete StopSignal singleton beyond ADR 0018's
+ADR 0043 prepares pure topology contracts and controls only. It does not replace
+current collector guards, emit proof v2, establish physical budget fit, or qualify
+native execution. Its explicit implementation and independent-review gates remain.
+
+
+ADR 0038 adds only the separately enumerated BoxFerry reviewed-consumer identity
+to the test-only maintained profile helper; native contexts and receipts retain
+their existing contract. Trusted source/admission, Box lifecycle/evidence wiring
+and fresh exact-candidate qualification remain separate obligations.
+
+Numbers 0022–0035 are reserved for preserved unpublished f406cb22 decisions,
+including 0035 Docker gated-entry custody; reservation adopts none of them.
+ADR 0036 versions only the current command-clear raw-source singleton. ADR 0037
+supersedes only ADR 0019's active selection, retaining its complete baseline and
+adding only guarded CommandClear. EntrypointClear remains withheld. ADR 0012's
+consumer gates and fresh final-head qualification remain required.
+
+ADRs 0020/0021 recover inert observation and destination-prerequisite contracts.
+They do not admit PIDs capabilities or authenticate delegation/enforcement.
+Schema 4 is selected only for the new finite rootless obligation; legacy artifact
+and request representations retain their existing bytes otherwise.
+
+Historical ADR 0019 selected only the complete StopSignal singleton beyond ADR 0018's
 retained groups for candidate rehearsal. ADR 0017's None/false/true, conditional
-schema-3 and pure snapshot boundaries remain; fresh final-candidate sixteen-test
+schema-3 and pure snapshot boundaries remain; fresh final-candidate twenty-six-test
 native and actual consumer gates still block ready/merge/main admission and
 release. Historical evidence and earlier obligations are preserved.

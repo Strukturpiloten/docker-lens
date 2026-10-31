@@ -50,6 +50,158 @@ const PEER: &str = "sleep 160";
 const SPECIAL: &str = "Grüße \"quoted\" \\ path\nline";
 const OUTPUT_BUDGET: usize = 4 * 1024 * 1024;
 
+// Diagnostic state is separate from resource/uncertainty state. These tokens
+// identify the boundary being checked, never a reconstructed panic reason.
+macro_rules! diagnostic_tokens {
+    ($name:ident { $($variant:ident => $token:literal),+ $(,)? }) => {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        enum $name { $($variant),+ }
+        impl $name {
+            fn token(self) -> &'static str {
+                match self { $(Self::$variant => $token),+ }
+            }
+        }
+    };
+}
+diagnostic_tokens!(DiagnosticRole { Context => "context", Oracle => "oracle", Rendered => "rendered" });
+diagnostic_tokens!(WorkStage {
+    OuterContext => "outer_context", EngineVersion => "engine_version", Package => "package",
+    ClientVersion => "client_version", EngineInfo => "engine_info", ClientInfo => "client_info",
+    DaemonMode => "daemon_mode", Acquisition => "acquisition", RequestPlan => "request_plan",
+    PrimaryNetworkCreate => "primary_network_create", SecondaryNetworkCreate => "secondary_network_create",
+    NetworkLabels => "network_labels", ServerCreate => "server_create", ServerStart => "server_start",
+    PrimaryReadback => "primary_readback", SecondaryConnect => "secondary_connect",
+    ConnectedReadback => "connected_readback", PrimaryPeerCreate => "primary_peer_create",
+    PrimaryPeerStart => "primary_peer_start", SecondaryPeerCreate => "secondary_peer_create",
+    SecondaryPeerStart => "secondary_peer_start", TopologyReadback => "topology_readback",
+    PrimaryPeerOwnership => "primary_peer_ownership", PrimaryResolver => "primary_resolver",
+    PrimaryUniqueDns => "primary_unique_dns", PrimarySharedDns => "primary_shared_dns",
+    PrimaryUniqueHttp => "primary_unique_http", PrimarySharedHttp => "primary_shared_http",
+    PrimaryDirectHttp => "primary_direct_http", SecondaryPeerOwnership => "secondary_peer_ownership",
+    SecondaryResolver => "secondary_resolver", SecondaryUniqueDns => "secondary_unique_dns",
+    SecondarySharedDns => "secondary_shared_dns", SecondaryUniqueHttp => "secondary_unique_http",
+    SecondarySharedHttp => "secondary_shared_http", SecondaryDirectHttp => "secondary_direct_http",
+    FinalReadback => "final_readback", RoleRecord => "role_record", OuterReadback => "outer_readback"
+});
+diagnostic_tokens!(CleanupOrigin { Role => "role", Terminal => "terminal", Drop => "drop" });
+diagnostic_tokens!(CleanupOperation {
+    OuterOwnership => "outer_ownership", Inspect => "inspect", Status => "status",
+    Ownership => "ownership", Delete => "delete", NameAbsence => "name_absence", IdAbsence => "id_absence"
+});
+diagnostic_tokens!(DiagnosticSlot {
+    None => "none", PrimaryNetwork => "primary_network", SecondaryNetwork => "secondary_network",
+    Server => "server", PrimaryPeer => "primary_peer", SecondaryPeer => "secondary_peer"
+});
+
+enum EffectSide {
+    Primary,
+    Secondary,
+}
+impl EffectSide {
+    fn stages(self) -> [WorkStage; 7] {
+        match self {
+            Self::Primary => [
+                WorkStage::PrimaryPeerOwnership,
+                WorkStage::PrimaryResolver,
+                WorkStage::PrimaryUniqueDns,
+                WorkStage::PrimarySharedDns,
+                WorkStage::PrimaryUniqueHttp,
+                WorkStage::PrimarySharedHttp,
+                WorkStage::PrimaryDirectHttp,
+            ],
+            Self::Secondary => [
+                WorkStage::SecondaryPeerOwnership,
+                WorkStage::SecondaryResolver,
+                WorkStage::SecondaryUniqueDns,
+                WorkStage::SecondarySharedDns,
+                WorkStage::SecondaryUniqueHttp,
+                WorkStage::SecondarySharedHttp,
+                WorkStage::SecondaryDirectHttp,
+            ],
+        }
+    }
+}
+
+impl DiagnosticRole {
+    fn resource(role: &str) -> Self {
+        match role {
+            "oracle" => Self::Oracle,
+            "rendered" => Self::Rendered,
+            _ => unreachable!("closed attachment diagnostic role"),
+        }
+    }
+}
+impl DiagnosticSlot {
+    fn resource(slot: &str) -> Self {
+        match slot {
+            "primary_network" => Self::PrimaryNetwork,
+            "secondary_network" => Self::SecondaryNetwork,
+            "server" => Self::Server,
+            "primary_peer" => Self::PrimaryPeer,
+            "secondary_peer" => Self::SecondaryPeer,
+            _ => unreachable!("closed attachment diagnostic slot"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct WorkSite {
+    role: DiagnosticRole,
+    stage: WorkStage,
+}
+impl WorkSite {
+    fn write(self, output: &mut impl Write) -> std::io::Result<()> {
+        writeln!(
+            output,
+            "DOCKERLENS_NATIVE_ATTACHMENT_WORK: role={} stage={}",
+            self.role.token(),
+            self.stage.token()
+        )
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CleanupSite {
+    origin: CleanupOrigin,
+    role: DiagnosticRole,
+    operation: CleanupOperation,
+    slot: DiagnosticSlot,
+}
+impl CleanupSite {
+    fn write(self, output: &mut impl Write) -> std::io::Result<()> {
+        writeln!(
+            output,
+            "DOCKERLENS_NATIVE_ATTACHMENT_CLEANUP: origin={} role={} operation={} slot={}",
+            self.origin.token(),
+            self.role.token(),
+            self.operation.token(),
+            self.slot.token()
+        )
+    }
+}
+
+#[derive(Default)]
+struct FirstFailures {
+    work: Option<WorkSite>,
+    cleanup: Option<CleanupSite>,
+}
+impl FirstFailures {
+    fn work_failed(&mut self, site: Option<WorkSite>) -> Option<WorkSite> {
+        if self.work.is_some() {
+            return None;
+        }
+        let site = site?;
+        self.work = Some(site);
+        Some(site)
+    }
+    fn cleanup_failed(&mut self, site: CleanupSite) -> Option<CleanupSite> {
+        if self.cleanup.is_some() {
+            return None;
+        }
+        self.cleanup = Some(site);
+        Some(site)
+    }
+}
+
 fn with_output_capacity<T>(used: usize, stream_cap: usize, start: impl FnOnce() -> T) -> Option<T> {
     if stream_cap == 0 || used.checked_add(stream_cap.checked_mul(2)?)? > OUTPUT_BUDGET {
         return None;
@@ -170,6 +322,10 @@ struct Run {
     mutation_uncertain: bool,
     cleanup_uncertain: bool,
     finished: bool,
+    diagnostic_role: DiagnosticRole,
+    work_site: Option<WorkSite>,
+    cleanup_site: Option<CleanupSite>,
+    first_failures: FirstFailures,
 }
 impl Run {
     fn new() -> Self {
@@ -265,6 +421,51 @@ impl Run {
             mutation_uncertain: false,
             cleanup_uncertain: false,
             finished: false,
+            diagnostic_role: DiagnosticRole::Context,
+            work_site: Some(WorkSite {
+                role: DiagnosticRole::Context,
+                stage: WorkStage::OuterContext,
+            }),
+            cleanup_site: None,
+            first_failures: FirstFailures::default(),
+        }
+    }
+    fn work_stage(&mut self, role: DiagnosticRole, stage: WorkStage) {
+        self.diagnostic_role = role;
+        self.work_site = Some(WorkSite { role, stage });
+    }
+    fn cleanup_stage(
+        &mut self,
+        origin: CleanupOrigin,
+        operation: CleanupOperation,
+        index: Option<usize>,
+    ) {
+        let (role, slot) = index.map_or((self.diagnostic_role, DiagnosticSlot::None), |index| {
+            let resource = &self.resources[index];
+            (
+                DiagnosticRole::resource(&resource.role),
+                DiagnosticSlot::resource(&resource.slot),
+            )
+        });
+        self.cleanup_site = Some(CleanupSite {
+            origin,
+            role,
+            operation,
+            slot,
+        });
+    }
+    fn record_work_failure(&mut self) {
+        if let Some(site) = self.first_failures.work_failed(self.work_site) {
+            // Diagnostic I/O failure cannot replace a cause or prevent cleanup.
+            let _ = site.write(&mut std::io::stderr().lock());
+        }
+    }
+    fn record_cleanup_failure(&mut self) {
+        if let Some(site) = self
+            .cleanup_site
+            .and_then(|site| self.first_failures.cleanup_failed(site))
+        {
+            let _ = site.write(&mut std::io::stderr().lock());
         }
     }
     fn remaining(&self) -> Duration {
@@ -373,7 +574,17 @@ impl Run {
         }
     }
     fn podman(&mut self, cleanup: bool, args: &[String]) -> std::process::Output {
-        let mut command = vec!["podman".into(), "--remote=false".into()];
+        if args.first().is_some_and(|arg| arg == "inspect") {
+            let extra = crate::native_outer_test_command::snapshot_extra_calls();
+            if cleanup {
+                self.cleanup_calls += extra;
+                self.cleanup_bytes += extra * 65536;
+            } else {
+                self.work_calls += extra;
+                self.work_bytes += extra * 65536;
+            }
+        }
+        let mut command = crate::native_outer_test_command::prefix();
         command.extend_from_slice(args);
         self.capture(cleanup, self.elevated, 3, &command, None, 64 * 1024)
     }
@@ -629,7 +840,8 @@ impl Run {
         );
         self.api(true, "GET", &path, None).0 == 404
     }
-    fn cleanup(&mut self) -> bool {
+    fn cleanup(&mut self, origin: CleanupOrigin) -> bool {
+        self.cleanup_stage(origin, CleanupOperation::OuterOwnership, None);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             assert!(
                 self.outer_snapshot(true, false).is_some(),
@@ -641,7 +853,9 @@ impl Run {
                     continue;
                 }
                 let removed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    self.cleanup_stage(origin, CleanupOperation::Inspect, Some(index));
                     let (code, value) = self.inspect(index, true);
+                    self.cleanup_stage(origin, CleanupOperation::Status, Some(index));
                     if code == 404 {
                         assert!(
                             self.resources[index].id.is_none(),
@@ -651,6 +865,7 @@ impl Run {
                         return;
                     }
                     assert_eq!(code, 200);
+                    self.cleanup_stage(origin, CleanupOperation::Ownership, Some(index));
                     assert!(
                         self.authenticate(index, &value),
                         "attachment cleanup refuses foreign ownership"
@@ -666,21 +881,30 @@ impl Run {
                         r.id.as_ref().unwrap(),
                         if r.network { "" } else { "?force=1" }
                     );
+                    self.cleanup_stage(origin, CleanupOperation::Delete, Some(index));
                     assert_eq!(self.api(true, "DELETE", &path, None).0, 204);
                     self.resources[index].deleted = true;
                 }))
                 .is_ok();
+                if !removed {
+                    self.record_cleanup_failure();
+                }
                 all &= removed;
             }
             for _ in 0..2 {
                 for index in 0..self.resources.len() {
                     let absent = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        self.cleanup_stage(origin, CleanupOperation::NameAbsence, Some(index));
                         assert!(self.absent(index, false), "attachment final name absence");
                         if self.resources[index].id.is_some() {
+                            self.cleanup_stage(origin, CleanupOperation::IdAbsence, Some(index));
                             assert!(self.absent(index, true), "attachment final ID absence");
                         }
                     }))
                     .is_ok();
+                    if !absent {
+                        self.record_cleanup_failure();
+                    }
                     all &= absent;
                 }
             }
@@ -690,15 +914,21 @@ impl Run {
                 }
             }
             all
-        }))
-        .unwrap_or(false);
+        }));
+        if result.is_err() {
+            self.record_cleanup_failure();
+        }
+        let result = result.unwrap_or(false);
         self.cleanup_uncertain |= !result;
         result
     }
 }
 impl Drop for Run {
     fn drop(&mut self) {
-        if !self.finished && self.resources.iter().any(|r| r.live) && !self.cleanup() {
+        if !self.finished
+            && self.resources.iter().any(|r| r.live)
+            && !self.cleanup(CleanupOrigin::Drop)
+        {
             eprintln!("DOCKERLENS_NATIVE_CHECK: network_attachment_cleanup_unverified");
         }
     }
@@ -766,9 +996,11 @@ impl Run {
     }
     fn observe_context(&mut self) {
         eprintln!("DOCKERLENS_NATIVE_CHECK: network_attachment_context");
+        self.work_stage(DiagnosticRole::Context, WorkStage::OuterContext);
         let outer = self
             .outer_snapshot(false, true)
             .unwrap_or_else(|| panic!("attachment exact native outer setup"));
+        self.work_stage(DiagnosticRole::Context, WorkStage::EngineVersion);
         let (code, bytes) = self.api(false, "GET", "/version", None);
         assert_eq!(code, 200);
         let version: Value = serde_json::from_slice(&bytes)
@@ -780,6 +1012,7 @@ impl Run {
                 matches!(self.release.as_str(), "20.10.5" | "20.10.5+dfsg1"),
                 "exact attachment Debian release"
             );
+            self.work_stage(DiagnosticRole::Context, WorkStage::Package);
             let package = self.podman(
                 false,
                 &[
@@ -798,6 +1031,7 @@ impl Run {
             assert_eq!(self.release, "29.8.1");
             assert_eq!(self.package, "");
         }
+        self.work_stage(DiagnosticRole::Context, WorkStage::ClientVersion);
         let client = self.cli(
             &[
                 "version".into(),
@@ -810,6 +1044,7 @@ impl Run {
             client,
             format!("{}|{}\n", self.release, self.api).into_bytes()
         );
+        self.work_stage(DiagnosticRole::Context, WorkStage::EngineInfo);
         let (code, bytes) = self.api(false, "GET", &format!("/v{}/info", self.api), None);
         assert_eq!(code, 200);
         let info: Value = serde_json::from_slice(&bytes)
@@ -822,6 +1057,7 @@ impl Run {
                 })
             });
         assert_eq!(rootless, self.mode == DaemonMode::Rootless);
+        self.work_stage(DiagnosticRole::Context, WorkStage::ClientInfo);
         let cli_security = self.cli(
             &[
                 "info".into(),
@@ -838,6 +1074,7 @@ impl Run {
                 .any(|s| s == "name=rootless" || s.starts_with("name=rootless,")),
             rootless
         );
+        self.work_stage(DiagnosticRole::Context, WorkStage::DaemonMode);
         let process = self.podman(false, &["exec".into(), self.outer_id.clone(), "sh".into(), "-ec".into(),
             "count=0; uid=; for p in /proc/[0-9]*/comm; do [ -r \"$p\" ] || continue; read -r n <\"$p\" || continue; [ \"$n\" = dockerd ] || continue; count=$((count+1)); uid=$(awk '/^Uid:/ {print $3}' \"${p%/comm}/status\"); done; [ \"$count\" -eq 1 ]; printf '%s\\n' \"$uid\"".into()]);
         assert!(
@@ -849,6 +1086,7 @@ impl Run {
             .and_then(|s| s.trim_end_matches('\n').parse::<u32>().ok())
             .unwrap_or_else(|| panic!("closed attachment daemon UID"));
         assert_eq!(uid != 0, rootless);
+        self.work_stage(DiagnosticRole::Context, WorkStage::Acquisition);
         self.work_calls += 16;
         self.work_bytes += 1024 * 1024;
         assert!(
@@ -1111,9 +1349,21 @@ impl Run {
             "attachment retained per-network authored aliases"
         );
     }
-    fn effects(&mut self, peer: usize, unique: &str, shared: &str, ip: Ipv4Addr) {
+    fn effects(&mut self, peer: usize, unique: &str, shared: &str, ip: Ipv4Addr, side: EffectSide) {
+        let role = DiagnosticRole::resource(&self.resources[peer].role);
+        let [
+            ownership,
+            resolver_stage,
+            unique_dns,
+            shared_dns,
+            unique_http,
+            shared_http,
+            direct_http,
+        ] = side.stages();
+        self.work_stage(role, ownership);
         let _ = self.owned(peer);
         let id = self.resources[peer].id.as_ref().unwrap().clone();
+        self.work_stage(role, resolver_stage);
         let resolver = self.cli(
             &[
                 "exec".into(),
@@ -1129,7 +1379,11 @@ impl Run {
                 .any(|line| line == b"nameserver 127.0.0.11"),
             "attachment embedded DNS premise"
         );
-        for alias in [unique, shared] {
+        for (alias, dns_stage, http_stage) in [
+            (unique, unique_dns, unique_http),
+            (shared, shared_dns, shared_http),
+        ] {
+            self.work_stage(role, dns_stage);
             let answer = self.cli(
                 &[
                     "exec".into(),
@@ -1145,6 +1399,7 @@ impl Run {
                 exact_a(&answer, alias, ip),
                 "attachment exact complete scoped A answer"
             );
+            self.work_stage(role, http_stage);
             let body = self.cli(
                 &[
                     "exec".into(),
@@ -1161,6 +1416,7 @@ impl Run {
             );
             assert_eq!(body, CANARY.as_bytes().to_vec());
         }
+        self.work_stage(role, direct_http);
         let body = self.cli(
             &[
                 "exec".into(),
@@ -1178,6 +1434,8 @@ impl Run {
         assert_eq!(body, CANARY.as_bytes().to_vec());
     }
     fn role(&mut self, role: &str) -> Value {
+        let diagnostic_role = DiagnosticRole::resource(role);
+        self.work_stage(diagnostic_role, WorkStage::RequestPlan);
         let names: Vec<_> = SLOTS
             .iter()
             .map(|slot| Resource::new(&self.token, role, slot).name)
@@ -1210,8 +1468,11 @@ impl Run {
             None
         };
         let request = |i| rendered.as_ref().map(|r| &r[i]);
+        self.work_stage(diagnostic_role, WorkStage::PrimaryNetworkCreate);
         let a = self.create_network(role, SLOTS[0], request(0));
+        self.work_stage(diagnostic_role, WorkStage::SecondaryNetworkCreate);
         let b = self.create_network(role, SLOTS[1], request(1));
+        self.work_stage(diagnostic_role, WorkStage::NetworkLabels);
         for network in [a, b] {
             let value = self.owned(network);
             assert_eq!(value["Labels"], labels(&self.token));
@@ -1220,23 +1481,33 @@ impl Run {
                 "attachment ordinary bridge only"
             );
         }
+        self.work_stage(diagnostic_role, WorkStage::ServerCreate);
         let server = self.create_container(role, SLOTS[2], a, &primary_aliases, request(2));
+        self.work_stage(diagnostic_role, WorkStage::ServerStart);
         self.start(server);
+        self.work_stage(diagnostic_role, WorkStage::PrimaryReadback);
         let primary_before = self.running_addresses(server, &[a]);
         assert_eq!(primary_before.len(), 1);
         self.membership(a, &[server]);
         self.membership(b, &[]);
         self.retained_aliases(server, a, &primary_aliases, &secondary_alias);
+        self.work_stage(diagnostic_role, WorkStage::SecondaryConnect);
         self.connect(server, b, &secondary_aliases, request(3));
+        self.work_stage(diagnostic_role, WorkStage::ConnectedReadback);
         let connected = self.running_addresses(server, &[a, b]);
         assert!(
             connected[0] != connected[1],
             "attachment separate server endpoint addresses"
         );
+        self.work_stage(diagnostic_role, WorkStage::PrimaryPeerCreate);
         let first = self.create_container(role, SLOTS[3], a, &[], request(4));
+        self.work_stage(diagnostic_role, WorkStage::PrimaryPeerStart);
         self.start(first);
+        self.work_stage(diagnostic_role, WorkStage::SecondaryPeerCreate);
         let second = self.create_container(role, SLOTS[4], b, &[], request(5));
+        self.work_stage(diagnostic_role, WorkStage::SecondaryPeerStart);
         self.start(second);
+        self.work_stage(diagnostic_role, WorkStage::TopologyReadback);
         let peer_a = self.running_addresses(first, &[a])[0];
         let peer_b = self.running_addresses(second, &[b])[0];
         assert!(
@@ -1247,8 +1518,21 @@ impl Run {
         self.retained_aliases(server, b, &secondary_aliases, &primary_alias);
         self.membership(a, &[server, first]);
         self.membership(b, &[server, second]);
-        self.effects(first, &primary_alias, &shared, connected[0]);
-        self.effects(second, &secondary_alias, &shared, connected[1]);
+        self.effects(
+            first,
+            &primary_alias,
+            &shared,
+            connected[0],
+            EffectSide::Primary,
+        );
+        self.effects(
+            second,
+            &secondary_alias,
+            &shared,
+            connected[1],
+            EffectSide::Secondary,
+        );
+        self.work_stage(diagnostic_role, WorkStage::FinalReadback);
         assert_eq!(self.running_addresses(server, &[a, b]), connected);
         assert_eq!(self.running_addresses(first, &[a]), vec![peer_a]);
         assert_eq!(self.running_addresses(second, &[b]), vec![peer_b]);
@@ -1257,7 +1541,13 @@ impl Run {
         for network in [a, b] {
             assert_eq!(self.owned(network)["Labels"], labels(&self.token));
         }
-        assert!(self.cleanup(), "attachment role verified cleanup");
+        // A caught role-cleanup failure is not a failure of the last work step.
+        self.work_site = None;
+        assert!(
+            self.cleanup(CleanupOrigin::Role),
+            "attachment role verified cleanup"
+        );
+        self.work_stage(diagnostic_role, WorkStage::RoleRecord);
         let resources: Vec<_> = [a,b,server,first,second].into_iter().map(|i| {
             let r = &self.resources[i]; let mut value = json!({"slot":r.slot,"kind":if r.network {"network"} else {"container"},
                 "id":r.id,"name":r.name,"owner":self.token,"configured":"passed","cleanup":"absent"});
@@ -1611,14 +1901,18 @@ fn live_network_attachments_match_engine() {
         roles.push(run.role("oracle"));
         eprintln!("DOCKERLENS_NATIVE_CHECK: network_attachment_rendered");
         roles.push(run.role("rendered"));
+        run.work_stage(DiagnosticRole::Rendered, WorkStage::OuterReadback);
         assert_eq!(
             run.outer_snapshot(false, true).unwrap(),
             run.context["outer"]
         );
     }))
     .is_ok();
+    if !passed {
+        run.record_work_failure();
+    }
     eprintln!("DOCKERLENS_NATIVE_CHECK: network_attachment_cleanup");
-    let cleaned = run.cleanup();
+    let cleaned = run.cleanup(CleanupOrigin::Terminal);
     assert!(
         passed && cleaned && !run.mutation_uncertain && !run.cleanup_uncertain,
         "attachment complete assertions and exact cleanup required"
@@ -1793,4 +2087,215 @@ fn attachment_cleanup_budget_and_creation_collision_remain_independent() {
     assert!(canonical(&"a".repeat(64), 64));
     assert!(!canonical(&"A".repeat(64), 64));
     assert!(!pin("private/image:latest"));
+}
+
+#[test]
+fn attachment_first_work_and_cleanup_survive_caught_panics_drop_and_later_attempts() {
+    struct CleanupOnDrop<'a> {
+        first: &'a mut FirstFailures,
+        site: CleanupSite,
+    }
+    impl Drop for CleanupOnDrop<'_> {
+        fn drop(&mut self) {
+            let _ = self.first.cleanup_failed(self.site);
+        }
+    }
+    let work = WorkSite {
+        role: DiagnosticRole::Oracle,
+        stage: WorkStage::PrimaryUniqueDns,
+    };
+    let cleanup = CleanupSite {
+        origin: CleanupOrigin::Role,
+        role: DiagnosticRole::Oracle,
+        operation: CleanupOperation::Ownership,
+        slot: DiagnosticSlot::Server,
+    };
+    let mut first = FirstFailures::default();
+    let caught = std::panic::catch_unwind(|| panic!("synthetic attachment work failure"));
+    assert!(caught.is_err());
+    assert_eq!(first.work_failed(Some(work)), Some(work));
+    let caught = std::panic::catch_unwind(|| panic!("synthetic attachment cleanup failure"));
+    assert!(caught.is_err());
+    assert_eq!(first.cleanup_failed(cleanup), Some(cleanup));
+    let later = CleanupSite {
+        origin: CleanupOrigin::Drop,
+        operation: CleanupOperation::Delete,
+        ..cleanup
+    };
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _drop = CleanupOnDrop {
+            first: &mut first,
+            site: later,
+        };
+        panic!("synthetic later cleanup failure");
+    }));
+    assert!(caught.is_err());
+    assert_eq!(
+        first.cleanup_failed(CleanupSite {
+            origin: CleanupOrigin::Terminal,
+            ..later
+        }),
+        None
+    );
+    assert_eq!(
+        first.work_failed(Some(WorkSite {
+            role: DiagnosticRole::Rendered,
+            stage: WorkStage::FinalReadback
+        })),
+        None
+    );
+    assert_eq!((first.work, first.cleanup), (Some(work), Some(cleanup)));
+    let mut output = Vec::new();
+    first.work.unwrap().write(&mut output).unwrap();
+    first.cleanup.unwrap().write(&mut output).unwrap();
+    assert_eq!(
+        String::from_utf8(output).unwrap(),
+        concat!(
+            "DOCKERLENS_NATIVE_ATTACHMENT_WORK: role=oracle stage=primary_unique_dns\n",
+            "DOCKERLENS_NATIVE_ATTACHMENT_CLEANUP: origin=role role=oracle operation=ownership slot=server\n"
+        )
+    );
+}
+
+#[test]
+fn attachment_cleanup_only_first_failure_never_becomes_a_work_failure() {
+    for (operation, token) in [
+        (CleanupOperation::OuterOwnership, "outer_ownership"),
+        (CleanupOperation::Inspect, "inspect"),
+        (CleanupOperation::Status, "status"),
+        (CleanupOperation::Ownership, "ownership"),
+        (CleanupOperation::Delete, "delete"),
+        (CleanupOperation::NameAbsence, "name_absence"),
+        (CleanupOperation::IdAbsence, "id_absence"),
+    ] {
+        let site = CleanupSite {
+            origin: CleanupOrigin::Role,
+            role: DiagnosticRole::Rendered,
+            operation,
+            slot: DiagnosticSlot::SecondaryPeer,
+        };
+        let mut first = FirstFailures::default();
+        assert_eq!(first.cleanup_failed(site), Some(site));
+        // Role cleanup suspends the work site before its aggregate assertion.
+        assert_eq!(first.work_failed(None), None);
+        for origin in [
+            CleanupOrigin::Terminal,
+            CleanupOrigin::Drop,
+            CleanupOrigin::Role,
+        ] {
+            assert_eq!(
+                first.cleanup_failed(CleanupSite {
+                    origin,
+                    operation: CleanupOperation::Delete,
+                    ..site
+                }),
+                None
+            );
+        }
+        assert_eq!((first.work, first.cleanup), (None, Some(site)));
+        let mut output = Vec::new();
+        site.write(&mut output).unwrap();
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            format!(
+                "DOCKERLENS_NATIVE_ATTACHMENT_CLEANUP: origin=role role=rendered operation={token} slot=secondary_peer\n"
+            )
+        );
+    }
+}
+
+#[test]
+fn attachment_work_classification_and_effect_steps_are_closed() {
+    for (role, stage, expected) in [
+        (
+            DiagnosticRole::Context,
+            WorkStage::Acquisition,
+            "role=context stage=acquisition",
+        ),
+        (
+            DiagnosticRole::Oracle,
+            WorkStage::ServerCreate,
+            "role=oracle stage=server_create",
+        ),
+        (
+            DiagnosticRole::Rendered,
+            WorkStage::SecondarySharedHttp,
+            "role=rendered stage=secondary_shared_http",
+        ),
+    ] {
+        let site = WorkSite { role, stage };
+        let mut first = FirstFailures::default();
+        assert_eq!(first.work_failed(Some(site)), Some(site));
+        assert_eq!(
+            first.work_failed(Some(WorkSite {
+                role: DiagnosticRole::Context,
+                stage: WorkStage::OuterContext
+            })),
+            None
+        );
+        let mut output = Vec::new();
+        site.write(&mut output).unwrap();
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            format!("DOCKERLENS_NATIVE_ATTACHMENT_WORK: {expected}\n")
+        );
+    }
+    assert_eq!(
+        EffectSide::Primary.stages().map(WorkStage::token),
+        [
+            "primary_peer_ownership",
+            "primary_resolver",
+            "primary_unique_dns",
+            "primary_shared_dns",
+            "primary_unique_http",
+            "primary_shared_http",
+            "primary_direct_http"
+        ]
+    );
+    assert_eq!(
+        EffectSide::Secondary.stages().map(WorkStage::token),
+        [
+            "secondary_peer_ownership",
+            "secondary_resolver",
+            "secondary_unique_dns",
+            "secondary_shared_dns",
+            "secondary_unique_http",
+            "secondary_shared_http",
+            "secondary_direct_http"
+        ]
+    );
+}
+
+#[test]
+fn attachment_diagnostic_write_failure_does_not_reset_first_failure() {
+    struct Refused;
+    impl Write for Refused {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("synthetic diagnostic refusal"))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let site = WorkSite {
+        role: DiagnosticRole::Oracle,
+        stage: WorkStage::PrimaryUniqueHttp,
+    };
+    let mut first = FirstFailures::default();
+    assert!(
+        first
+            .work_failed(Some(site))
+            .unwrap()
+            .write(&mut Refused)
+            .is_err()
+    );
+    assert_eq!(
+        first.work_failed(Some(WorkSite {
+            stage: WorkStage::SecondaryDirectHttp,
+            ..site
+        })),
+        None
+    );
+    assert_eq!(first.work, Some(site));
+    assert!(first.cleanup.is_none());
 }
