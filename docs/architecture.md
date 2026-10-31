@@ -1,5 +1,20 @@
 # Architecture
 
+## Device mapping source invocation 29
+
+[ADR 0047](decisions/0047-device-mapping-native-source-proof.md) appends the
+[finite device proof](native-device-mapping-contract.md) after unchanged
+PIDs27/read and nofile28/read. The 29-call lane has eight delegated owners;
+original invocation22 resolver semantics, private custody and non-admission
+rules remain intact. Independent CLI/rendered controls check exact mapping,
+nonsymlink character identity and a bounded held-descriptor read only. The
+private reader is mandatory without emission and repeated by the unchanged
+19-argument emitter. No denied-write/create or DeviceMappings admission claim
+follows. Fresh complete and exact-candidate whole-four-lane native gates,
+actual byte/time fit and verified cleanup remain pending. Memory effects,
+named capability add/drop and logging source proofs remain open.
+
+
 ## Hostname/resolver private proof v2
 
 The current [hostname/resolver contract](native-hostname-contract.md) and
@@ -7,9 +22,9 @@ The current [hostname/resolver contract](native-hostname-contract.md) and
 invocation 22 under its existing HealthRun/owner with four fresh resolver fixtures,
 while preserving all four hostname controls. Private schema 2/hostname-v2.json
 requires both sections; public hostname-v1, the 19-argument emitter and capability/
-catalogue maps remain unchanged. The same 28 invocation names and seven owner
-scopes remain, but resolver failure now can prevent reaching PIDs27. PIDs27 and
-its immediate reader still precede nofile28. Earlier qualification is not reusable;
+catalogue maps remain unchanged. The original 28 invocation names retain their order; device29 now appends an
+eighth owner scope under ADR 0047. Resolver failure can prevent reaching PIDs27.
+PIDs27/read and nofile28/read must succeed before device29/read. Earlier qualification is not reusable;
 source checks and actual combined native byte/time fit remain pending. No resolver
 connectivity, IPv6-network, application-acceptance or publication claim follows.
 
@@ -25,7 +40,7 @@ the 19-argument emitter revalidates with independent lane/context and selected
 outer-backend facts and requires the exact three-key unadmitted result. It
 adds no public nofile projection, schema, capability or catalogue grant.
 Original lane EXIT cleanup remains mandatory. Full final-source checks and fresh
-exact-candidate four-lane 28-call qualification remain pending; source wiring
+exact-candidate four-lane 29-call qualification remain pending; source wiring
 cannot bypass strict rootless PIDs/delegation or hosted-runtime prerequisites.
 
 ## Typed PIDs source and private proof v2

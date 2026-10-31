@@ -1,5 +1,9 @@
 # Architecture decisions
 
+- [0047: Device mapping native source proof](0047-device-mapping-native-source-proof.md)
+  appends only device29 after PIDs27/read and nofile28/read; supersedes only
+  ADR0046's roster/owner counts to 29/eight, retaining resolver and non-admission rules.
+
 - [0046: Hostname and resolver source proof v2](0046-hostname-resolver-source-proof-v2.md)
   expands invocation 22 under its existing owner and limits, requires private v2,
   and retains public hostname-v1; earlier qualification cannot qualify the change.

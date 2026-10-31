@@ -21,7 +21,7 @@ Strict PIDs/delegation and hosted-runtime prerequisites cannot be skipped or
 weakened to run nofile. Original lane EXIT cleanup remains mandatory. Source
 wiring and synthetic controls do not prove native execution or qualification;
 independent review, complete final-source gates and fresh exact-candidate
-four-lane 28-call evidence remain pending. No raw admission, catalogue,
+four-lane 29-call evidence remain pending. No raw admission, catalogue,
 19-argument emitter ABI, product API, version, private packet schema, runtime
 operation, software pin or budget is changed.
 

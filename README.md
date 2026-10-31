@@ -5,9 +5,9 @@ The current [hostname/resolver contract](docs/native-hostname-contract.md) and
 invocation 22 under its existing HealthRun/owner with four fresh resolver fixtures,
 while preserving all four hostname controls. Private schema 2/hostname-v2.json
 requires both sections; public hostname-v1, the 19-argument emitter and capability/
-catalogue maps remain unchanged. The same 28 invocation names and seven owner
-scopes remain, but resolver failure now can prevent reaching PIDs27. PIDs27 and
-its immediate reader still precede nofile28. Earlier qualification is not reusable;
+catalogue maps remain unchanged. The original 28 invocation names retain their order; device29 now appends an
+eighth owner scope under ADR 0047. Resolver failure can prevent reaching PIDs27.
+PIDs27/read and nofile28/read must succeed before device29/read. Earlier qualification is not reusable;
 source checks and actual combined native byte/time fit remain pending. No resolver
 connectivity, IPv6-network, application-acceptance or publication claim follows.
 
@@ -52,7 +52,7 @@ owner scope after the unchanged first 26 calls. Its bounded prebuild, six-case
 producer and immediate independent reader run before deferred publication or
 outer cleanup, including without public emission. Only an unadmitted PIDs
 source outcome is added. Fresh exact-candidate four-lane qualification of the
-current 28-call lane, whole-lane cleanup and milestone completion remain pending.
+current 29-call lane, whole-lane cleanup and milestone completion remain pending.
 
 The current [typed PIDs source](docs/native-pids-threaded-contract.md) supports
 explicit domain/thread-root/threaded roles with fixed local-membership discovery
@@ -97,7 +97,7 @@ representations retain their existing behavior.
 
 This is candidate pre-merge rehearsal admission. Production merge, main
 admission and release remain blocked until fresh exact-final-candidate complete
-and four-lane twenty-eight-test native gates, fresh independently reviewed volume-only
+and four-lane twenty-nine-test native gates, fresh independently reviewed volume-only
 consumer rehearsals of all six actual authored fixtures under
 [ADR 0012](docs/decisions/0012-candidate-volume-label-admission.md), and reviewed
 BoxFerry consumers of the actual Nextcloud/Supabase binds and desired external

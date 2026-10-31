@@ -11,6 +11,7 @@ import tempfile
 import unittest
 
 from test_native_nofile_proof import fixture
+from test_native_device_mapping_proof import fixture as device_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = "native_nofile"
@@ -152,12 +153,13 @@ exit 1
     def test_original27_order_readers_and_separate_one_child_owner_are_preserved(self):
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         calls = re.findall(r'^[ \t]*"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source, re.M)
-        self.assertEqual(calls, ORIGINAL27 + [(TARGET, TEST)])
+        self.assertEqual(calls, ORIGINAL27 + [(TARGET, TEST), ("native_device_mapping", "live_device_mapping_matches_engine")])
         owners = re.findall(r'^\(\n[ \t]+export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1\n(.*?)^\)', source, re.S | re.M)
         owned = [re.findall(r'run-exact-native-test.sh" (\w+) (\w+)', block) for block in owners]
         self.assertEqual(owned, [ORIGINAL27[16:21], [ORIGINAL27[21]], [ORIGINAL27[23]],
-                                [ORIGINAL27[24]], [ORIGINAL27[25]], [ORIGINAL27[26]], [(TARGET, TEST)]])
-        self.assertEqual(source.count("export NATIVE_LIFECYCLE_CLEANUP_OWNER="), 7)
+                                [ORIGINAL27[24]], [ORIGINAL27[25]], [ORIGINAL27[26]], [(TARGET, TEST)],
+                                 [("native_device_mapping", "live_device_mapping_matches_engine")]])
+        self.assertEqual(source.count("export NATIVE_LIFECYCLE_CLEANUP_OWNER="), 8)
         pids = source.index('python3 "$script_dir/native_pids_proof.py"')
         nofile = source.index('"$(dirname "$0")/run-exact-native-test.sh" native_nofile')
         reader = source.index('python3 "$script_dir/native_nofile_proof.py"')
@@ -165,14 +167,14 @@ exit 1
         self.assertLess(pids, nofile)
         self.assertLess(nofile, reader)
         self.assertLess(reader, publication)
-        command = shlex.split(source[reader:source.index('\n\n', reader)].replace('\\\n', ' '))
+        command = shlex.split(source[reader:source.index('\n# Invocation 29', reader)].replace('\\\n', ' '))
         self.assertEqual(command[2:], ["$run_dir", "$NATIVE_NOFILE_CANDIDATE_SHA", "$run_id", "$lane",
             "$server_version", "$api_version", "$expected_mode", "$installed_docker_package",
             "$NATIVE_FIXTURE_IMAGE", "$image", "$NATIVE_OUTER_CONTAINER_ID", "$NATIVE_BIND_RELABEL_DAEMON_UID"])
         self.assertIn('export NATIVE_NOFILE_PROOF_PATH="$run_dir/nofile-v1.json"', source)
         self.assertIn('export NATIVE_NOFILE_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA', source)
 
-    def tail(self, lane, backend, *, failure="", evidence=False, profile=False, proof_mutate=None):
+    def tail(self, lane, backend, *, failure="", evidence=False, profile=False, proof_mutate=None, device_mutate=None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             root.chmod(0o700)
@@ -183,6 +185,13 @@ exit 1
             context = deepcopy(context)
             if proof_mutate is not None:
                 proof_mutate(payload)
+            device = device_fixture(lane, outer_backend=backend)
+            device["context"] = deepcopy(context)
+            if device_mutate is not None:
+                device_mutate(device)
+            device_path = root / "device-mapping-v1.json"
+            device_path.write_text(json.dumps(device))
+            device_path.chmod(0o600)
             proof_path = root / "nofile-v1.json"
             proof_path.write_text(json.dumps(payload))
             proof_path.chmod(0o600)
@@ -192,12 +201,12 @@ if sys.argv[1] == "-c":
     print("123456789")
     raise SystemExit(0)
 name = sys.argv[1].rsplit("/", 1)[-1]
-event = {"build-native-pids-worker.py":"prebuild", "native_pids_proof.py":"pids_reader", "native_nofile_proof.py":"nofile_reader"}[name]
+event = {"build-native-pids-worker.py":"prebuild", "native_pids_proof.py":"pids_reader", "native_nofile_proof.py":"nofile_reader", "native_device_mapping_proof.py":"device_reader"}[name]
 with open(os.environ["TRACE"], "a") as stream:
     stream.write(json.dumps({"event":event, "argv":sys.argv[2:], "backend":os.environ["NATIVE_OUTER_ENGINE"]}) + "\\n")
 if os.environ["FAILURE"] == event:
     raise SystemExit(23)
-if event == "nofile_reader":
+if event in ("nofile_reader", "device_reader"):
     raise SystemExit(subprocess.run([sys.executable, *sys.argv[1:]], check=False).returncode)
 ''')
             (root / "run-exact-native-test.sh").write_text('''#!/usr/bin/env bash
@@ -205,6 +214,7 @@ set -euo pipefail
 case "$1 $2" in
   'native_pids live_pids_limits_and_effects_match_engine') event=pids_child ;;
   'native_nofile live_nofile_limits_and_effects_match_engine') event=nofile_child ;;
+  'native_device_mapping live_device_mapping_matches_engine') event=device_child ;;
   *) exit 97 ;;
 esac
 printf '{"event":"%s","owner":"%s"}\\n' "$event" "${NATIVE_LIFECYCLE_CLEANUP_OWNER:-}" >> "$TRACE"
@@ -242,7 +252,7 @@ trap cleanup EXIT
                    "NATIVE_FIXTURE_IMAGE": context["fixture_image"], "NATIVE_OUTER_IMAGE": context["outer"]["image"],
                    "NATIVE_OUTER_CONTAINER_ID": context["outer"]["id"], "NATIVE_OUTER_ENGINE": backend,
                    "NATIVE_BIND_RELABEL_DAEMON_UID": str(context["daemon_uid"]),
-                   "NATIVE_PIDS_CANDIDATE_SHA": context["candidate_sha"], "NATIVE_NOFILE_CANDIDATE_SHA": context["candidate_sha"],
+                   "NATIVE_PIDS_CANDIDATE_SHA": context["candidate_sha"], "NATIVE_NOFILE_CANDIDATE_SHA": context["candidate_sha"], "NATIVE_DEVICE_MAPPING_CANDIDATE_SHA": context["candidate_sha"],
                    "DOCKERLENS_NATIVE_CANDIDATE_SHA": context["candidate_sha"],
                    "DOCKERLENS_NATIVE_EVIDENCE_DIR": "synthetic" if evidence else "", "apparmor_profile": "owned" if profile else ""}
             for name in ("SHAPES", "SOURCE_PROBES", "NETWORK_PROBES", "VOLUME_PROBES", "VOLUME_LABEL_PROBES",
@@ -259,7 +269,7 @@ trap cleanup EXIT
                     result, events, context = self.tail(lane, backend)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual([item["event"] for item in events],
-                        ["prebuild", "pids_child", "pids_reader", "nofile_child", "nofile_reader", "complete", "teardown"])
+                        ["prebuild", "pids_child", "pids_reader", "nofile_child", "nofile_reader", "device_child", "device_reader", "complete", "teardown"])
                     reader = events[4]
                     self.assertEqual(reader["backend"], backend)
                     self.assertEqual(reader["argv"], [context["outer"]["socket_source"].removesuffix("/socket"),
@@ -272,7 +282,7 @@ trap cleanup EXIT
                     self.assertEqual(events[-1]["status"], 0)
 
     def test_each_required_failure_stops_before_later_work_and_original_exit_teardown_runs(self):
-        sequence = ["prebuild", "pids_child", "pids_reader", "nofile_child", "nofile_reader"]
+        sequence = ["prebuild", "pids_child", "pids_reader", "nofile_child", "nofile_reader", "device_child", "device_reader"]
         for failure in sequence:
             for profile in (False, True):
                 with self.subTest(failure=failure, profile=profile):

@@ -9,6 +9,9 @@ import sys
 from pathlib import Path
 
 from native_source_accounting import outer_snapshot_cost
+from native_device_mapping_proof import (
+    CONTRACT as DEVICE_MAPPING_CONTRACT, FILENAME as DEVICE_MAPPING_FILENAME, read_device_mapping_proof,
+)
 from native_pids_proof import CONTRACT as PIDS_CONTRACT, FILENAME as PIDS_FILENAME, read_pids_proof
 from native_shm_size_proof import (
     CONTRACT as SHM_SIZE_CONTRACT, FILENAME as SHM_SIZE_FILENAME, read_shm_size_proof,
@@ -570,6 +573,14 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
             or nofile["catalogue_admission"] is not False):
         raise ValueError("invalid private nofile reader result")
 
+    device = read_device_mapping_proof(
+        capture_dir / DEVICE_MAPPING_FILENAME, capture_dir, external_context, outer_backend=outer_backend)
+    if (type(device) is not dict
+            or set(device) != {"contract", "capability_admission", "catalogue_admission"}
+            or type(device["contract"]) is not str or device["contract"] != DEVICE_MAPPING_CONTRACT
+            or type(device["capability_admission"]) is not list or device["capability_admission"] != []
+            or device["catalogue_admission"] is not False):
+        raise ValueError("invalid private device mapping reader result")
     # Only these closed mappings follow the complete, validated native proof
     # files above. They extend raw lane evidence, never the reviewed catalogue.
     # Other network probes and source daemon reports grant no capability here.

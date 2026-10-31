@@ -59,8 +59,9 @@ def assert_current_cohort(test, source):
     calls = native_calls(source)
     test.assertEqual(calls[:26], ORIGINAL_CALLS)
     test.assertEqual(calls[26:], [("native_pids", "live_pids_limits_and_effects_match_engine"),
-                                 ("native_nofile", "live_nofile_limits_and_effects_match_engine")])
-    test.assertEqual(source.count("export NATIVE_LIFECYCLE_CLEANUP_OWNER="), 7)
+                                 ("native_nofile", "live_nofile_limits_and_effects_match_engine"),
+                                 ("native_device_mapping", "live_device_mapping_matches_engine")])
+    test.assertEqual(source.count("export NATIVE_LIFECYCLE_CLEANUP_OWNER="), 8)
     return calls
 
 
@@ -99,7 +100,7 @@ else:
     def test_twenty_second_registration_preserves_existing_protocol_and_private_reader(self):
         harness = (ROOT / "scripts/native-conformance.sh").read_text()
         calls = assert_current_cohort(self, harness)
-        self.assertEqual(len(calls), 28)
+        self.assertEqual(len(calls), 29)
         self.assertEqual(calls[21], (TARGET, TEST))
         self.assertEqual(calls.count((TARGET, TEST)), 1)
         owner_marker = '(\n  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1\n'
@@ -110,7 +111,7 @@ else:
         owner = harness.index(owner_marker, original_end)
         end = harness.index('\n)\n', owner)
         self.assertEqual(native_calls(harness[owner:end]), [(TARGET, TEST)])
-        self.assertEqual(harness.count(owner_marker), 7)
+        self.assertEqual(harness.count(owner_marker), 8)
         reader = harness.index('python3 "$script_dir/native_hostname_proof.py"')
         emitter = harness.index('python3 "$script_dir/native-evidence.py"')
         self.assertLess(end, reader)

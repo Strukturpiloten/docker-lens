@@ -29,6 +29,9 @@ mod supplementary_groups;
 #[path = "native_nofile_tests.rs"]
 mod nofile;
 
+#[path = "native_device_mapping_tests.rs"]
+mod device_mapping;
+
 // Only new source families require this strict, separately supplied selector.
 // Actual snapshot charges remain owned by the existing shared I/O helper.
 #[derive(Clone, Copy)]

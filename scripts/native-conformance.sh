@@ -1500,6 +1500,8 @@ export NATIVE_PIDS_PROOF_PATH="$run_dir/pids-v2.json"
 export NATIVE_PIDS_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 export NATIVE_NOFILE_PROOF_PATH="$run_dir/nofile-v1.json"
 export NATIVE_NOFILE_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
+export NATIVE_DEVICE_MAPPING_PROOF_PATH="$run_dir/device-mapping-v1.json"
+export NATIVE_DEVICE_MAPPING_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 export NATIVE_PORT_START_DIAGNOSTIC_PATH="$run_dir/diagnostics/port-start-window.json"
 export NATIVE_PORT_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 export NATIVE_HEALTH_METADATA_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
@@ -1888,6 +1890,15 @@ python3 "$script_dir/native_nofile_proof.py" "$run_dir" "$NATIVE_NOFILE_CANDIDAT
   "$lane" "$server_version" "$api_version" "$expected_mode" "$installed_docker_package" \
   "$NATIVE_FIXTURE_IMAGE" "$image" "$NATIVE_OUTER_CONTAINER_ID" "$NATIVE_BIND_RELABEL_DAEMON_UID"
 
+# Invocation 29 owns only its device child, after PIDs27/read and nofile28/read.
+(
+  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1
+  "$(dirname "$0")/run-exact-native-test.sh" native_device_mapping live_device_mapping_matches_engine
+)
+# Mandatory independent private reader, even without public evidence emission.
+python3 "$script_dir/native_device_mapping_proof.py" "$run_dir" "$NATIVE_DEVICE_MAPPING_CANDIDATE_SHA" "$run_id" \
+  "$lane" "$server_version" "$api_version" "$expected_mode" "$installed_docker_package" \
+  "$NATIVE_FIXTURE_IMAGE" "$image" "$NATIVE_OUTER_CONTAINER_ID" "$NATIVE_BIND_RELABEL_DAEMON_UID"
 publish_native_evidence() {
   local candidate_sha dirty
   if [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]; then

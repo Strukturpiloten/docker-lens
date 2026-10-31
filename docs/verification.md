@@ -1,5 +1,20 @@
 # Verification
 
+## Device mapping source invocation 29
+
+[ADR 0047](decisions/0047-device-mapping-native-source-proof.md) appends the
+[finite device proof](native-device-mapping-contract.md) after unchanged
+PIDs27/read and nofile28/read. The 29-call lane has eight delegated owners;
+original invocation22 resolver semantics, private custody and non-admission
+rules remain intact. Independent CLI/rendered controls check exact mapping,
+nonsymlink character identity and a bounded held-descriptor read only. The
+private reader is mandatory without emission and repeated by the unchanged
+19-argument emitter. No denied-write/create or DeviceMappings admission claim
+follows. Fresh complete and exact-candidate whole-four-lane native gates,
+actual byte/time fit and verified cleanup remain pending. Memory effects,
+named capability add/drop and logging source proofs remain open.
+
+
 ## Expanded invocation 22 verification
 
 The current [hostname/resolver contract](native-hostname-contract.md) and
@@ -7,9 +22,9 @@ The current [hostname/resolver contract](native-hostname-contract.md) and
 invocation 22 under its existing HealthRun/owner with four fresh resolver fixtures,
 while preserving all four hostname controls. Private schema 2/hostname-v2.json
 requires both sections; public hostname-v1, the 19-argument emitter and capability/
-catalogue maps remain unchanged. The same 28 invocation names and seven owner
-scopes remain, but resolver failure now can prevent reaching PIDs27. PIDs27 and
-its immediate reader still precede nofile28. Earlier qualification is not reusable;
+catalogue maps remain unchanged. The original 28 invocation names retain their order; device29 now appends an
+eighth owner scope under ADR 0047. Resolver failure can prevent reaching PIDs27.
+PIDs27/read and nofile28/read must succeed before device29/read. Earlier qualification is not reusable;
 source checks and actual combined native byte/time fit remain pending. No resolver
 connectivity, IPv6-network, application-acceptance or publication claim follows.
 
@@ -29,7 +44,7 @@ Focused synthetic controls exercise order, PIDs fail-fast behavior, separate
 owner scope, once-bound deadline, bounded/token-free diagnostics, all four lanes
 and both outer backends, reader custody/context/refusal and unchanged emission.
 They do not execute a native fixture. Independent review, complete final-edit
-gates, fresh exact-candidate four-lane 28-call evidence, actual proof/time/output
+gates, fresh exact-candidate four-lane 29-call evidence, actual proof/time/output
 fit and original lane EXIT cleanup remain required. Rootless PIDs/delegation and
 hosted-runtime prerequisites are mandatory; nofile cannot be run around them.
 Historical 26/27-call receipts do not qualify this changed candidate, BoxFerry
@@ -143,7 +158,7 @@ checks actual private artifact/source/raw-tool hashes and static ELF structure.
 The emitter repeats the reader and adds only an unadmitted source outcome.
 No PidsLimit capability or catalogue grant follows. Pure checks and source
 integration do not qualify a lane: complete final-source checks, genuine fresh
-exact-candidate current 28-call four-lane runs, original lane EXIT cleanup and independent
+exact-candidate current 29-call four-lane runs, original lane EXIT cleanup and independent
 review remain due. Nofile28 follows only a successful PIDs27 and strict reader. Historical first26 run
 claims below remain unchanged and cannot qualify the new candidate.
 
