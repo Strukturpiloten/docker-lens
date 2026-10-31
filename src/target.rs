@@ -2080,7 +2080,7 @@ mod tests {
             .unwrap(),
         ];
         container.settings.memory_limit =
-            Some(MemoryLimit::Bytes(NonZeroU64::new(1_048_576).unwrap()));
+            Some(MemoryLimit::Bytes(NonZeroU64::new(67_108_864).unwrap()));
         container.settings.pids_limit = Some(PidsLimit::Unlimited);
         container.settings.shm_size_bytes = NonZeroU64::new(65536);
         container.settings.ulimits = vec![Ulimit {
@@ -2150,7 +2150,7 @@ mod tests {
             host["Mounts"][0]["TmpfsOptions"],
             serde_json::json!({"SizeBytes":4096,"Mode":448})
         );
-        assert_eq!(host["Memory"], 1_048_576);
+        assert_eq!(host["Memory"], 67_108_864);
         assert_eq!(host["PidsLimit"], -1);
         assert_eq!(host["ShmSize"], 65_536);
         assert_eq!(
@@ -2183,6 +2183,114 @@ mod tests {
             "127.0.0.53",
         ] {
             assert!(!format!("{intent:?} {graph:?} {artifact:?}").contains(protected));
+        }
+    }
+
+    #[test]
+    fn memory_limit_rejects_below_linux_floor_and_signed_overflow_without_clamping() {
+        // Literal bounds are independent of the validator's implementation.
+        for bytes in [
+            1,
+            1_048_576,
+            6_000_000,
+            6_291_455,
+            9_223_372_036_854_775_808,
+            u64::MAX,
+        ] {
+            let mut container = bare_container();
+            container.settings.memory_limit =
+                Some(MemoryLimit::Bytes(NonZeroU64::new(bytes).unwrap()));
+            assert_eq!(
+                TargetIntent::new(vec![TargetResource::Container(Box::new(container))])
+                    .unwrap_err(),
+                IntentError::InvalidContainerSetting
+            );
+        }
+    }
+
+    #[test]
+    fn memory_limit_finite_boundaries_render_literal_bytes_without_rounding() {
+        // In particular, the value one byte above the floor is not page-aligned.
+        for (bytes, expected_json) in [
+            (6_291_456, "6291456"),
+            (6_291_457, "6291457"),
+            (67_108_864, "67108864"),
+            (9_223_372_036_854_775_807, "9223372036854775807"),
+        ] {
+            let mut container = bare_container();
+            container.settings.memory_limit =
+                Some(MemoryLimit::Bytes(NonZeroU64::new(bytes).unwrap()));
+            let intent =
+                TargetIntent::new(vec![TargetResource::Container(Box::new(container))]).unwrap();
+            let daemon = facts(
+                41,
+                DaemonMode::Rootful,
+                &[Capability::StandaloneContainer, Capability::MemoryLimit],
+            );
+            let capabilities = ValidatedCapabilities::new(&daemon).unwrap();
+            let graph = DockerPlanner.plan(&intent, &capabilities).unwrap();
+            let artifact = DockerApiRenderer.render(&graph).unwrap();
+            let expected = format!(
+                "{{\"method\":\"POST\",\"path\":\"/v1.41/containers/create?name=app\",\"body\":{{\"Image\":\"image:1\",\"HostConfig\":{{\"Memory\":{expected_json}}}}}}}\n"
+            );
+            assert_eq!(artifact.bytes(), expected.as_bytes());
+        }
+    }
+
+    #[test]
+    fn memory_limit_omission_and_explicit_unlimited_render_distinct_requests() {
+        for (requested, expected) in [
+            (None, b"{\"method\":\"POST\",\"path\":\"/v1.41/containers/create?name=app\",\"body\":{\"Image\":\"image:1\",\"HostConfig\":{}}}\n".as_slice()),
+            (Some(MemoryLimit::Unlimited), b"{\"method\":\"POST\",\"path\":\"/v1.41/containers/create?name=app\",\"body\":{\"Image\":\"image:1\",\"HostConfig\":{\"Memory\":0}}}\n".as_slice()),
+        ] {
+            let mut container = bare_container();
+            container.settings.memory_limit = requested;
+            let intent =
+                TargetIntent::new(vec![TargetResource::Container(Box::new(container))]).unwrap();
+            let mut available = vec![Capability::StandaloneContainer];
+            if requested.is_some() {
+                available.push(Capability::MemoryLimit);
+            }
+            let daemon = facts(41, DaemonMode::Rootful, &available);
+            let capabilities = ValidatedCapabilities::new(&daemon).unwrap();
+            let graph = DockerPlanner.plan(&intent, &capabilities).unwrap();
+            let artifact = DockerApiRenderer.render(&graph).unwrap();
+            assert_eq!(artifact.bytes(), expected);
+        }
+    }
+
+    #[test]
+    fn memory_limit_finite_and_explicit_unlimited_still_require_separate_capability() {
+        for requested in [
+            MemoryLimit::Bytes(NonZeroU64::new(67_108_864).unwrap()),
+            MemoryLimit::Unlimited,
+        ] {
+            let mut container = bare_container();
+            container.settings.memory_limit = Some(requested);
+            let intent =
+                TargetIntent::new(vec![TargetResource::Container(Box::new(container))]).unwrap();
+            let daemon = facts(41, DaemonMode::Rootful, &[Capability::StandaloneContainer]);
+            let capabilities = ValidatedCapabilities::new(&daemon).unwrap();
+            assert_eq!(
+                DockerPlanner.plan(&intent, &capabilities).unwrap_err(),
+                PlanningError::MissingCapability {
+                    resource: ResourceRef::new(1),
+                    field: TargetField::MemoryLimit,
+                    capability: Capability::MemoryLimit,
+                }
+            );
+            let catalog = TargetCapabilityCatalog::reviewed();
+            for profile in catalog.profiles() {
+                let capabilities = catalog.resolve(profile).unwrap();
+                assert_eq!(
+                    DockerPlanner.plan(&intent, &capabilities).unwrap_err(),
+                    PlanningError::MissingCapability {
+                        resource: ResourceRef::new(1),
+                        field: TargetField::MemoryLimit,
+                        capability: Capability::MemoryLimit,
+                    }
+                );
+            }
         }
     }
 

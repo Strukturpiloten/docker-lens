@@ -117,7 +117,7 @@ else:
         self.assertLess(reader, harness.index('if [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]', end))
         self.assertLess(reader, emitter)
         self.assertLess(reader, harness.index('if [[ -n ${apparmor_profile:-} ]]; then', end))
-        self.assertIn('export NATIVE_HOSTNAME_PROOF_PATH="$run_dir/hostname-v1.json"', harness)
+        self.assertIn('export NATIVE_HOSTNAME_PROOF_PATH="$run_dir/hostname-v2.json"', harness)
         self.assertIn('export NATIVE_HOSTNAME_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA', harness)
         invocation = harness[reader:harness.index('\n\n', reader)]
         self.assertEqual(len(shlex.split(invocation.replace('\\\n', ' '))) - 2, 12)
@@ -230,6 +230,28 @@ sys.exit(int(os.environ["READER_STATUS"]))
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertNotIn(SECRET, result.stdout + result.stderr)
 
+    def test_resolver_extends_one_original_owner_before_the_same_terminal_cleanup(self):
+        source = (ROOT / "src/native_hostname_tests.rs").read_text()
+        self.assertEqual(source.count("let mut run = HealthRun::new_for("), 1)
+        self.assertEqual(source.count("BoundOuterCleanupOwner::bind(&run)"), 1)
+        self.assertIn('const OWNER_SLOTS: usize = 8;', source)
+        self.assertIn('run.ids = vec![None; OWNER_SLOTS]', source)
+        self.assertIn('run.attempted = vec![false; OWNER_SLOTS]', source)
+        self.assertLess(source.index(".extend(RESOLVER_CASES"),
+                        source.index("BoundOuterCleanupOwner::bind(&run)"))
+        self.assertLess(source.index("observe(&mut run, 2 * case, &image)"),
+                        source.index("resolver_observe(&mut run, 4 + 2 * case, &image)"))
+        self.assertLess(source.index("combined_cleanup_room(backend, run.calls.get(), run.bytes.get())"),
+                        source.index("cleanup(&mut run)"))
+        for required in ('"/etc/resolv.conf"', '"/etc/hosts"', 'RESOLVER_FILE_LIMIT + 1',
+                         'resolver_nameservers(&resolv)', 'resolver_host_matches(&hosts, host)',
+                         'backend.final_snapshot_room(calls, bytes, 2)',
+                         '"resolver":{"contract":RESOLVER_CONTRACT,"cases":resolver_cases}'):
+            self.assertIn(required, source)
+        self.assertIn('"schema_version":2', source)
+        self.assertIn('const FILENAME: &str = "hostname-v2.json";', source)
+        self.assertIn('const CONTRACT: &str = "hostname-v1";', source)
+
     def test_source_requires_real_hostname_and_preserves_scoped_cleanup(self):
         source = (ROOT / "src/native_hostname_tests.rs").read_text()
         self.assertIn("use super::super::ProofTarget;", source)
@@ -290,9 +312,36 @@ class HostnameEvidenceTests(unittest.TestCase):
             self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 48 if lane.startswith("debian11-") else 50)
             self.assertNotIn("ContainerHostname", record["capability_outcome"])
             self.assertNotIn("ContainerHostname", record["admitted_shapes"])
+            for capability in ("DnsServers", "ExtraHosts"):
+                self.assertNotIn(capability, record["capability_outcome"])
+                self.assertNotIn(capability, record["admitted_shapes"])
             for private in ("dl-host-", "dl-hostname-", "configured_hostname", "process_hostname",
-                            "daemon_uid", "a" * 64, "f" * 64, SECRET):
+                            "daemon_uid", "a" * 64, "f" * 64, "dl-resolver-", "fixture-v4.local", "fixture-v6.local",
+                            "nameservers", "host_matches", "configured_dns", "configured_extra_hosts",
+                            "resolver-files-v1", "hostname-v2", SECRET):
                 self.assertNotIn(private, raw)
+
+    def test_missing_or_invalid_resolver_never_publishes_on_any_lane(self):
+        from test_native_hostname_proof import fixture
+        for lane in ("debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless"):
+            for fault in ("missing", "old_private_version", "wrong_nameserver", "duplicate_host"):
+                with self.subTest(lane=lane, fault=fault):
+                    proof = fixture(lane)
+                    if fault == "missing":
+                        del proof["resolver"]
+                    elif fault == "old_private_version":
+                        proof["schema_version"] = 1
+                    elif fault == "wrong_nameserver":
+                        proof["resolver"]["cases"][1]["containers"][0]["nameservers"] = [SECRET]
+                    else:
+                        record = proof["resolver"]["cases"][0]["containers"][0]
+                        record["host_matches"] *= 2
+                    result, path = self.emit(lane, hostname=proof)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse(path.exists())
+                    self.assertEqual(result.stdout, "")
+                    self.assertEqual(result.stderr, "native evidence rejected\n")
+                    self.assertNotIn(SECRET, result.stdout + result.stderr)
 
     def test_missing_hostname_never_publishes_on_any_lane(self):
         for lane in ("debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless"):
@@ -308,7 +357,7 @@ class HostnameEvidenceTests(unittest.TestCase):
             with self.subTest(fault=fault):
                 result, path = self.emit()
                 self.assertEqual(result.returncode, 0, result.stderr)
-                proof_path = path.parent.parent / "hostname-v1.json"
+                proof_path = path.parent.parent / "hostname-v2.json"
                 proof = json.loads(proof_path.read_text())
                 path.unlink()
                 if fault == "candidate":
@@ -333,7 +382,7 @@ class HostnameEvidenceTests(unittest.TestCase):
                 if fault == "malformed":
                     proof_path.write_text("{" + SECRET)
                 elif fault == "duplicate":
-                    proof_path.write_text(proof_path.read_text().replace('"schema_version": 1', '"schema_version": 0, "schema_version": 1', 1))
+                    proof_path.write_text(proof_path.read_text().replace('"schema_version": 2', '"schema_version": 0, "schema_version": 2', 1))
                 elif fault == "mode":
                     proof_path.chmod(0o640)
                 elif fault == "hardlink":

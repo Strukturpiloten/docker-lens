@@ -1,5 +1,9 @@
 # Architecture decisions
 
+- [0046: Hostname and resolver source proof v2](0046-hostname-resolver-source-proof-v2.md)
+  expands invocation 22 under its existing owner and limits, requires private v2,
+  and retains public hostname-v1; earlier qualification cannot qualify the change.
+
 - [0045: Canonical nofile28 source integration](0045-canonical-nofile-source-integration.md)
   appends one private nofile child after mandatory PIDs27/reader, retaining
   original ownership/deadlines/EXIT cleanup and unchanged public admission;
