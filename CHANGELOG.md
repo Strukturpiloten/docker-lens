@@ -1,6 +1,11 @@
 # Changelog
 
 ## Unreleased
+- Validate authored finite container memory as exact bytes from 6 MiB through
+signed maximum; reject smaller positive limits and overflow without rounding.
+Omitted memory stays distinct from explicit unlimited/zero; requested memory
+remains separately capability-gated, and observed source values stay unchanged. This restores an unmerged target
+validation correction, not native memory enforcement or capability admission.
 
 - Add bounded discovery and explicit selection by canonical container or
   network ID, volume name, container name, name prefix, or label. Captures retain
