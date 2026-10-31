@@ -40,8 +40,8 @@ profile policy remain unchanged. The current source sequence appends the
 owner scope after the unchanged first 26 calls. Its bounded prebuild, six-case
 producer and immediate independent reader run before deferred publication or
 outer cleanup, including without public emission. Only an unadmitted PIDs
-source outcome is added. Fresh exact-candidate four-lane 27-call qualification,
-whole-lane cleanup and milestone completion remain pending.
+source outcome is added. Fresh exact-candidate four-lane qualification of the
+current 28-call lane, whole-lane cleanup and milestone completion remain pending.
 
 The current [typed PIDs source](docs/native-pids-threaded-contract.md) supports
 explicit domain/thread-root/threaded roles with fixed local-membership discovery
@@ -49,11 +49,14 @@ and private proof v2. Complete authored IPC envelopes fit the unchanged budgets;
 final-source checks and fresh native qualification remain required. Root framing
 and worker/controller protocols remain v1; no PIDs capability is admitted.
 
-The preserved [nofile proof](docs/native-nofile-contract.md) is registered as
-prepared test-only source, with its scoped private-proof bounds and custody
-controls. It is not a canonical invocation or emitter requirement: successful
-PIDs27 qualification must precede eventual nofile28 integration. An ignored
-test definition is not native execution, full28 completion or capability admission.
+The [nofile proof](docs/native-nofile-contract.md) is canonical test-only
+invocation 28 under [ADR 0045](docs/decisions/0045-canonical-nofile-source-integration.md).
+It runs in its own one-child cleanup-owner scope only after all original 27
+calls and the immediate strict PIDs reader succeed. Its independent reader is
+mandatory even without public evidence; the emitter repeats validation without
+adding a nofile field or capability. The producer remains ignored outside the
+native harness. Source wiring is not native execution, full28 completion or
+capability admission; strict PIDs prerequisites cannot be bypassed.
 
 The planned native work is tracked in [DockerLens #3](https://github.com/Strukturpiloten/docker-lens/issues/3).
 Typed networks, protected runtime settings and conditional bind-source review
@@ -83,7 +86,7 @@ representations retain their existing behavior.
 
 This is candidate pre-merge rehearsal admission. Production merge, main
 admission and release remain blocked until fresh exact-final-candidate complete
-and four-lane twenty-seven-test native gates, fresh independently reviewed volume-only
+and four-lane twenty-eight-test native gates, fresh independently reviewed volume-only
 consumer rehearsals of all six actual authored fixtures under
 [ADR 0012](docs/decisions/0012-candidate-volume-label-admission.md), and reviewed
 BoxFerry consumers of the actual Nextcloud/Supabase binds and desired external

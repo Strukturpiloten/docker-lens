@@ -49,6 +49,7 @@ EXPECTED_CALLS = [
     ("native_supplementary_groups", "live_supplementary_groups_match_engine"),
     ("native_kernel_settings", "live_kernel_settings_match_engine"),
     ("native_pids", "live_pids_limits_and_effects_match_engine"),
+    ("native_nofile", "live_nofile_limits_and_effects_match_engine"),
 ]
 
 
@@ -85,7 +86,7 @@ sys.exit(int(os.environ["STATUS"]))
             ended = time.time()
             return result, [json.loads(line) for line in calls.read_text().splitlines()], started, ended
 
-    def test_original_nineteen_plus_recovered_two_have_exact_six_owner_scopes(self):
+    def test_original_nineteen_plus_recovered_two_retain_seven_current_owner_scopes(self):
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         calls = re.findall(r'^[ \t]*"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source, re.M)
         self.assertEqual(calls, EXPECTED_CALLS)
@@ -93,7 +94,7 @@ sys.exit(int(os.environ["STATUS"]))
         end = source.index('\n)\n', owner)
         scoped = re.findall(r'^[ \t]*"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source[owner:end], re.M)
         self.assertEqual(scoped, EXPECTED_CALLS[16:21])
-        self.assertEqual(source.count('export NATIVE_LIFECYCLE_CLEANUP_OWNER='), 6)
+        self.assertEqual(source.count('export NATIVE_LIFECYCLE_CLEANUP_OWNER='), 7)
         self.assertLess(source.index('unset NATIVE_LIFECYCLE_CLEANUP_OWNER'), source.index('run-exact-native-test.sh" native_capture'))
         emission = source.index('python3 "$script_dir/native-evidence.py"')
         self.assertLess(end, emission)

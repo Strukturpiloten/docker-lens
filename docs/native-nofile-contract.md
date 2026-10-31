@@ -1,20 +1,29 @@
 # Diagonal nofile source-only contract
 
-`nofile-v1` is prepared source for eventual private invocation 28, recovered from
-committed `f406cb22efc53fc7df04c24ea44a9ecd7900f41b` without its later coordinator,
-broker or catalogue changes. The historical integration decision ADR 0028 in
-that preserved source is provenance, not adoption of canonical wiring here.
-This stage adds no canonical invocation, emitter requirement or public nofile
-projection. The ignored producer is registered privately with its shared
-accounting dependencies. PIDs invocation 27 remains
-unresolved and must not be skipped or bypassed to run 28. The current coordinator
-requires PIDs invocation 27 after the first 26 calls and their mandatory readers.
+`nofile-v1` is canonical test-only invocation 28 under
+[ADR 0045](decisions/0045-canonical-nofile-source-integration.md). Its producer
+was recovered from committed `f406cb22efc53fc7df04c24ea44a9ecd7900f41b` without
+that checkout's later coordinator, broker or catalogue changes. Historical
+ADR 0028 remains provenance, not adoption of that runtime rewrite.
 
-This preparation defines neither a passing native lane nor capability support;
-native qualification remains unverified. Primary integration owns compilation,
-complete gates and fresh exact-candidate native qualification. No raw admission,
-catalogue selection, emitter ABI, product API, version or private packet schema
-is changed. Source and synthetic proofs are not native evidence.
+All original 27 calls, the fixed PIDs witness prebuild and immediate strict
+PIDs27 reader must succeed before the separate one-child nofile owner scope.
+The exact producer remains ignored outside the canonical harness. Its wrapper
+forwards one original 180-second deadline without renewal; the 46-second
+cleanup reserve, eight-slot ID guard, bounded captures and once-only handoff
+remain unchanged. The existing 12-fact private reader runs immediately even
+without evidence emission, and the emitter repeats validation with independent
+external context and the separately selected outer backend. Only the exact
+three-key result (`contract: nofile-v1`, empty `capability_admission`, false
+`catalogue_admission`) passes. No public nofile projection is added.
+
+Strict PIDs/delegation and hosted-runtime prerequisites cannot be skipped or
+weakened to run nofile. Original lane EXIT cleanup remains mandatory. Source
+wiring and synthetic controls do not prove native execution or qualification;
+independent review, complete final-source gates and fresh exact-candidate
+four-lane 28-call evidence remain pending. No raw admission, catalogue,
+19-argument emitter ABI, product API, version, private packet schema, runtime
+operation, software pin or budget is changed.
 
 The existing `Ulimits`/`UlimitNofile` capability groups require finite **and**
 unlimited source shapes. Finite success with negative unlimited outcomes must

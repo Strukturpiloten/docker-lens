@@ -815,8 +815,9 @@ else:
     def test_canonical27_is_after_kernel_reader_and_before_final_emission(self):
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         calls = re.findall(r'run-exact-native-test\.sh" ([a-z_0-9]+) ([a-z_0-9]+)', source)
-        self.assertEqual(calls[-2:], [("native_kernel_settings", "live_kernel_settings_match_engine"), ("native_pids", TEST)])
-        self.assertEqual(len(calls), 27)
+        self.assertEqual(calls[25:], [("native_kernel_settings", "live_kernel_settings_match_engine"), ("native_pids", TEST),
+                                     ("native_nofile", "live_nofile_limits_and_effects_match_engine")])
+        self.assertEqual(len(calls), 28)
         reader = source.index('python3 "$script_dir/native_pids_proof.py"')
         child = source.index('"$(dirname "$0")/run-exact-native-test.sh" native_pids')
         prebuild = source.index('python3 "$script_dir/build-native-pids-worker.py"')
@@ -851,7 +852,8 @@ if sys.argv[1] == "-c":
     print("123456789")
     raise SystemExit(0)
 name = sys.argv[1].rsplit("/", 1)[-1]
-event = {"build-native-pids-worker.py":"prebuild", "native_pids_proof.py":"reader"}[name]
+event = {"build-native-pids-worker.py":"prebuild", "native_pids_proof.py":"reader",
+         "native_nofile_proof.py":"nofile_reader"}[name]
 with open(os.environ["TRACE"], "a") as stream:
     stream.write(event + "\\n")
 raise SystemExit(int(os.environ["FAILURE"] == event))
@@ -860,9 +862,13 @@ raise SystemExit(int(os.environ["FAILURE"] == event))
                         child = root / "run-exact-native-test.sh"
                         child.write_text('''#!/usr/bin/env bash
 set -euo pipefail
-[[ $1 == native_pids && $2 == live_pids_limits_and_effects_match_engine ]]
-printf 'child\\n' >> "$TRACE"
-[[ $FAILURE != child ]]
+if [[ $1 == native_pids && $2 == live_pids_limits_and_effects_match_engine ]]; then
+  printf 'child\\n' >> "$TRACE"
+  [[ $FAILURE != child ]]
+else
+  [[ $1 == native_nofile && $2 == live_nofile_limits_and_effects_match_engine ]]
+  printf 'nofile_child\\n' >> "$TRACE"
+fi
 ''')
                         child.chmod(0o700)
                         harness = root / "coordinator-tail.sh"
@@ -896,6 +902,7 @@ trap cleanup EXIT
                             env={**os.environ, **variables, "PATH": str(root) + os.pathsep + os.environ["PATH"],
                                  "TRACE": str(root / "trace"), "FAILURE": failure, "run_dir": directory, "script_dir": directory,
                                  "NATIVE_PIDS_CANDIDATE_SHA": "a" * 40, "DOCKERLENS_NATIVE_CANDIDATE_SHA": "a" * 40,
+                                      "NATIVE_NOFILE_CANDIDATE_SHA": "a" * 40, "NATIVE_BIND_RELABEL_DAEMON_UID": "0",
                                  "apparmor_profile": profile, "DOCKERLENS_NATIVE_EVIDENCE_DIR": evidence})
                         trace = (root / "trace").read_text().splitlines()
                         expected = ["prebuild", "child", "reader"]
@@ -904,6 +911,7 @@ trap cleanup EXIT
                             self.assertEqual(trace, expected[:expected.index(failure) + 1] + ["teardown"])
                         else:
                             self.assertEqual(result.returncode, 0, result.stderr)
+                            expected.extend(["nofile_child", "nofile_reader"])
                             if evidence and not profile:
                                 expected.append("emitter")
                             expected.extend(["complete", "teardown"])

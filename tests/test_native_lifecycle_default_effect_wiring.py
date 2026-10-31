@@ -55,11 +55,11 @@ sys.exit(int(os.environ["STATUS"]))
             ended = time.time()
             return result, [json.loads(line) for line in calls.read_text().splitlines()], began, ended
 
-    def test_twenty_first_required_registration_preserves_protocol_and_six_owner_scopes(self):
+    def test_twenty_first_required_registration_preserves_protocol_and_seven_owner_scopes(self):
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         invocation = f'"$(dirname "$0")/run-exact-native-test.sh" {TARGET} {TEST}'
         calls = re.findall(r'^[ \t]*"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source, re.M)
-        self.assertEqual(len(calls), 27)
+        self.assertEqual(len(calls), 28)
         assert_current_cohort(self, source)
         self.assertEqual(calls[20], (TARGET, TEST))
         self.assertEqual(source.count(invocation), 1)
@@ -67,7 +67,7 @@ sys.exit(int(os.environ["STATUS"]))
         end = source.index('\n)\n', owner)
         owned_calls = re.findall(r'^[ \t]*"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source[owner:end], re.M)
         self.assertEqual(owned_calls, calls[16:21])
-        self.assertEqual(source.count("export NATIVE_LIFECYCLE_CLEANUP_OWNER="), 6)
+        self.assertEqual(source.count("export NATIVE_LIFECYCLE_CLEANUP_OWNER="), 7)
         self.assertLess(source.index("unset NATIVE_LIFECYCLE_CLEANUP_OWNER"), owner)
         for line in (f'export NATIVE_LIFECYCLE_DEFAULT_EFFECT_PROOF_PATH="$run_dir/{FILENAME}"',
                      'export NATIVE_LIFECYCLE_DEFAULT_EFFECT_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA'):

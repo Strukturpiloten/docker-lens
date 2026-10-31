@@ -136,7 +136,9 @@ native_supplementary_groups live_supplementary_groups_match_engine
 native_kernel_settings live_kernel_settings_match_engine
 native_pids live_pids_limits_and_effects_match_engine
 """
-        self.assertEqual(calls, [tuple(row.split()) for row in expected.strip().splitlines()])
+        self.assertEqual(calls, [tuple(row.split()) for row in expected.strip().splitlines()] + [
+            ("native_nofile", "live_nofile_limits_and_effects_match_engine"),
+        ])
         gate = SOURCE.index('\nnative_pids_prerequisite "$expected_mode"')
         self.assertEqual(SOURCE.count("info --format '{{.CgroupVersion}}'"), 1)
         self.assertEqual(SOURCE.count("info --format '{{.CgroupDriver}}'"), 1)

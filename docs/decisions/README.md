@@ -1,5 +1,10 @@
 # Architecture decisions
 
+- [0045: Canonical nofile28 source integration](0045-canonical-nofile-source-integration.md)
+  appends one private nofile child after mandatory PIDs27/reader, retaining
+  original ownership/deadlines/EXIT cleanup and unchanged public admission;
+  exact-candidate native qualification remains pending.
+
 - [0042: Finite sudo ancestor UID shape](0042-sudo-monitor-uid-shape.md)
   admits only the exact positive-peer/root-effective/saved/filesystem shape for
   non-supervisor links still bound to the existing fixed sudo and ancestry checks;
@@ -14,7 +19,8 @@
 
 - [0039: Prepared measured PIDs boundary](0039-measured-pids-boundary.md) defines
   an unwired post-daemon-start/pre-workload collector only. Historical ADRs
-  0022–0035 remain unadopted; mandatory PIDs27 and nofile28 remain pending.
+  0022–0035 remain unadopted. Current ADRs 0041/0045 now supply PIDs27/nofile28
+  source integration; final native qualification remains pending.
 
 Durable native boundaries and evidence/admission contracts:
 
