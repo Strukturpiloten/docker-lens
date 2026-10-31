@@ -402,7 +402,7 @@ class NativeEvidenceTests(unittest.TestCase):
         tmpfs_effect_path = root / "tmpfs-effect-v1.json"
         health_boundary_path = root / "health-start-interval-boundary-v1.json"
         lifecycle_default_effect_path = root / "lifecycle-default-effects-v1.json"
-        hostname_path = root / "hostname-v1.json"
+        hostname_path = root / "hostname-v2.json"
         command_clear_path = root / "command-clear-v1.json"
         destination = root / "out" / f"{lane}.json"
         version_path.write_text(json.dumps(version), encoding="utf-8")
@@ -499,7 +499,7 @@ class NativeEvidenceTests(unittest.TestCase):
             lifecycle_default_effect_path.chmod(0o600)
         host = hostname_fixture(lane)
         host["context"].update(external["context"])
-        for case in host["cases"]:
+        for case in host["cases"] + host["resolver"]["cases"]:
             for record in case["containers"]:
                 record["image"] = HEALTH_FIXTURE_IMAGE
         if not hostname_missing:

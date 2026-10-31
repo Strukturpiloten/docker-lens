@@ -35,7 +35,7 @@ def fixture(lane="upstream-rootful"):
                   "privileged": True, "memory_bytes": 4294967296, "cpu_quota": 200000,
                   "cpu_period": 100000, "pids_limit": 512},
     }
-    proof = {"schema_version": 1, "contract": "hostname-v1", "context": context,
+    proof = {"schema_version": 2, "contract": "hostname-v1", "context": context,
              "capability_admission": [], "catalogue_admission": False,
              "borrowed_image": {"id": "sha256:" + "d" * 64, "identity": "unchanged", "removal": "not_owned"},
              "cases": [], "cleanup": {"containers": "absent", "rounds": 2, "outstanding": 0, "uncertain": False}}
@@ -53,6 +53,25 @@ def fixture(lane="upstream-rootful"):
                             "started_at": "2026-10-18T10:00:00.000000001Z", "running_before": True,
                             "running_after": True, "restart_count": 0, "cleanup": "absent"})
         proof["cases"].append({"case": case, "authored_hostname": authored, "containers": records})
+    # Independent expected resolver fixtures, never constructed by the reader.
+    proof["resolver"] = {"contract": "resolver-files-v1", "cases": []}
+    for case_index, (family, dns, host, address) in enumerate((
+        ("ipv4", "192.0.2.53", "fixture-v4.local", "192.0.2.10"),
+        ("ipv6", "2001:4860:4860::8888", "fixture-v6.local", "2001:db8::10"),
+    )):
+        records = []
+        for offset, role in enumerate(("oracle", "rendered")):
+            records.append({"role": role, "id": str(5 + 2 * case_index + offset) * 64,
+                            "name": f"dl-resolver-{run}-{family}-{role}",
+                            "owner": run, "image": context["fixture_image"],
+                            "image_id": proof["borrowed_image"]["id"],
+                            "wire": "independent_cli" if role == "oracle" else "literal_rendered",
+                            "cli_api": context["rendering_api"],
+                            "configured_dns": [dns], "configured_extra_hosts": [f"{host}:{address}"],
+                            "nameservers": [dns], "host_matches": [{"address": address, "names": [host]}],
+                            "started_at": "2026-10-18T10:00:00.000000001Z", "running_before": True,
+                            "running_after": True, "restart_count": 0, "cleanup": "absent"})
+        proof["resolver"]["cases"].append({"case": family, "containers": records})
     return proof
 
 
@@ -126,6 +145,88 @@ class HostnameProofTests(unittest.TestCase):
             changed[key] = bad
             self.reject(changed, original["context"])
 
+    def test_private_v2_requires_both_resolver_families_and_all_eight_distinct_ids(self):
+        original = fixture()
+        self.assertEqual(FILENAME, "hostname-v2.json")
+        changed = copy.deepcopy(original)
+        changed["schema_version"] = 1
+        self.reject(changed, original["context"])
+        for key in ("contract", "cases"):
+            changed = copy.deepcopy(original)
+            del changed["resolver"][key]
+            self.reject(changed, original["context"])
+        for case in range(2):
+            changed = copy.deepcopy(original)
+            changed["resolver"]["cases"].pop(case)
+            self.reject(changed, original["context"])
+            for role in range(2):
+                changed = copy.deepcopy(original)
+                changed["resolver"]["cases"][case]["containers"].pop(role)
+                self.reject(changed, original["context"])
+                for key in original["resolver"]["cases"][case]["containers"][role]:
+                    for missing in (False, True):
+                        changed = copy.deepcopy(original)
+                        record = changed["resolver"]["cases"][case]["containers"][role]
+                        if missing:
+                            del record[key]
+                        else:
+                            record[key] = SECRET
+                        self.reject(changed, original["context"])
+        for identifier in (original["context"]["outer"]["id"],
+                           original["cases"][0]["containers"][0]["id"],
+                           original["resolver"]["cases"][0]["containers"][0]["id"]):
+            changed = copy.deepcopy(original)
+            changed["resolver"]["cases"][1]["containers"][1]["id"] = identifier
+            self.reject(changed, original["context"])
+        for bad in ({}, [], {"contract": "hostname-v1", "cases": []}):
+            changed = copy.deepcopy(original)
+            changed["resolver"] = bad
+            self.reject(changed, original["context"])
+
+    def test_finite_resolver_observations_reject_duplicates_wrong_targets_and_types(self):
+        original = fixture()
+        record = original["resolver"]["cases"][1]["containers"][0]
+        changes = (
+            ("configured_dns", []), ("configured_extra_hosts", []),
+            ("nameservers", []), ("nameservers", True),
+            ("nameservers", ["2001:4860:4860::8888", "2001:4860:4860::8888"]),
+            ("nameservers", ["192.0.2.53"]),
+            ("host_matches", []), ("host_matches", record["host_matches"] * 2),
+            ("host_matches", [{"address": "2001:db8::11", "names": ["fixture-v6.local"]}]),
+            ("host_matches", [{"address": "2001:db8::10", "names": ["prefix-fixture-v6.local"]}]),
+            ("host_matches", [{"address": "2001:db8::10", "names": ["fixture-v6.local", "alias"]}]),
+            ("host_matches", [{"address": "2001:db8::10", "names": ["fixture-v6.local"], "extra": True}]),
+            ("running_before", 1), ("running_after", False), ("restart_count", True),
+            ("started_at", "0001-01-01T00:00:00Z"), ("cleanup", "uncertain"),
+        )
+        for key, bad in changes:
+            changed = copy.deepcopy(original)
+            changed["resolver"]["cases"][1]["containers"][0][key] = bad
+            self.reject(changed, original["context"])
+        changed = copy.deepcopy(original)
+        changed["resolver"]["cases"].reverse()
+        self.reject(changed, original["context"])
+        changed = copy.deepcopy(original)
+        changed["resolver"]["cases"][0]["case"] = "ipv6"
+        self.reject(changed, original["context"])
+
+    def test_complete_private_v2_fits_default_limit_and_old_filename_is_never_a_fallback(self):
+        for lane in ("debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless"):
+            proof = fixture(lane)
+            self.assertLessEqual(len(json.dumps(proof, separators=(",", ":")).encode()), 16 * 1024)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            root.chmod(0o700)
+            proof = fixture()
+            proof["context"]["outer"]["socket_source"] = str(root / "socket")
+            old = root / "hostname-v1.json"
+            old.write_text(json.dumps(proof))
+            old.chmod(0o600)
+            with self.assertRaisesRegex(ValueError, "^" + ERROR + "$"):
+                read_hostname_proof(old, root, proof["context"])
+            with self.assertRaisesRegex(ValueError, "^" + ERROR + "$"):
+                read_hostname_proof(root / FILENAME, root, proof["context"])
+
     def test_private_custody_and_command_line_bind_context_without_leaking(self):
         for failure in (None, "missing", "public", "parent", "symlink", "fifo", "hardlink", "oversized", "duplicate", "nonfinite", "context"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
@@ -154,7 +255,7 @@ class HostnameProofTests(unittest.TestCase):
                 elif failure == "oversized":
                     path.write_text(" " * 16385)
                 elif failure == "duplicate":
-                    path.write_text(path.read_text().replace('"schema_version": 1', '"schema_version": 0, "schema_version": 1', 1))
+                    path.write_text(path.read_text().replace('"schema_version": 2', '"schema_version": 0, "schema_version": 2', 1))
                 elif failure == "nonfinite":
                     path.write_text(path.read_text().replace('"restart_count": 0', '"restart_count": NaN', 1))
                 elif failure == "context":

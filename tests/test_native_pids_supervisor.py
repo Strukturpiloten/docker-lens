@@ -726,7 +726,9 @@ class RootFactoryTests(unittest.TestCase):
                 os._exit(result)
             child_stream.close()
             peer = s.peer_socket(parent)
-            channel = s.Channel(parent, l.RuntimeBudget(time.monotonic_ns() + 50_000_000_000), peer[3])
+            # Match production's 180-second envelope: the unchanged 46-second
+            # cleanup reserve leaves 134 seconds for this positive transcript.
+            channel = s.Channel(parent, l.RuntimeBudget(time.monotonic_ns() + 180_000_000_000), peer[3])
             sequence, reservations, body_bytes = 0, 0, 0
             reaped = False
             try:

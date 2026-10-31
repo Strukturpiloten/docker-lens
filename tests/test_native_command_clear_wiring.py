@@ -321,7 +321,7 @@ else:
                         command["cleanup"]["uncertain"] = True
                     for family, proof in (("hostname", hostname), ("command", command)):
                         if fault != family + "_missing":
-                            path = root / ("hostname-v1.json" if family == "hostname" else "command-clear-v1.json")
+                            path = root / ("hostname-v2.json" if family == "hostname" else "command-clear-v1.json")
                             path.write_text(json.dumps(proof))
                             path.chmod(0o600)
                     for family, fixture in (("shm_size", shm_fixture), ("supplementary_groups", groups_fixture),

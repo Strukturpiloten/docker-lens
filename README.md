@@ -1,5 +1,16 @@
 # DockerLens
 
+The current [hostname/resolver contract](docs/native-hostname-contract.md) and
+[ADR 0046](docs/decisions/0046-hostname-resolver-source-proof-v2.md) expand
+invocation 22 under its existing HealthRun/owner with four fresh resolver fixtures,
+while preserving all four hostname controls. Private schema 2/hostname-v2.json
+requires both sections; public hostname-v1, the 19-argument emitter and capability/
+catalogue maps remain unchanged. The same 28 invocation names and seven owner
+scopes remain, but resolver failure now can prevent reaching PIDs27. PIDs27 and
+its immediate reader still precede nofile28. Earlier qualification is not reusable;
+source checks and actual combined native byte/time fit remain pending. No resolver
+connectivity, IPv6-network, application-acceptance or publication claim follows.
+
 Building DockerLens requires Rust 1.98.1 or newer. The repository pins Rust
 1.98.1 for development, linting, documentation, and validation.
 

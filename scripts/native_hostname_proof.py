@@ -8,13 +8,25 @@ from native_external_network_proof import validate_context
 from native_health_metadata_proof import timestamp_ns
 from native_network_attachment_proof import canonical, keys, read_private_proof
 
+# Semantic/public projection is deliberately independent of private versioning.
 CONTRACT = "hostname-v1"
-FILENAME = "hostname-v1.json"
+PRIVATE_SCHEMA_VERSION = 2
+FILENAME = "hostname-v2.json"
+RESOLVER_CONTRACT = "resolver-files-v1"
 ERROR = "invalid private hostname proof"
 CASES = ("omitted", "explicit")
 FIELDS = ("role", "id", "name", "owner", "image", "image_id", "wire", "cli_api",
           "request_hostname", "configured_hostname", "process_hostname", "started_at",
           "running_before", "running_after", "restart_count", "cleanup")
+
+
+RESOLVER_FIELDS = ("role", "id", "name", "owner", "image", "image_id", "wire", "cli_api",
+                   "configured_dns", "configured_extra_hosts", "nameservers", "host_matches",
+                   "started_at", "running_before", "running_after", "restart_count", "cleanup")
+RESOLVER_CASES = (
+    ("ipv4", "192.0.2.53", "fixture-v4.local", "192.0.2.10"),
+    ("ipv6", "2001:4860:4860::8888", "fixture-v6.local", "2001:db8::10"),
+)
 
 
 def fail():
@@ -26,8 +38,40 @@ def exact(value, expected):
         fail()
 
 
+def validate_resolver(section, context, image, seen):
+    """Finite observed records with independently authored expected values."""
+    keys(section, ("contract", "cases"))
+    exact(section["contract"], RESOLVER_CONTRACT)
+    if type(section["cases"]) is not list or len(section["cases"]) != 2:
+        fail()
+    for case, (family, dns, host, address) in zip(section["cases"], RESOLVER_CASES):
+        keys(case, ("case", "containers"))
+        exact(case["case"], family)
+        if type(case["containers"]) is not list or len(case["containers"]) != 2:
+            fail()
+        for record, role in zip(case["containers"], ("oracle", "rendered")):
+            keys(record, RESOLVER_FIELDS)
+            if not canonical(record["id"]) or record["id"] in seen:
+                fail()
+            seen.add(record["id"])
+            for key, value in (
+                ("role", role), ("name", f'dl-resolver-{context["run_id"]}-{family}-{role}'),
+                ("owner", context["run_id"]), ("image", context["fixture_image"]),
+                ("image_id", image["id"]),
+                ("wire", "independent_cli" if role == "oracle" else "literal_rendered"),
+                ("cli_api", context["rendering_api"]),
+                ("configured_dns", [dns]), ("configured_extra_hosts", [f"{host}:{address}"]),
+                ("nameservers", [dns]), ("host_matches", [{"address": address, "names": [host]}]),
+                ("running_before", True), ("running_after", True),
+                ("restart_count", 0), ("cleanup", "absent"),
+            ):
+                exact(record[key], value)
+            if timestamp_ns(record["started_at"]) <= 0:
+                fail()
+
+
 def validate_hostname_proof(proof, expected_context):
-    """Bind independently supplied harness facts and all four finite fixtures.
+    """Bind independently supplied harness facts and all eight finite fixtures.
 
     The omitted request retains no authored hostname. Its generated short-ID
     hostname is checked as a daemon default, never portable configured intent.
@@ -35,8 +79,8 @@ def validate_hostname_proof(proof, expected_context):
     try:
         validate_context(expected_context)
         keys(proof, ("schema_version", "contract", "context", "capability_admission",
-                     "catalogue_admission", "borrowed_image", "cases", "cleanup"))
-        for key, value in (("schema_version", 1), ("contract", CONTRACT),
+                     "catalogue_admission", "borrowed_image", "cases", "resolver", "cleanup"))
+        for key, value in (("schema_version", PRIVATE_SCHEMA_VERSION), ("contract", CONTRACT),
                            ("context", expected_context), ("capability_admission", []),
                            ("catalogue_admission", False)):
             exact(proof[key], value)
@@ -81,6 +125,7 @@ def validate_hostname_proof(proof, expected_context):
                     exact(record[key], value)
                 if timestamp_ns(record["started_at"]) <= 0:
                     fail()
+        validate_resolver(proof["resolver"], expected_context, image, seen)
         return {"contract": CONTRACT, "capability_admission": [], "catalogue_admission": False}
     except (ValueError, TypeError, KeyError, OverflowError, RecursionError, AttributeError):
         raise ValueError(ERROR) from None
