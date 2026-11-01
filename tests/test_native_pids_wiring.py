@@ -69,7 +69,8 @@ sys.stdout.buffer.write(sys.stdin.buffer.read())
             self.assertEqual(result.stderr, b"native outer command refused\n")
 
     def wrapper(self, output, status=0, listing=None, *, target="native_pids", test_name=TEST,
-                registry=None, registry_kind="file", capture_failure=None, terminate_output=True):
+                registry=None, registry_kind="file", capture_failure=None, terminate_output=True,
+                measurement_registry=None, measurement_registry_kind="file"):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "scripts").mkdir()
@@ -106,6 +107,22 @@ print(directory)
                 os.mkfifo(registry_path)
             elif registry_kind != "missing":
                 raise AssertionError("unknown inert registry fixture")
+            measurement_path = root / "src/native_pids_measurement_refusals.txt"
+            measurement_bytes = (ROOT / "src/native_pids_measurement_refusals.txt").read_bytes() if measurement_registry is None else measurement_registry
+            if measurement_registry_kind in ("file", "writable"):
+                measurement_path.write_bytes(measurement_bytes)
+                if measurement_registry_kind == "writable":
+                    measurement_path.chmod(0o666)
+            elif measurement_registry_kind == "symlink":
+                (root / "foreign-measurement-registry").write_bytes(measurement_bytes)
+                measurement_path.symlink_to(root / "foreign-measurement-registry")
+            elif measurement_registry_kind == "fifo":
+                os.mkfifo(measurement_path)
+            elif measurement_registry_kind == "hardlink":
+                (root / "foreign-measurement-registry").write_bytes(measurement_bytes)
+                os.link(root / "foreign-measurement-registry", measurement_path)
+            elif measurement_registry_kind != "missing":
+                raise AssertionError("unknown inert measurement registry fixture")
             (root / "output").write_bytes(output.encode() if isinstance(output, str) else output)
             selected = "native_health_metadata_tests::lifecycle::pids::" + test_name if target == "native_pids" else test_name
             listing = selected + ": test" if listing is None else listing

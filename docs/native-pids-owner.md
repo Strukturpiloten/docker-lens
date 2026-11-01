@@ -28,6 +28,38 @@ seams in [ADR 0040](decisions/0040-pids-runtime-source-session.md). Linux valida
 does not add macOS native testing or Windows support. The public library keeps
 its unsafe-code prohibition and has no new executor or public transport API.
 
+## Closed measurement refusal diagnostics
+
+Baseline run 41274026896 at exact 10cf passes the first 26 native invocations in
+both rootful lanes, then PIDs27 returns a private measurement refusal. The
+preceding pids_context marker does not identify which measurement check failed.
+Issue #157 preserves only the existing static error code after terminal cleanup,
+using a separate 78-code packaged measurement registry. The original 32-code
+constructor/setup registry and its API remain unchanged.
+
+Only the exact selected PIDs test may emit a failure-only
+`DOCKERLENS_NATIVE_PIDS_MEASUREMENT_REFUSAL: code=<closed-code>` line. The Rust
+producer maps unknown values to unclassified; the wrapper validates original
+private capture bytes and the exact registry integrity before projection.
+Unknown, injected, duplicate, truncated, mixed-family or foreign-selector records
+cannot supply a phase; any measurement prefix contradicts success. No native
+values, IDs, paths, exception text or raw frames cross this boundary.
+
+The inventory covers context, control/artifact, request creation, worker/root
+protocol, measured validation and acquisition helpers reachable from measure.
+OuterFinalize and its pids-shutdown code are after measurement and excluded.
+Existing workload, failure/cleanup dominance, predicates, receipts, 32-invocation
+order, eleven native owners and all time/output/resource bounds remain fixed.
+The registry is test-only under src/**; existing Cargo package inclusion covers
+it, with no manifest, dependency, software pin or Renovate manager change.
+
+Both rootless baseline lanes separately refuse the deliberate systemd fixture
+prerequisite; the actual upstream-rootless Ubuntu24 legacy SDK verifies its
+label and removes its profile. This diagnostic establishes no kernel cause,
+PIDs support, fixture repair, host migration or native qualification. Final
+independent review/complete gates and fresh exact-source native evidence remain
+due before diagnosing the actual rootful measurement code.
+
 ## Launcher prerequisites
 
 The launcher reuses its existing inner cgroup version and driver queries to
