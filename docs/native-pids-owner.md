@@ -62,6 +62,21 @@ due before diagnosing the actual rootful measurement code.
 
 ### Configured-fixture witness
 
+Physical case creation visits the existing rendered/API controls first, at logical
+indices 3, 4, 5, then CLI controls 0, 1, 2. Each original configured-state guard
+still fails immediately; no worker starts unless all six cases pass. Definitions
+are restored to logical order 0 through 5 before the first start. Slot identities,
+indexed ownership/attempted flags, subsequent starts, measurements, proof order,
+strict value checks and witness schema remain unchanged. This ordering can expose
+the independent API unlimited control before a CLI unlimited refusal; it does not
+interpret null as explicit unlimited or establish PIDs enforcement.
+
+Successful execution uses the same six creations/inspects and call budget. A
+failure can consume more of that existing six-case budget than a CLI-first
+failure did. The original absolute deadline, call/byte/resource limits, cleanup
+reserves and teardown owner remain authoritative; no probe or runtime command is
+added and no reserve is renewed. Fresh native execution must establish actual fit.
+
 Run 41281982479 at exact candidate 946be4f returned
 `pids-configured-fixture` in both rootful lanes. That code alone does not reveal
 which of the six slots or configured-state predicates failed. It occurs after
