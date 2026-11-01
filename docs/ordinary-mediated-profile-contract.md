@@ -8,9 +8,11 @@ policy-loading, runtime, admission, or cleanup operation.
 
 ## Fixed policy and identity
 
-The builder emits ABI 4.0, one ordinary profile declaration containing only the
-generated name, and exactly thirteen fixed family rules, in the order below.
-No mode flags are emitted: ordinary enforce mode is required. The declaration
+The builder emits ABI 4.0, one ordinary profile declaration with the generated
+name and fixed `flags=(attach_disconnected,mediate_deleted)`, and exactly thirteen
+fixed family rules, in the order below. The flag order and absence of whitespace
+after the comma are fixed bytes. They are path lookup flags, not caller-selectable
+mode flags: ordinary enforce mode is required. The declaration
 has no executable attachment, child profile, exec target, include, tunable,
 rlimit, or caller-supplied policy fragment. It does not emit `change_profile` or
 `change_hat` permissions. There is no selectable mode,
@@ -78,8 +80,69 @@ dynamically or fall back. A live kernel can still lack a selected family: strict
 compilation and fresh complete native behavior/cleanup qualification remain
 required. These tests check source bytes, identity boundaries and exclusions;
 they neither emulate parser expansion nor prove runtime enforcement or denial.
-Maximum policies are 378 and 376 bytes for the DockerLens and BoxFerry prefixes,
+Maximum policies are 422 and 420 bytes for the DockerLens and BoxFerry prefixes,
 within the existing 1024-byte consumer bound.
+
+## Fixed path flags and conditional self-exec reasoning
+
+[ADR 0053](decisions/0053-mediated-disconnected-path-flags.md) supersedes only the
+previous flag-free declaration. The body, ABI4, name grammar and single-argument
+interface stay fixed. No consumer selects the flags or changes policy bytes
+locally. The pair adds exactly 44 ASCII bytes. Path attachment here means
+connecting a disconnected pathname; it does not introduce an executable
+attachment expression, profile transition or alternate label.
+
+The source-supported candidate addresses an earlier path lookup, not a missing
+exec permission: the bare file rule already includes inherit-exec. In reviewed
+RootlessKit v0.14.4/Go 1.19.7 sources, self-exec through `/proc/self/exe` follows
+creation of a new mount namespace. The examined upstream Linux v7.0 code retains
+the executable file's original mount reference while copying the filesystem
+namespace. Procfs follows that original path; AppArmor may identify the mount as
+outside the current namespace and refuse it before matching file permissions.
+A deleted executable or memfd is not required by that source explanation.
+
+This remains conditional. The examined upstream kernel is not established as
+the exact source of the admitted Ubuntu Azure 7.0.0-1017 build, and the failed
+task's actually enforced profile and exact executable/source correspondence have
+not been proved. A RootlessKit parent
+fork/exec-self permission message alone cannot distinguish clone, unshare, execve
+or the responsible security mechanism: Go can report those startup errors through
+the same wrapper. No audit attribution or successful execution of this candidate
+is claimed.
+
+The pair deliberately preserves one examined deleted-dentry guard across an
+explicit serialization boundary:
+
+| Declaration | Parser 5.0.2 serialization | Examined upstream v7.0 effective mask | Unlinked positive dentry guard |
+| --- | --- | --- | --- |
+| Historical declaration without path flags | `path_flags` omitted | `0x20000` | Continues pathname mediation |
+| `attach_disconnected` alone, not selected | Explicit `0x00004` | `0x00004` | Returns ENOENT |
+| Fixed paired candidate | Explicit `0x10004` | `0x10004` | Continues pathname mediation |
+
+Parser 5.0.2 names its `0x10000` bit `mediate_deleted`; the examined kernel calls
+that bit `PATH_DELEGATE_DELETED`, while its omitted-field default
+`PATH_MEDIATE_DELETED` is `0x20000`. The particular lookup guard accepts either
+bit. Thus the pair preserves **that guard's result**, not a numeric mask or all
+downstream semantics. Absence of the explicit parser flag did not mean deleted
+paths were previously unmediated. Do not describe the pair as globally equivalent
+to the previous declaration or use its text as proof of actual kernel behavior.
+
+Disconnected-path connection expands pathname reachability and can introduce
+pathname aliases. The existing all-file permissions and inherited execution
+explain the permission selection, but do not remove that behavioral expansion
+or establish sandbox safety. This remains one permissive disposable-runner test
+prerequisite with exact generated enforce-label and ownership requirements.
+
+Fresh qualification is on hold: verify actual pinned parser serialization and
+admitted-kernel interpretation, connected/deleted and namespace-disconnected
+self-exec boundaries, then actual postexec held-task label, original workloads
+and complete private cleanup/unload across every affected ordinary/systemd row,
+including Docker 20.10 on both supported architectures. A disappeared error,
+compile or single repaired row is insufficient. Retain fatal warnings, all pins,
+budgets, early-exit and label refusals, and the existing absence-before-unload
+authority. No fallback, host policy change, new cleanup power or audit collector
+is implemented by this source candidate. The active legacy 4.0.1 path stays
+byte-identical and is not switched to this builder.
 
 ## Legacy callers and dependency ownership
 
@@ -88,7 +151,11 @@ They retain the fixed userns/unconfined policy, exact unconfined registry/task
 expectations, parser 4.0.1 guards, lifecycle and receipts. The new builder is not
 wired into any active DockerLens command or consumer automatically.
 
-The caller inventory for this change is:
+The caller inventory originally recorded with ADR 0051 is retained as historical
+source-custody context below. This declaration-only candidate changes no recorded
+consumer pin or authorization. A new consumer opt-in requires a real immutable
+reviewed producer commit and actual source-closure sizes/hashes; historical
+receipts and earlier source or native observations do not qualify these bytes.
 
 | Owner | Existing use | This change |
 | --- | --- | --- |
@@ -164,3 +231,26 @@ Additional reviewed source hashes are `parser/mqueue.h`
 `c13f1977c8d0a2c7bc3e24b7cef498d9262d776d8b5d348260c78409f4bcb892`
 (104: no-op implied-rule default). Selected family headers do not override that
 default; the reviewed network-to-Unix expansion is included above.
+
+The path-flag review additionally used immutable source references: AppArmor
+5.0.2 `909affc32a13d14ae3a7ccf44d325ae63ce11baf`, RootlessKit v0.14.4
+`87d443683ac1e8aba4110b8081f15aaae432aaa2`, Go 1.19.7
+`7bd22aafe41be40e2174335a3dc55431ca9548ec`, and upstream Linux v7.0
+`028ef9c96e96197026887c0f092424679298aae8`. These are semantic references, not
+changed dependency/tool pins. Relevant reviewed source hashes include:
+
+| Source reference | Reviewed fact | SHA-256 |
+| --- | --- | --- |
+| AppArmor `parser/profile.h` 171, 204 | Initial flags and parser names | `3173ec38ffaae93260fae57ca4d2755b111dcb144b5484115aca3d0903a13f62` |
+| AppArmor `parser/parser_interface.c` 522 | Explicit serialization versus omitted zero flags | `662882741f8bc916eaea3b0a55aaab7c279118fb9dc7815d6108b07a4f26519b` |
+| Linux `security/apparmor/policy_unpack.c` 1238 | Omitted-field default | `078d121b60723ede5bc329a77e07ca95d2a30da51877e6b2036b8af24da59356` |
+| Linux `security/apparmor/include/path.h` 14 | Numeric bit names | `2c6cd2fe0fb7ac0f3a3fe5386082d019800991ed45762e924ac34842dae2e0d6` |
+| Linux `security/apparmor/path.c` 53, 125, 151, 160 | Disconnection and examined deleted-dentry guard | `0be893db0ca3551f10de6913bd8672ebbc07e7c9cd794659a18aad709d04a920` |
+
+The specialist retrieved bounded unauthenticated immutable HTTPS source snapshots
+and checked bytes/hashes; no oracle binary or parser command was executed for
+this source candidate. AppArmor is GPL-2.0, RootlessKit Apache-2.0, Go BSD-3-Clause,
+and Linux GPL-2.0-only with the syscall note where applicable. Research snapshots
+remain private references: no oracle implementation is copied, mechanically
+translated or redistributed in this change. No source version, installed tool,
+software pin, Renovate ownership/extraction or consumer definition is changed.

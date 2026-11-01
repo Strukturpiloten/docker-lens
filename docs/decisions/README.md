@@ -1,5 +1,10 @@
 # Architecture decisions
 
+- [0053: Fixed path flags for the mediated prerequisite](0053-mediated-disconnected-path-flags.md)
+  forward-ports the approved issue 158 paired path flags, superseding only ADR 0051's
+  flag-free declaration. Legacy callers stay unchanged; parser/kernel interpretation
+  and fresh native qualification remain on hold.
+
 - [0052: Controlled PIDs CREATE observations](0052-controlled-pids-create-observations.md)
   separates explicit minus-one request intent from owned CREATE null readback and versions only
   private acquisition observations; public uncertainty and actual effect obligations remain strict.
