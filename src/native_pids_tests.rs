@@ -120,6 +120,231 @@ fn pids_measurement_refusal_diagnostic(error: &str) -> String {
     )
 }
 
+// One failed configured-fixture guard may retain only this closed, value-free
+// witness. It observes the existing immutable inspect value, never another I/O.
+const CONFIGURED_FIXTURE_DIAGNOSTIC_MAX: usize = 320;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConfiguredFixtureSlot {
+    Cli16,
+    Cli64,
+    CliUnlimited,
+    Rendered16,
+    Rendered64,
+    RenderedUnlimited,
+}
+
+impl ConfiguredFixtureSlot {
+    fn from_index(index: usize) -> Option<Self> {
+        match index {
+            0 => Some(Self::Cli16),
+            1 => Some(Self::Cli64),
+            2 => Some(Self::CliUnlimited),
+            3 => Some(Self::Rendered16),
+            4 => Some(Self::Rendered64),
+            5 => Some(Self::RenderedUnlimited),
+            _ => None,
+        }
+    }
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Cli16 => "cli16",
+            Self::Cli64 => "cli64",
+            Self::CliUnlimited => "cli_unlimited",
+            Self::Rendered16 => "rendered16",
+            Self::Rendered64 => "rendered64",
+            Self::RenderedUnlimited => "rendered_unlimited",
+        }
+    }
+
+    const fn maximum(self) -> i64 {
+        match self {
+            Self::Cli16 | Self::Rendered16 => 16,
+            Self::Cli64 | Self::Rendered64 => 64,
+            Self::CliUnlimited | Self::RenderedUnlimited => -1,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConfiguredFixtureShape {
+    Missing,
+    Null,
+    False,
+    True,
+    Zero,
+    MinusOne,
+    Sixteen,
+    SixtyFour,
+    Integer,
+    Number,
+    String,
+    Array,
+    Object,
+}
+
+impl ConfiguredFixtureShape {
+    fn observe(value: Option<&Value>) -> Self {
+        match value {
+            None => Self::Missing,
+            Some(Value::Null) => Self::Null,
+            Some(Value::Bool(false)) => Self::False,
+            Some(Value::Bool(true)) => Self::True,
+            Some(Value::Number(number)) => match number.as_i64() {
+                Some(0) => Self::Zero,
+                Some(-1) => Self::MinusOne,
+                Some(16) => Self::Sixteen,
+                Some(64) => Self::SixtyFour,
+                Some(_) => Self::Integer,
+                None if number.is_u64() => Self::Integer,
+                None => Self::Number,
+            },
+            Some(Value::String(_)) => Self::String,
+            Some(Value::Array(_)) => Self::Array,
+            Some(Value::Object(_)) => Self::Object,
+        }
+    }
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Missing => "missing",
+            Self::Null => "null",
+            Self::False => "false",
+            Self::True => "true",
+            Self::Zero => "zero",
+            Self::MinusOne => "minus_one",
+            Self::Sixteen => "sixteen",
+            Self::SixtyFour => "sixty_four",
+            Self::Integer => "integer",
+            Self::Number => "number",
+            Self::String => "string",
+            Self::Array => "array",
+            Self::Object => "object",
+        }
+    }
+}
+
+// Expected private strings are borrowed only while making the closed witness;
+// none is retained in the witness or accepted by its formatter.
+struct ConfiguredFixtureExpected<'a> {
+    id: &'a str,
+    name: &'a str,
+    image: &'a str,
+    owner: &'a str,
+    nonce: &'a str,
+    deadline: &'a str,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ConfiguredFixtureWitness {
+    slot: ConfiguredFixtureSlot,
+    checks: [bool; 14],
+    shapes: [ConfiguredFixtureShape; 12],
+    lengths: [bool; 2],
+}
+
+impl ConfiguredFixtureWitness {
+    fn observe(
+        index: usize,
+        status: u16,
+        actual: &Value,
+        expected: &ConfiguredFixtureExpected<'_>,
+    ) -> Option<Self> {
+        let slot = ConfiguredFixtureSlot::from_index(index)?;
+        let config = actual.get("Config");
+        let labels = config.and_then(|value| value.get("Labels"));
+        let host = actual.get("HostConfig");
+        // Same fixed field order in the independent wrapper and owner docs.
+        let fields = [
+            actual.get("Id"),
+            actual.get("Name"),
+            config.and_then(|value| value.get("Image")),
+            labels.and_then(|value| value.get(OWNER)),
+            actual.get("State").and_then(|value| value.get("Running")),
+            labels.and_then(|value| value.get(LABEL)),
+            labels.and_then(|value| value.get(SLOT_LABEL)),
+            host.and_then(|value| value.get("PidsLimit")),
+            host.and_then(|value| value.get("Init")),
+            config.and_then(|value| value.get("Entrypoint")),
+            config.and_then(|value| value.get("Cmd")),
+            actual.get("RestartCount"),
+        ];
+        let entrypoint = fields[9].and_then(Value::as_array);
+        let command = fields[10].and_then(Value::as_array);
+        let lengths = [
+            entrypoint.is_some_and(|values| values.len() == 1),
+            command.is_some_and(|values| values.len() == 3),
+        ];
+        // Evaluate every atomic predicate, even after an earlier mismatch.
+        // The original short-circuit acceptance guard remains unchanged.
+        let checks = [
+            status == 200,
+            fields[0].and_then(Value::as_str).is_some_and(identifier),
+            fields[0].is_some_and(|value| *value == expected.id),
+            fields[1]
+                .and_then(Value::as_str)
+                .is_some_and(|value| value.strip_prefix('/') == Some(expected.name)),
+            fields[2].is_some_and(|value| *value == expected.image),
+            fields[3].is_some_and(|value| *value == expected.owner),
+            fields[4].is_some_and(|value| *value == false),
+            fields[5].is_some_and(|value| *value == expected.owner),
+            fields[6].is_some_and(|value| *value == slot.name()),
+            fields[7].is_some_and(|value| *value == slot.maximum()),
+            fields[8].is_some_and(|value| *value == false),
+            entrypoint.is_some_and(|values| lengths[0] && values[0] == "/dl-pids-worker"),
+            command.is_some_and(|values| {
+                lengths[1]
+                    && values[0] == slot.name()
+                    && values[1] == expected.nonce
+                    && values[2] == expected.deadline
+            }),
+            fields[11].is_some_and(|value| *value == 0),
+        ];
+        Some(Self {
+            slot,
+            checks,
+            shapes: fields.map(ConfiguredFixtureShape::observe),
+            lengths,
+        })
+    }
+
+    fn suffix(self) -> Option<String> {
+        if self.checks.iter().all(|passed| *passed) {
+            return None;
+        }
+        let checks: String = self
+            .checks
+            .iter()
+            .map(|passed| if *passed { '1' } else { '0' })
+            .collect();
+        let shapes = self.shapes.map(ConfiguredFixtureShape::name).join(",");
+        let lengths: String = self
+            .lengths
+            .iter()
+            .map(|matched| if *matched { '1' } else { '0' })
+            .collect();
+        Some(format!(
+            " slot={} checks={checks} shapes={shapes} lengths={lengths}",
+            self.slot.name()
+        ))
+    }
+}
+
+fn pids_configured_fixture_diagnostic(
+    phase: &str,
+    witness: Option<&ConfiguredFixtureWitness>,
+) -> String {
+    let mut line = pids_measurement_refusal_diagnostic(phase);
+    if line == "DOCKERLENS_NATIVE_PIDS_MEASUREMENT_REFUSAL: code=pids-configured-fixture"
+        && let Some(suffix) = witness.and_then(|value| value.suffix())
+        && line.len() + suffix.len() <= CONFIGURED_FIXTURE_DIAGNOSTIC_MAX
+    {
+        line.push_str(&suffix);
+    }
+    line
+}
+
 // A startup record is only a closed site observation from an existing stderr
 // capture. It does not authenticate source authority or establish a root cause.
 const STARTUP_PREFIX: &str = "DOCKERLENS_NATIVE_PIDS_START:";
@@ -3126,6 +3351,7 @@ struct NativeProducer {
     confirmed_outer: OuterIdentity,
     deadline_ns: u64,
     observations: Vec<Value>,
+    configured_fixture_witness: Option<ConfiguredFixtureWitness>,
     worker: PreparedWorker,
     controller: Option<WorkerControl>,
     nonce: String,
@@ -3190,6 +3416,7 @@ impl NativeProducer {
             confirmed_outer: second,
             deadline_ns,
             observations: Vec::new(),
+            configured_fixture_witness: None,
             worker,
             controller: None,
             nonce,
@@ -3486,6 +3713,19 @@ impl NativeProducer {
             || actual["Config"]["Cmd"] != json!([slot, self.nonce, self.deadline_ns.to_string()])
             || actual["RestartCount"] != 0
         {
+            self.configured_fixture_witness = ConfiguredFixtureWitness::observe(
+                index,
+                status,
+                &actual,
+                &ConfiguredFixtureExpected {
+                    id: &id,
+                    name: &self.run.names[index],
+                    image: &self.run.base,
+                    owner: &self.run.run,
+                    nonce: &self.nonce,
+                    deadline: &self.deadline_ns.to_string(),
+                },
+            );
             return Err("pids-configured-fixture");
         }
         Ok(
@@ -3844,7 +4084,13 @@ fn live_pids_limits_and_effects_match_engine() {
             std::panic::resume_unwind(error);
         }
         Ok(Err(phase)) => {
-            eprintln!("{}", pids_measurement_refusal_diagnostic(phase));
+            eprintln!(
+                "{}",
+                pids_configured_fixture_diagnostic(
+                    phase,
+                    producer.configured_fixture_witness.as_ref()
+                )
+            );
             panic!("private native PIDs observation refused");
         }
         Ok(Ok(value)) => value,
@@ -5908,4 +6154,271 @@ fn pids_measurement_refusal_registry_binds_exact_packaged_bytes() {
     ] {
         assert!(!pids_measurement_refusal_registry_valid(&changed));
     }
+}
+
+fn configured_fixture_authored_expected() -> ConfiguredFixtureExpected<'static> {
+    ConfiguredFixtureExpected {
+        id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        name: "PRIVATE_NAME_CANARY",
+        image: "PRIVATE_IMAGE_CANARY",
+        owner: "PRIVATE_OWNER_CANARY",
+        nonce: "PRIVATE_NONCE_CANARY",
+        deadline: "123456789",
+    }
+}
+
+fn configured_fixture_authored_input(slot: &str, maximum: i64) -> Value {
+    // Independent inspect literal, not a rendered request or witness output.
+    json!({
+        "Id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "Name": "/PRIVATE_NAME_CANARY",
+        "Config": {
+            "Image": "PRIVATE_IMAGE_CANARY",
+            "Labels": {
+                "io.dockerlens.native-run": "PRIVATE_OWNER_CANARY",
+                "io.dockerlens.native-pids": "PRIVATE_OWNER_CANARY",
+                "io.dockerlens.native-pids-slot": slot
+            },
+            "Entrypoint": ["/dl-pids-worker"],
+            "Cmd": [slot, "PRIVATE_NONCE_CANARY", "123456789"]
+        },
+        "State": {"Running": false},
+        "HostConfig": {"PidsLimit": maximum, "Init": false},
+        "RestartCount": 0
+    })
+}
+
+#[test]
+fn pids_configured_fixture_witness_has_independent_all_slot_expectations() {
+    use ConfiguredFixtureShape::{Array, False, MinusOne, Sixteen, SixtyFour, String, Zero};
+    for (index, (slot, maximum, shape)) in [
+        ("cli16", 16, Sixteen),
+        ("cli64", 64, SixtyFour),
+        ("cli_unlimited", -1, MinusOne),
+        ("rendered16", 16, Sixteen),
+        ("rendered64", 64, SixtyFour),
+        ("rendered_unlimited", -1, MinusOne),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let actual = configured_fixture_authored_input(slot, maximum);
+        let witness = ConfiguredFixtureWitness::observe(
+            index,
+            200,
+            &actual,
+            &configured_fixture_authored_expected(),
+        )
+        .unwrap();
+        assert_eq!(witness.slot.name(), slot);
+        assert_eq!(witness.checks, [true; 14]);
+        assert_eq!(witness.lengths, [true; 2]);
+        assert_eq!(
+            witness.shapes,
+            [
+                String, String, String, String, False, String, String, shape, False, Array, Array,
+                Zero
+            ]
+        );
+        assert_eq!(witness.suffix(), None);
+        assert_eq!(
+            pids_configured_fixture_diagnostic("pids-configured-fixture", Some(&witness)),
+            "DOCKERLENS_NATIVE_PIDS_MEASUREMENT_REFUSAL: code=pids-configured-fixture"
+        );
+    }
+}
+
+#[test]
+fn pids_configured_fixture_witness_observes_every_atomic_guard_without_values() {
+    for failed in 0..14 {
+        let mut actual = configured_fixture_authored_input("cli16", 16);
+        let mut expected = configured_fixture_authored_expected();
+        let mut status = 200;
+        match failed {
+            0 => status = 503,
+            1 => {
+                actual["Id"] = json!("PRIVATE_NONCANONICAL_ID_CANARY");
+                expected.id = "PRIVATE_NONCANONICAL_ID_CANARY";
+            }
+            2 => {
+                actual["Id"] =
+                    json!("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+            }
+            3 => actual["Name"] = json!("/PRIVATE_OTHER_NAME_CANARY"),
+            4 => actual["Config"]["Image"] = json!("PRIVATE_OTHER_IMAGE_CANARY"),
+            5 => {
+                actual["Config"]["Labels"]["io.dockerlens.native-run"] =
+                    json!("PRIVATE_OTHER_OWNER_CANARY")
+            }
+            6 => actual["State"]["Running"] = json!(true),
+            7 => {
+                actual["Config"]["Labels"]["io.dockerlens.native-pids"] =
+                    json!("PRIVATE_OTHER_LABEL_CANARY")
+            }
+            8 => {
+                actual["Config"]["Labels"]["io.dockerlens.native-pids-slot"] =
+                    json!("PRIVATE_OTHER_SLOT_CANARY")
+            }
+            9 => actual["HostConfig"]["PidsLimit"] = json!(64),
+            10 => actual["HostConfig"]["Init"] = json!(true),
+            11 => actual["Config"]["Entrypoint"] = json!(["PRIVATE_OTHER_ENTRYPOINT_CANARY"]),
+            12 => {
+                actual["Config"]["Cmd"] =
+                    json!(["cli16", "PRIVATE_OTHER_NONCE_CANARY", "123456789"])
+            }
+            13 => actual["RestartCount"] = json!(1),
+            _ => unreachable!(),
+        }
+        let witness = ConfiguredFixtureWitness::observe(0, status, &actual, &expected).unwrap();
+        let mut checks = [true; 14];
+        checks[failed] = false;
+        assert!(witness.checks == checks, "atomic predicate {failed}");
+        let line = pids_configured_fixture_diagnostic("pids-configured-fixture", Some(&witness));
+        assert!(line.starts_with("DOCKERLENS_NATIVE_PIDS_MEASUREMENT_REFUSAL: code=pids-configured-fixture slot=cli16 checks="));
+        for private in [
+            "PRIVATE",
+            expected.id,
+            expected.name,
+            expected.image,
+            expected.owner,
+            expected.nonce,
+            expected.deadline,
+        ] {
+            assert!(
+                !line.contains(private),
+                "only closed metadata may be projected"
+            );
+        }
+        assert!(line.is_ascii() && !line.contains('\n'));
+        assert!(line.len() <= CONFIGURED_FIXTURE_DIAGNOSTIC_MAX);
+    }
+}
+
+#[test]
+fn pids_configured_fixture_witness_retains_simultaneous_and_absent_predicates() {
+    let expected = configured_fixture_authored_expected();
+    let mut actual = configured_fixture_authored_input("cli16", 16);
+    actual["Config"]["Labels"]["io.dockerlens.native-run"] = json!("PRIVATE_OTHER_OWNER");
+    actual["HostConfig"]["Init"] = json!(true);
+    actual["Config"]["Cmd"] = json!(["PRIVATE_ARGV_CANARY"]);
+    let witness = ConfiguredFixtureWitness::observe(0, 503, &actual, &expected).unwrap();
+    assert_eq!(
+        witness.checks,
+        [
+            false, true, true, true, true, false, true, true, true, true, false, true, false, true
+        ]
+    );
+    assert_eq!(witness.lengths, [true, false]);
+    assert!(witness.suffix().unwrap().contains("checks=01111011110101"));
+    for actual in [json!({}), Value::Null, json!("PRIVATE_ROOT_CANARY")] {
+        let witness = ConfiguredFixtureWitness::observe(5, 503, &actual, &expected).unwrap();
+        assert_eq!(witness.checks, [false; 14]);
+        assert_eq!(witness.shapes, [ConfiguredFixtureShape::Missing; 12]);
+        assert_eq!(witness.lengths, [false; 2]);
+        assert!(witness.suffix().unwrap().contains("checks=00000000000000"));
+    }
+}
+
+#[test]
+fn pids_configured_fixture_shapes_distinguish_absence_null_false_zero_and_wrong_types() {
+    use ConfiguredFixtureShape::{
+        Array, False, Integer, MinusOne, Missing, Null, Number, Object, Sixteen, SixtyFour, String,
+        True, Zero,
+    };
+    assert_eq!(ConfiguredFixtureShape::observe(None), Missing);
+    for (value, shape) in [
+        (Value::Null, Null),
+        (json!(false), False),
+        (json!(true), True),
+        (json!(0), Zero),
+        (json!(-1), MinusOne),
+        (json!(16), Sixteen),
+        (json!(64), SixtyFour),
+        (json!(17), Integer),
+        (json!(u64::MAX), Integer),
+        (json!(0.5), Number),
+        (json!("PRIVATE_SHAPE_CANARY"), String),
+        (json!([]), Array),
+        (json!({}), Object),
+    ] {
+        assert_eq!(ConfiguredFixtureShape::observe(Some(&value)), shape);
+        let mut actual = configured_fixture_authored_input("cli16", 16);
+        actual["HostConfig"]["Init"] = value.clone();
+        actual["HostConfig"]["PidsLimit"] = value.clone();
+        actual["RestartCount"] = value;
+        let witness = ConfiguredFixtureWitness::observe(
+            0,
+            200,
+            &actual,
+            &configured_fixture_authored_expected(),
+        )
+        .unwrap();
+        assert_eq!(witness.shapes[8], shape);
+        assert_eq!(witness.shapes[7], shape);
+        assert_eq!(witness.shapes[11], shape);
+        assert_eq!(witness.checks[10], shape == False);
+        assert_eq!(witness.checks[9], shape == Sixteen);
+        assert_eq!(witness.checks[13], shape == Zero);
+    }
+    let mut actual = configured_fixture_authored_input("cli16", 16);
+    actual["HostConfig"].as_object_mut().unwrap().remove("Init");
+    let witness =
+        ConfiguredFixtureWitness::observe(0, 200, &actual, &configured_fixture_authored_expected())
+            .unwrap();
+    assert_eq!(witness.shapes[8], Missing);
+    assert!(!witness.checks[10]);
+    for value in [
+        Value::Null,
+        json!(false),
+        json!("PRIVATE_ARRAY_CANARY"),
+        json!({}),
+        json!([]),
+    ] {
+        actual["Config"]["Entrypoint"] = value.clone();
+        actual["Config"]["Cmd"] = value;
+        let witness = ConfiguredFixtureWitness::observe(
+            0,
+            200,
+            &actual,
+            &configured_fixture_authored_expected(),
+        )
+        .unwrap();
+        assert_eq!(witness.lengths, [false; 2]);
+        assert!(!witness.checks[11] && !witness.checks[12]);
+    }
+}
+
+#[test]
+fn pids_configured_fixture_metadata_failure_keeps_the_original_bare_phase() {
+    let actual = configured_fixture_authored_input("cli16", 16);
+    assert_eq!(
+        ConfiguredFixtureWitness::observe(6, 200, &actual, &configured_fixture_authored_expected()),
+        None
+    );
+    let mut witness =
+        ConfiguredFixtureWitness::observe(0, 503, &actual, &configured_fixture_authored_expected())
+            .unwrap();
+    for phase in [
+        "pids-configured-fixture",
+        "pids-version",
+        "PRIVATE_ERROR_CANARY",
+    ] {
+        assert_eq!(
+            pids_configured_fixture_diagnostic(phase, None),
+            pids_measurement_refusal_diagnostic(phase)
+        );
+        if phase != "pids-configured-fixture" {
+            assert_eq!(
+                pids_configured_fixture_diagnostic(phase, Some(&witness)),
+                pids_measurement_refusal_diagnostic(phase)
+            );
+        }
+    }
+    witness.slot = ConfiguredFixtureSlot::RenderedUnlimited;
+    witness.checks = [false; 14];
+    witness.shapes = [ConfiguredFixtureShape::SixtyFour; 12];
+    witness.lengths = [true; 2];
+    let line = pids_configured_fixture_diagnostic("pids-configured-fixture", Some(&witness));
+    assert!(line.len() <= CONFIGURED_FIXTURE_DIAGNOSTIC_MAX);
+    assert!(line.ends_with("lengths=11"));
 }

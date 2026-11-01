@@ -379,10 +379,58 @@ try:
     if len(observations) != 1:
         sys.exit(0)
     index, line = observations[0]
-    if (index == len(lines) - 1 or len(line) > 96 or not line.startswith(prefix)
-            or line[len(prefix):] not in set(codes) | {b"unclassified"}):
+    if index == len(lines) - 1 or not line.startswith(prefix) or len(line) > 320:
         sys.exit(0)
-    sys.stdout.buffer.write(prefix + line[len(prefix):] + b"\n")
+    code, separator, detail = line[len(prefix):].partition(b" ")
+    if code not in set(codes) | {b"unclassified"}:
+        sys.exit(0)
+    projected = prefix + code
+    if separator:
+        if code != b"pids-configured-fixture":
+            sys.exit(0)
+        slots = (b"cli16", b"cli64", b"cli_unlimited", b"rendered16", b"rendered64", b"rendered_unlimited")
+        shapes = (b"missing", b"null", b"false", b"true", b"zero", b"minus_one", b"sixteen",
+                  b"sixty_four", b"integer", b"number", b"string", b"array", b"object")
+        shape = b"(?:" + b"|".join(shapes) + b")"
+        match = re.fullmatch(b"slot=(" + b"|".join(slots) + b") checks=([01]{14}) shapes=("
+                             + shape + b"(?:," + shape + b"){11}) lengths=([01]{2})", detail)
+        if match is None:
+            sys.exit(0)
+        slot, checks, shape_list, lengths = match.groups()
+        if checks == b"11111111111111":
+            sys.exit(0)
+        observed_shapes = shape_list.split(b",")
+        matched = [value == 49 for value in checks]
+        sized = [value == 49 for value in lengths]
+        # Equality to private strings requires string shape, but that shape
+        # cannot establish equality. Created IDs were already canonical.
+        string_fields = ((1, 0), (2, 0), (3, 1), (4, 2), (5, 3), (7, 5), (8, 6))
+        if (any(matched[check] and observed_shapes[field] != b"string" for check, field in string_fields)
+                or matched[2] and not matched[1]):
+            sys.exit(0)
+        expected_limit = dict(zip(slots, (b"sixteen", b"sixty_four", b"minus_one",
+                                          b"sixteen", b"sixty_four", b"minus_one")))[slot]
+        fixed_equalities = ((6, 4, b"false"), (10, 8, b"false"),
+                            (9, 7, expected_limit), (13, 11, b"zero"))
+        if any(matched[check] != (observed_shapes[field] == expected)
+               for check, field, expected in fixed_equalities):
+            sys.exit(0)
+        # Correct array shape/length alone does not establish private contents.
+        if any((sized[length] and observed_shapes[field] != b"array")
+               or (matched[check] and not sized[length])
+               for length, field, check in ((0, 9, 11), (1, 10, 12))):
+            sys.exit(0)
+        # Reconstruct only fixed enums and bits; the original inspect/argv and
+        # every other byte in the private capture remain unprojectable.
+        fixed_slot = next(value for value in slots if value == slot)
+        fixed_shapes = [next(value for value in shapes if value == token) for token in shape_list.split(b",")]
+        fixed_checks = bytes(49 if value == 49 else 48 for value in checks)
+        fixed_lengths = bytes(49 if value == 49 else 48 for value in lengths)
+        projected += (b" slot=" + fixed_slot + b" checks=" + fixed_checks + b" shapes="
+                      + b",".join(fixed_shapes) + b" lengths=" + fixed_lengths)
+    elif len(line) > 96:
+        sys.exit(0)
+    sys.stdout.buffer.write(projected + b"\n")
 except (OSError, ValueError):
     pass
 ' "$(dirname "$0")/../src/native_pids_measurement_refusals.txt" "$capture_directory/run.raw" "$original_run_status" 2>/dev/null) || measurement_projection_status=$?
