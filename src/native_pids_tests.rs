@@ -3343,6 +3343,17 @@ impl OuterIdentity {
     }
 }
 
+fn create_configured_cases(
+    mut create: impl FnMut(usize) -> PidsResult<Value>,
+) -> PidsResult<Vec<Value>> {
+    let mut definitions = Vec::with_capacity(SLOTS.len());
+    for index in [3, 4, 5, 0, 1, 2] {
+        definitions.push((index, create(index)?));
+    }
+    definitions.sort_unstable_by_key(|(index, _)| *index);
+    Ok(definitions.into_iter().map(|(_, value)| value).collect())
+}
+
 struct NativeProducer {
     run: HealthRun,
     target: ProofTarget,
@@ -3851,10 +3862,7 @@ impl NativeProducer {
     fn measure(&mut self) -> PidsResult<Value> {
         let daemon = self.context()?;
         let copy = self.prepare_control()?;
-        let mut definitions = Vec::new();
-        for index in 0..SLOTS.len() {
-            definitions.push(self.create_case(index)?);
-        }
+        let definitions = create_configured_cases(|index| self.create_case(index))?;
         for id in self.run.ids.iter().flatten() {
             let (status, _) = self.run.api(
                 "POST",
@@ -6421,4 +6429,156 @@ fn pids_configured_fixture_metadata_failure_keeps_the_original_bare_phase() {
     let line = pids_configured_fixture_diagnostic("pids-configured-fixture", Some(&witness));
     assert!(line.len() <= CONFIGURED_FIXTURE_DIAGNOSTIC_MAX);
     assert!(line.ends_with("lengths=11"));
+}
+
+#[test]
+fn pids_configured_creation_restores_logical_results_before_starts() -> PidsResult<()> {
+    let mut trace = Vec::new();
+    let definitions = create_configured_cases(|index| {
+        trace.push(format!("create:{}", SLOTS[index]));
+        Ok(json!({"slot": SLOTS[index], "owned_index": index}))
+    })?;
+    for (index, definition) in definitions.iter().enumerate() {
+        assert_eq!(definition["owned_index"], index);
+        trace.push(format!(
+            "start:{}",
+            definition["slot"].as_str().ok_or("pids-slot")?
+        ));
+    }
+    assert_eq!(
+        trace,
+        [
+            "create:rendered16",
+            "create:rendered64",
+            "create:rendered_unlimited",
+            "create:cli16",
+            "create:cli64",
+            "create:cli_unlimited",
+            "start:cli16",
+            "start:cli64",
+            "start:cli_unlimited",
+            "start:rendered16",
+            "start:rendered64",
+            "start:rendered_unlimited",
+        ]
+    );
+    assert_eq!(definitions.len(), 6);
+    Ok(())
+}
+
+#[test]
+fn pids_configured_api_failure_retains_sparse_ownership_without_cli_or_starts() {
+    let mut visits = Vec::new();
+    let mut attempted = [false; 6];
+    let mut bound = [None; 6];
+    let mut starts = Vec::new();
+    let mut refusal = None;
+    let result = create_configured_cases(|index| {
+        visits.push(index);
+        attempted[index] = true;
+        bound[index] = Some(100 + index);
+        if index == 5 {
+            let mut actual = configured_fixture_authored_input("rendered_unlimited", -1);
+            actual["HostConfig"]["PidsLimit"] = Value::Null;
+            refusal = ConfiguredFixtureWitness::observe(
+                index,
+                200,
+                &actual,
+                &configured_fixture_authored_expected(),
+            );
+            return Err("pids-configured-fixture");
+        }
+        Ok(json!({"slot": SLOTS[index]}))
+    })
+    .inspect(|definitions| {
+        starts.extend(0..definitions.len());
+    });
+    assert_eq!(result, Err("pids-configured-fixture"));
+    assert_eq!(visits, [3, 4, 5]);
+    assert!(starts.is_empty());
+    assert_eq!(attempted, [false, false, false, true, true, true]);
+    assert_eq!(bound, [None, None, None, Some(103), Some(104), Some(105)]);
+    let cleanup_owned: Vec<_> = attempted
+        .iter()
+        .zip(bound)
+        .enumerate()
+        .filter_map(|(index, (attempted, id))| {
+            if *attempted {
+                id.map(|id| (index, id))
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(cleanup_owned, [(3, 103), (4, 104), (5, 105)]);
+    assert!(refusal.is_some_and(|witness| witness.slot
+        == ConfiguredFixtureSlot::RenderedUnlimited
+        && !witness.checks[9]
+        && witness.shapes[7] == ConfiguredFixtureShape::Null));
+}
+
+#[test]
+fn pids_configured_cli_failure_follows_all_api_controls_without_starts() {
+    let mut visits = Vec::new();
+    let mut attempted = [false; 6];
+    let mut bound = [None; 6];
+    let mut starts = Vec::new();
+    let result = create_configured_cases(|index| {
+        visits.push(index);
+        attempted[index] = true;
+        bound[index] = Some(100 + index);
+        if index == 2 {
+            return Err("pids-configured-fixture");
+        }
+        Ok(json!({"slot": SLOTS[index], "owned_index": index}))
+    })
+    .inspect(|definitions| {
+        starts.extend(0..definitions.len());
+    });
+    assert_eq!(result, Err("pids-configured-fixture"));
+    assert_eq!(visits, [3, 4, 5, 0, 1, 2]);
+    assert!(starts.is_empty());
+    assert_eq!(attempted, [true; 6]);
+    assert_eq!(
+        bound,
+        [
+            Some(100),
+            Some(101),
+            Some(102),
+            Some(103),
+            Some(104),
+            Some(105)
+        ]
+    );
+}
+
+#[test]
+fn pids_configured_creation_error_keeps_unbound_attempt_for_existing_teardown() {
+    let mut visits = Vec::new();
+    let mut attempted = [false; 6];
+    let mut bound = [None; 6];
+    let mut starts = Vec::new();
+    let result = create_configured_cases(|index| {
+        visits.push(index);
+        attempted[index] = true;
+        if index == 4 {
+            return Err("pids-create");
+        }
+        bound[index] = Some(100 + index);
+        Ok(json!({"slot": SLOTS[index]}))
+    })
+    .inspect(|definitions| {
+        starts.extend(0..definitions.len());
+    });
+    assert_eq!(result, Err("pids-create"));
+    assert_eq!(visits, [3, 4]);
+    assert!(starts.is_empty());
+    assert_eq!(attempted, [false, false, false, true, true, false]);
+    assert_eq!(bound, [None, None, None, Some(103), None, None]);
+    assert!(
+        attempted
+            .iter()
+            .zip(bound)
+            .any(|(attempted, id)| *attempted && id.is_none())
+    );
 }
