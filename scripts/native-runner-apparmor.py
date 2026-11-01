@@ -223,7 +223,7 @@ def profile_bytes(name):
 def mediated_profile_bytes(name):
     """Fixed opt-in policy; see docs/ordinary-mediated-profile-contract.md."""
     need(re.fullmatch(r"(?:dockerlens-127|boxferry-343)-upstream-rootless-[1-9][0-9]{0,19}-[1-9][0-9]{0,19}-[0-9a-f]{32}", name) is not None)
-    return (f"abi <abi/4.0>,\nprofile {name} {{\n"
+    return (f"abi <abi/4.0>,\nprofile {name} flags=(attach_disconnected,mediate_deleted) {{\n"
             "  file,\n"
             "  capability,\n"
             "  network,\n"

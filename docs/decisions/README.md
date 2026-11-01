@@ -68,6 +68,12 @@ barrier is superseded while its historical evidence keeps its original status.
 - [0043: Prepare thread-aware PIDs source coverage](0043-thread-aware-pids-source-contract.md)
 - [0044: Typed PIDs source and private proof v2](0044-typed-pids-source-and-proof-v2.md)
 - [0051: Fixed ordinary mediated profile builder](0051-ordinary-mediated-profile-builder.md)
+- [0052: Fixed path flags for the mediated prerequisite](0052-mediated-disconnected-path-flags.md)
+
+ADR 0052 narrowly supersedes ADR 0051's flag-free declaration with the fixed
+attach_disconnected/mediate_deleted pair. It preserves the thirteen-rule body
+and all legacy active behavior; conditional source reasoning does not establish
+actual kernel/profile attribution or native qualification.
 
 ADR 0051 adds only an opt-in pure policy builder with thirteen explicit ABI4
 family rules, including seven POSIX queue permissions. The rejected all-rule
