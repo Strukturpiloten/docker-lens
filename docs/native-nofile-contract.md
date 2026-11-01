@@ -197,6 +197,49 @@ Unverified cleanup or any uncertain transport/ownership/effect fails the whole
 proof. Borrowed image and authenticated outer snapshots must remain unchanged
 after cleanup before publication.
 
+## Failure-only caller and cleanup diagnostics
+
+Issue #172 retains caller context for an unsuccessful observation, separately from cleanup:
+
+- `DOCKERLENS_NATIVE_NOFILE_FAILURE` has caller_case, caller_role, caller_operation,
+  observed_termination and code. Cases/roles/operations are finite owner enums, never resource
+  names, IDs, commands or private payloads. This is the caller's current boundary, not proof of
+  process/source entry or an internal cause. A pure validation failure has unknown termination.
+- `DOCKERLENS_NATIVE_NOFILE_CLEANUP_REFUSAL` has reason ownership_guard, inner_unverified or
+  panic, plus first_observed_termination and code. An ownership-guard refusal enters no inner
+  cleanup and always has unknown termination. Other refusals may retain the first failed command
+  termination already observed during cleanup; this does not identify the refusal's cause,
+  authorize another mutation, or establish removal from a successful lookup.
+
+An optional nofile-only observation stores an already-waited nonzero command exit (1..255),
+signal (1..64), or unknown; no stderr/exception text is retained. It is disabled for every other
+HealthRun owner. Every capture clears current status before any budget/spawn/wait/stream step;
+only a status that passes the original stream bounds is eligible. Each caller boundary clears
+prior status, and successful commands supply no failed termination. Timeout/cancellation exit
+numbers, when actually returned by the existing waited command, are observed numbers rather
+than inferred elapsed time or signal delivery.
+
+The first work failure is frozen before cleanup, then cleanup status is independently reset.
+Later cleanup captures cannot replace its first failed command observation. A cleanup-only
+failure emits no invented work record; if both failures exist, work is emitted first and both
+remain independent. Emission follows the original terminal handler and cannot replace the
+original panic/nonzero result. Fully successful execution emits neither record. Expected
+unlimited START refusals retain their original CLI/API framing and exact acceptance contract.
+
+The existing exact-selector wrapper validates complete original private capture bytes and
+finite cross-field combinations. Caller records require the existing context/effects/cleanup
+boundaries, cleanup refusal requires the original outer-owner handoff, duplicates/reversed
+records/mixed families are withheld, and any family prefix contradicts success. Malformed,
+private-suffixed, NUL/ANSI, unknown, foreign, stale or truncated records never project. Records
+convey no OOM attribution, kernel cause, verified absence, capability or catalogue admission.
+
+Only existing I/O/status/results are observed. No command, source read, probe, retry, wait,
+clock, collector, IPC, privilege, cap, budget or deadline renewal is added. The original eight-slot
+ownership guard, effects, accounting, cleanup authority, successful nofile-v1 proof/readers and
+all 32 canonical invocations remain unchanged. No dependency/pin/manifest or Renovate extraction,
+manager/grouping/approval change is required. Final complete gates and fresh exact-candidate
+native execution, output/time fit and whole-lane cleanup remain required.
+
 ## Private protocol, sizing and integration seam
 
 The fixed direct child is `nofile-v1.json`. Twelve independent harness facts,

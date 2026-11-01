@@ -337,5 +337,148 @@ trap cleanup EXIT
             self.assertEqual(result.stderr, b"invalid private nofile proof\n")
 
 
+    @staticmethod
+    def failure_line(case="soft64_hard128", role="oracle", operation="create", termination="exit", code="125"):
+        return (f"DOCKERLENS_NATIVE_NOFILE_FAILURE: caller_case={case} caller_role={role} caller_operation={operation} "
+                f"observed_termination={termination} code={code}\n").encode()
+
+    @staticmethod
+    def cleanup_line(reason="inner_unverified", termination="exit", code="7"):
+        return (f"DOCKERLENS_NATIVE_NOFILE_CLEANUP_REFUSAL: reason={reason} "
+                f"first_observed_termination={termination} code={code}\n").encode()
+
+    @staticmethod
+    def failure_transcript(work=b"", cleanup=b""):
+        prefix = b"DOCKERLENS_NATIVE_CHECK: nofile_context\nDOCKERLENS_NATIVE_CHECK: nofile_effects\n"
+        panic = f"thread '{SELECTED}' panicked at src/native_health_metadata_tests.rs:541:9:\n".encode() + SECRET + b"\n"
+        if work:
+            prefix += panic
+        else:
+            prefix += b"DOCKERLENS_NATIVE_CHECK: nofile_capture\n"
+        result = prefix + b"DOCKERLENS_NATIVE_CHECK: nofile_cleanup\n" + (HANDOFF if cleanup else b"") + work + cleanup
+        if cleanup and not work:
+            result += f"thread '{SELECTED}' panicked at src/native_lifecycle_tests.rs:212:5:\n".encode()
+        return result
+
+    def test_closed_work_and_cleanup_failures_remain_independent_and_in_order(self):
+        work, cleanup = self.failure_line(), self.cleanup_line()
+        for work_record, cleanup_record in ((work, b""), (b"", cleanup), (work, cleanup)):
+            result, calls, dates = self.wrapper(self.failure_transcript(work_record, cleanup_record), 101)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(dates, ["date"])
+            self.assertEqual(work in result.stderr, bool(work_record))
+            self.assertEqual(cleanup in result.stderr, bool(cleanup_record))
+            if work_record and cleanup_record:
+                self.assertLess(result.stderr.index(work), result.stderr.index(cleanup))
+        for termination, code in (("exit", "124"), ("exit", "130"), ("exit", "143"), ("signal", "9"), ("unknown", "none")):
+            line = self.failure_line(termination=termination, code=code)
+            result, _calls, _dates = self.wrapper(self.failure_transcript(line), 101)
+            self.assertIn(line, result.stderr)
+        line = self.cleanup_line("ownership_guard", "unknown", "none")
+        result, _calls, _dates = self.wrapper(self.failure_transcript(cleanup=line), 101)
+        self.assertIn(line, result.stderr)
+        self.assertNotIn(b"DOCKERLENS_NATIVE_NOFILE_FAILURE:", result.stderr)
+        result, _calls, _dates = self.wrapper(self.failure_transcript(work, line), 101)
+        self.assertIn(work, result.stderr)
+        self.assertIn(line, result.stderr)
+        self.assertNotIn(b"first_observed_termination=exit code=125", result.stderr)
+
+    def test_handoff_requires_complete_pair_after_terminal_cleanup_before_projection(self):
+        work, cleanup = self.failure_line(), self.cleanup_line()
+        complete = self.failure_transcript(work, cleanup)
+        # Cut on a complete work-record newline between the producer's two writes.
+        # It is a valid work record in isolation, but the retained handoff proves
+        # that cleanup refusal also exists and cannot be silently dropped.
+        cut = complete[:complete.index(cleanup)]
+        self.assertTrue(cut.endswith(work))
+        impossible = (
+            cut,
+            complete.replace(HANDOFF + work, work + HANDOFF),
+            cut + HANDOFF,
+            self.failure_transcript(work) + HANDOFF,
+        )
+        for output in impossible:
+            result, calls, dates = self.wrapper(output, 101)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(dates, ["date"])
+            self.assertIn(b"(exit 101)", result.stderr)
+            self.assertIn(HANDOFF.rstrip(), result.stderr)
+            self.assertNotIn(b"DOCKERLENS_NATIVE_NOFILE_FAILURE:", result.stdout + result.stderr)
+            self.assertNotIn(b"DOCKERLENS_NATIVE_NOFILE_CLEANUP_REFUSAL:", result.stdout + result.stderr)
+        for work_record, cleanup_record in ((work, b""), (b"", cleanup), (work, cleanup)):
+            result, _calls, _dates = self.wrapper(self.failure_transcript(work_record, cleanup_record), 101)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(work in result.stderr, bool(work_record))
+            self.assertEqual(cleanup in result.stderr, bool(cleanup_record))
+        # Context/preflight can fail before nofile_effects; verified cleanup
+        # still permits its sole work record without an outer teardown handoff.
+        context = self.failure_line("all", "none", "context", "unknown", "none")
+        preflight = self.failure_transcript(context).replace(b"DOCKERLENS_NATIVE_CHECK: nofile_effects\n", b"")
+        result, _calls, _dates = self.wrapper(preflight, 101)
+        self.assertIn(context, result.stderr)
+        self.assertNotIn(b"DOCKERLENS_NATIVE_NOFILE_CLEANUP_REFUSAL:", result.stderr)
+
+    def test_closed_case_roles_and_noncommand_boundaries_keep_unknown_termination(self):
+        for case in ("soft64_hard128", "soft128_hard128", "soft64_hard_unlimited", "both_unlimited"):
+            for role in ("oracle", "rendered"):
+                line = self.failure_line(case, role, "observe", "exit", "1")
+                result, _calls, _dates = self.wrapper(self.failure_transcript(line), 101)
+                self.assertIn(line, result.stderr)
+        for case, role, operation, termination, code in (
+                ("all", "none", "context", "unknown", "none"),
+                ("soft64_hard128", "pair", "pair_comparison", "unknown", "none"),
+                ("all", "rendered", "capacity_comparison", "unknown", "none"),
+                ("all", "none", "daemon_health", "exit", "7"),
+                ("all", "none", "acquisition", "unknown", "none")):
+            line = self.failure_line(case, role, operation, termination, code)
+            result, _calls, _dates = self.wrapper(self.failure_transcript(line), 101)
+            self.assertIn(line, result.stderr)
+        from test_native_pids_wiring import PidsWiringTests
+        line = self.failure_line()
+        result, _trace = PidsWiringTests.wrapper(self, line.decode() + SUCCESS.decode(), status=0)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn(b"DOCKERLENS_NATIVE_NOFILE_", result.stdout + result.stderr)
+        self.assertNotIn(b"required native test passed", result.stdout + result.stderr)
+
+    def test_nofile_caller_context_rejects_malformed_stale_private_and_contradictory_records(self):
+        work, cleanup = self.failure_line(), self.cleanup_line()
+        invalid = [work + work, cleanup + work, work + cleanup + cleanup,
+                   work.replace(b"caller_role=oracle", b"caller_role=pair"),
+                   work.replace(b"caller_case=soft64_hard128", b"caller_case=all"),
+                   work.replace(b"caller_operation=create", b"caller_operation=witness"),
+                   work.replace(b"code=125", b"code=0"), work.replace(b"code=125", b"code=0125"),
+                   self.failure_line(termination="signal", code="65"),
+                   work.replace(b"code=125", b"code=256"), work.replace(b"observed_termination=exit", b"observed_termination=unknown"),
+                   b"\x1b[31m" + work, work.replace(b"caller_role=oracle", b"caller_role=\x1b[31moracle"),
+                   work.rstrip(b"\n") + b" " + SECRET + b"\n", work.replace(b"\n", b"\r\n"),
+                   work.replace(b"\n", b"\0" + SECRET + b"\n"),
+                   self.cleanup_line("ownership_guard", "exit", "125"),
+                   b"DOCKERLENS_NATIVE_NOFILE_FAILURE: " + SECRET + b"\n",
+                   work + b"DOCKERLENS_NATIVE_PIDS_MEASUREMENT_REFUSAL: code=pids-eof\n"]
+        for records in invalid:
+            result, _calls, _dates = self.wrapper(self.failure_transcript(records), 101)
+            self.assertNotIn(b"DOCKERLENS_NATIVE_NOFILE_", result.stdout + result.stderr)
+        for output in (work, self.failure_transcript(cleanup=cleanup).replace(HANDOFF, b"") + HANDOFF,
+                       self.failure_transcript(cleanup=cleanup) + HANDOFF,
+                       self.failure_transcript(work).replace(b"DOCKERLENS_NATIVE_CHECK: nofile_cleanup\n", b""),
+                       self.failure_transcript(cleanup=cleanup).replace(HANDOFF, b""),
+                       self.failure_transcript(work).rstrip(b"\n")):
+            result, _calls, _dates = self.wrapper(output, 101)
+            self.assertNotIn(b"DOCKERLENS_NATIVE_NOFILE_", result.stdout + result.stderr)
+        for status in (0, 101):
+            result, _calls, _dates = self.wrapper(self.failure_transcript(b"\x1b[31m" + work) + SUCCESS, status)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn(b"DOCKERLENS_NATIVE_NOFILE_", result.stdout + result.stderr)
+            result, _calls, _dates = self.wrapper(self.failure_transcript(work) + SUCCESS, status)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn(b"DOCKERLENS_NATIVE_NOFILE_", result.stdout + result.stderr)
+            self.assertNotIn(b"required native test passed", result.stdout + result.stderr)
+        result, _calls, _dates = self.wrapper()
+        self.assertEqual(result.returncode, 0)
+        self.assertNotIn(b"DOCKERLENS_NATIVE_NOFILE_", result.stdout + result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

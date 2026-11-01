@@ -1110,7 +1110,98 @@ fn reserve(run: &HealthRun, units: usize, bytes: usize, cleanup: bool) -> PidsRe
     Ok(())
 }
 
+// Caller-side context only: an EOF does not prove the source entered this request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MeasurementCaller {
+    LocateBatch,
+    Sample {
+        slot: ConfiguredFixtureSlot,
+        phase: MeasurementSamplePhase,
+    },
+    SealMeasurements,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MeasurementSamplePhase {
+    Before,
+    AtLimit,
+    AfterFailure,
+    Control,
+    AfterRelease,
+}
+
+impl MeasurementCaller {
+    fn request(operation: &str, fields: &Value) -> Option<Self> {
+        match operation {
+            "LocateBatch" => Some(Self::LocateBatch),
+            "SealMeasurements" => Some(Self::SealMeasurements),
+            "Sample" => {
+                let slot = SLOTS
+                    .iter()
+                    .position(|slot| fields["slot"].as_str() == Some(*slot))
+                    .and_then(ConfiguredFixtureSlot::from_index)?;
+                let phase = match fields["phase"].as_str()? {
+                    "before" => MeasurementSamplePhase::Before,
+                    "at_limit" => MeasurementSamplePhase::AtLimit,
+                    "after_failure"
+                        if matches!(
+                            slot,
+                            ConfiguredFixtureSlot::Cli16 | ConfiguredFixtureSlot::Rendered16
+                        ) =>
+                    {
+                        MeasurementSamplePhase::AfterFailure
+                    }
+                    "control"
+                        if !matches!(
+                            slot,
+                            ConfiguredFixtureSlot::Cli16 | ConfiguredFixtureSlot::Rendered16
+                        ) =>
+                    {
+                        MeasurementSamplePhase::Control
+                    }
+                    "after_release" => MeasurementSamplePhase::AfterRelease,
+                    _ => return None,
+                };
+                Some(Self::Sample { slot, phase })
+            }
+            _ => None,
+        }
+    }
+
+    fn suffix(self) -> String {
+        let (caller, slot, phase) = match self {
+            Self::LocateBatch => ("locate_batch", "none", "none"),
+            Self::SealMeasurements => ("seal_measurements", "none", "none"),
+            Self::Sample { slot, phase } => (
+                "sample",
+                slot.name(),
+                match phase {
+                    MeasurementSamplePhase::Before => "before",
+                    MeasurementSamplePhase::AtLimit => "at_limit",
+                    MeasurementSamplePhase::AfterFailure => "after_failure",
+                    MeasurementSamplePhase::Control => "control",
+                    MeasurementSamplePhase::AfterRelease => "after_release",
+                },
+            ),
+        };
+        format!(" caller={caller} slot={slot} phase={phase}")
+    }
+}
+
+fn measurement_eof_diagnostic(error: &str, caller: Option<MeasurementCaller>) -> String {
+    let mut line = pids_measurement_refusal_diagnostic(error);
+    if error == "pids-eof"
+        && let Some(caller) = caller
+    {
+        line.push_str(&caller.suffix());
+    }
+    line
+}
+
 struct RootWire {
+    measurement_caller: Option<MeasurementCaller>,
+    first_measurement_eof: Option<MeasurementCaller>,
+    measurement_eof_seen: bool,
     constructor_phase: Option<ConstructorIoPhase>,
     first_read_fault: Option<ConstructorIoFault>,
     stream: UnixStream,
@@ -1135,6 +1226,9 @@ impl RootWire {
             return Err("pids-deadline");
         }
         Ok(Self {
+            measurement_caller: None,
+            first_measurement_eof: None,
+            measurement_eof_seen: false,
             constructor_phase: None,
             first_read_fault: None,
             stream,
@@ -1280,6 +1374,10 @@ impl RootWire {
                         "DOCKERLENS_NATIVE_PIDS_IO: phase={} kind=eof",
                         fault.phase.name()
                     );
+                }
+                if !self.cleanup && self.constructor_phase.is_none() && !self.measurement_eof_seen {
+                    self.measurement_eof_seen = true;
+                    self.first_measurement_eof = self.measurement_caller;
                 }
                 return Err("pids-eof");
             }
@@ -1473,6 +1571,8 @@ impl RootChannel {
     }
 
     fn request(&mut self, run: &HealthRun, operation: &str, fields: Value) -> PidsResult<Value> {
+        self.wire.measurement_caller = None;
+        let caller = MeasurementCaller::request(operation, &fields);
         if self.finished {
             return Err("pids-sequence");
         }
@@ -1486,6 +1586,7 @@ impl RootChannel {
         request.insert("version".into(), json!(VERSION));
         request.insert("sequence".into(), json!(self.wire.sequence));
         request.insert("op".into(), json!(operation));
+        self.wire.measurement_caller = caller;
         self.wire.frame(&Value::Object(request))?;
         if operation == "OuterFinalize" {
             if !self.wire.cleanup {
@@ -1540,6 +1641,7 @@ impl RootChannel {
             if response["op"] != operation {
                 return Err("pids-sequence");
             }
+            self.wire.measurement_caller = None;
             return Ok(response);
         }
     }
@@ -4178,13 +4280,15 @@ fn live_pids_limits_and_effects_match_engine() {
             std::panic::resume_unwind(error);
         }
         Ok(Err(phase)) => {
-            eprintln!(
-                "{}",
+            let diagnostic = if phase == "pids-eof" {
+                measurement_eof_diagnostic(phase, producer.root.wire.first_measurement_eof)
+            } else {
                 pids_configured_fixture_diagnostic(
                     phase,
-                    producer.configured_fixture_witness.as_ref()
+                    producer.configured_fixture_witness.as_ref(),
                 )
-            );
+            };
+            eprintln!("{diagnostic}");
             panic!("private native PIDs observation refused");
         }
         Ok(Ok(value)) => value,
@@ -6946,4 +7050,87 @@ fn pids_controlled_unlimited_null_never_bypasses_other_fixture_guards() {
         }
     }
     assert!(ConfiguredFixtureSlot::from_index(6).is_none());
+}
+
+#[test]
+fn pids_measurement_eof_retains_first_caller_across_cleanup_without_constructor_alias() {
+    for caller in [
+        Some(MeasurementCaller::LocateBatch),
+        Some(MeasurementCaller::Sample {
+            slot: ConfiguredFixtureSlot::Cli16,
+            phase: MeasurementSamplePhase::Before,
+        }),
+        Some(MeasurementCaller::SealMeasurements),
+        None,
+    ] {
+        let (owner, peer) = UnixStream::pair().unwrap();
+        let mut wire = RootWire::new(owner, Instant::now() + Duration::from_secs(50)).unwrap();
+        wire.measurement_caller = caller;
+        drop(peer);
+        assert_eq!(wire.exact(&mut [0]), Err("pids-eof"));
+        assert!(wire.measurement_eof_seen);
+        assert_eq!(wire.first_measurement_eof, caller);
+        assert!(wire.first_read_fault.is_none());
+        wire.measurement_caller = Some(MeasurementCaller::SealMeasurements);
+        assert_eq!(wire.exact(&mut [0]), Err("pids-eof"));
+        wire.cleanup = true;
+        wire.measurement_caller = Some(MeasurementCaller::LocateBatch);
+        assert_eq!(wire.exact(&mut [0]), Err("pids-eof"));
+        assert_eq!(wire.first_measurement_eof, caller);
+        assert_eq!(wire.received, 0);
+        assert_eq!(wire.frames, 0);
+    }
+    let (owner, mut peer) = UnixStream::pair().unwrap();
+    let mut wire = RootWire::new(owner, Instant::now() + Duration::from_secs(50)).unwrap();
+    wire.measurement_caller = Some(MeasurementCaller::LocateBatch);
+    peer.write_all(&[7]).unwrap();
+    assert_eq!(wire.exact(&mut [0]), Ok(()));
+    assert!(!wire.measurement_eof_seen);
+    wire.cleanup = true;
+    drop(peer);
+    assert_eq!(wire.exact(&mut [0]), Err("pids-eof"));
+    assert!(!wire.measurement_eof_seen);
+    assert!(wire.first_measurement_eof.is_none());
+}
+
+#[test]
+fn pids_measurement_caller_context_is_closed_request_only_and_valid_for_slot() {
+    for slot in SLOTS {
+        for phase in [
+            "before",
+            "at_limit",
+            "after_failure",
+            "control",
+            "after_release",
+            "private",
+            "",
+        ] {
+            let caller = MeasurementCaller::request("Sample", &json!({"slot":slot,"phase":phase}));
+            let expected = matches!(phase, "before" | "at_limit" | "after_release")
+                || phase == "after_failure" && slot.ends_with("16")
+                || phase == "control" && !slot.ends_with("16");
+            assert_eq!(caller.is_some(), expected);
+            if let Some(caller) = caller {
+                let line = measurement_eof_diagnostic("pids-eof", Some(caller));
+                assert!(line.contains(" caller=sample slot="));
+                assert!(line.is_ascii() && line.len() <= 180);
+                assert_eq!(
+                    measurement_eof_diagnostic("pids-read", Some(caller)),
+                    pids_measurement_refusal_diagnostic("pids-read")
+                );
+            }
+        }
+    }
+    for (operation, fields) in [
+        ("Sample", json!({"slot":"private-id","phase":"before"})),
+        ("Sample", json!({"slot":"cli16","phase":null})),
+        ("OuterFinalize", json!({})),
+        ("private", json!({})),
+    ] {
+        assert!(MeasurementCaller::request(operation, &fields).is_none());
+    }
+    assert_eq!(
+        measurement_eof_diagnostic("pids-eof", None),
+        pids_measurement_refusal_diagnostic("pids-eof")
+    );
 }

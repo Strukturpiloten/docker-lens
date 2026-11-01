@@ -325,7 +325,34 @@ impl HealthAbsenceLookup {
     }
 }
 
+// Disabled for every owner except nofile. Only already-waited failed statuses
+// are retained; a new capture cannot inherit the preceding command's status.
+#[derive(Default)]
+struct NofileCommandObservation {
+    current_failure: Cell<Option<std::process::ExitStatus>>,
+    first_failure: Cell<Option<std::process::ExitStatus>>,
+}
+
+impl NofileCommandObservation {
+    fn reset(&self) {
+        self.current_failure.set(None);
+        self.first_failure.set(None);
+    }
+    fn begin_capture(&self) {
+        self.current_failure.set(None);
+    }
+    fn observe(&self, status: std::process::ExitStatus) {
+        if !status.success() {
+            self.current_failure.set(Some(status));
+            if self.first_failure.get().is_none() {
+                self.first_failure.set(Some(status));
+            }
+        }
+    }
+}
+
 struct HealthRun {
+    nofile_command_observation: Option<NofileCommandObservation>,
     run: String,
     lane: String,
     candidate: String,
@@ -450,6 +477,7 @@ impl HealthRun {
         let absence_lookup =
             HealthAbsenceLookup::for_invocation(candidate_key, deadline_key, &run, &lane, &api);
         Self {
+            nofile_command_observation: None,
             derived_tag: format!("dl-health-{}:inherited", run.to_ascii_lowercase()),
             run,
             lane,
@@ -496,6 +524,9 @@ impl HealthRun {
     }
 
     fn capture(&self, command: &mut Command, input: Option<&[u8]>, cleanup: bool) -> Vec<u8> {
+        if let Some(observation) = &self.nofile_command_observation {
+            observation.begin_capture();
+        }
         assert!(
             capture_room(self.calls.get(), self.bytes.get(), cleanup),
             "reserved native command/byte budget"
@@ -538,6 +569,9 @@ impl HealthRun {
             !overflow && !error_overflow && self.bytes.get() <= MAX_BYTES,
             "private stream budget"
         );
+        if let Some(observation) = &self.nofile_command_observation {
+            observation.observe(status);
+        }
         assert!(
             status.success(),
             "original native command must complete successfully"

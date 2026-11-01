@@ -60,6 +60,36 @@ PIDs support, fixture repair, host migration or native qualification. Final
 independent review/complete gates and fresh exact-source native evidence remain
 due before diagnosing the actual rootful measurement code.
 
+### First measurement EOF caller
+
+Issue #172 adds an optional suffix to the existing `code=pids-eof` refusal only:
+`caller=locate_batch|sample|seal_measurements slot=<fixed-slot-or-none> phase=<fixed-phase-or-none>`.
+This describes the caller request awaiting a reply. EOF does not establish that the source
+entered that operation or identify a kernel, topology, budget or exception cause. No source-side
+cause or stderr category is inferred.
+
+The original exact-read EOF latches the first non-cleanup measurement caller. Sample retains
+only one of the six existing slot enums and before, at_limit, after_failure, control or
+after_release; after_failure is finite16-only and control belongs to the other slots. The two
+other callers require slot/phase none. An unknown first caller remains unknown; subsequent
+requests and cleanup cannot replace it. Constructor phases and their original diagnostics stay
+separate, as does successful terminal EOF. No diagnostic is emitted for successful work.
+
+The immutable snapshot is projected only after the existing terminal cleanup and only alongside
+the original pids-eof error. The original error, registry/hash and cleanup handoff remain intact.
+Missing context retains bare pids-eof. The original private-capture parser requires one complete,
+closed record after the cleanup marker; wrong-code/slot/phase combinations, unknown fields,
+duplicates, mixed families, foreign selectors, truncation and success contradictions cannot
+supply caller context. Configured Unlimited predicate10 now correlates a passing bit with null,
+without a minus_one fallback; the actual CREATE guard is unchanged.
+
+This adds only in-memory observation plumbing at existing request/read boundaries. It adds no
+request, read, retry, IPC, clock, probe, collector, deadline or resource allowance and changes no
+successful wire/proof/reader bytes, measurement predicate, public API or admission. The canonical
+32 invocations, owner scopes and operational pins stay unchanged; existing Renovate ownership
+needs no new extraction path, pin, grouping or approval rule. Focused synthetic/socket controls
+are not fresh native qualification or verified cleanup.
+
 ### Configured-fixture witness
 
 [ADR 0052](decisions/0052-controlled-pids-create-observations.md) corrects the controlled CREATE

@@ -167,8 +167,8 @@ class MeasurementRefusalTests(unittest.TestCase):
     def test_configured_witness_projects_independently_coherent_slots_checks_and_shapes(self):
         # Literal expected limit classes for all six roles, independent of the
         # wrapper mapping. The sole mismatch is Init=null versus explicit false.
-        for slot, limit in (("cli16", "sixteen"), ("cli64", "sixty_four"), ("cli_unlimited", "minus_one"),
-                            ("rendered16", "sixteen"), ("rendered64", "sixty_four"), ("rendered_unlimited", "minus_one")):
+        for slot, limit in (("cli16", "sixteen"), ("cli64", "sixty_four"), ("cli_unlimited", "null"),
+                            ("rendered16", "sixteen"), ("rendered64", "sixty_four"), ("rendered_unlimited", "null")):
             shapes = "string,string,string,string,false,string,string," + limit + ",null,array,array,zero"
             line = self.configured_line(slot=slot, shapes=shapes)
             result, trace = self.wrapper(line, status=101)
@@ -242,8 +242,8 @@ class MeasurementRefusalTests(unittest.TestCase):
                               self.configured_line(checks=checks, shapes=",".join(changed))))
 
         for slot, expected, wrong in (("cli16", "sixteen", "sixty_four"), ("cli64", "sixty_four", "minus_one"),
-                                     ("cli_unlimited", "minus_one", "zero"), ("rendered16", "sixteen", "minus_one"),
-                                     ("rendered64", "sixty_four", "sixteen"), ("rendered_unlimited", "minus_one", "sixteen")):
+                                     ("cli_unlimited", "null", "zero"), ("rendered16", "sixteen", "minus_one"),
+                                     ("rendered64", "sixty_four", "sixteen"), ("rendered_unlimited", "null", "sixteen")):
             changed = shapes.copy()
             changed[7] = expected
             cases.append((slot + " authored limit must match", self.configured_line(slot=slot, checks="01111111101111", shapes=",".join(changed))))
@@ -347,6 +347,47 @@ class MeasurementRefusalTests(unittest.TestCase):
         result, _ = self.wrapper(line, status=101)
         self.assertIn((line + "\n").encode(), result.stderr)
         self.assertNotIn(b" slot=", result.stdout + result.stderr)
+
+
+    def test_eof_caller_context_projects_only_for_eof_after_cleanup_and_closed_slot_phase(self):
+        valid = [("locate_batch", "none", "none"), ("seal_measurements", "none", "none")]
+        for slot in ("cli16", "cli64", "cli_unlimited", "rendered16", "rendered64", "rendered_unlimited"):
+            valid.extend(("sample", slot, phase) for phase in ("before", "at_limit", "after_release",
+                          "after_failure" if slot.endswith("16") else "control"))
+        for caller, slot, phase in valid:
+            line = PREFIX + f"pids-eof caller={caller} slot={slot} phase={phase}"
+            result, trace = self.wrapper("DOCKERLENS_NATIVE_CHECK: pids_cleanup\n" + line, status=101)
+            self.assertEqual(len(trace), 2)
+            self.assertEqual(result.stderr.count((line + "\n").encode()), 1)
+            self.assertNotEqual(result.returncode, 0)
+
+    def test_eof_caller_context_refuses_stale_unknown_mixed_and_success_records(self):
+        line = PREFIX + "pids-eof caller=sample slot=cli16 phase=after_failure"
+        invalid = [line.replace("pids-eof", "pids-read"), line.replace("cli16", "cli64"),
+                   line.replace("after_failure", "control"), line.replace("cli16", SECRET),
+                   line.replace("sample", "locate_batch"), line + " " + SECRET,
+                   line + "\r", line + "\0" + SECRET, line + "\n" + line,
+                   line + "\n" + SETUP_REFUSAL + "pids-eof",
+                   line + "\nDOCKERLENS_NATIVE_NOFILE_FAILURE: " + SECRET]
+        for record in invalid:
+            result, _ = self.wrapper("DOCKERLENS_NATIVE_CHECK: pids_cleanup\n" + record, status=101)
+            self.assertNotIn(b" caller=", result.stdout + result.stderr)
+            self.assertNotIn(SECRET.encode(), result.stdout + result.stderr)
+        for output, status in [(line, 101), ("DOCKERLENS_NATIVE_CHECK: pids_cleanup\n" + line + "\n" + SUCCESS, 0),
+                               ("DOCKERLENS_NATIVE_CHECK: pids_cleanup\n" + line + "\n" + SUCCESS, 101)]:
+            result, _ = self.wrapper(output, status=status)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn(b" caller=", result.stdout + result.stderr)
+        result, _ = self.wrapper("DOCKERLENS_NATIVE_CHECK: pids_cleanup\n" + line, status=101, terminate_output=False)
+        self.assertNotIn(b" caller=", result.stdout + result.stderr)
+
+    def test_unlimited_passing_limit_bit_requires_null_without_minus_one_fallback(self):
+        for slot in ("cli_unlimited", "rendered_unlimited"):
+            for shape, projects in (("null", True), ("minus_one", False), ("missing", False)):
+                shapes = "string,string,string,string,false,string,string," + shape + ",null,array,array,zero"
+                line = self.configured_line(slot=slot, shapes=shapes)
+                result, _ = self.wrapper(line, status=101)
+                self.assertEqual((line + "\n").encode() in result.stderr, projects)
 
 
 if __name__ == "__main__":

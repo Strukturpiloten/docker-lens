@@ -561,6 +561,7 @@ fn allowlist_fixture(lane: &str) -> HealthRun {
         "1.56"
     };
     HealthRun {
+        nofile_command_observation: None,
         run: run.into(),
         lane: lane.into(),
         candidate: "a".repeat(40),

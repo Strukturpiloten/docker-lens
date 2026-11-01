@@ -71,6 +71,192 @@ cat "$d/parent" "$d/report"
 s(){ printf '%s ' "$1";awk '/^Max open files /{printf "%s %s ",$4,$5}' /proc/"$2"/limits;awk '/^Pid:/{printf "%s ",$2}/^PPid:/{print $2}' /proc/"$2"/status;}
 s root_parent 1;s root_worker "$c""#;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NofileOperation {
+    Context,
+    FreshName,
+    Create,
+    Bind,
+    ConfiguredBefore,
+    Start,
+    ConfiguredStarted,
+    Observe,
+    Witness,
+    ConfiguredAfter,
+    RefusalStable,
+    SlotAccounting,
+    PairComparison,
+    CapacityComparison,
+    KernelComparison,
+    DaemonHealth,
+    Acquisition,
+}
+impl NofileOperation {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Context => "context",
+            Self::FreshName => "fresh_name",
+            Self::Create => "create",
+            Self::Bind => "bind",
+            Self::ConfiguredBefore => "configured_before",
+            Self::Start => "start",
+            Self::ConfiguredStarted => "configured_started",
+            Self::Observe => "observe",
+            Self::Witness => "witness",
+            Self::ConfiguredAfter => "configured_after",
+            Self::RefusalStable => "refusal_stable",
+            Self::SlotAccounting => "slot_accounting",
+            Self::PairComparison => "pair_comparison",
+            Self::CapacityComparison => "capacity_comparison",
+            Self::KernelComparison => "kernel_comparison",
+            Self::DaemonHealth => "daemon_health",
+            Self::Acquisition => "acquisition",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct NofileCaller {
+    case: usize,
+    role: NofileRole,
+    operation: NofileOperation,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NofileRole {
+    Oracle,
+    Rendered,
+    Pair,
+    None,
+}
+impl NofileCaller {
+    fn fields(self) -> Option<(&'static str, &'static str, &'static str)> {
+        let case = match self.case {
+            0 => "soft64_hard128",
+            1 => "soft128_hard128",
+            2 => "soft64_hard_unlimited",
+            3 => "both_unlimited",
+            4 => "all",
+            _ => return None,
+        };
+        let role = match self.role {
+            NofileRole::Oracle => "oracle",
+            NofileRole::Rendered => "rendered",
+            NofileRole::Pair => "pair",
+            NofileRole::None => "none",
+        };
+        Some((case, role, self.operation.name()))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NofileTermination {
+    Exit(u8),
+    Signal(u8),
+    Unknown,
+}
+impl NofileTermination {
+    fn observed(status: Option<std::process::ExitStatus>) -> Self {
+        let Some(status) = status else {
+            return Self::Unknown;
+        };
+        if let Some(code) = status
+            .code()
+            .and_then(|code| u8::try_from(code).ok())
+            .filter(|code| *code > 0)
+        {
+            return Self::Exit(code);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            if let Some(signal) = status
+                .signal()
+                .and_then(|signal| u8::try_from(signal).ok())
+                .filter(|signal| (1..=64).contains(signal))
+            {
+                return Self::Signal(signal);
+            }
+        }
+        Self::Unknown
+    }
+    fn fields(self) -> (&'static str, String) {
+        match self {
+            Self::Exit(code) => ("exit", code.to_string()),
+            Self::Signal(code) => ("signal", code.to_string()),
+            Self::Unknown => ("unknown", "none".into()),
+        }
+    }
+}
+
+#[derive(Default)]
+struct NofileDiagnostics {
+    caller: Cell<Option<NofileCaller>>,
+}
+impl NofileDiagnostics {
+    fn select(&self, run: &HealthRun, case: usize, role: NofileRole, operation: NofileOperation) {
+        self.caller.set(Some(NofileCaller {
+            case,
+            role,
+            operation,
+        }));
+        if let Some(observation) = &run.nofile_command_observation {
+            observation.reset();
+        }
+    }
+    fn slot(&self, run: &HealthRun, index: usize, operation: NofileOperation) {
+        self.select(
+            run,
+            index / 2,
+            if index.is_multiple_of(2) {
+                NofileRole::Oracle
+            } else {
+                NofileRole::Rendered
+            },
+            operation,
+        );
+    }
+    fn all(&self, run: &HealthRun, operation: NofileOperation) {
+        self.select(run, 4, NofileRole::None, operation);
+    }
+    fn failure(&self, run: &HealthRun) -> Option<String> {
+        let (case, role, operation) = self.caller.get()?.fields()?;
+        let status = run
+            .nofile_command_observation
+            .as_ref()
+            .and_then(|observation| observation.current_failure.get());
+        let (termination, code) = NofileTermination::observed(status).fields();
+        Some(format!(
+            "DOCKERLENS_NATIVE_NOFILE_FAILURE: caller_case={case} caller_role={role} caller_operation={operation} observed_termination={termination} code={code}"
+        ))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NofileCleanupRefusal {
+    OwnershipGuard,
+    InnerUnverified,
+    Panic,
+}
+impl NofileCleanupRefusal {
+    fn diagnostic(self, status: Option<std::process::ExitStatus>) -> String {
+        let reason = match self {
+            Self::OwnershipGuard => "ownership_guard",
+            Self::InnerUnverified => "inner_unverified",
+            Self::Panic => "panic",
+        };
+        // A rejected guard never entered command capture and cannot inherit work status.
+        let (termination, code) = NofileTermination::observed(if self == Self::OwnershipGuard {
+            None
+        } else {
+            status
+        })
+        .fields();
+        format!(
+            "DOCKERLENS_NATIVE_NOFILE_CLEANUP_REFUSAL: reason={reason} first_observed_termination={termination} code={code}"
+        )
+    }
+}
+
 fn number(text: &str) -> u64 {
     assert!(
         !text.is_empty()
@@ -373,12 +559,14 @@ fn authored(run: &HealthRun, index: usize) -> Value {
     request
 }
 
-fn create_nofile(run: &mut HealthRun, index: usize) {
+fn create_nofile(run: &mut HealthRun, index: usize, diagnostics: &NofileDiagnostics) {
+    diagnostics.slot(run, index, NofileOperation::FreshName);
     assert!(
         run.inspect(&run.names[index], false).0 == 404,
         "fresh nofile name"
     );
     run.attempted[index] = true;
+    diagnostics.slot(run, index, NofileOperation::Create);
     if index.is_multiple_of(2) {
         let (_, soft, hard) = CASES[index / 2];
         let bytes = docker(
@@ -403,6 +591,7 @@ fn create_nofile(run: &mut HealthRun, index: usize) {
             .ok()
             .and_then(|s| s.strip_suffix('\n'))
             .unwrap_or_else(|| panic!("closed nofile CLI create ID"));
+        diagnostics.slot(run, index, NofileOperation::Bind);
         bind(run, index, id);
     } else {
         let request = authored(run, index);
@@ -418,6 +607,7 @@ fn create_nofile(run: &mut HealthRun, index: usize) {
             status == 201 && (value["Warnings"].is_null() || value["Warnings"] == json!([])),
             "nofile create must yield known canonical ID"
         );
+        diagnostics.slot(run, index, NofileOperation::Bind);
         bind(
             run,
             index,
@@ -428,7 +618,15 @@ fn create_nofile(run: &mut HealthRun, index: usize) {
     }
 }
 
-fn configured(run: &HealthRun, index: usize, image: &Value, running: bool) -> Value {
+fn configured(
+    run: &HealthRun,
+    index: usize,
+    image: &Value,
+    running: bool,
+    diagnostics: &NofileDiagnostics,
+    operation: NofileOperation,
+) -> Value {
+    diagnostics.slot(run, index, operation);
     let id = run.ids[index].as_ref().unwrap();
     let (status, value) = run.inspect(id, false);
     let (_, soft, hard) = CASES[index / 2];
@@ -543,8 +741,20 @@ fn refusal(error: &str) -> bool {
             || error.ends_with(&format!(": {REFUSAL}: unknown")))
 }
 
-fn exercise(run: &HealthRun, index: usize, image: &Value) -> Value {
-    let before = configured(run, index, image, false);
+fn exercise(
+    run: &HealthRun,
+    index: usize,
+    image: &Value,
+    diagnostics: &NofileDiagnostics,
+) -> Value {
+    let before = configured(
+        run,
+        index,
+        image,
+        false,
+        diagnostics,
+        NofileOperation::ConfiguredBefore,
+    );
     assert!(
         before["State"]["Status"] == "created"
             && before["State"]["Pid"] == 0
@@ -554,6 +764,7 @@ fn exercise(run: &HealthRun, index: usize, image: &Value) -> Value {
             && before["State"]["ExitCode"] == 0,
         "never-started exact create state"
     );
+    diagnostics.slot(run, index, NofileOperation::Start);
     let (status, reported) = if index.is_multiple_of(2) {
         let (s, t) = start_cli(run, index);
         (s, json!(t))
@@ -562,7 +773,14 @@ fn exercise(run: &HealthRun, index: usize, image: &Value) -> Value {
         (s, v)
     };
     let success = status == if index.is_multiple_of(2) { 0 } else { 204 };
-    let current = configured(run, index, image, success);
+    let current = configured(
+        run,
+        index,
+        image,
+        success,
+        diagnostics,
+        NofileOperation::ConfiguredStarted,
+    );
     let (_, soft, hard) = CASES[index / 2];
     if success {
         if index.is_multiple_of(2) {
@@ -576,6 +794,7 @@ fn exercise(run: &HealthRun, index: usize, image: &Value) -> Value {
                 && current["State"]["Pid"].as_u64().is_some_and(|n| n > 0),
             "actual live nofile PID1"
         );
+        diagnostics.slot(run, index, NofileOperation::Observe);
         let bytes = docker(
             run,
             &[
@@ -590,8 +809,16 @@ fn exercise(run: &HealthRun, index: usize, image: &Value) -> Value {
                 WORKER.into(),
             ],
         );
+        diagnostics.slot(run, index, NofileOperation::Witness);
         let value = witness(&bytes, (soft, hard));
-        configured(run, index, image, true);
+        configured(
+            run,
+            index,
+            image,
+            true,
+            diagnostics,
+            NofileOperation::ConfiguredAfter,
+        );
         json!({"stage":"running","cli_exit":if index.is_multiple_of(2){json!(0)}else{Value::Null},"http_status":if index.is_multiple_of(2){Value::Null}else{json!(204)},"diagnostic":Value::Null,"witness":value})
     } else {
         assert!(
@@ -626,7 +853,14 @@ fn exercise(run: &HealthRun, index: usize, image: &Value) -> Value {
                 "actual API error corroborates inspected error"
             );
         }
-        let after = configured(run, index, image, false);
+        let after = configured(
+            run,
+            index,
+            image,
+            false,
+            diagnostics,
+            NofileOperation::RefusalStable,
+        );
         assert!(
             after["State"] == current["State"],
             "stable never-started terminal failure"
@@ -838,6 +1072,8 @@ fn live_nofile_limits_and_effects_match_engine() {
         "NATIVE_NOFILE_CANDIDATE_SHA",
         "NATIVE_NOFILE_DEADLINE_EPOCH",
     );
+    run.nofile_command_observation = Some(NofileCommandObservation::default());
+    let diagnostics = NofileDiagnostics::default();
     run.names = CASES
         .into_iter()
         .flat_map(|(name, _, _)| {
@@ -848,6 +1084,7 @@ fn live_nofile_limits_and_effects_match_engine() {
     run.attempted = vec![false; 8];
     let owner = BoundOuterCleanupOwner::bind(&run);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        diagnostics.all(&run, NofileOperation::Context);
         eprintln!("DOCKERLENS_NATIVE_CHECK: nofile_context");
         let uid = run.context();
         let image = image_snapshot(&run);
@@ -887,8 +1124,9 @@ fn live_nofile_limits_and_effects_match_engine() {
         eprintln!("DOCKERLENS_NATIVE_CHECK: nofile_effects");
         for index in 0..8 {
             let before = run.calls.get();
-            create_nofile(&mut run, index);
-            let effect = exercise(&run, index, &image);
+            create_nofile(&mut run, index, &diagnostics);
+            let effect = exercise(&run, index, &image, &diagnostics);
+            diagnostics.slot(&run, index, NofileOperation::SlotAccounting);
             let expected = if effect["stage"] == "running" { 8 } else { 7 };
             assert!(
                 run.calls.get() - before == expected,
@@ -899,6 +1137,7 @@ fn live_nofile_limits_and_effects_match_engine() {
         }
         let mut cases = Vec::new();
         for (i, (name, _, _)) in CASES.into_iter().enumerate() {
+            diagnostics.select(&run, i, NofileRole::Pair, NofileOperation::PairComparison);
             let a = &records[2 * i]["effect"];
             let b = &records[2 * i + 1]["effect"];
             assert!(
@@ -911,6 +1150,16 @@ fn live_nofile_limits_and_effects_match_engine() {
             cases.push(json!({"case":name,"containers":[records[2*i],records[2*i+1]]}));
         }
         for role in 0..2 {
+            diagnostics.select(
+                &run,
+                4,
+                if role == 0 {
+                    NofileRole::Oracle
+                } else {
+                    NofileRole::Rendered
+                },
+                NofileOperation::CapacityComparison,
+            );
             assert!(
                 records[2 + role]["effect"]["witness"]["retained_count"]
                     .as_u64()
@@ -921,6 +1170,7 @@ fn live_nofile_limits_and_effects_match_engine() {
                 "greater live retained capacity at finite soft128 than64"
             );
         }
+        diagnostics.all(&run, NofileOperation::KernelComparison);
         let nr = records[0]["effect"]["witness"]["nr_open"].clone();
         for record in &records {
             if record["effect"]["stage"] == "running" {
@@ -930,15 +1180,25 @@ fn live_nofile_limits_and_effects_match_engine() {
                 );
             }
         }
+        diagnostics.all(&run, NofileOperation::DaemonHealth);
         let (health_status, health) = run.api("GET", "/version", None, false);
         assert!(
             health_status == 200 && health["Version"] == run.engine,
             "post-case daemon health corroborated by finite controls"
         );
         eprintln!("DOCKERLENS_NATIVE_CHECK: nofile_capture");
+        diagnostics.all(&run, NofileOperation::Acquisition);
         let acquired = acquisition(&run, outer_backend);
         (uid, image, cases, acquired, context_calls, slot_calls)
     }));
+    // Freeze the original work context before any cleanup call can change it.
+    let work_failure = result
+        .as_ref()
+        .err()
+        .and_then(|_| diagnostics.failure(&run));
+    if let Some(observation) = &run.nofile_command_observation {
+        observation.reset();
+    }
     let work_elapsed = started.elapsed();
     let before_calls = run.calls.get();
     let before_bytes = run.bytes.get();
@@ -948,14 +1208,38 @@ fn live_nofile_limits_and_effects_match_engine() {
     // the guard. Only the guarded callback can enter shared lifecycle cleanup.
     let attempted = run.attempted.clone();
     let ids = run.ids.clone();
-    let disposition = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        nofile_cleanup_with(&attempted, &ids, || cleanup(&mut run))
-    }))
-    .unwrap_or(CleanupDisposition::OuterTeardownRequired);
+    let entered = Cell::new(false);
+    let cleanup_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        nofile_cleanup_with(&attempted, &ids, || {
+            entered.set(true);
+            cleanup(&mut run)
+        })
+    }));
+    let cleanup_refusal = match &cleanup_result {
+        Err(_) => Some(NofileCleanupRefusal::Panic),
+        Ok(CleanupDisposition::OuterTeardownRequired) if !entered.get() => {
+            Some(NofileCleanupRefusal::OwnershipGuard)
+        }
+        Ok(CleanupDisposition::OuterTeardownRequired) => {
+            Some(NofileCleanupRefusal::InnerUnverified)
+        }
+        Ok(CleanupDisposition::VerifiedAbsent) => None,
+    };
+    let disposition = cleanup_result.unwrap_or(CleanupDisposition::OuterTeardownRequired);
     let cleanup_elapsed = cleanup_started.elapsed();
     let cleanup_calls = run.calls.get() - before_calls;
     let cleanup_bytes = run.bytes.get() - before_bytes;
     terminal_cleanup(&mut run, &owner, disposition);
+    if let Some(line) = work_failure {
+        let _ = writeln!(std::io::stderr(), "{line}");
+    }
+    if let Some(refusal) = cleanup_refusal {
+        let status = run
+            .nofile_command_observation
+            .as_ref()
+            .and_then(|observation| observation.first_failure.get());
+        let _ = writeln!(std::io::stderr(), "{}", refusal.diagnostic(status));
+    }
     let (uid, image, cases, acquired, context_calls, slot_calls) =
         require_verified_result(result, disposition);
     assert!(
@@ -1006,4 +1290,45 @@ fn live_nofile_limits_and_effects_match_engine() {
     );
     eprintln!("DOCKERLENS_NATIVE_CHECK: nofile_proof");
     target.publish_bounded(&proof, NOFILE_PROOF_MAX_BYTES);
+}
+
+#[cfg(unix)]
+#[test]
+fn nofile_observed_termination_clears_current_and_retains_first_cleanup_failure() {
+    use std::os::unix::process::ExitStatusExt;
+    let observation = NofileCommandObservation::default();
+    let failed = std::process::ExitStatus::from_raw(125 << 8);
+    observation.observe(failed);
+    let frozen_work = NofileTermination::observed(observation.current_failure.get());
+    assert_eq!(frozen_work, NofileTermination::Exit(125));
+    observation.begin_capture(); // spawn, reserve or overflow may fail before a new status is eligible
+    assert_eq!(
+        NofileTermination::observed(observation.current_failure.get()),
+        NofileTermination::Unknown
+    );
+    observation.reset(); // independent cleanup scope; a rejected ownership guard enters no capture
+    assert!(observation.first_failure.get().is_none());
+    let guard = NofileCleanupRefusal::OwnershipGuard.diagnostic(Some(failed));
+    assert!(guard.ends_with("first_observed_termination=unknown code=none"));
+    observation.observe(std::process::ExitStatus::from_raw(7 << 8));
+    observation.begin_capture();
+    observation.observe(std::process::ExitStatus::from_raw(0));
+    observation.begin_capture();
+    observation.observe(std::process::ExitStatus::from_raw(9));
+    assert_eq!(
+        NofileTermination::observed(observation.first_failure.get()),
+        NofileTermination::Exit(7)
+    );
+    assert_eq!(
+        NofileTermination::observed(observation.current_failure.get()),
+        NofileTermination::Signal(9)
+    );
+    assert_eq!(frozen_work, NofileTermination::Exit(125));
+    observation.reset();
+    observation.observe(std::process::ExitStatus::from_raw(0));
+    assert_eq!(
+        NofileTermination::observed(observation.current_failure.get()),
+        NofileTermination::Unknown
+    );
+    assert!(observation.first_failure.get().is_none());
 }

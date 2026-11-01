@@ -114,7 +114,7 @@ class NofileSourceTests(unittest.TestCase):
         self.assertNotIn('inspect(', guard)
         self.assertNotIn('cleanup(', guard)
         self.assertIn('letattempted=run.attempted.clone();letids=run.ids.clone();', source)
-        guarded_call = 'nofile_cleanup_with(&attempted,&ids,||cleanup(&mutrun))'
+        guarded_call = 'nofile_cleanup_with(&attempted,&ids,||{entered.set(true);cleanup(&mutrun)})'
         self.assertEqual(source.count(guarded_call), 1)
         self.assertIn('fnnofile_unknown_create_id_never_invokes_inner_cleanup()', source)
 
@@ -143,7 +143,7 @@ class NofileSourceTests(unittest.TestCase):
 
     def test_guard_disposition_always_reaches_existing_authenticated_terminal_handler(self):
         source = self.compact()
-        guarded_call = source.index('nofile_cleanup_with(&attempted,&ids,||cleanup(&mutrun))')
+        guarded_call = source.index('nofile_cleanup_with(&attempted,&ids,||{entered.set(true);cleanup(&mutrun)})')
         terminal = source.index('terminal_cleanup(&mutrun,&owner,disposition)')
         verified = source.index('require_verified_result(result,disposition)')
         publish = source.index('target.publish_bounded(&proof,NOFILE_PROOF_MAX_BYTES)')
@@ -170,6 +170,21 @@ class NofileSourceTests(unittest.TestCase):
         self.assertEqual(harness.count('native_nofile live_nofile_limits_and_effects_match_engine'), 1)
         self.assertIn('read_nofile_proof', (ROOT / 'scripts/native-evidence.py').read_text())
 
+
+    def test_status_observation_is_disabled_elsewhere_and_cleared_before_capture_failures(self):
+        shared = (ROOT / "src/native_health_metadata_tests.rs").read_text()
+        capture = shared.split("fn capture(", 1)[1].split("fn charge_outer_snapshot", 1)[0]
+        self.assertLess(capture.index("observation.begin_capture()"), capture.index("capture_room("))
+        self.assertLess(capture.index("original native command must complete successfully"), capture.index("output\n"))
+        self.assertLess(capture.index('"private stream budget"'), capture.index("observation.observe(status)"))
+        self.assertIn("nofile_command_observation: None", shared)
+        self.assertIn("nofile_command_observation: None", (ROOT / "src/native_lifecycle_default_effect_tests.rs").read_text())
+        live = self.raw().split("fn live_nofile_limits_and_effects_match_engine()", 1)[1]
+        self.assertLess(live.index("let work_failure"), live.index("observation.reset()"))
+        self.assertLess(live.index("observation.reset()"), live.index("nofile_cleanup_with("))
+        self.assertLess(live.index("terminal_cleanup("), live.index("if let Some(line) = work_failure"))
+        self.assertLess(live.index("if let Some(line) = work_failure"), live.index("if let Some(refusal) = cleanup_refusal"))
+        self.assertIn("result.as_ref().err()", re.sub(r"\s+", "", live))
 
 if __name__ == '__main__':
     unittest.main()

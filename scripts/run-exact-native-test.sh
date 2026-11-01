@@ -359,7 +359,7 @@ try:
         sys.stdout.buffer.write(prefix + b"unclassified\n")
         sys.exit(3)
     other = (b"DOCKERLENS_NATIVE_PIDS_SETUP_REFUSAL:", b"DOCKERLENS_NATIVE_PIDS_IO:",
-             b"DOCKERLENS_NATIVE_PIDS_START:", b"DOCKERLENS_NATIVE_PIDS_BIND:")
+             b"DOCKERLENS_NATIVE_PIDS_START:", b"DOCKERLENS_NATIVE_PIDS_BIND:", b"DOCKERLENS_NATIVE_NOFILE_")
     if any(line.startswith(other) for line in lines):
         sys.exit(4)
     descriptor = os.open(sys.argv[1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -385,7 +385,23 @@ try:
     if code not in set(codes) | {b"unclassified"}:
         sys.exit(0)
     projected = prefix + code
-    if separator:
+    if separator and code == b"pids-eof":
+        slots = (b"cli16", b"cli64", b"cli_unlimited", b"rendered16", b"rendered64", b"rendered_unlimited")
+        if b"DOCKERLENS_NATIVE_CHECK: pids_cleanup" not in lines[:index]:
+            sys.exit(0)
+        match = re.fullmatch(rb"caller=(locate_batch|sample|seal_measurements) slot=([a-z0-9_]+) phase=([a-z_]+)", detail)
+        if match is None:
+            sys.exit(0)
+        caller, slot, phase = match.groups()
+        if caller == b"sample":
+            if (slot not in slots or phase not in (b"before", b"at_limit", b"after_failure", b"control", b"after_release")
+                    or phase == b"after_failure" and slot not in (b"cli16", b"rendered16")
+                    or phase == b"control" and slot in (b"cli16", b"rendered16")):
+                sys.exit(0)
+        elif slot != b"none" or phase != b"none":
+            sys.exit(0)
+        projected += b" caller=" + caller + b" slot=" + slot + b" phase=" + phase
+    elif separator:
         if code != b"pids-configured-fixture":
             sys.exit(0)
         slots = (b"cli16", b"cli64", b"cli_unlimited", b"rendered16", b"rendered64", b"rendered_unlimited")
@@ -408,8 +424,8 @@ try:
         if (any(matched[check] and observed_shapes[field] != b"string" for check, field in string_fields)
                 or matched[2] and not matched[1]):
             sys.exit(0)
-        expected_limit = dict(zip(slots, (b"sixteen", b"sixty_four", b"minus_one",
-                                          b"sixteen", b"sixty_four", b"minus_one")))[slot]
+        expected_limit = dict(zip(slots, (b"sixteen", b"sixty_four", b"null",
+                                          b"sixteen", b"sixty_four", b"null")))[slot]
         fixed_equalities = ((6, 4, b"false"), (10, 8, b"false"),
                             (9, 7, expected_limit), (13, 11, b"zero"))
         if any(matched[check] != (observed_shapes[field] == expected)
@@ -448,6 +464,100 @@ elif (( !exact_pids )) && grep -q '^DOCKERLENS_NATIVE_PIDS_MEASUREMENT_REFUSAL' 
   if (( run_status == 0 )); then run_status=1; fi
 fi
 
+# Failure-only nofile caller context; read the existing private capture, never native data.
+nofile_failure_context=
+if (( exact_nofile && !raw_capture_invalid )); then
+  nofile_projection_status=0
+  nofile_failure_context=$(python3 -I -c '
+import os, re, stat, sys
+try:
+    descriptor = os.open(sys.argv[1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, "rb") as capture:
+        info = os.fstat(capture.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.geteuid()
+                or stat.S_IMODE(info.st_mode) != 0o600 or info.st_size > 1048576):
+            raise ValueError()
+        data = capture.read(1048577)
+    if len(data) != info.st_size or b"\0" in data:
+        raise ValueError()
+    lines = data.split(b"\n")
+    observations = [(index, line) for index, line in enumerate(lines) if b"DOCKERLENS_NATIVE_NOFILE_" in line]
+    if not observations:
+        sys.exit(0)
+    if sys.argv[2] == "0" or any(line.startswith(b"test result: ok.") or line == b"DOCKERLENS_NATIVE_CHECK: nofile_proof" for line in lines):
+        sys.exit(3)
+    if any(line.startswith(b"DOCKERLENS_NATIVE_PIDS_") for line in lines):
+        raise ValueError()
+    cleanup_indices = [index for index, line in enumerate(lines) if line == b"DOCKERLENS_NATIVE_CHECK: nofile_cleanup"]
+    if len(cleanup_indices) != 1 or b"DOCKERLENS_NATIVE_CHECK: nofile_context" not in lines[:cleanup_indices[0]]:
+        raise ValueError()
+    if any(index <= cleanup_indices[0] for index, _line in observations):
+        raise ValueError()
+    work, cleanup = None, None
+    handoffs = [index for index, line in enumerate(lines) if line == b"DOCKERLENS_NATIVE_LIFECYCLE_CLEANUP: owner=native_conformance_outer_v1 scope=outer_container_and_data_volume state=required"]
+    for index, line in observations:
+        if index == len(lines) - 1 or len(line) > 256:
+            raise ValueError()
+        match = re.fullmatch(rb"DOCKERLENS_NATIVE_NOFILE_FAILURE: caller_case=(soft64_hard128|soft128_hard128|soft64_hard_unlimited|both_unlimited|all) caller_role=(oracle|rendered|pair|none) caller_operation=([a-z_]+) observed_termination=(exit|signal|unknown) code=([0-9]+|none)", line)
+        if match is not None:
+            if work is not None or cleanup is not None:
+                raise ValueError()
+            case, role, operation, termination, code = match.groups()
+            if operation != b"context" and b"DOCKERLENS_NATIVE_CHECK: nofile_effects" not in lines[:cleanup_indices[0]]:
+                raise ValueError()
+            slot_ops = (b"fresh_name", b"create", b"bind", b"configured_before", b"start", b"configured_started", b"observe", b"witness", b"configured_after", b"refusal_stable", b"slot_accounting")
+            if operation in slot_ops:
+                if case == b"all" or role not in (b"oracle", b"rendered"):
+                    raise ValueError()
+            elif operation == b"pair_comparison":
+                if case == b"all" or role != b"pair":
+                    raise ValueError()
+            elif operation == b"capacity_comparison":
+                if case != b"all" or role not in (b"oracle", b"rendered"):
+                    raise ValueError()
+            elif operation in (b"context", b"kernel_comparison", b"daemon_health", b"acquisition"):
+                if case != b"all" or role != b"none":
+                    raise ValueError()
+            else:
+                raise ValueError()
+            if operation in (b"witness", b"slot_accounting", b"pair_comparison", b"capacity_comparison", b"kernel_comparison", b"acquisition") and termination != b"unknown":
+                raise ValueError()
+            work = line
+        else:
+            match = re.fullmatch(rb"DOCKERLENS_NATIVE_NOFILE_CLEANUP_REFUSAL: reason=(ownership_guard|inner_unverified|panic) first_observed_termination=(exit|signal|unknown) code=([0-9]+|none)", line)
+            if match is None or cleanup is not None or len(handoffs) != 1 or not cleanup_indices[0] < handoffs[0] < index:
+                raise ValueError()
+            reason, termination, code = match.groups()
+            if reason == b"ownership_guard" and termination != b"unknown":
+                raise ValueError()
+            cleanup = line
+        if termination == b"unknown":
+            if code != b"none":
+                raise ValueError()
+        elif not code.isdigit() or code.startswith(b"0") or not 1 <= int(code) <= (255 if termination == b"exit" else 64):
+            raise ValueError()
+    # Terminal teardown requires a complete cleanup refusal. Validate the entire
+    # pair before either write: a capture cut after work must not hide cleanup.
+    if handoffs and (len(handoffs) != 1 or cleanup is None
+                     or any(index <= handoffs[0] for index, _line in observations)):
+        raise ValueError()
+    # Reconstruct only fully matched finite records; original payload is never printed.
+    for line in (work, cleanup):
+        if line is not None:
+            sys.stdout.buffer.write(line + b"\n")
+except (OSError, ValueError):
+    pass
+' "$capture_directory/run.raw" "$original_run_status" 2>/dev/null) || nofile_projection_status=$?
+  if (( nofile_projection_status == 3 )); then
+    result=
+    if (( run_status == 0 )); then run_status=1; fi
+  fi
+elif (( !exact_nofile )) && grep -q "DOCKERLENS_NATIVE_NOFILE_" <<<"$result"; then
+  pids_setup_refusal=
+  pids_measurement_refusal=
+  result=
+  if (( run_status == 0 )); then run_status=1; fi
+fi
 # Only libtest's numeric summary is safe to print. Test and compiler output can
 # contain protected native values, socket payloads, or authored secrets.
 summary=$(grep -Eo '^test result: (ok|FAILED)\. [0-9]+ passed; [0-9]+ failed; [0-9]+ ignored; [0-9]+ measured; [0-9]+ filtered out;' <<<"$result" | tail -n 1 || true)
@@ -734,6 +844,7 @@ if (( run_status != 0 )); then
   echo "required native test $target::$test_name failed (exit $run_status)" >&2
   if [[ -n $pids_setup_refusal ]]; then echo "$pids_setup_refusal" >&2; fi
   if [[ -n $pids_measurement_refusal ]]; then echo "$pids_measurement_refusal" >&2; fi
+  if [[ -n $nofile_failure_context ]]; then printf '%s\n' "$nofile_failure_context" >&2; fi
   if [[ -n $port_causal_marker && $port_causal_marker != "$marker" ]]; then echo "$port_causal_marker" >&2; fi
   if [[ -n $marker ]]; then echo "$marker" >&2; fi
   if [[ -n $lifecycle_causal_marker && $lifecycle_causal_marker != "$marker" ]]; then echo "$lifecycle_causal_marker" >&2; fi
