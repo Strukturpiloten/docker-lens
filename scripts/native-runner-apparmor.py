@@ -220,6 +220,26 @@ def profile_bytes(name):
     return f"abi <abi/4.0>,\nprofile {name} flags=(unconfined) {{\n  userns,\n}}\n".encode("ascii")
 
 
+def mediated_profile_bytes(name):
+    """Fixed opt-in policy; see docs/ordinary-mediated-profile-contract.md."""
+    need(re.fullmatch(r"(?:dockerlens-127|boxferry-343)-upstream-rootless-[1-9][0-9]{0,19}-[1-9][0-9]{0,19}-[0-9a-f]{32}", name) is not None)
+    return (f"abi <abi/4.0>,\nprofile {name} {{\n"
+            "  file,\n"
+            "  capability,\n"
+            "  network,\n"
+            "  unix,\n"
+            "  dbus (bind, send, receive),\n"
+            "  mount,\n"
+            "  remount,\n"
+            "  umount,\n"
+            "  pivot_root,\n"
+            "  signal (send, receive),\n"
+            "  ptrace,\n"
+            "  userns create,\n"
+            "  mqueue (create, read, write, open, delete, setattr, getattr) type=posix,\n"
+            "}\n").encode("ascii")
+
+
 def loaded(name):
     rows = read_path(PROFILES, 1048576).decode("ascii").splitlines()
     matches = [row for row in rows if row.startswith(name + " ") or row == name]
