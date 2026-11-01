@@ -389,6 +389,55 @@ class MeasurementRefusalTests(unittest.TestCase):
                 result, _ = self.wrapper(line, status=101)
                 self.assertEqual((line + "\n").encode() in result.stderr, projects)
 
+    def test_locate_source_observation_projects_only_with_retained_locate_eof(self):
+        caller = PREFIX + "pids-eof caller=locate_batch slot=none phase=none"
+        for stage in ("input", "inspect", "discovery", "membership", "distinctness", "recheck", "freeze", "transfer"):
+            for category in ("BindingFailed", "UnsupportedPeerPidfd", "PeerExited", "NamespaceUnreachable", "NoMatch",
+                             "AmbiguousMatch", "UnsupportedEventSemantics", "ConfiguredOuterUnavailable", "unclassified"):
+                source = f"DOCKERLENS_NATIVE_PIDS_LOCATE: stage={stage} category={category}"
+                expected = caller + f" source_stage={stage} source_category={category}"
+                result, _ = self.wrapper(source + "\nDOCKERLENS_NATIVE_CHECK: pids_cleanup\n" + caller, status=101)
+                self.assertEqual(result.stderr.count((expected + "\n").encode()), 1)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn(source.encode(), result.stdout + result.stderr)
+
+    def test_locate_record_unknown_partial_duplicate_mixed_and_success_remain_failed(self):
+        source = "DOCKERLENS_NATIVE_PIDS_LOCATE: stage=discovery category=NoMatch"
+        caller = PREFIX + "pids-eof caller=locate_batch slot=none phase=none"
+        for bad in (source + "\n" + source, source + "\r", source + " " + SECRET,
+                    source.replace("discovery", SECRET), source.replace("NoMatch", SECRET),
+                    "DOCKERLENS_NATIVE_PIDS_LOCATE", source + "\0" + SECRET):
+            result, _ = self.wrapper(bad + "\nDOCKERLENS_NATIVE_CHECK: pids_cleanup\n" + caller, status=101)
+            self.assertNotIn(b"source_stage=", result.stdout + result.stderr)
+            self.assertNotIn(SECRET.encode(), result.stdout + result.stderr)
+            self.assertNotEqual(result.returncode, 0)
+        for context in (PREFIX + "pids-eof", PREFIX + "pids-read", PREFIX + "pids-version",
+                        caller.replace("locate_batch", "seal_measurements"),
+                        PREFIX + "pids-eof caller=sample slot=cli16 phase=before",
+                        SETUP_REFUSAL + "pids-eof\nDOCKERLENS_NATIVE_PIDS_IO: phase=ready kind=eof\nDOCKERLENS_NATIVE_PIDS_START: s=s_imports k=import",
+                        SETUP_REFUSAL + "pids-eof\nDOCKERLENS_NATIVE_PIDS_IO: phase=bind kind=eof\nDOCKERLENS_NATIVE_PIDS_BIND: s=w_endpoint"):
+            result, _ = self.wrapper(source + "\nDOCKERLENS_NATIVE_CHECK: pids_cleanup\n" + context, status=101)
+            self.assertNotIn(PREFIX.encode(), result.stdout + result.stderr)
+            self.assertNotIn(SETUP_REFUSAL.encode(), result.stdout + result.stderr)
+        for status in (0, 101):
+            result, _ = self.wrapper(source + "\n" + SUCCESS, status=status)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn(b"required native test passed", result.stdout + result.stderr)
+        for output in ("DOCKERLENS_NATIVE_CHECK: pids_cleanup\n" + caller + "\n" + source,
+                       source + "\n" + caller):
+            result, _ = self.wrapper(output, status=101, terminate_output=False)
+            self.assertNotIn(b"source_stage=", result.stdout + result.stderr)
+        output = source + "\nDOCKERLENS_NATIVE_CHECK: pids_cleanup\n" + caller + "\n" + HANDOFF
+        for status in (101, 124, 130, 143):
+            result, _ = self.wrapper(output, status=status)
+            self.assertIn(f"(exit {status})".encode(), result.stderr)
+            self.assertIn(HANDOFF.encode(), result.stderr)
+            self.assertIn(b"source_stage=discovery source_category=NoMatch", result.stderr)
+        result, _ = self.wrapper(output, status=101, capture_failure="cleanup")
+        self.assertIn(b"private capture cleanup unavailable", result.stderr)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn(b"required native test passed", result.stdout + result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

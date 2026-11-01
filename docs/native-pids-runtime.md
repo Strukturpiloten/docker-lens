@@ -15,6 +15,22 @@ catalogue and nofile source remain unchanged. Neither these controls nor a
 successful source session qualify mandatory PIDs27.
 Rootless none/v2 refusal is never positive evidence or permission for nofile28.
 
+## Failure-only LocateBatch observation
+
+An escaping `locate_batch` operation records only its finite operation stage and an existing
+closed `LocatorRefusal` category, or `unclassified`. The best-effort single stderr write
+precedes the original transfer abort; abort, propagation and failure state remain mandatory.
+It retains no exception text, native identifier, path or payload and performs no new source
+operation. The original 1024-byte root stderr reader and sole post-retirement snapshot can
+forward this record only for the retained first measurement EOF awaiting LocateBatch.
+Caller EOF alone still does not prove source entry or identify any guard's cause.
+
+The exact wrapper projects the observation only alongside the matching failed measurement
+refusal, as finite `source_stage` and `source_category` fields. START/BIND lifetimes remain
+unchanged; mixed constructor/locate records are invalid. Missing, late, malformed, duplicate,
+partial, overflowed or unavailable records establish no source cause and cannot turn failure
+into success. No extra read, retry, wait, timeout, budget or native qualification is added.
+
 ## Actual in-process association
 
 `scripts/native_pids_locator.py` composes `LocatorSource` with the existing

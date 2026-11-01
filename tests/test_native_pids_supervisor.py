@@ -494,6 +494,37 @@ class RootSessionTests(unittest.TestCase):
 
 class RootFactoryTests(unittest.TestCase):
     """Fixed factory executes source I/O; namespace/pidfd kernel facts simulated."""
+    def test_locate_escape_after_pending_reply_keeps_bind_stopped_and_original_cleanup(self):
+        for rootful in (False, True):
+            def run(tree, session, channel, request, _calls):
+                recorder = s.BindRecorder()
+                recorder.begin()
+                failure = l.LocatorRefusal("NoMatch")
+                requests = iter([request,
+                    {"version": 1, "sequence": 2, "op": "ConfirmRuntime"},
+                    {"version": 1, "sequence": 3, "op": "LocateBatch", "slots": tree.ids}])
+                responses = []
+                def receive():
+                    item = next(requests)
+                    if item["op"] == "LocateBatch":
+                        self.assertFalse(recorder.active)
+                        session.runtime.inspect = lambda _cid: (_ for _ in ()).throw(failure)
+                    return item
+                channel.request = receive
+                channel.response = responses.append
+                with patch.object(s, "_BIND", recorder), patch.object(s, "_STARTUP", s.StartupRecorder()), patch.object(l.os, "write") as write:
+                    with self.assertRaises(l.LocatorRefusal) as caught:
+                        s.serve_session(channel, session)
+                self.assertIs(caught.exception, failure)
+                self.assertEqual([row["status"] for row in responses], ["pending", "confirmed"])
+                self.assertFalse(recorder.active)
+                self.assertFalse(recorder.seen)
+                self.assertTrue(session.failed)
+                self.assertTrue(session.runtime.failed)
+                self.assertEqual(session.source.owned, set())
+                write.assert_called_once_with(2, b"DOCKERLENS_NATIVE_PIDS_LOCATE: stage=inspect category=NoMatch\n")
+            self.run_factory(run, rootful=rootful)
+
 
     def test_closed_lane_expectations_match_canonical_profile_and_acquisition_ceiling(self):
         root = Path(__file__).resolve().parents[1]

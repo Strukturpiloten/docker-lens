@@ -57,6 +57,65 @@ ORIGINAL27 = [
 
 
 class NofileWiringTests(unittest.TestCase):
+    def test_actual_default_capture_libtest_preserves_marker_record_and_cleanup_order(self):
+        # Execute the three production marker statements under ordinary capturing
+        # libtest. Authored transcripts alone miss eprintln/direct-stderr reordering.
+        source = (ROOT / "src/native_nofile_tests.rs").read_text()
+        markers = {}
+        for name in ("context", "effects", "cleanup"):
+            matches = [line.strip() for line in source.splitlines()
+                       if f'"DOCKERLENS_NATIVE_CHECK: nofile_{name}"' in line]
+            self.assertEqual(len(matches), 1)
+            markers[name] = matches[0]
+        with tempfile.TemporaryDirectory(prefix="dl-nofile-libtest-") as directory:
+            root = Path(directory)
+            fixture = '''use std::io::Write;
+mod native_health_metadata_tests { pub mod lifecycle { pub mod nofile {
+use super::super::super::*;
+#[test] #[ignore]
+fn live_nofile_limits_and_effects_match_engine() {
+    let mode = std::env::var("NOFILE_TRANSPORT_MODE").unwrap();
+    let work = mode == "work" || mode == "both";
+    let cleanup = mode == "cleanup" || mode == "both";
+    let result = std::panic::catch_unwind(|| {
+        CONTEXT
+        EFFECTS
+        if work { panic!("PRIVATE_NOFILE_WIRING_CANARY"); }
+    });
+    CLEANUP
+    if cleanup { let _ = std::io::stderr().write_all(HANDOFF); }
+    if work { let _ = std::io::stderr().write_all(WORK); }
+    if cleanup { let _ = std::io::stderr().write_all(REFUSAL); }
+    if let Err(error) = result { std::panic::resume_unwind(error); }
+    assert!(!cleanup, "PRIVATE_NOFILE_WIRING_CANARY");
+}
+}}}
+'''
+            for token, value in (("CONTEXT", markers["context"]), ("EFFECTS", markers["effects"]),
+                                 ("CLEANUP", markers["cleanup"]),
+                                 ("HANDOFF", 'b"' + HANDOFF.decode().replace("\n", "\\n") + '"'),
+                                 ("WORK", 'b"' + self.failure_line().decode().replace("\n", "\\n") + '"'),
+                                 ("REFUSAL", 'b"' + self.cleanup_line(reason="ownership_guard", termination="unknown", code="none").decode().replace("\n", "\\n") + '"')):
+                fixture = fixture.replace(token, value)
+            (root / "transport.rs").write_text(fixture)
+            built = subprocess.run(["rustc", "--edition=2024", "--test", str(root / "transport.rs"), "-o", str(root / "transport")],
+                                   cwd=ROOT, capture_output=True, timeout=30, check=False)
+            self.assertEqual(built.returncode, 0, built.stderr)
+            for mode in ("work", "cleanup", "both", "success"):
+                captured = subprocess.run([str(root / "transport"), "--ignored", "--exact", SELECTED],
+                                          env={**os.environ, "NOFILE_TRANSPORT_MODE": mode},
+                                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=5, check=False)
+                self.assertEqual(captured.returncode, 0 if mode == "success" else 101)
+                result, _calls, _dates = self.wrapper(captured.stdout, captured.returncode)
+                self.assertEqual(result.returncode, 0 if mode == "success" else 1, result.stderr)
+                output = result.stdout + result.stderr
+                self.assertEqual(b"DOCKERLENS_NATIVE_NOFILE_FAILURE:" in output, mode in ("work", "both"))
+                self.assertEqual(b"DOCKERLENS_NATIVE_NOFILE_CLEANUP_REFUSAL:" in output, mode in ("cleanup", "both"))
+                self.assertEqual(HANDOFF.rstrip() in output, mode in ("cleanup", "both"))
+                self.assertNotIn(SECRET, output)
+                if mode == "both":
+                    self.assertLess(output.index(b"DOCKERLENS_NATIVE_NOFILE_FAILURE:"), output.index(b"DOCKERLENS_NATIVE_NOFILE_CLEANUP_REFUSAL:"))
+
     def wrapper(self, output=SUCCESS, status=0, *, listing=None, list_status=0, name=TEST, cleanup_failure=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

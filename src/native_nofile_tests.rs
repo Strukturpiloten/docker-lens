@@ -1085,7 +1085,7 @@ fn live_nofile_limits_and_effects_match_engine() {
     let owner = BoundOuterCleanupOwner::bind(&run);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         diagnostics.all(&run, NofileOperation::Context);
-        eprintln!("DOCKERLENS_NATIVE_CHECK: nofile_context");
+        let _ = writeln!(std::io::stderr(), "DOCKERLENS_NATIVE_CHECK: nofile_context");
         let uid = run.context();
         let image = image_snapshot(&run);
         assert!(
@@ -1121,7 +1121,7 @@ fn live_nofile_limits_and_effects_match_engine() {
         );
         let mut records = Vec::new();
         let mut slot_calls = Vec::new();
-        eprintln!("DOCKERLENS_NATIVE_CHECK: nofile_effects");
+        let _ = writeln!(std::io::stderr(), "DOCKERLENS_NATIVE_CHECK: nofile_effects");
         for index in 0..8 {
             let before = run.calls.get();
             create_nofile(&mut run, index, &diagnostics);
@@ -1203,7 +1203,7 @@ fn live_nofile_limits_and_effects_match_engine() {
     let before_calls = run.calls.get();
     let before_bytes = run.bytes.get();
     let cleanup_started = Instant::now();
-    eprintln!("DOCKERLENS_NATIVE_CHECK: nofile_cleanup");
+    let _ = writeln!(std::io::stderr(), "DOCKERLENS_NATIVE_CHECK: nofile_cleanup");
     // Bounded immutable ledger snapshots avoid borrowing the mutable runner in
     // the guard. Only the guarded callback can enter shared lifecycle cleanup.
     let attempted = run.attempted.clone();

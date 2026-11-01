@@ -241,6 +241,8 @@ try:
     if seen and (positive or sys.argv[3] == "0"):
         sys.stdout.buffer.write(prefix + b"unclassified\n")
         sys.exit(3)
+    if any(line.startswith(b"DOCKERLENS_NATIVE_PIDS_LOCATE") for line in lines):
+        sys.exit(0)
     descriptor = os.open(sys.argv[1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(descriptor, "rb") as registry:
         info = os.fstat(registry.fileno())
@@ -352,12 +354,15 @@ try:
     family = b"DOCKERLENS_NATIVE_PIDS_MEASUREMENT_REFUSAL"
     lines = data.split(b"\n")
     observations = [(index, line) for index, line in enumerate(lines) if line.startswith(family)]
-    if not observations:
+    locates = [(index, line) for index, line in enumerate(lines) if line.startswith(b"DOCKERLENS_NATIVE_PIDS_LOCATE")]
+    if not observations and not locates:
         sys.exit(0)
     positive = any(line == b"DOCKERLENS_NATIVE_CHECK: pids_evidence" or line.startswith(b"test result: ok.") for line in lines)
     if sys.argv[3] == "0" or positive:
         sys.stdout.buffer.write(prefix + b"unclassified\n")
         sys.exit(3)
+    if not observations:
+        sys.exit(0)
     other = (b"DOCKERLENS_NATIVE_PIDS_SETUP_REFUSAL:", b"DOCKERLENS_NATIVE_PIDS_IO:",
              b"DOCKERLENS_NATIVE_PIDS_START:", b"DOCKERLENS_NATIVE_PIDS_BIND:", b"DOCKERLENS_NATIVE_NOFILE_")
     if any(line.startswith(other) for line in lines):
@@ -401,6 +406,23 @@ try:
         elif slot != b"none" or phase != b"none":
             sys.exit(0)
         projected += b" caller=" + caller + b" slot=" + slot + b" phase=" + phase
+        if locates:
+            if caller != b"locate_batch" or len(locates) != 1:
+                sys.exit(0)
+            locate_index, locate_line = locates[0]
+            if locate_index == len(lines) - 1 or len(locate_line) > 111:
+                sys.exit(0)
+            stages = (b"input", b"inspect", b"discovery", b"membership", b"distinctness", b"recheck", b"freeze", b"transfer")
+            categories = (b"BindingFailed", b"UnsupportedPeerPidfd", b"PeerExited", b"NamespaceUnreachable", b"NoMatch",
+                          b"AmbiguousMatch", b"UnsupportedEventSemantics", b"ConfiguredOuterUnavailable", b"unclassified")
+            match = re.fullmatch(rb"DOCKERLENS_NATIVE_PIDS_LOCATE: stage=([a-z]+) category=([A-Za-z]+)", locate_line)
+            if match is None:
+                sys.exit(0)
+            stage, category = match.groups()
+            if stage not in stages or category not in categories:
+                sys.exit(0)
+            projected += (b" source_stage=" + next(value for value in stages if value == stage)
+                          + b" source_category=" + next(value for value in categories if value == category))
     elif separator:
         if code != b"pids-configured-fixture":
             sys.exit(0)
@@ -446,6 +468,8 @@ try:
                       + b",".join(fixed_shapes) + b" lengths=" + fixed_lengths)
     elif len(line) > 96:
         sys.exit(0)
+    if locates and not (separator and code == b"pids-eof"):
+        sys.exit(0)
     sys.stdout.buffer.write(projected + b"\n")
 except (OSError, ValueError):
     pass
@@ -458,7 +482,7 @@ except (OSError, ValueError):
     pids_setup_refusal=
     pids_measurement_refusal=
   fi
-elif (( !exact_pids )) && grep -q '^DOCKERLENS_NATIVE_PIDS_MEASUREMENT_REFUSAL' <<<"$result"; then
+elif (( !exact_pids )) && grep -Eq '^DOCKERLENS_NATIVE_PIDS_(MEASUREMENT_REFUSAL|LOCATE)' <<<"$result"; then
   # A foreign selected test cannot supply PIDs measurement evidence.
   result=
   if (( run_status == 0 )); then run_status=1; fi

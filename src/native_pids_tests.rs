@@ -717,6 +717,115 @@ impl ClosedBindSite {
 enum CapturedConstructorObservation {
     Startup(ClosedStartupFault),
     Bind(ClosedBindSite),
+    Locate(ClosedLocateFailure),
+}
+// Failure-only source observation. This shares the original bounded stderr
+// reader and retirement snapshot; it never extends START/BIND lifetimes.
+const LOCATE_PREFIX: &str = "DOCKERLENS_NATIVE_PIDS_LOCATE";
+const LOCATE_STAGES: &[&str] = &[
+    "input",
+    "inspect",
+    "discovery",
+    "membership",
+    "distinctness",
+    "recheck",
+    "freeze",
+    "transfer",
+];
+const LOCATE_CATEGORIES: &[&str] = &[
+    "BindingFailed",
+    "UnsupportedPeerPidfd",
+    "PeerExited",
+    "NamespaceUnreachable",
+    "NoMatch",
+    "AmbiguousMatch",
+    "UnsupportedEventSemantics",
+    "ConfiguredOuterUnavailable",
+    "unclassified",
+];
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ClosedLocateFailure {
+    stage: usize,
+    category: usize,
+}
+impl ClosedLocateFailure {
+    fn parts(self) -> Option<(&'static str, &'static str)> {
+        Some((
+            *LOCATE_STAGES.get(self.stage)?,
+            *LOCATE_CATEGORIES.get(self.category)?,
+        ))
+    }
+}
+fn root_observation_from_capture(
+    bytes: &[u8],
+    overflow: bool,
+) -> Option<CapturedConstructorObservation> {
+    let mut records = bytes
+        .split(|byte| *byte == b'\n')
+        .filter(|line| line.starts_with(LOCATE_PREFIX.as_bytes()));
+    let Some(line) = records.next() else {
+        return constructor_observation_from_capture(bytes, overflow);
+    };
+    if overflow
+        || bytes.len() > 1024
+        || bytes.contains(&0)
+        || !bytes.ends_with(b"\n")
+        || records.next().is_some()
+        || line.len() > 111
+        || bytes.split(|byte| *byte == b'\n').any(|line| {
+            line.starts_with(STARTUP_PREFIX.as_bytes()) || line.starts_with(BIND_PREFIX.as_bytes())
+        })
+    {
+        return None;
+    }
+    let body =
+        std::str::from_utf8(line.strip_prefix(b"DOCKERLENS_NATIVE_PIDS_LOCATE: stage=")?).ok()?;
+    let (stage, category) = body.split_once(" category=")?;
+    Some(CapturedConstructorObservation::Locate(
+        ClosedLocateFailure {
+            stage: LOCATE_STAGES.iter().position(|allowed| *allowed == stage)?,
+            category: LOCATE_CATEGORIES
+                .iter()
+                .position(|allowed| *allowed == category)?,
+        },
+    ))
+}
+fn locate_failure_for_eof(
+    caller: Option<MeasurementCaller>,
+    observation: Option<CapturedConstructorObservation>,
+) -> Option<ClosedLocateFailure> {
+    match (caller, observation) {
+        (
+            Some(MeasurementCaller::LocateBatch),
+            Some(CapturedConstructorObservation::Locate(failure)),
+        ) => Some(failure),
+        _ => None,
+    }
+}
+fn write_locate_failure(mut output: impl std::io::Write, failure: ClosedLocateFailure) {
+    let Some((stage, category)) = failure.parts() else {
+        return;
+    };
+    let chunks: &[&[u8]] = &[
+        b"DOCKERLENS_NATIVE_PIDS_LOCATE: stage=",
+        stage.as_bytes(),
+        b" category=",
+        category.as_bytes(),
+        b"\n",
+    ];
+    let mut line = [0; 112];
+    let mut length = 0usize;
+    for chunk in chunks {
+        let Some(next) = length.checked_add(chunk.len()) else {
+            return;
+        };
+        let Some(destination) = line.get_mut(length..next) else {
+            return;
+        };
+        destination.copy_from_slice(chunk);
+        length = next;
+    }
+    let _ = output.write(&line[..length]);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -739,9 +848,9 @@ fn startup_fault_from_capture(bytes: &[u8], overflow: bool) -> Option<ClosedStar
         || bytes.len() > 1024
         || bytes.contains(&0)
         || !bytes.ends_with(b"\n")
-        || bytes
-            .split(|byte| *byte == b'\n')
-            .any(|line| line.starts_with(BIND_PREFIX.as_bytes()))
+        || bytes.split(|byte| *byte == b'\n').any(|line| {
+            line.starts_with(BIND_PREFIX.as_bytes()) || line.starts_with(LOCATE_PREFIX.as_bytes())
+        })
     {
         return None;
     }
@@ -772,6 +881,12 @@ fn constructor_observation_from_capture(
     bytes: &[u8],
     overflow: bool,
 ) -> Option<CapturedConstructorObservation> {
+    if bytes
+        .split(|byte| *byte == b'\n')
+        .any(|line| line.starts_with(LOCATE_PREFIX.as_bytes()))
+    {
+        return None;
+    }
     let bind = bytes
         .split(|byte| *byte == b'\n')
         .any(|line| line.starts_with(BIND_PREFIX.as_bytes()));
@@ -912,7 +1027,7 @@ fn root_stderr_capture(
     // stream owns exactly the original reads, cap and EOF. No partial capture,
     // overflow or reader panic may publish. Preserve its tuple for success join.
     let capture = stream(source, 1024);
-    if let Some(fault) = constructor_observation_from_capture(&capture.0, capture.1) {
+    if let Some(fault) = root_observation_from_capture(&capture.0, capture.1) {
         let _ = startup.set(fault);
     }
     capture
@@ -1794,6 +1909,9 @@ impl Drop for RootChannel {
         // One nonblocking snapshot after the ORIGINAL retirement. Success still
         // joins; failure still detaches. Late/no EOF or reader panic is silent.
         let startup = self.startup.get().copied();
+        if let Some(failure) = locate_failure_for_eof(self.wire.first_measurement_eof, startup) {
+            write_locate_failure(std::io::stderr().lock(), failure);
+        }
         match (self.wire.first_read_fault, startup) {
             (Some(io), Some(CapturedConstructorObservation::Startup(fault)))
                 if io.allows_startup_observation() =>
@@ -5025,6 +5143,8 @@ fn pids_startup_reader_preserves_original_tuple_and_every_read() {
         b"DOCKERLENS_NATIVE_PIDS_START: s=w_parent_uid k=guard".to_vec(),
         b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_endpoint\n".to_vec(),
         b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_endpoint".to_vec(),
+        b"DOCKERLENS_NATIVE_PIDS_LOCATE: stage=discovery category=NoMatch\n".to_vec(),
+        b"DOCKERLENS_NATIVE_PIDS_LOCATE: stage=discovery category=NoMatch".to_vec(),
         b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_gh_nodes e=declared_unsupported_events\n".to_vec(),
         b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_gh_read e=ENOENT".to_vec(),
         b"DOCKERLENS_NATIVE_PIDS_START: s=w_parent_uid k=guard\nDOCKERLENS_NATIVE_PIDS_BIND: s=w_endpoint\n".to_vec(),
@@ -5051,7 +5171,7 @@ fn pids_startup_reader_preserves_original_tuple_and_every_read() {
         assert_eq!(observed_calls.get(), original_calls.get());
         assert_eq!(
             slot.get().copied(),
-            constructor_observation_from_capture(&original.0, original.1)
+            root_observation_from_capture(&original.0, original.1)
         );
     }
 }
@@ -7133,4 +7253,159 @@ fn pids_measurement_caller_context_is_closed_request_only_and_valid_for_slot() {
         measurement_eof_diagnostic("pids-eof", None),
         pids_measurement_refusal_diagnostic("pids-eof")
     );
+}
+
+#[test]
+fn pids_locate_capture_is_closed_unique_and_never_a_constructor_observation() {
+    assert_eq!(
+        LOCATE_STAGES,
+        &[
+            "input",
+            "inspect",
+            "discovery",
+            "membership",
+            "distinctness",
+            "recheck",
+            "freeze",
+            "transfer"
+        ]
+    );
+    assert_eq!(
+        LOCATE_CATEGORIES,
+        &[
+            "BindingFailed",
+            "UnsupportedPeerPidfd",
+            "PeerExited",
+            "NamespaceUnreachable",
+            "NoMatch",
+            "AmbiguousMatch",
+            "UnsupportedEventSemantics",
+            "ConfiguredOuterUnavailable",
+            "unclassified"
+        ]
+    );
+    for stage in LOCATE_STAGES {
+        for category in LOCATE_CATEGORIES {
+            let line =
+                format!("DOCKERLENS_NATIVE_PIDS_LOCATE: stage={stage} category={category}\n");
+            let Some(CapturedConstructorObservation::Locate(failure)) =
+                root_observation_from_capture(line.as_bytes(), false)
+            else {
+                panic!("closed locate observation required");
+            };
+            assert_eq!(failure.parts(), Some((*stage, *category)));
+            assert!(constructor_observation_from_capture(line.as_bytes(), false).is_none());
+            assert!(startup_fault_from_capture(line.as_bytes(), false).is_none());
+            let mut written = Vec::new();
+            write_locate_failure(&mut written, failure);
+            assert_eq!(written, line.as_bytes());
+            assert!(written.len() <= 112);
+        }
+    }
+    let line = "DOCKERLENS_NATIVE_PIDS_LOCATE: stage=discovery category=NoMatch\n";
+    for bytes in [
+        line.trim_end().as_bytes().to_vec(),
+        format!("{line}{line}").into_bytes(),
+        line.replace("NoMatch", "PRIVATE_LOCATE_CANARY")
+            .into_bytes(),
+        line.replace("discovery", "PRIVATE_LOCATE_CANARY")
+            .into_bytes(),
+        line.replace("\n", "\r\n").into_bytes(),
+        line.replace("\n", "\0\n").into_bytes(),
+        format!("{line}DOCKERLENS_NATIVE_PIDS_START: s=s_imports k=import\n").into_bytes(),
+        format!("{line}DOCKERLENS_NATIVE_PIDS_BIND: s=w_endpoint\n").into_bytes(),
+        b"DOCKERLENS_NATIVE_PIDS_LOCATE\n".to_vec(),
+        format!("{line}{}\n", "x".repeat(1024)).into_bytes(),
+    ] {
+        assert!(root_observation_from_capture(&bytes, false).is_none());
+        assert!(constructor_observation_from_capture(&bytes, false).is_none());
+    }
+    assert!(root_observation_from_capture(line.as_bytes(), true).is_none());
+}
+
+#[test]
+fn pids_locate_snapshot_is_only_retained_locate_eof_and_never_late_or_cleanup_context() {
+    struct Incomplete {
+        supplied: bool,
+        panic: bool,
+    }
+    impl Read for Incomplete {
+        fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+            if !self.supplied {
+                self.supplied = true;
+                let record =
+                    b"DOCKERLENS_NATIVE_PIDS_LOCATE: stage=inspect category=BindingFailed\n";
+                bytes[..record.len()].copy_from_slice(record);
+                return Ok(record.len());
+            }
+            assert!(!self.panic, "synthetic reader panic before EOF");
+            Err(std::io::ErrorKind::WouldBlock.into())
+        }
+    }
+    for panic in [false, true] {
+        let slot = OnceLock::new();
+        assert!(
+            std::panic::catch_unwind(|| root_stderr_capture(
+                Incomplete {
+                    supplied: false,
+                    panic
+                },
+                &slot
+            ))
+            .is_err()
+        );
+        assert!(slot.get().is_none());
+    }
+    let slot = OnceLock::new();
+    let snapshot = slot.get().copied();
+    let bytes = b"DOCKERLENS_NATIVE_PIDS_LOCATE: stage=discovery category=NoMatch\n";
+    assert_eq!(
+        root_stderr_capture(std::io::Cursor::new(bytes), &slot),
+        (bytes.to_vec(), false)
+    );
+    assert!(locate_failure_for_eof(Some(MeasurementCaller::LocateBatch), snapshot).is_none());
+    let observed = slot.get().copied();
+    assert!(locate_failure_for_eof(Some(MeasurementCaller::LocateBatch), observed).is_some());
+    for caller in [
+        None,
+        Some(MeasurementCaller::SealMeasurements),
+        Some(MeasurementCaller::Sample {
+            slot: ConfiguredFixtureSlot::Cli16,
+            phase: MeasurementSamplePhase::Before,
+        }),
+    ] {
+        assert!(locate_failure_for_eof(caller, observed).is_none());
+    }
+    assert!(
+        locate_failure_for_eof(
+            Some(MeasurementCaller::LocateBatch),
+            constructor_observation_from_capture(
+                b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_endpoint\n",
+                false
+            )
+        )
+        .is_none()
+    );
+    struct RefusedWrite<'a>(&'a std::cell::Cell<usize>, bool);
+    impl std::io::Write for RefusedWrite<'_> {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            self.0.set(self.0.get() + 1);
+            if self.1 {
+                Ok(0)
+            } else {
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            }
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            panic!("diagnostic cannot flush");
+        }
+    }
+    for short in [false, true] {
+        let writes = std::cell::Cell::new(0);
+        write_locate_failure(
+            RefusedWrite(&writes, short),
+            locate_failure_for_eof(Some(MeasurementCaller::LocateBatch), observed).unwrap(),
+        );
+        assert_eq!(writes.get(), 1);
+    }
 }

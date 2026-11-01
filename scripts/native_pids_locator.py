@@ -175,6 +175,30 @@ class LocatorRefusal(boundary.Refusal):
         super().__init__(category)
 
 
+LOCATE_STAGES = ("input", "inspect", "discovery", "membership", "distinctness",
+                 "recheck", "freeze", "transfer")
+LOCATE_CATEGORIES = ("BindingFailed", "UnsupportedPeerPidfd", "PeerExited",
+                     "NamespaceUnreachable", "NoMatch", "AmbiguousMatch",
+                     "UnsupportedEventSemantics", "ConfiguredOuterUnavailable", "unclassified")
+
+
+def _locate_failure(stage, error):
+    """Best-effort observation before abort; no values, exception text or retry."""
+    try:
+        if type(stage) is not str or stage not in LOCATE_STAGES:
+            return
+        stage = next(value for value in LOCATE_STAGES if value == stage)
+        category = "unclassified"
+        if type(error) is LocatorRefusal:
+            observed = object.__getattribute__(error, "category")
+            if type(observed) is str and observed in LOCATE_CATEGORIES:
+                category = next(value for value in LOCATE_CATEGORIES if value == observed)
+        os.write(2, ("DOCKERLENS_NATIVE_PIDS_LOCATE: stage=" + stage
+                     + " category=" + category + "\n").encode("ascii"))
+    except BaseException:
+        pass
+
+
 def _host_group_exception_tag(error):
     if type(error) is LocatorRefusal:
         category = object.__getattribute__(error, "category")
@@ -1086,12 +1110,15 @@ class RuntimeLocator:
 
     def locate_batch(self, slots):
         transfer = None
+        stage = "input"
         try:
             require(not self.failed and not self.sealed and not self.bound and type(slots) is dict
                     and tuple(slots) == ORDER and len(set(slots.values())) == 6)
+            stage = "inspect"
             before = {slot: self.inspect(cid) for slot, cid in slots.items()}
             if self.slot_label is not None:
                 require(all(dict(before[slot][3]).get(self.slot_label) == slot for slot in ORDER))
+            stage = "discovery"
             daemon_ns = boundary.identity(self.daemon.namespaces[0])
             discovery = _discovery_module()
             self.source.type_scope().begin_locate()
@@ -1113,6 +1140,7 @@ class RuntimeLocator:
                 if matched != set(ORDER):
                     raise LocatorRefusal("NoMatch")
             transfer = discovery.discover(self.source, self.outer_group, discovery.Mode.WORKERS, consume)
+            stage = "membership"
             self.source.adopt_discovery_types(transfer, self.outer_group)
             observed_identities = {row.identity[:2]: row.identity for row in transfer.types}
             result = {}
@@ -1132,24 +1160,30 @@ class RuntimeLocator:
                 coverage = [node for node in nodes if node[1][:2] == selected.coverage_witness.identity]
                 require(len(coverage) == 1 and coverage[0][1] == observed_identities[selected.coverage_witness.identity])
                 result[slot] = RuntimeBoundProcess(slot, slots[slot], process, group, chain, before[slot])
+            stage = "distinctness"
             require(len({x.process.pid for x in result.values()}) == 6
                     and len({x.group.identities[-1] for x in result.values()}) == 6)
+            stage = "recheck"
             for slot, item in result.items():
                 require(self.inspect(item.container_id) == item.inspect_facts)
                 self.source.check_process(item.process)
                 self.source.check_group(item.group)
             self.check_daemon()
+            stage = "freeze"
             self.source.freeze_measurement_types(item.group for item in result.values())
+            stage = "transfer"
             transfer.release_witnesses()
             transfer.handoff()
             self.bound = result
             return result  # live Python objects directly to collector, never JSON
-        except LocatorRefusal:
+        except LocatorRefusal as error:
+            _locate_failure(stage, error)
             self.failed = True
             if transfer is not None:
                 transfer.abort()
             raise
-        except (Exception, KeyboardInterrupt):
+        except (Exception, KeyboardInterrupt) as error:
+            _locate_failure(stage, error)
             self.failed = True
             if transfer is not None:
                 transfer.abort()

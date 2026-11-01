@@ -220,6 +220,10 @@ numbers, when actually returned by the existing waited command, are observed num
 than inferred elapsed time or signal delivery.
 
 The first work failure is frozen before cleanup, then cleanup status is independently reset.
+The context, effects and cleanup boundary markers use the same best-effort direct stderr
+sink as the failure records and terminal handoff. Ordinary capturing libtest otherwise
+buffers those markers after the records, making their physical order unverifiable by the
+unchanged strict projector. The default libtest capture and all raw-capture bounds remain.
 Later cleanup captures cannot replace its first failed command observation. A cleanup-only
 failure emits no invented work record; if both failures exist, work is emitted first and both
 remain independent. Emission follows the original terminal handler and cannot replace the

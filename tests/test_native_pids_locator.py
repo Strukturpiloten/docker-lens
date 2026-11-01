@@ -149,6 +149,109 @@ class KernelTree:
 
 
 class LocatorTests(unittest.TestCase):
+    def test_locate_failure_record_is_closed_best_effort_and_has_no_exception_text(self):
+        stages = ("input", "inspect", "discovery", "membership", "distinctness", "recheck", "freeze", "transfer")
+        categories = ("BindingFailed", "UnsupportedPeerPidfd", "PeerExited", "NamespaceUnreachable", "NoMatch",
+                      "AmbiguousMatch", "UnsupportedEventSemantics", "ConfiguredOuterUnavailable", "unclassified")
+        self.assertEqual(l.LOCATE_STAGES, stages)
+        self.assertEqual(l.LOCATE_CATEGORIES, categories)
+        for stage in stages:
+            for category in categories:
+                error = l.LocatorRefusal(category) if category != "unclassified" else RuntimeError("PRIVATE_LOCATE_CANARY")
+                with patch.object(l.os, "write", return_value=0) as write:
+                    l._locate_failure(stage, error)
+                write.assert_called_once_with(2, f"DOCKERLENS_NATIVE_PIDS_LOCATE: stage={stage} category={category}\n".encode())
+        class Foreign(l.LocatorRefusal):
+            pass
+        for error in (Foreign("NoMatch"), OSError("PRIVATE_LOCATE_CANARY"), KeyboardInterrupt()):
+            with patch.object(l.os, "write") as write:
+                l._locate_failure("inspect", error)
+            self.assertIn(b"category=unclassified\n", write.call_args.args[1])
+        for failure in (OSError("PRIVATE_SINK_CANARY"), KeyboardInterrupt()):
+            with patch.object(l.os, "write", side_effect=failure) as write:
+                l._locate_failure("inspect", RuntimeError("PRIVATE_LOCATE_CANARY"))
+            self.assertEqual(write.call_count, 1)
+        with patch.object(l.os, "write") as write:
+            l._locate_failure("PRIVATE_STAGE_CANARY", RuntimeError())
+        write.assert_not_called()
+
+    def test_locate_escape_records_original_stage_before_abort_and_preserves_failure(self):
+        # Real source/descriptor traversal with only the existing synthetic kernel facts.
+        for stage in ("input", "inspect", "discovery", "membership", "distinctness", "recheck", "freeze", "transfer"):
+            for category in ("NoMatch", "unclassified"):
+                with self.subTest(stage=stage, category=category):
+                    def run(tree):
+                        runtime = self.runtime(tree)
+                        error = l.LocatorRefusal("NoMatch") if category == "NoMatch" else RuntimeError("PRIVATE_LOCATE_CANARY")
+                        trace = []
+                        discovery = l._discovery_module()
+                        original_discover = discovery.discover
+                        def discover(*args, **kwargs):
+                            transfer = original_discover(*args, **kwargs)
+                            original_abort = transfer.abort
+                            def abort():
+                                trace.append("abort")
+                                original_abort()
+                            transfer.abort = abort
+                            if stage == "transfer":
+                                transfer.release_witnesses = lambda: (_ for _ in ()).throw(error)
+                            return transfer
+                        def write(_fd, record):
+                            trace.append(record)
+                            return len(record)
+                        slots = {} if stage == "input" else tree.ids
+                        # Existing boundary.Refusal guards have no LocatorRefusal category.
+                        expected_category = "unclassified" if stage in ("input", "distinctness") else category
+                        fault = (lambda *args: SimpleNamespace(process=SimpleNamespace(pid=200), group=args[3])) if stage == "distinctness" else error
+                        target, member = {
+                            "input": (runtime, "inspect"), "inspect": (runtime, "inspect"),
+                            "discovery": (l, "_discovery_module"),
+                            "membership": (tree.source, "adopt_discovery_types"),
+                            "distinctness": (l, "RuntimeBoundProcess"),
+                            "recheck": (runtime, "check_daemon"),
+                            "freeze": (tree.source, "freeze_measurement_types"),
+                            "transfer": (runtime, "recheck_batch"),
+                        }[stage]
+                        with patch.object(discovery, "discover", side_effect=discover), patch.object(
+                                target, member, side_effect=fault), patch.object(l.os, "write", side_effect=write):
+                            with self.assertRaises(l.LocatorRefusal) as refused:
+                                runtime.locate_batch(slots)
+                        if category == "NoMatch" and stage not in ("input", "distinctness"):
+                            self.assertIs(refused.exception, error)
+                        else:
+                            self.assertEqual(refused.exception.category, "BindingFailed")
+                        self.assertTrue(runtime.failed)
+                        self.assertEqual(runtime.bound, {})
+                        self.assertEqual(trace[0], f"DOCKERLENS_NATIVE_PIDS_LOCATE: stage={stage} category={expected_category}\n".encode())
+                        self.assertEqual(trace[1:], ["abort"] if stage in ("membership", "distinctness", "recheck", "freeze", "transfer") else [])
+                    self.run_tree(True, run)
+
+    def test_locate_diagnostic_cannot_replace_original_transfer_abort_failure(self):
+        def run(tree):
+            runtime = self.runtime(tree)
+            discovery = l._discovery_module()
+            original = discovery.discover
+            abort_failure = RuntimeError("PRIVATE_ABORT_CANARY")
+            trace = []
+            def discover(*args, **kwargs):
+                transfer = original(*args, **kwargs)
+                def abort():
+                    trace.append("abort")
+                    raise abort_failure
+                transfer.abort = abort
+                return transfer
+            def write(*_args):
+                trace.append("diagnostic")
+                raise OSError("PRIVATE_SINK_CANARY")
+            with patch.object(discovery, "discover", side_effect=discover), patch.object(
+                    tree.source, "adopt_discovery_types", side_effect=l.LocatorRefusal("NoMatch")), patch.object(l.os, "write", side_effect=write):
+                with self.assertRaises(RuntimeError) as refused:
+                    runtime.locate_batch(tree.ids)
+            self.assertIs(refused.exception, abort_failure)
+            self.assertEqual(trace, ["diagnostic", "abort"])
+            self.assertTrue(runtime.failed)
+        self.run_tree(True, run)
+
     def configured_fixture(self, fault=None, *, handled=False, cleanup=False, kind=None, values=(512, 0, 0)):
         """Independent operation trace; no daemon, namespace, or runtime probe."""
         source = l.LocatorSource.__new__(l.LocatorSource)
@@ -898,7 +1001,9 @@ class LocatorTests(unittest.TestCase):
             with self.subTest(nested=nested):
                 def run(tree):
                     runtime = self.runtime(tree)
-                    result = runtime.locate_batch(tree.ids)
+                    with patch.object(l.os, "write") as write:
+                        result = runtime.locate_batch(tree.ids)
+                    write.assert_not_called()
                     self.assertEqual(tuple(result), l.ORDER)
                     self.assertEqual([item.process.pid for item in result.values()], [200, 201, 202, 203, 204, 205])
                     self.assertTrue(all(item.process.directory in tree.source.owned for item in result.values()))
