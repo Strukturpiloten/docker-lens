@@ -29,16 +29,23 @@ class DaemonUidTests(unittest.TestCase):
                     UID.uid(stdout, stderr, status, mode)
 
     def test_root_owns_the_fixed_timeout_and_only_exact_outer_is_queried(self):
-        with patch.object(UID.os, "geteuid", return_value=1000):
-            args = UID.command("a" * 64)
-            self.assertEqual(args[:9], ["sudo", "-n", "timeout", "--signal=TERM", "--kill-after=2s",
-                                        "8s", "podman", "exec", "a" * 64])
-        with patch.object(UID.os, "geteuid", return_value=0):
-            self.assertEqual(UID.command("b" * 64)[:4], ["timeout", "--signal=TERM", "--kill-after=2s", "8s"])
+        for engine in ("podman", "docker"):
+            for host_uid in (0, 1000):
+                with self.subTest(engine=engine, host_uid=host_uid), patch.object(UID.os, "geteuid", return_value=host_uid):
+                    args = UID.command("a" * 64, engine, "/tmp/held;not-shell")
+                privilege = [] if host_uid == 0 else ["sudo", "-n"]
+                self.assertEqual(args[:len(privilege) + 5], privilege + [
+                    "timeout", "--signal=TERM", "--kill-after=2s", "8s", "env"])
+                self.assertEqual(args[-11:], ["bash", str(ROOT / "scripts/native-outer-command.sh"),
+                    "--engine", engine, "--directory", "/tmp/held;not-shell", "exec", "a" * 64, "sh", "-ec", UID.QUERY])
+                self.assertFalse(any(item in ("-E", "-c") for item in args))
         for value in ("", "a" * 63, "A" * 64, "private; command"):
             with self.assertRaisesRegex(ValueError, "^invalid daemon UID context$"):
-                UID.command(value)
+                UID.command(value, "docker", "/tmp/held")
+        for engine, directory in (("", "/tmp/held"), ("auto", "/tmp/held"), ("docker", "relative")):
+            with self.assertRaisesRegex(ValueError, "^invalid daemon UID context$"):
+                UID.command("a" * 64, engine, directory)
         with patch.object(UID.subprocess, "Popen") as start:
             with self.assertRaises(ValueError):
-                UID.observe("a" * 64, "unknown")
+                UID.observe("a" * 64, "unknown", "docker", "/tmp/held")
             start.assert_not_called()

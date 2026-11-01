@@ -42,7 +42,7 @@ pub enum DecodeError {
 /// from the daemon release and cannot be reconstructed from `/version`.
 pub struct DecodedVersion {
     pub daemon: DaemonFacts,
-    /// Independent `/info` memory/swap reports from this capture, not capabilities.
+    /// Independent `/info` resource/cgroup reports from this capture, not capabilities.
     pub resource_support: ResourceSupportObservation,
     pub client_release: Option<ProtectedValue>,
     pub distribution_package_revision: Option<ProtectedValue>,
@@ -1446,11 +1446,7 @@ pub fn decode_capture(capture: &Capture) -> Result<DecodedInventory, DecodeError
                 mode: DaemonMode::Unknown,
                 capabilities: Vec::new(),
             },
-            resource_support: ResourceSupportObservation {
-                observation_id: capture.observation_id(),
-                memory_limit: Observed::unavailable(Availability::Missing, Origin::Effective),
-                swap_limit: Observed::unavailable(Availability::Missing, Origin::Effective),
-            },
+            resource_support: ResourceSupportObservation::missing(capture.observation_id()),
             client_release: None,
             distribution_package_revision: None,
             requested_api_versions: Vec::new(),
@@ -1525,6 +1521,24 @@ pub fn decode_capture(capture: &Capture) -> Result<DecodedInventory, DecodeError
                 result.version.resource_support.swap_limit = bool_field(
                     &body,
                     &["SwapLimit"],
+                    FieldPath::ResourceLimit,
+                    Origin::Effective,
+                )?;
+                result.version.resource_support.pids_limit = bool_field(
+                    &body,
+                    &["PidsLimit"],
+                    FieldPath::ResourceLimit,
+                    Origin::Effective,
+                )?;
+                result.version.resource_support.cgroup_driver = string_field(
+                    &body,
+                    &["CgroupDriver"],
+                    FieldPath::ResourceLimit,
+                    Origin::Effective,
+                )?;
+                result.version.resource_support.cgroup_version = string_field(
+                    &body,
+                    &["CgroupVersion"],
                     FieldPath::ResourceLimit,
                     Origin::Effective,
                 )?;
@@ -1825,7 +1839,9 @@ mod resource_support_tests {
     use super::*;
     use crate::acquisition::{Budget, Limits};
     use crate::evidence::HttpStatus;
-    use crate::resource_support::{ReportedResourceSupport, ResourceSupportError};
+    use crate::resource_support::{
+        ReportedCgroupDriver, ReportedCgroupVersion, ReportedResourceSupport, ResourceSupportError,
+    };
     use crate::version::{
         Capability, CapabilityFact, CapabilityScope, CapabilityState, FactProvenance,
         TargetCapabilityCatalog,
@@ -1845,11 +1861,11 @@ mod resource_support_tests {
         budget
             .record_request(ReadRequest::DaemonVersion, None, None)
             .unwrap();
+        let version = format!(
+            r#"{{"Version":"20.10.5+dfsg1","ApiVersion":"1.{api_minor}","MinAPIVersion":"1.41"}}"#
+        );
         budget
-            .read_response(
-                HttpStatus::new(200).unwrap(),
-                &br#"{"Version":"20.10.5+dfsg1","ApiVersion":"1.49","MinAPIVersion":"1.41"}"#[..],
-            )
+            .read_response(HttpStatus::new(200).unwrap(), version.as_bytes())
             .unwrap();
         if let Some(info) = info {
             budget
@@ -1867,7 +1883,7 @@ mod resource_support_tests {
     }
 
     #[test]
-    fn literal_memory_and_swap_reports_preserve_independent_states() {
+    fn literal_resource_booleans_preserve_independent_states() {
         let cases = [
             (
                 None,
@@ -1900,35 +1916,231 @@ mod resource_support_tests {
                 ReportedResourceSupport::ReportedAvailableUnverified,
             ),
         ];
-        for api_minor in [41, 49] {
+        for api_minor in [41, 49, 56] {
             for (memory, memory_availability, memory_value, memory_assessment) in cases {
                 for (swap, swap_availability, swap_value, swap_assessment) in cases {
-                    let fields: Vec<_> = [("MemoryLimit", memory), ("SwapLimit", swap)]
+                    for (pids, pids_availability, pids_value, pids_assessment) in cases {
+                        let fields: Vec<_> = [
+                            ("MemoryLimit", memory),
+                            ("SwapLimit", swap),
+                            ("PidsLimit", pids),
+                        ]
                         .into_iter()
                         .filter_map(|(name, value)| {
                             value.map(|value| format!("\"{name}\":{value}"))
                         })
                         .collect();
+                        let body = format!("{{{}}}", fields.join(","));
+                        let capture = resource_capture(api_minor, Some(&body));
+                        let decoded = decode_capture(&capture).unwrap();
+                        let reports = &decoded.version.resource_support;
+                        assert_eq!(reports.observation_id, capture.observation_id());
+                        assert_eq!(
+                            reports.observation_id,
+                            decoded.version.daemon.observation_id
+                        );
+                        assert_eq!(reports.memory_limit.availability, memory_availability);
+                        assert_eq!(reports.swap_limit.availability, swap_availability);
+                        assert_eq!(reports.pids_limit.availability, pids_availability);
+                        assert_eq!(reports.memory_limit.origin, Origin::Effective);
+                        assert_eq!(reports.swap_limit.origin, Origin::Effective);
+                        assert_eq!(reports.pids_limit.origin, Origin::Effective);
+                        assert_eq!(reports.memory_limit.value().copied(), memory_value);
+                        assert_eq!(reports.swap_limit.value().copied(), swap_value);
+                        assert_eq!(reports.pids_limit.value().copied(), pids_value);
+                        let assessed = reports.assess(decoded.observation_id).unwrap();
+                        assert_eq!(assessed.memory_limit, memory_assessment);
+                        assert_eq!(assessed.swap_limit, swap_assessment);
+                        assert_eq!(assessed.pids_limit, pids_assessment);
+                        assert_eq!(assessed.cgroup_driver, ReportedCgroupDriver::Unknown);
+                        assert_eq!(assessed.cgroup_version, ReportedCgroupVersion::Unknown);
+                        assert!(decoded.version.daemon.capabilities.is_empty());
+                        assert_eq!(capture.exchanges().len(), 2);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cgroup_strings_preserve_independent_availability_exact_values_and_privacy() {
+        let cases = [
+            (
+                None,
+                Availability::Missing,
+                None,
+                ReportedCgroupDriver::Unknown,
+                ReportedCgroupVersion::Unknown,
+            ),
+            (
+                Some("null"),
+                Availability::Null,
+                None,
+                ReportedCgroupDriver::Unknown,
+                ReportedCgroupVersion::Unknown,
+            ),
+            (
+                Some(r#"{"__docker_lens_redacted__":true}"#),
+                Availability::Redacted,
+                None,
+                ReportedCgroupDriver::Unknown,
+                ReportedCgroupVersion::Unknown,
+            ),
+            (
+                Some(r#""""#),
+                Availability::Empty,
+                Some(""),
+                ReportedCgroupDriver::Unknown,
+                ReportedCgroupVersion::Unknown,
+            ),
+            (
+                Some(r#""none""#),
+                Availability::Present,
+                Some("none"),
+                ReportedCgroupDriver::None,
+                ReportedCgroupVersion::Unrecognized,
+            ),
+            (
+                Some(r#""cgroupfs""#),
+                Availability::Present,
+                Some("cgroupfs"),
+                ReportedCgroupDriver::Cgroupfs,
+                ReportedCgroupVersion::Unrecognized,
+            ),
+            (
+                Some(r#""systemd""#),
+                Availability::Present,
+                Some("systemd"),
+                ReportedCgroupDriver::Systemd,
+                ReportedCgroupVersion::Unrecognized,
+            ),
+            (
+                Some(r#""1""#),
+                Availability::Present,
+                Some("1"),
+                ReportedCgroupDriver::Unrecognized,
+                ReportedCgroupVersion::V1,
+            ),
+            (
+                Some(r#""2""#),
+                Availability::Present,
+                Some("2"),
+                ReportedCgroupDriver::Unrecognized,
+                ReportedCgroupVersion::V2,
+            ),
+            (
+                Some(r#"" Systemd ""#),
+                Availability::Present,
+                Some(" Systemd "),
+                ReportedCgroupDriver::Unrecognized,
+                ReportedCgroupVersion::Unrecognized,
+            ),
+            (
+                Some(r#""02""#),
+                Availability::Present,
+                Some("02"),
+                ReportedCgroupDriver::Unrecognized,
+                ReportedCgroupVersion::Unrecognized,
+            ),
+            (
+                Some(r#""private-resource-canary""#),
+                Availability::Present,
+                Some("private-resource-canary"),
+                ReportedCgroupDriver::Unrecognized,
+                ReportedCgroupVersion::Unrecognized,
+            ),
+        ];
+        for api_minor in [41, 49, 56] {
+            for (driver, driver_availability, driver_value, driver_assessment, _) in cases {
+                for (version, version_availability, version_value, _, version_assessment) in cases {
+                    let mut fields: Vec<_> = [("CgroupDriver", driver), ("CgroupVersion", version)]
+                        .into_iter()
+                        .filter_map(|(name, value)| {
+                            value.map(|value| format!("\"{name}\":{value}"))
+                        })
+                        .collect();
+                    fields.push("\"PidsLimit\":false".to_owned());
                     let body = format!("{{{}}}", fields.join(","));
                     let capture = resource_capture(api_minor, Some(&body));
                     let decoded = decode_capture(&capture).unwrap();
                     let reports = &decoded.version.resource_support;
-                    assert_eq!(reports.observation_id, capture.observation_id());
+                    assert_eq!(reports.cgroup_driver.availability, driver_availability);
+                    assert_eq!(reports.cgroup_version.availability, version_availability);
+                    assert_eq!(reports.cgroup_driver.origin, Origin::Effective);
+                    assert_eq!(reports.cgroup_version.origin, Origin::Effective);
                     assert_eq!(
-                        reports.observation_id,
-                        decoded.version.daemon.observation_id
+                        reports.cgroup_driver.value().map(ProtectedValue::as_bytes),
+                        driver_value.map(str::as_bytes)
                     );
-                    assert_eq!(reports.memory_limit.availability, memory_availability);
-                    assert_eq!(reports.swap_limit.availability, swap_availability);
-                    assert_eq!(reports.memory_limit.origin, Origin::Effective);
-                    assert_eq!(reports.swap_limit.origin, Origin::Effective);
-                    assert_eq!(reports.memory_limit.value().copied(), memory_value);
-                    assert_eq!(reports.swap_limit.value().copied(), swap_value);
-                    let assessed = reports.assess(decoded.observation_id).unwrap();
-                    assert_eq!(assessed.memory_limit, memory_assessment);
-                    assert_eq!(assessed.swap_limit, swap_assessment);
+                    assert_eq!(
+                        reports.cgroup_version.value().map(ProtectedValue::as_bytes),
+                        version_value.map(str::as_bytes)
+                    );
+                    let assessment = reports.assess(capture.observation_id()).unwrap();
+                    assert_eq!(assessment.cgroup_driver, driver_assessment);
+                    assert_eq!(assessment.cgroup_version, version_assessment);
+                    assert_eq!(
+                        assessment.pids_limit,
+                        ReportedResourceSupport::ReportedUnavailable
+                    );
+                    assert_eq!(assessment.memory_limit, ReportedResourceSupport::Unknown);
+                    assert_eq!(assessment.swap_limit, ReportedResourceSupport::Unknown);
+                    assert!(!format!("{reports:?}").contains("private-resource-canary"));
+                    assert!(!format!("{assessment:?}").contains("private-resource-canary"));
                     assert!(decoded.version.daemon.capabilities.is_empty());
                     assert_eq!(capture.exchanges().len(), 2);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cgroup_metadata_does_not_infer_or_override_a_resource_report() {
+        for api_minor in [41, 49, 56] {
+            let capture = resource_capture(
+                api_minor,
+                Some(r#"{"PidsLimit":true,"CgroupDriver":"none","CgroupVersion":"1"}"#),
+            );
+            let decoded = decode_capture(&capture).unwrap();
+            let assessment = decoded
+                .version
+                .resource_support
+                .assess(capture.observation_id())
+                .unwrap();
+            assert_eq!(
+                assessment.pids_limit,
+                ReportedResourceSupport::ReportedAvailableUnverified
+            );
+            assert_eq!(assessment.cgroup_driver, ReportedCgroupDriver::None);
+            assert_eq!(assessment.cgroup_version, ReportedCgroupVersion::V1);
+            assert_eq!(assessment.memory_limit, ReportedResourceSupport::Unknown);
+            assert_eq!(assessment.swap_limit, ReportedResourceSupport::Unknown);
+            assert!(decoded.version.daemon.capabilities.is_empty());
+        }
+    }
+
+    #[test]
+    fn malformed_cgroup_strings_reject_without_native_values() {
+        for api_minor in [41, 49, 56] {
+            for name in ["CgroupDriver", "CgroupVersion"] {
+                for malformed in [
+                    "false",
+                    "true",
+                    "0",
+                    "1",
+                    "2",
+                    "2.0",
+                    "[]",
+                    "{}",
+                    r#"{"__docker_lens_redacted__":false}"#,
+                    r#"{"__docker_lens_redacted__":true,"private-resource-canary":true}"#,
+                ] {
+                    let body = format!("{{\"{name}\":{malformed}}}");
+                    let error = decode_capture(&resource_capture(api_minor, Some(&body)))
+                        .err()
+                        .unwrap();
+                    assert_eq!(error, DecodeError::InvalidShape(FieldPath::ResourceLimit));
+                    assert_eq!(format!("{error:?}"), "InvalidShape(ResourceLimit)");
                 }
             }
         }
@@ -1941,12 +2153,35 @@ mod resource_support_tests {
         let reports = &decoded.version.resource_support;
         assert_eq!(reports.memory_limit.availability, Availability::Missing);
         assert_eq!(reports.swap_limit.availability, Availability::Missing);
+        assert_eq!(reports.pids_limit.availability, Availability::Missing);
+        assert_eq!(reports.cgroup_driver.availability, Availability::Missing);
+        assert_eq!(reports.cgroup_version.availability, Availability::Missing);
+        for field in [
+            &reports.memory_limit,
+            &reports.swap_limit,
+            &reports.pids_limit,
+        ] {
+            assert_eq!(field.origin, Origin::Effective);
+            assert!(field.value().is_none());
+        }
+        for field in [&reports.cgroup_driver, &reports.cgroup_version] {
+            assert_eq!(field.origin, Origin::Effective);
+            assert!(field.value().is_none());
+        }
         let assessment = reports.assess(capture.observation_id()).unwrap();
         assert_eq!(assessment.memory_limit, ReportedResourceSupport::Unknown);
         assert_eq!(assessment.swap_limit, ReportedResourceSupport::Unknown);
+        assert_eq!(assessment.pids_limit, ReportedResourceSupport::Unknown);
+        assert_eq!(assessment.cgroup_driver, ReportedCgroupDriver::Unknown);
+        assert_eq!(assessment.cgroup_version, ReportedCgroupVersion::Unknown);
         assert_eq!(capture.exchanges().len(), 1);
 
-        let other_capture = resource_capture(41, Some(r#"{"MemoryLimit":true,"SwapLimit":false}"#));
+        let other_capture = resource_capture(
+            41,
+            Some(
+                r#"{"MemoryLimit":true,"SwapLimit":false,"PidsLimit":true,"CgroupDriver":"systemd","CgroupVersion":"2"}"#,
+            ),
+        );
         let other = decode_capture(&other_capture).unwrap();
         assert_eq!(decoded.version.daemon.release, other.version.daemon.release);
         assert_eq!(
@@ -1968,34 +2203,44 @@ mod resource_support_tests {
 
     #[test]
     fn malformed_resource_booleans_fail_with_value_free_errors() {
-        for name in ["MemoryLimit", "SwapLimit"] {
-            for malformed in [
-                r#""private-resource-canary""#,
-                "0",
-                "1",
-                "[]",
-                "{}",
-                r#"{"__docker_lens_redacted__":false}"#,
-                r#"{"__docker_lens_redacted__":true,"private-resource-canary":true}"#,
-            ] {
-                let other_name = if name == "MemoryLimit" {
-                    "SwapLimit"
-                } else {
-                    "MemoryLimit"
-                };
-                let body = format!("{{\"{name}\":{malformed},\"{other_name}\":true}}");
-                let error = decode_capture(&resource_capture(41, Some(&body)))
-                    .err()
-                    .unwrap();
-                assert_eq!(error, DecodeError::InvalidShape(FieldPath::ResourceLimit));
-                assert_eq!(format!("{error:?}"), "InvalidShape(ResourceLimit)");
+        for api_minor in [41, 49, 56] {
+            for name in ["MemoryLimit", "SwapLimit", "PidsLimit"] {
+                for malformed in [
+                    r#""private-resource-canary""#,
+                    r#""""#,
+                    "0",
+                    "1",
+                    "1.0",
+                    "-1",
+                    "[]",
+                    "{}",
+                    r#"{"__docker_lens_redacted__":false}"#,
+                    r#"{"__docker_lens_redacted__":true,"private-resource-canary":true}"#,
+                ] {
+                    let other_name = if name == "MemoryLimit" {
+                        "SwapLimit"
+                    } else {
+                        "MemoryLimit"
+                    };
+                    let body = format!("{{\"{name}\":{malformed},\"{other_name}\":true}}");
+                    let error = decode_capture(&resource_capture(api_minor, Some(&body)))
+                        .err()
+                        .unwrap();
+                    assert_eq!(error, DecodeError::InvalidShape(FieldPath::ResourceLimit));
+                    assert_eq!(format!("{error:?}"), "InvalidShape(ResourceLimit)");
+                }
             }
         }
     }
 
     #[test]
     fn reported_true_with_failed_effect_evidence_stays_unverified() {
-        let capture = resource_capture(41, Some(r#"{"MemoryLimit":true,"SwapLimit":true}"#));
+        let capture = resource_capture(
+            41,
+            Some(
+                r#"{"MemoryLimit":true,"SwapLimit":true,"PidsLimit":true,"CgroupDriver":"systemd","CgroupVersion":"2"}"#,
+            ),
+        );
         let mut decoded = decode_capture(&capture).unwrap();
         // Separate, caller-supplied negative effect evidence cannot be promoted
         // by a daemon's positive report. It is not native compatibility proof.
@@ -2028,6 +2273,12 @@ mod resource_support_tests {
             assessment.swap_limit,
             ReportedResourceSupport::ReportedAvailableUnverified
         );
+        assert_eq!(
+            assessment.pids_limit,
+            ReportedResourceSupport::ReportedAvailableUnverified
+        );
+        assert_eq!(assessment.cgroup_driver, ReportedCgroupDriver::Systemd);
+        assert_eq!(assessment.cgroup_version, ReportedCgroupVersion::V2);
         assert_eq!(decoded.version.daemon.capabilities, vec![failed_effect]);
         let catalog = TargetCapabilityCatalog::reviewed();
         assert_eq!(catalog.profiles().len(), 4);
@@ -2037,6 +2288,12 @@ mod resource_support_tests {
                     .resolve(profile)
                     .unwrap()
                     .supports(Capability::MemoryLimit)
+            );
+            assert!(
+                !catalog
+                    .resolve(profile)
+                    .unwrap()
+                    .supports(Capability::PidsLimit)
             );
         }
     }

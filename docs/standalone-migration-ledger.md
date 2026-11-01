@@ -1,5 +1,34 @@
 # Standalone Docker migration ledger
 
+## Device mapping source invocation 29
+
+[ADR 0047](decisions/0047-device-mapping-native-source-proof.md) appends the
+[finite device proof](native-device-mapping-contract.md) after unchanged
+PIDs27/read and nofile28/read. The 29-call lane has eight delegated owners;
+original invocation22 resolver semantics, private custody and non-admission
+rules remain intact. Independent CLI/rendered controls check exact mapping,
+nonsymlink character identity and a bounded held-descriptor read only. The
+private reader is mandatory without emission and repeated by the unchanged
+19-argument emitter. No denied-write/create or DeviceMappings admission claim
+follows. Fresh complete and exact-candidate whole-four-lane native gates,
+actual byte/time fit and verified cleanup remain pending. Memory effects,
+named capability add/drop and logging source proofs remain open.
+
+
+## Resolver source recovery #148
+
+The current [hostname/resolver contract](native-hostname-contract.md) and
+[ADR 0046](decisions/0046-hostname-resolver-source-proof-v2.md) expand
+invocation 22 under its existing HealthRun/owner with four fresh resolver fixtures,
+while preserving all four hostname controls. Private schema 2/hostname-v2.json
+requires both sections; public hostname-v1, the 19-argument emitter and capability/
+catalogue maps remain unchanged. The original 28 invocation names retain their order; device29 now appends an
+eighth owner scope under ADR 0047. Resolver failure can prevent reaching PIDs27.
+PIDs27/read and nofile28/read must succeed before device29/read. Earlier qualification is not reusable;
+source checks and actual combined native byte/time fit remain pending. No resolver
+connectivity, IPv6-network, application-acceptance or publication claim follows.
+
+
 This is the finite checkpoint for DockerLens #3, not a completed migration or a
 compatibility claim. DockerLens 0.1.0 supplies the foundation: bounded explicit
 read-only Unix-socket acquisition, pure typed inspection, and inert standalone
@@ -99,7 +128,7 @@ or migration acceptance is established; #31/#343/#366 remain open.
 | #30 target branch | Typed request contract | Remaining proof / owner |
 | --- | --- | --- |
 | Publication | `PortPublication` has exposed-only or ordered `HostBinding` values; each binding distinguishes omitted/explicit IPv4 or IPv6 `HostIp` and fixed/ephemeral `HostPort`. Duplicate or wildcard-overlapping fixed bindings fail before planning. | #31 must inspect resulting fixed/repeated/dynamic bindings, loopback isolation and IPv6 behavior per exact lane; #343 must retain authored address versus observed assigned port. |
-| Process and health | Command and entrypoint distinguish native omission, clear intent and exec. Command clear with inherited or cleared entrypoint fails intent validation; explicit exec entrypoint plus clear command remains capability-gated. Health test distinguishes exec, one shell string, disabled and inherited absence; timing retains omitted versus explicit start values. | #31 must prove the conditional command-clear request against independent literal Engine behavior and compare an entrypoint-only control; `EntrypointClear` needs separate proof. #343 must not infer authored clear from effective source `Config.Cmd`. No empty-string argument workaround, generic API floor, or claim from offline bytes. |
+| Process and health | Command and entrypoint distinguish native omission, clear intent and exec. Command clear with inherited or cleared entrypoint fails intent validation; ADR 0037 selects only explicit exec entrypoint plus clear command for candidate rehearsal. Health test distinguishes exec, one shell string, disabled and inherited absence; timing retains omitted versus explicit start values. | Independently reviewed source run 40119803977 proves accepted Cmd `[]` under that guard, including the entrypoint-only control with intentionally identical process effect. The admission head still needs fresh complete/package/native26 and actual consumer gates. `EntrypointClear`, including inherited image command, needs separate proof. #343 must not infer authored clear from effective source `Config.Cmd`. No empty-string workaround, generic API floor, or offline-only compatibility claim. |
 | Identity and runtime | Protected labels/user/workdir/hostname; typed tmpfs, read-only rootfs, init, stop settings, limits, devices, caps/security/sysctls/groups, DNS/extra hosts and logging render behind individual capabilities. | #31 checks resulting process, mount, resolver and security/resource behavior. #343 maps each neutral field or records actionable loss; a typed branch alone does not close the full application contract. |
 
 The existing source-to-target rows below remain the finite release blockers.

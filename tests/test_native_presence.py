@@ -119,6 +119,76 @@ class NativePresenceTests(unittest.TestCase):
 
 
 class PresenceCleanupTests(unittest.TestCase):
+    def test_complete_inspection_mismatch_retains_resources_without_query_failure(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text()
+        helpers = source[source.index("cleanup_podman() {"):source.index("trap cleanup EXIT")]
+        for role in ("network", "volume"):
+            for value in ("", "wrong-identity", "one|two", "wrong\nidentity"):
+                with self.subTest(role=role, value=value):
+                    setup = (
+                        "set -u\nnative_outer_engine=docker\nrun_id=expected-owner\n"
+                        "network_attempted=1; network_created=1; outer_network=held-network; outer_network_id=held-id\n"
+                        "volume_attempted=1; volume=held-volume; volume_identity=expected-identity\n"
+                        "payload=$1\n"
+                    )
+                    seams = (
+                        "native_presence() { return 0; }\n"
+                        "native_outer_binding() { return 0; }\n"
+                        "cleanup_inspect_query() { printf '%s' \"$payload\"; return 0; }\n"
+                        "cleanup_remove() { printf 'unexpected-removal\\n'; return 0; }\n"
+                        "cleanup_identity_stage() { printf 'unexpected-query-failure\\n'; }\n"
+                        "cleanup_refuse() { printf '%s:%s\\n' \"$1\" \"$2\"; }\n"
+                    )
+                    result = subprocess.run(
+                        ["bash", "-c", setup + helpers + seams + f"cleanup_{role}\n", "fixture", value],
+                        capture_output=True, timeout=3, check=False,
+                    )
+                    self.assertEqual(result.returncode, 1)
+                    self.assertEqual(result.stdout, f"{role}:identity_mismatch\n".encode())
+                    self.assertEqual(result.stderr, b"")
+
+    def test_inspection_handoff_keeps_selected_privilege_query_and_status(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text()
+        helper = source[source.index("cleanup_inspect_query() {"):source.index("native_presence() {")]
+        cases = (
+            ("network-owner-inspect", "dl-native-net-ABC123xy",
+             ["network", "inspect", "--format", '{{index .Labels "io.dockerlens.native-run"}}']),
+            ("volume-identity-inspect", "dl-native-data-ABC123xy",
+             ["volume", "inspect", "--format",
+              '{{.Name}}|{{.Driver}}|{{.Mountpoint}}|{{.CreatedAt}}|{{index .Labels "io.dockerlens.native-run"}}']),
+        )
+        for engine in ("docker", "podman"):
+            for elevated in (False, True):
+                for status in (0, 1, 130, 143):
+                    for kind, name, original_query in cases:
+                        with self.subTest(engine=engine, elevated=elevated, status=status, kind=kind):
+                            setup = (
+                                "set -u\nscript_dir=/reviewed/scripts\n"
+                                "run_dir=/private/dockerlens-native.ABC123xy\n"
+                                f"native_outer_engine={engine}\n"
+                                f"native_outer_cmd=({'sudo -n env' if elevated else 'env'})\n"
+                                f"python3() {{ printf 'frontend\\0'; printf '%s\\0' \"$@\"; return {status}; }}\n"
+                                f"cleanup_podman() {{ printf 'legacy\\0'; printf '%s\\0' \"$@\"; return {status}; }}\n"
+                                "sudo() { printf 'owned-sudo\\n' >&2; [[ $1 == -n ]] || return 99; shift; \"$@\"; }\n"
+                            )
+                            result = subprocess.run(
+                                ["bash", "-c", setup + helper + "\ncleanup_inspect_query \"$1\" \"$2\"\n",
+                                 "fixture", kind, name], capture_output=True, timeout=3, check=False,
+                            )
+                            expected = (
+                                ["frontend", "/reviewed/scripts/native-cleanup-inspect-diagnostic.py", "owner",
+                                 "--engine", "docker", "--directory", "/private/dockerlens-native.ABC123xy",
+                                 "--kind", kind, "--name", name]
+                                if engine == "docker" else ["legacy", *original_query, name]
+                            )
+                            self.assertEqual(result.returncode, status)
+                            self.assertEqual(result.stdout.split(b"\0"), [item.encode() for item in expected] + [b""])
+                            self.assertEqual(result.stderr, b"owned-sudo\n" if engine == "docker" and elevated else b"")
+        self.assertIn('current=$(cleanup_inspect_query volume-identity-inspect "$volume")', source)
+        self.assertIn('owner=$(cleanup_inspect_query network-owner-inspect "$outer_network")', source)
+        self.assertIn('[[ $current == "$volume_identity" ]]', source)
+        self.assertIn('[[ $owner == "$run_id" ]]', source)
+
     def run_shell(self, role: str, phase: str, fault: str, *, elevated: bool = False):
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         helpers = source[source.index("cleanup_podman() {"):source.index("trap cleanup EXIT")]

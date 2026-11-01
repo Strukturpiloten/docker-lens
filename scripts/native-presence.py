@@ -19,6 +19,14 @@ REAP_SECONDS = 1.0
 
 
 def classify(status: int | None, output: bytes, complete: bool, mode: str) -> tuple[str, int]:
+    if mode == "exact-list":
+        if complete and status == 0:
+            if output == b"":
+                return "absent", 1
+            rows = output.splitlines(keepends=True)
+            if all(row in (b"present\n", b"other\n") for row in rows) and rows.count(b"present\n") <= 1:
+                return ("present", 0) if b"present\n" in rows else ("absent", 1)
+        return "unknown", 2
     if not complete or output:
         return "unknown", 2
     if mode == "exists" and status in (0, 1):
@@ -59,6 +67,8 @@ def query(command: list[str], directory: Path, mode: str, *, seconds: float = QU
     complete = False
     cancelled = False
     group_finished = False
+    stderr_seen = False
+    retained_bytes = 0
 
     def cancel(_number: int, _frame: object) -> None:
         nonlocal cancelled
@@ -73,25 +83,42 @@ def query(command: list[str], directory: Path, mode: str, *, seconds: float = QU
             # The child has its own session for teardown. Keep a same-privilege
             # timer around the actual client as well: it survives helper death.
             bounded = ["timeout", "--signal=TERM", "--kill-after=2s", f"{seconds}s", *command]
-            process = subprocess.Popen(bounded, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            process = subprocess.Popen(bounded, stdout=subprocess.PIPE,
+                                       stderr=subprocess.PIPE if mode == "exact-list" else subprocess.STDOUT,
                                        start_new_session=True)
             assert process.stdout is not None
-            os.set_blocking(process.stdout.fileno(), False)
             deadline = time.monotonic() + seconds
             with selectors.DefaultSelector() as selector:
-                selector.register(process.stdout, selectors.EVENT_READ)
+                streams = [process.stdout] + ([process.stderr] if process.stderr is not None else [])
+                for stream in streams:
+                    os.set_blocking(stream.fileno(), False)
+                    selector.register(stream, selectors.EVENT_READ, stream is process.stderr)
+                open_streams = {stream.fileno() for stream in streams}
+                overflow = False
                 while not cancelled and time.monotonic() < deadline:
                     events = selector.select(min(0.05, max(0, deadline - time.monotonic())))
                     if not events:
                         continue
-                    chunk = os.read(process.stdout.fileno(), 4096)
-                    if not chunk:
-                        complete = True
+                    for key, _mask in events:
+                        chunk = os.read(key.fd, 4096)
+                        if not chunk:
+                            selector.unregister(key.fileobj)
+                            open_streams.remove(key.fd)
+                            continue
+                        if key.data:
+                            stderr_seen = True
+                        retained = chunk[:max(0, OUTPUT_LIMIT - retained_bytes)]
+                        retained_bytes += len(retained)
+                        if not key.data:
+                            output.extend(retained)
+                        evidence.write(retained)
+                        if len(retained) != len(chunk):
+                            overflow = True
+                            break
+                    if overflow:
                         break
-                    retained = chunk[:max(0, OUTPUT_LIMIT - len(output))]
-                    output.extend(retained)
-                    evidence.write(retained)
-                    if len(retained) != len(chunk):
+                    if not open_streams:
+                        complete = True
                         break
             exited = None
             # EOF is not process completion: a client can close its streams and
@@ -104,12 +131,16 @@ def query(command: list[str], directory: Path, mode: str, *, seconds: float = QU
             status, terminated = terminate_group(process)
             group_finished = True
             process.stdout.close()
-            return classify(status, bytes(output), complete and exited is not None and terminated and not cancelled, mode)
+            if process.stderr is not None:
+                process.stderr.close()
+            return classify(status, bytes(output), complete and exited is not None and terminated and not cancelled and not stderr_seen, mode)
     except (OSError, ValueError, subprocess.SubprocessError):
         if process is not None and not group_finished:
             terminate_group(process)
         if process is not None and process.stdout is not None:
             process.stdout.close()
+        if process is not None and process.stderr is not None:
+            process.stderr.close()
         return "unknown", 2
     finally:
         for number, handler in previous.items():
@@ -117,7 +148,7 @@ def query(command: list[str], directory: Path, mode: str, *, seconds: float = QU
 
 
 def main() -> int:
-    if len(sys.argv) < 5 or sys.argv[1] not in ("exists", "empty-success") or sys.argv[3] != "--":
+    if len(sys.argv) < 5 or sys.argv[1] not in ("exists", "empty-success", "exact-list") or sys.argv[3] != "--":
         print("unknown")
         return 2
     marker, status = query(sys.argv[4:], Path(sys.argv[2]), sys.argv[1])

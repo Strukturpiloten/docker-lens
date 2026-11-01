@@ -1,0 +1,389 @@
+{
+  "acquisition_api": "1.49",
+  "admitted_shapes": {
+    "BindMount": [
+      "BindMountReadWrite",
+      "BindMountReadOnly"
+    ],
+    "BindRelabelPrivate": [
+      "BindMountPrivateRelabelReadWrite",
+      "BindMountPrivateRelabelReadOnly"
+    ],
+    "BindRelabelShared": [
+      "BindMountSharedRelabelReadWrite",
+      "BindMountSharedRelabelReadOnly"
+    ],
+    "BridgeNetwork": [
+      "BridgeNetworkCreate",
+      "BridgeNetworkAttach"
+    ],
+    "Command": [
+      "ExecCommand"
+    ],
+    "CommandClear": [
+      "ClearCommand"
+    ],
+    "ContainerLabels": [
+      "ContainerCreateLabels"
+    ],
+    "ContainerUser": [
+      "ContainerUser"
+    ],
+    "ContainerWorkdir": [
+      "ContainerWorkdir"
+    ],
+    "Entrypoint": [
+      "ExecEntrypoint"
+    ],
+    "EnvironmentAssignment": [
+      "EnvironmentValue",
+      "EnvironmentEmptyValue"
+    ],
+    "HealthShell": [
+      "ShellHealthcheck"
+    ],
+    "HealthStartPeriod": [
+      "HealthStartPeriodZero",
+      "HealthStartPeriodPositive"
+    ],
+    "Healthcheck": [
+      "ExecHealthcheck"
+    ],
+    "NamedVolume": [
+      "NamedVolumeCreate",
+      "NamedVolumeMountReadWrite",
+      "NamedVolumeMountReadOnly"
+    ],
+    "NetworkAliases": [
+      "NetworkPrimaryAliases",
+      "NetworkSecondaryAliases"
+    ],
+    "NetworkExternalInternalExpectation": [
+      "ExternalNetworkInternalFalse",
+      "ExternalNetworkInternalTrue"
+    ],
+    "NetworkExternalReference": [
+      "ExternalNetworkReference"
+    ],
+    "NetworkInternal": [
+      "InternalBridgeNetworkCreate"
+    ],
+    "NetworkLabels": [
+      "NetworkCreateLabels"
+    ],
+    "NetworkMultipleAttachment": [
+      "NetworkSecondaryConnect"
+    ],
+    "PortEphemeral": [
+      "EphemeralHostPort"
+    ],
+    "PortExposeOnly": [
+      "ExposedOnlyPort"
+    ],
+    "PortHostIpv4": [
+      "FixedIpv4HostPort",
+      "EphemeralIpv4HostPort"
+    ],
+    "PortHostIpv6": [
+      "FixedIpv6HostPort",
+      "EphemeralIpv6HostPort"
+    ],
+    "PortMultipleBindings": [
+      "MultipleFixedPortBindings",
+      "MultipleEphemeralPortBindings"
+    ],
+    "PortPublish": [
+      "FixedTcpPort",
+      "FixedUdpPort"
+    ],
+    "RestartPolicy": [
+      "RestartNo",
+      "RestartAlways",
+      "RestartUnlessStopped",
+      "RestartOnFailureUnlimited",
+      "RestartOnFailureLimited"
+    ],
+    "StandaloneContainer": [
+      "StandaloneCreate"
+    ],
+    "StopSignal": [
+      "StopSignal"
+    ],
+    "VolumeExternalReference": [
+      "ExternalVolumeReference"
+    ],
+    "VolumeLabels": [
+      "VolumeCreateLabels"
+    ]
+  },
+  "bind_relabel_contract": "bind-relabel-config-v1",
+  "bind_relabel_probes": [
+    "BindMountSharedRelabelReadWrite",
+    "BindMountSharedRelabelReadOnly",
+    "BindMountPrivateRelabelReadWrite",
+    "BindMountPrivateRelabelReadOnly"
+  ],
+  "bind_relabel_selinux_effect": "unverified",
+  "candidate_sha": "a36e42fbaeee6585c954948c9fe3a8686d86018b",
+  "capability_outcome": {
+    "BindMount": "available",
+    "BindRelabelPrivate": "available",
+    "BindRelabelShared": "available",
+    "BridgeNetwork": "available",
+    "Command": "available",
+    "CommandClear": "available",
+    "ContainerLabels": "available",
+    "ContainerUser": "available",
+    "ContainerWorkdir": "available",
+    "Entrypoint": "available",
+    "EnvironmentAssignment": "available",
+    "HealthShell": "available",
+    "HealthStartPeriod": "available",
+    "Healthcheck": "available",
+    "NamedVolume": "available",
+    "NetworkAliases": "available",
+    "NetworkExternalInternalExpectation": "available",
+    "NetworkExternalReference": "available",
+    "NetworkInternal": "available",
+    "NetworkLabels": "available",
+    "NetworkMultipleAttachment": "available",
+    "PortEphemeral": "available",
+    "PortExposeOnly": "available",
+    "PortHostIpv4": "available",
+    "PortHostIpv6": "available",
+    "PortMultipleBindings": "available",
+    "PortPublish": "available",
+    "RestartPolicy": "available",
+    "StandaloneContainer": "available",
+    "StopSignal": "available",
+    "VolumeExternalReference": "available",
+    "VolumeLabels": "available"
+  },
+  "capability_version": "1.56",
+  "command_clear_contract": "command-clear-v1",
+  "command_clear_outcomes": {
+    "capability": "CommandClear",
+    "catalogue_admission": "unadmitted",
+    "outcome": "all_four_process_controls_verified",
+    "scope": "explicit_exec_entrypoint_required",
+    "shapes": [
+      "ClearCommand"
+    ],
+    "source_admission": "raw_source_only"
+  },
+  "command_clear_projection_contract": "command-clear-native-source-v1",
+  "debian_docker_package": null,
+  "engine_api_max": "1.56",
+  "engine_api_min": "1.40",
+  "engine_version": "29.8.1",
+  "expected_mode": "rootless",
+  "external_network_contract": "external-network-internal-v1",
+  "external_network_probes": [
+    "ExternalNetworkInternalFalse",
+    "ExternalNetworkInternalTrue"
+  ],
+  "health_metadata_contract": "health-metadata-v1",
+  "health_metadata_probes": [
+    "ContainerCreateLabels",
+    "ShellHealthcheck",
+    "HealthStartPeriodPositive",
+    "HealthStartPeriodZero"
+  ],
+  "health_start_interval_boundary_contract": "health-start-interval-boundary-v1",
+  "health_start_interval_boundary_outcomes": {
+    "admission": "unadmitted",
+    "probes": [
+      "omission_configured_absent",
+      "literal_zero_configured_absent",
+      "cli_zero_configured_absent"
+    ],
+    "scope": "created_configuration_only"
+  },
+  "hostname_contract": "hostname-v1",
+  "hostname_outcomes": {
+    "admission": "unadmitted",
+    "outcome": "omitted_and_explicit_verified"
+  },
+  "identity_cases": [
+    "inherit",
+    "numeric_uid_gid",
+    "numeric_uid",
+    "named_user",
+    "named_user_group",
+    "named_user_numeric_group",
+    "numeric_user_named_group",
+    "missing_user",
+    "missing_group",
+    "nondirectory_workdir"
+  ],
+  "identity_contract": "container-identity-v1",
+  "identity_probes": [
+    "ContainerUser",
+    "ContainerWorkdir",
+    "ContainerNumericUidGid",
+    "ContainerProcessWorkingDirectory",
+    "ContainerIdentityOwnershipCleanup"
+  ],
+  "kernel_settings_contract": "kernel-settings-v1",
+  "kernel_settings_outcomes": {
+    "admission": "unadmitted",
+    "outcome": "pid1_and_bound_child_kernel_effects_verified",
+    "scope": "diagonal_omitted_false0_true1_only"
+  },
+  "lane": "upstream-rootless",
+  "lifecycle_contract": "lifecycle-v1",
+  "lifecycle_default_effect_contract": "lifecycle-default-effects-v1",
+  "lifecycle_default_effect_outcomes": {
+    "admission": "unadmitted",
+    "probes": [
+      "stop_timeout_omitted_graceful_zero_forced",
+      "health_start_interval_default_equivalent"
+    ]
+  },
+  "lifecycle_outcomes": {
+    "admission": "unadmitted",
+    "probes": [
+      "stop_timeout_effective",
+      "health_start_interval_effective"
+    ]
+  },
+  "network_attachment_contract": "network-attachments-v1",
+  "network_attachment_probes": [
+    "NetworkCreateLabels",
+    "NetworkPrimaryAliases",
+    "NetworkSecondaryAliases",
+    "NetworkSecondaryConnect"
+  ],
+  "network_probes": [
+    "ExternalNetworkReference",
+    "InternalBridgeNetworkCreate",
+    "Ipv6BridgeNetworkCreate",
+    "NetworkIpamV4",
+    "NetworkIpamV6",
+    "NetworkIpamGateway",
+    "NetworkIpamRange",
+    "NetworkIpamAuxiliary",
+    "NetworkIpamDefaultDriver",
+    "NetworkBridgeMtu",
+    "NetworkBridgeIcc",
+    "NetworkBridgeMasquerade",
+    "NetworkBridgeHostBindingIp",
+    "NetworkCreateLabels",
+    "NetworkPrimaryAliases",
+    "NetworkSecondaryAliases",
+    "NetworkStaticIpv4",
+    "NetworkStaticIpv6",
+    "NetworkSecondaryConnect",
+    "NetworkBridgeIccDisabled",
+    "NetworkBridgeMasqueradeEnabled",
+    "NetworkCreateLabelsValueDomain"
+  ],
+  "outer_image": "ghcr.io/strukturpiloten/docker-29-rootless:v29.8.1@sha256:075f6b6e6f15960ebf3bca6496331ee6b0e32d96b7824cbac382ae5b296f0d7c",
+  "port_probes": [
+    {
+      "outcome": "observed",
+      "shape": "FixedIpv4HostPort"
+    },
+    {
+      "outcome": "observed",
+      "shape": "EphemeralIpv4HostPort"
+    },
+    {
+      "outcome": "observed",
+      "shape": "FixedIpv6HostPort"
+    },
+    {
+      "outcome": "observed",
+      "shape": "EphemeralIpv6HostPort"
+    },
+    {
+      "outcome": "observed",
+      "shape": "MultipleFixedPortBindings"
+    },
+    {
+      "outcome": "observed",
+      "shape": "MultipleEphemeralPortBindings"
+    },
+    {
+      "outcome": "observed",
+      "shape": "ExposedOnlyPort"
+    },
+    {
+      "outcome": "observed",
+      "shape": "EphemeralHostPort"
+    }
+  ],
+  "rendering_api": "1.56",
+  "runtime_components": {
+    "containerd": "v2.3.5",
+    "runc": "1.5.1"
+  },
+  "runtime_filesystem_contract": "runtime-filesystem-v1",
+  "runtime_filesystem_outcomes": {
+    "admission": "unadmitted",
+    "controls": [
+      "omitted",
+      "false",
+      "true"
+    ],
+    "init_effect_scope": "pid1_indirection_only",
+    "rootfs_effect_scope": "diagonal_omitted_false_true_only"
+  },
+  "schema_version": 1,
+  "shm_size_contract": "shm-size-v1",
+  "shm_size_outcomes": {
+    "admission": "unadmitted",
+    "outcome": "tmpfs_effect_and_ipc_isolation_verified",
+    "scope": "explicit_1MiB_2MiB_with_observed_omission_only"
+  },
+  "source_probes": [
+    "DiscoveryMetadata",
+    "ExactContainerId",
+    "ExactContainerName",
+    "LiteralNamePrefix",
+    "ExactLabel",
+    "ExplicitAllContainers",
+    "ExactNetworkRoot",
+    "ExactVolumeRoot",
+    "UnrelatedInspectExcluded",
+    "IdentityFieldsOracle",
+    "PortBindingsOracle",
+    "MultipleHostIpBindingsOracle",
+    "MountEnvironmentOracle",
+    "HealthRestartOracle",
+    "SelectedFieldOrigins",
+    "DaemonResourceSupportOracle",
+    "NetworkActiveMembership",
+    "NetworkStoppedMembershipBoundary",
+    "ContainerInspectIdOracle"
+  ],
+  "stop_signal_contract": "stop-signal-v1",
+  "stop_signal_probes": [
+    "StopSignal"
+  ],
+  "supplementary_groups_contract": "supplementary-groups-v1",
+  "supplementary_groups_outcomes": {
+    "admission": "unadmitted",
+    "outcome": "kernel_groups_and_dac_verified",
+    "scope": "numeric_nonroot_omitted_one_pair_dac_only"
+  },
+  "tmpfs_effect_contract": "tmpfs-effect-v1",
+  "tmpfs_effect_outcomes": {
+    "admission": "unadmitted",
+    "coverage": "explicit_1MiB_0700_and_2MiB_0750_rw_ro_only"
+  },
+  "volume_label_probes": [
+    "VolumeCreateLabels",
+    "VolumeLabelInspect",
+    "VolumeLabelPersistence",
+    "VolumeLabelOwnershipCleanup"
+  ],
+  "volume_probes": [
+    "ExistingVolumePrerequisite",
+    "ExistingVolumeTargetIdentity",
+    "ExistingVolumeReadOnlyData",
+    "ExistingVolumeReadWriteData",
+    "ExistingVolumePersistence",
+    "MissingVolumePrecheck"
+  ]
+}

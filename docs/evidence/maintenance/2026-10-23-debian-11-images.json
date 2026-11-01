@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "purpose": "publication-maintenance-only",
+  "native_admission": false,
+  "source_repository": "Strukturpiloten/containers",
+  "source_revision": "d148838d2b1234f5a898ff2a6d4e7393a259d92c",
+  "run_id": "39919296714",
+  "run_attempt": "1",
+  "verified_on": "2026-10-23",
+  "verification": "finalized release-result records and anonymous raw registry indexes; no image layers downloaded",
+  "images": [
+    {
+      "lane": "debian11-rootful",
+      "image": "ghcr.io/strukturpiloten/docker-debian-11-rootful",
+      "tag": "v1.0.0",
+      "index_digest": "sha256:47faf9e0f13269b9fdbe6e1b167b62a3c02130b6f8d34d785c6234b2c4d02ed3",
+      "architecture_digests": {
+        "amd64": "sha256:70fbdd599787ca34b557142e1f9ae859607e61cb2e423f7f590f8357e1812464",
+        "arm64": "sha256:d4ad327650d3ff50e81a07d4027b53db23c7e5c03b3c1cf3e5a6007796be5c8f"
+      },
+      "release_result_artifact_id": "12487684362",
+      "release_result_artifact_name": "docker-debian-11-rootful-release-result",
+      "extracted_receipt_sha256": "d2ea83d8e1e2cba009e929cca983ad6fbd8e42724975230ace2ab9a950426c3b"
+    },
+    {
+      "lane": "debian11-rootless",
+      "image": "ghcr.io/strukturpiloten/docker-debian-11-rootless",
+      "tag": "v1.0.0",
+      "index_digest": "sha256:36a16241b6058d163d1ed90549a8ea0aff9e242be62d414e4e75d81629513e77",
+      "architecture_digests": {
+        "amd64": "sha256:71baf6cbe8e519f31608f89aa93272b3f9252c8cfb1a6af907b76b45d560554b",
+        "arm64": "sha256:4e65f29d6b86a600e5cc596418596bbf66c2a9c5c18d2bfc3cefc8be1cca6c89"
+      },
+      "release_result_artifact_id": "12487767998",
+      "release_result_artifact_name": "docker-debian-11-rootless-release-result",
+      "extracted_receipt_sha256": "da89d8749319e1237191f8335339fe0f216ba4658b9d792b0f3f0c069da23907"
+    }
+  ]
+}

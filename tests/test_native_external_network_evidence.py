@@ -45,7 +45,7 @@ class ExternalNetworkEvidenceTests(unittest.TestCase):
     def rerun(self, result, destination):
         lane = destination.stem
         output = subprocess.run(result.args, capture_output=True, text=True, check=False, timeout=5,
-                                env={**os.environ, "NATIVE_FIXTURE_IMAGE": legacy.HEALTH_FIXTURE_IMAGE,
+                                env={**os.environ, "NATIVE_OUTER_ENGINE": "podman", "NATIVE_FIXTURE_IMAGE": legacy.HEALTH_FIXTURE_IMAGE,
                                      "NATIVE_OUTER_CONTAINER_ID": "f" * 64,
                                      "NATIVE_BIND_RELABEL_DAEMON_UID": "1000" if lane.endswith("-rootless") else "0"})
         self.assertNotEqual(output.returncode, 0)
@@ -64,9 +64,9 @@ class ExternalNetworkEvidenceTests(unittest.TestCase):
                 self.assertEqual(record["capability_outcome"]["NetworkExternalInternalExpectation"], "available")
                 self.assertEqual(record["admitted_shapes"]["NetworkExternalInternalExpectation"], SHAPES)
                 self.assertEqual(record["admitted_shapes"]["NetworkInternal"], ["InternalBridgeNetworkCreate"])
-                self.assertEqual(len(record["capability_outcome"]), 30 if lane.startswith("debian11-") else 31)
+                self.assertEqual(len(record["capability_outcome"]), 31 if lane.startswith("debian11-") else 32)
                 self.assertEqual(sum(map(len, record["admitted_shapes"].values())),
-                                 47 if lane.startswith("debian11-") else 49)
+                                 48 if lane.startswith("debian11-") else 50)
                 for key, expected in (
                     ("source_probes", legacy.SOURCE_PROBES), ("network_probes", legacy.NETWORK_PROBES),
                     ("volume_probes", legacy.VOLUME_PROBES), ("volume_label_probes", legacy.VOLUME_LABEL_PROBES),

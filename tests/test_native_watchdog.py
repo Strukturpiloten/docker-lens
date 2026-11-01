@@ -10,7 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
 WATCHDOG = "watchdog_measure() {" + SOURCE.split("watchdog_measure() {", 1)[1].split(
-    "\nstorage_mount=", 1
+    "\nvalidated_outer_ipv4() {", 1
 )[0]
 
 

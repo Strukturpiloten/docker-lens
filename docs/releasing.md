@@ -29,8 +29,11 @@ For the final current-main candidate require:
 ## Validate the candidate
 
 Run from a clean Linux host checkout with the repository's development tools.
-Native suites use isolated Podman-launched fixtures, not host Docker. The hosted
-workflow supplies their required privileged Linux environment.
+Native suites default locally to isolated Podman-launched inner fixtures. Admitted
+hosted jobs explicitly verify/select outer Docker under the [canonical test-only
+runtime](native-outer-runtime.md), without using its host daemon as the test subject
+or mounting its socket into a guest. Fresh qualification remains required; the
+hosted workflow supplies the privileged Linux environment.
 
 ```sh
 cd /home/becks/Entwicklung/standard/github/strukturpiloten/docker-lens
