@@ -4,6 +4,11 @@ Status: accepted bounded source-only test-helper contract; consumer opt-in and
 native qualification pending. Adds a distinct policy builder alongside ADRs
 0004 and 0038; their active legacy policy and lifecycle remain unchanged.
 
+The original flag-free declaration is narrowly superseded by
+[ADR 0052](0052-mediated-disconnected-path-flags.md). Its thirteen-rule vector,
+legacy boundaries and historical source evidence remain intact; neither decision
+claims native qualification of the changed declaration.
+
 ## Decision
 
 Add only `mediated_profile_bytes(name)` beside `profile_bytes`. It accepts the

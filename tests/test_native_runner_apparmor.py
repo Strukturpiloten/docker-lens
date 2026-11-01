@@ -81,7 +81,7 @@ class MediatedProfileContractTests(unittest.TestCase):
                 with self.subTest(prefix=prefix, run=run, attempt=attempt):
                     name = f"{prefix}-upstream-rootless-{run}-{attempt}-" + "0123456789abcdef" * 2
                     self.assertEqual(APP.mediated_profile_bytes(name),
-                                     (f"abi <abi/4.0>,\nprofile {name} {{\n"
+                                     (f"abi <abi/4.0>,\nprofile {name} flags=(attach_disconnected,mediate_deleted) {{\n"
                                       "  file,\n"
                                       "  capability,\n"
                                       "  network,\n"
@@ -120,13 +120,17 @@ class MediatedProfileContractTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             APP.mediated_profile_bytes(name, "all,")
         for key, value in (("mode", "unconfined"), ("rules", "change_profile,"),
-                           ("target", "/bin/tool"), ("attachment", "/bin/*")):
+                           ("target", "/bin/tool"), ("attachment", "/bin/*"),
+                           ("flags", "attach_disconnected"), ("path_flags", "mediate_deleted")):
             with self.subTest(parameter=key), self.assertRaises(TypeError):
                 APP.mediated_profile_bytes(name, **{key: value})
 
     def test_exact_finite_rule_roster_has_no_implicit_or_unsupported_family(self):
         name = "dockerlens-127-upstream-rootless-1-1-" + NONCE
         policy = APP.mediated_profile_bytes(name)
+        self.assertEqual(policy.splitlines()[1],
+                         f"profile {name} flags=(attach_disconnected,mediate_deleted) {{".encode("ascii"))
+        self.assertEqual(policy.count(b"flags=("), 1)
         self.assertEqual(policy.splitlines()[2:-1], [
             b"  file,", b"  capability,", b"  network,", b"  unix,",
             b"  dbus (bind, send, receive),", b"  mount,", b"  remount,", b"  umount,",
@@ -134,12 +138,13 @@ class MediatedProfileContractTests(unittest.TestCase):
             b"  mqueue (create, read, write, open, delete, setattr, getattr) type=posix,",
         ])
         for forbidden in (b"all,", b"io_uring", b"type=sysv", b"  mqueue,", b"eavesdrop",
-                          b"change_profile", b"change_hat", b"->", b"flags=", b"audit ", b"include"):
+                          b"change_profile", b"change_hat", b"->", b"flags=(unconfined)",
+                          b"default_allow", b"complain", b"audit ", b"include"):
             with self.subTest(token=forbidden):
                 self.assertNotIn(forbidden, policy)
 
     def test_maximum_names_fit_unchanged_consumer_policy_bound(self):
-        for prefix, name_bytes, policy_bytes in (("dockerlens-127", 107, 378), ("boxferry-343", 105, 376)):
+        for prefix, name_bytes, policy_bytes in (("dockerlens-127", 107, 422), ("boxferry-343", 105, 420)):
             with self.subTest(prefix=prefix):
                 name = f"{prefix}-upstream-rootless-{'9' * 20}-{'9' * 20}-" + "f" * 32
                 self.assertEqual(len(name.encode("ascii")), name_bytes)
@@ -155,7 +160,7 @@ class MediatedProfileContractTests(unittest.TestCase):
             stack.enter_context(mock.patch.object(APP.os, "open", side_effect=AssertionError("open")))
             stack.enter_context(mock.patch("builtins.open", side_effect=AssertionError("open")))
             self.assertEqual(APP.mediated_profile_bytes(name),
-                             (f"abi <abi/4.0>,\nprofile {name} {{\n"
+                             (f"abi <abi/4.0>,\nprofile {name} flags=(attach_disconnected,mediate_deleted) {{\n"
                               "  file,\n"
                               "  capability,\n"
                               "  network,\n"
