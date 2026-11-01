@@ -67,6 +67,14 @@ barrier is superseded while its historical evidence keeps its original status.
 - [0042: Finite sudo monitor UID shape](0042-sudo-monitor-uid-shape.md)
 - [0043: Prepare thread-aware PIDs source coverage](0043-thread-aware-pids-source-contract.md)
 - [0044: Typed PIDs source and private proof v2](0044-typed-pids-source-and-proof-v2.md)
+- [0051: Fixed ordinary mediated profile builder](0051-ordinary-mediated-profile-builder.md)
+
+ADR 0051 adds only an opt-in pure policy builder with thirteen explicit ABI4
+family rules, including seven POSIX queue permissions. The rejected all-rule
+candidate's static ABI incompatibility remains historical. Existing maintained-profile
+callers and immutable consumer pins remain unchanged; consumer source integration
+and fresh native qualification are separate obligations. Numbers 0048–0050 are
+reserved for the separately scoped Memory, Capabilities and Logging decisions.
 
 ADR 0043 prepares pure topology contracts and controls only. It does not replace
 current collector guards, emit proof v2, establish physical budget fit, or qualify

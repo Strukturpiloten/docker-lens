@@ -72,6 +72,106 @@ def warning_effect_401(arguments, category):
     return reported, fatal
 
 
+class MediatedProfileContractTests(unittest.TestCase):
+    """Fixed source bytes only; these controls do not execute an AppArmor parser."""
+
+    def test_exact_enforce_policy_and_unchanged_legacy_policy_for_both_prefixes(self):
+        for prefix in ("dockerlens-127", "boxferry-343"):
+            for run, attempt in (("1", "1"), ("9" * 20, "9" * 20)):
+                with self.subTest(prefix=prefix, run=run, attempt=attempt):
+                    name = f"{prefix}-upstream-rootless-{run}-{attempt}-" + "0123456789abcdef" * 2
+                    self.assertEqual(APP.mediated_profile_bytes(name),
+                                     (f"abi <abi/4.0>,\nprofile {name} {{\n"
+                                      "  file,\n"
+                                      "  capability,\n"
+                                      "  network,\n"
+                                      "  unix,\n"
+                                      "  dbus (bind, send, receive),\n"
+                                      "  mount,\n"
+                                      "  remount,\n"
+                                      "  umount,\n"
+                                      "  pivot_root,\n"
+                                      "  signal (send, receive),\n"
+                                      "  ptrace,\n"
+                                      "  userns create,\n"
+                                      "  mqueue (create, read, write, open, delete, setattr, getattr) type=posix,\n"
+                                      "}\n").encode("ascii"))
+                    self.assertEqual(APP.profile_bytes(name),
+                                     f"abi <abi/4.0>,\nprofile {name} flags=(unconfined) {{\n  userns,\n}}\n".encode("ascii"))
+
+    def test_invalid_identity_and_policy_injection_refuse(self):
+        name = "dockerlens-127-upstream-rootless-127-1-" + NONCE
+        invalid = ["", "unconfined", "docker-default", "/bin/rootlesskit", "../profile",
+                   name + "\n", name + " ", " " + name, name + " /bin/tool",
+                   name + " flags=(complain)", name + " { change_profile -> other, }",
+                   name.replace("dockerlens-127", "other-127"), name.replace("rootless", "rootful"),
+                   name.replace("-127-1-", "-0-1-"), name.replace("-127-1-", "-01-1-"),
+                   name.replace("-127-1-", "-1-0-"), name.replace("-127-1-", "-1-01-"),
+                   name.replace("-127-1-", "-" + "9" * 21 + "-1-"),
+                   name.replace("-127-1-", "-1-" + "9" * 21 + "-"),
+                   name.replace("-127-1-", "-\u0661-1-"), name[:-1], name + "a",
+                   name[:-32] + "A" * 32, name[:-32] + "g" * 32]
+        for value in invalid:
+            with self.subTest(name=value), self.assertRaises(APP.Refused):
+                APP.mediated_profile_bytes(value)
+
+    def test_no_rules_modes_targets_or_additional_parameters(self):
+        name = "boxferry-343-upstream-rootless-1-1-" + NONCE
+        with self.assertRaises(TypeError):
+            APP.mediated_profile_bytes(name, "all,")
+        for key, value in (("mode", "unconfined"), ("rules", "change_profile,"),
+                           ("target", "/bin/tool"), ("attachment", "/bin/*")):
+            with self.subTest(parameter=key), self.assertRaises(TypeError):
+                APP.mediated_profile_bytes(name, **{key: value})
+
+    def test_exact_finite_rule_roster_has_no_implicit_or_unsupported_family(self):
+        name = "dockerlens-127-upstream-rootless-1-1-" + NONCE
+        policy = APP.mediated_profile_bytes(name)
+        self.assertEqual(policy.splitlines()[2:-1], [
+            b"  file,", b"  capability,", b"  network,", b"  unix,",
+            b"  dbus (bind, send, receive),", b"  mount,", b"  remount,", b"  umount,",
+            b"  pivot_root,", b"  signal (send, receive),", b"  ptrace,", b"  userns create,",
+            b"  mqueue (create, read, write, open, delete, setattr, getattr) type=posix,",
+        ])
+        for forbidden in (b"all,", b"io_uring", b"type=sysv", b"  mqueue,", b"eavesdrop",
+                          b"change_profile", b"change_hat", b"->", b"flags=", b"audit ", b"include"):
+            with self.subTest(token=forbidden):
+                self.assertNotIn(forbidden, policy)
+
+    def test_maximum_names_fit_unchanged_consumer_policy_bound(self):
+        for prefix, name_bytes, policy_bytes in (("dockerlens-127", 107, 378), ("boxferry-343", 105, 376)):
+            with self.subTest(prefix=prefix):
+                name = f"{prefix}-upstream-rootless-{'9' * 20}-{'9' * 20}-" + "f" * 32
+                self.assertEqual(len(name.encode("ascii")), name_bytes)
+                policy = APP.mediated_profile_bytes(name)
+                self.assertEqual(len(policy), policy_bytes)
+                self.assertLessEqual(len(policy), 1024)
+
+    def test_pure_builder_does_not_enter_legacy_or_privileged_operations(self):
+        name = "dockerlens-127-upstream-rootless-1-1-" + NONCE
+        with contextlib.ExitStack() as stack:
+            for attribute in ("profile_bytes", "loaded", "RunnerProfile", "read_path", "trusted_file", "CaptureContext"):
+                stack.enter_context(mock.patch.object(APP, attribute, side_effect=AssertionError(attribute)))
+            stack.enter_context(mock.patch.object(APP.os, "open", side_effect=AssertionError("open")))
+            stack.enter_context(mock.patch("builtins.open", side_effect=AssertionError("open")))
+            self.assertEqual(APP.mediated_profile_bytes(name),
+                             (f"abi <abi/4.0>,\nprofile {name} {{\n"
+                              "  file,\n"
+                              "  capability,\n"
+                              "  network,\n"
+                              "  unix,\n"
+                              "  dbus (bind, send, receive),\n"
+                              "  mount,\n"
+                              "  remount,\n"
+                              "  umount,\n"
+                              "  pivot_root,\n"
+                              "  signal (send, receive),\n"
+                              "  ptrace,\n"
+                              "  userns create,\n"
+                              "  mqueue (create, read, write, open, delete, setattr, getattr) type=posix,\n"
+                              "}\n").encode("ascii"))
+
+
 class WarningContract401Tests(unittest.TestCase):
     def test_default_masks_do_not_enable_abi_or_downgrade_by_severity(self):
         # Literal old severity-only configuration is the counterexample: an
