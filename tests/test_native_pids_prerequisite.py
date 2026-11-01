@@ -139,6 +139,7 @@ native_pids live_pids_limits_and_effects_match_engine
         self.assertEqual(calls, [tuple(row.split()) for row in expected.strip().splitlines()] + [
             ("native_nofile", "live_nofile_limits_and_effects_match_engine"),
             ("native_device_mapping", "live_device_mapping_matches_engine"),
+            ("native_memory", "live_memory_limits_and_effects_match_engine"), ("native_capabilities", "live_named_capabilities_match_engine"), ("native_logging", "live_logging_matches_engine"),
         ])
         gate = SOURCE.index('\nnative_pids_prerequisite "$expected_mode"')
         self.assertEqual(SOURCE.count("info --format '{{.CgroupVersion}}'"), 1)

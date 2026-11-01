@@ -67,7 +67,7 @@ else:
     def test_twenty_third_registration_and_mandatory_independent_reader(self):
         harness = (ROOT / "scripts/native-conformance.sh").read_text()
         calls = assert_current_cohort(self, harness)
-        self.assertEqual(len(calls), 29)
+        self.assertEqual(len(calls), 32)
         self.assertEqual(calls[21:23], [("native_hostname", "live_hostname_matches_engine"), (TARGET, TEST)])
         self.assertEqual(calls.count((TARGET, TEST)), 1)
         hostname_reader = harness.index('python3 "$script_dir/native_hostname_proof.py"')
@@ -84,7 +84,7 @@ else:
         self.assertLess(harness.index('\n)\n', owner), command)
         hostname_owner = harness.index('(\n  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1\n', owner + 1)
         self.assertLess(harness.index('\n)\n', hostname_owner), command)
-        self.assertEqual(harness.count('export NATIVE_LIFECYCLE_CLEANUP_OWNER='), 8)
+        self.assertEqual(harness.count('export NATIVE_LIFECYCLE_CLEANUP_OWNER='), 11)
         self.assertLess(reader, harness.index('if [[ -n ${apparmor_profile:-} ]]; then', reader))
         emitter = harness.index('python3 "$script_dir/native-evidence.py"')
         protocol = harness[emitter:harness.index('\n  fi\n}', emitter)].replace('\\\n', ' ')
@@ -235,6 +235,9 @@ else:
         from test_native_kernel_settings_proof import fixture as kernel_fixture
         from test_native_nofile_proof import fixture as nofile_fixture
         from test_native_device_mapping_proof import fixture as device_fixture
+        from test_native_memory_proof import fixture as memory_fixture, bind_context as bind_memory_context
+        from test_native_capabilities_proof import fixture as capabilities_fixture, bind_context as bind_capabilities_context
+        from test_native_logging_proof import fixture as logging_fixture, bind_context as bind_logging_context
 
         harness = (ROOT / "scripts/native-conformance.sh").read_text()
         start = harness.index('python3 "$script_dir/native_hostname_proof.py"')
@@ -257,7 +260,7 @@ target = str(pathlib.Path(os.environ["script_dir"]) / "build-native-pids-worker.
 reader = str(pathlib.Path(os.environ["script_dir"]) / "native_pids_proof.py")
 if sys.argv[1] not in (target, reader):
     allowed = {str(pathlib.Path(os.environ["script_dir"]) / ("native_" + family + "_proof.py"))
-               for family in ("hostname", "shm_size", "supplementary_groups", "kernel_settings", "nofile", "device_mapping")}
+               for family in ("hostname", "shm_size", "supplementary_groups", "kernel_settings", "nofile", "device_mapping", "memory", "capabilities", "logging")}
     assert sys.argv[1] in allowed | {"-", "-c"}
     if sys.argv[1] == "-c":
         assert sys.argv[2:] == ["import time; print(time.monotonic_ns() + 180_000_000_000)"]
@@ -305,6 +308,9 @@ else:
                         NATIVE_PIDS_CANDIDATE_SHA=context["candidate_sha"],
                         NATIVE_NOFILE_CANDIDATE_SHA=context["candidate_sha"],
                                NATIVE_DEVICE_MAPPING_CANDIDATE_SHA=context["candidate_sha"],
+                               NATIVE_MEMORY_CANDIDATE_SHA=context["candidate_sha"],
+                               NATIVE_CAPABILITIES_CANDIDATE_SHA=context["candidate_sha"],
+                               NATIVE_LOGGING_CANDIDATE_SHA=context["candidate_sha"],
                         NATIVE_OUTER_IMAGE=context["outer"]["image"],
                         NATIVE_OUTER_ENGINE="podman",
                         NATIVE_FIXTURE_IMAGE=context["fixture_image"], image=context["outer"]["image"],
@@ -324,12 +330,18 @@ else:
                     for family, proof in (("hostname", hostname), ("command", command)):
                         if fault != family + "_missing":
                             path = root / ("hostname-v2.json" if family == "hostname" else "command-clear-v1.json")
-                            path.write_text(json.dumps(proof))
+                            path.write_text(json.dumps(proof, separators=(",", ":") if family == "logging" else None))
                             path.chmod(0o600)
                     for family, fixture in (("shm_size", shm_fixture), ("supplementary_groups", groups_fixture),
-                                            ("kernel_settings", kernel_fixture), ("nofile", nofile_fixture), ("device_mapping", device_fixture)):
+                                            ("kernel_settings", kernel_fixture), ("nofile", nofile_fixture), ("device_mapping", device_fixture), ("memory", memory_fixture), ("capabilities", capabilities_fixture), ("logging", logging_fixture)):
                         if fault != family + "_missing":
                             proof = fixture(lane)
+                            if family == "memory":
+                                proof = bind_memory_context(proof, context)
+                            if family == "logging":
+                                proof = bind_logging_context(proof, context)
+                            if family == "capabilities":
+                                proof = bind_capabilities_context(proof, context)
                             proof["context"] = json.loads(json.dumps(context))
                             if family == "nofile":
                                 for case in proof["cases"]:
@@ -340,8 +352,8 @@ else:
                                 for item in proof["containers"]:
                                     item["owner"] = context["run_id"]
                                     item["name"] = f"dl-device-{context['run_id']}-{item['role']}"
-                            path = root / (family.replace("_", "-") + "-v1.json")
-                            path.write_text(json.dumps(proof))
+                            path = root / ("memory-limits-v1.json" if family == "memory" else "named-capabilities-v1.json" if family == "capabilities" else family.replace("_", "-") + "-v1.json")
+                            path.write_text(json.dumps(proof, separators=(",", ":") if family == "logging" else None))
                             path.chmod(0o600)
                     script = ('set -euo pipefail\ncommand_wrapper() {\n'
                               '  if [[ $1 == native_command_clear ]]; then\n'
@@ -377,6 +389,9 @@ else:
                         expected.append("native_nofile live_nofile_limits_and_effects_match_engine")
                     if fault == "none":
                         expected.append("native_device_mapping live_device_mapping_matches_engine")
+                        expected.append("native_memory live_memory_limits_and_effects_match_engine")
+                        expected.append("native_capabilities live_named_capabilities_match_engine")
+                        expected.append("native_logging live_logging_matches_engine")
                         expected.append("public")
                     self.assertEqual(events, expected)
                     self.assertEqual(result.returncode == 0, fault == "none", result.stderr)

@@ -1502,6 +1502,12 @@ export NATIVE_NOFILE_PROOF_PATH="$run_dir/nofile-v1.json"
 export NATIVE_NOFILE_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 export NATIVE_DEVICE_MAPPING_PROOF_PATH="$run_dir/device-mapping-v1.json"
 export NATIVE_DEVICE_MAPPING_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
+export NATIVE_MEMORY_PROOF_PATH="$run_dir/memory-limits-v1.json"
+export NATIVE_MEMORY_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
+export NATIVE_CAPABILITIES_PROOF_PATH="$run_dir/named-capabilities-v1.json"
+export NATIVE_CAPABILITIES_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
+export NATIVE_LOGGING_PROOF_PATH="$run_dir/logging-v1.json"
+export NATIVE_LOGGING_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 export NATIVE_PORT_START_DIAGNOSTIC_PATH="$run_dir/diagnostics/port-start-window.json"
 export NATIVE_PORT_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
 export NATIVE_HEALTH_METADATA_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA
@@ -1899,6 +1905,37 @@ python3 "$script_dir/native_nofile_proof.py" "$run_dir" "$NATIVE_NOFILE_CANDIDAT
 python3 "$script_dir/native_device_mapping_proof.py" "$run_dir" "$NATIVE_DEVICE_MAPPING_CANDIDATE_SHA" "$run_id" \
   "$lane" "$server_version" "$api_version" "$expected_mode" "$installed_docker_package" \
   "$NATIVE_FIXTURE_IMAGE" "$image" "$NATIVE_OUTER_CONTAINER_ID" "$NATIVE_BIND_RELABEL_DAEMON_UID"
+
+# Invocation 30 owns only its memory child, after every original29/read succeeds.
+(
+  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1
+  "$(dirname "$0")/run-exact-native-test.sh" native_memory live_memory_limits_and_effects_match_engine
+)
+# Mandatory independent reader, including without public evidence emission.
+python3 "$script_dir/native_memory_proof.py" "$run_dir" "$NATIVE_MEMORY_CANDIDATE_SHA" "$run_id" \
+  "$lane" "$server_version" "$api_version" "$expected_mode" "$installed_docker_package" \
+  "$NATIVE_FIXTURE_IMAGE" "$image" "$NATIVE_OUTER_CONTAINER_ID" "$NATIVE_BIND_RELABEL_DAEMON_UID"
+
+# Invocation 31 owns only its capability child after the unchanged30/read prefix.
+(
+  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1
+  "$(dirname "$0")/run-exact-native-test.sh" native_capabilities live_named_capabilities_match_engine
+)
+# Mandatory independent reader, including without public evidence emission.
+python3 "$script_dir/native_capabilities_proof.py" "$run_dir" "$NATIVE_CAPABILITIES_CANDIDATE_SHA" "$run_id" \
+  "$lane" "$server_version" "$api_version" "$expected_mode" "$installed_docker_package" \
+  "$NATIVE_FIXTURE_IMAGE" "$image" "$NATIVE_OUTER_CONTAINER_ID" "$NATIVE_BIND_RELABEL_DAEMON_UID"
+
+# Invocation32 follows every original29/read, memory30/read and capabilities31/read.
+(
+  export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1
+  "$(dirname "$0")/run-exact-native-test.sh" native_logging live_logging_matches_engine
+)
+# Mandatory independent reader, including without public evidence emission.
+python3 "$script_dir/native_logging_proof.py" "$run_dir" "$NATIVE_LOGGING_CANDIDATE_SHA" "$run_id" \
+  "$lane" "$server_version" "$api_version" "$expected_mode" "$installed_docker_package" \
+  "$NATIVE_FIXTURE_IMAGE" "$image" "$NATIVE_OUTER_CONTAINER_ID" "$NATIVE_BIND_RELABEL_DAEMON_UID"
+
 publish_native_evidence() {
   local candidate_sha dirty
   if [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR:-} ]]; then

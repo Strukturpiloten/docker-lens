@@ -1,5 +1,12 @@
 # Diagonal nofile source-only contract
 
+Current memory30 under [ADR 0048](decisions/0048-inner-memory-native-source-proof.md)
+follows complete PIDs27/read, nofile28/read and device29/read.
+[ADR 0049](decisions/0049-named-capabilities-native-source-proof.md) appends
+capabilities31/read after memory30/read.
+[ADR 0050](decisions/0050-logging-native-source-proof.md) adds logging32/read:
+32 invocations and eleven owners. All nofile behavior below remains fixed.
+
 `nofile-v1` is canonical test-only invocation 28 under
 [ADR 0045](decisions/0045-canonical-nofile-source-integration.md). Its producer
 was recovered from committed `f406cb22efc53fc7df04c24ea44a9ecd7900f41b` without
@@ -21,7 +28,7 @@ Strict PIDs/delegation and hosted-runtime prerequisites cannot be skipped or
 weakened to run nofile. Original lane EXIT cleanup remains mandatory. Source
 wiring and synthetic controls do not prove native execution or qualification;
 independent review, complete final-source gates and fresh exact-candidate
-four-lane 29-call evidence remain pending. No raw admission, catalogue,
+four-lane32-call evidence remain pending. No raw admission, catalogue,
 19-argument emitter ABI, product API, version, private packet schema, runtime
 operation, software pin or budget is changed.
 
@@ -141,19 +148,19 @@ the independently observed daemon context/UID, never silently promoted.
 Body accounting is not wire accounting. Headers remain separately bounded at
 16KiB, chunk-size lines64 bytes, payload CRLF2 bytes and final trailer line16KiB;
 actual wire bytes are unmeasured. Initial context acquisition remains separately
-bounded at16 requests/2MiB bodies/15s. Neither bound is multiplied per fixture,
+bounded at16 requests/2 MiB bodies/15s. Neither bound is multiplied per fixture,
 reset after a refusal or claimed to be included in measured captured-command
 bytes.
 
 The immutable180-second deadline,134-second work cutoff,46-second cleanup
-reserve,400 calls/4MiB captured-output-plus-reserved-body envelope and100-call/
-2MiB cleanup reserve stay unchanged. Closed accounting is derived by outcome:
+reserve,400 calls/4 MiB captured-output-plus-reserved-body envelope and100-call/
+2 MiB cleanup reserve stay unchanged. Closed accounting is derived by outcome:
 context8 upstream/9 Debian plus the independently selected Docker snapshot's
 one extra call; each live slot8 captures, each precisely refused
 known-ID start7; daemon-health1; aggregate acquisition20 reserved units; final
 unchanged image/outer readbacks2 plus one extra call for selected Docker.
 Thus ordinary units are91..95 upstream or92..96 Debian on Podman, and93..97
-upstream or94..98 Debian on Docker. Ordinary bytes must fit2MiB and include the
+upstream or94..98 Debian on Docker. Ordinary bytes must fit2 MiB and include the
 existing two Docker image-observation reservations of65536 bytes each, in
 addition to the512KiB decoded-body acquisition reservation. These conservative
 ledger charges are not measured raw-wire bytes. All eight ordinary exact-ID

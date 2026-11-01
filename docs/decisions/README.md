@@ -1,5 +1,25 @@
 # Architecture decisions
 
+- [0051: Fixed ordinary mediated profile builder](0051-ordinary-mediated-profile-builder.md)
+  adds only an opt-in pure builder with thirteen explicit ABI4 family rules,
+  including seven POSIX queue permissions. The rejected all-rule candidate remains
+  historical. Active legacy callers and immutable pins remain unchanged; consumer
+  integration and native qualification remain separate obligations.
+
+
+- [0050: Explicit logging configured-state and one-line source proof](0050-logging-native-source-proof.md)
+  appends logging32 after original29/read, memory30/read and capabilities31/read,
+  with eleven owners, exact configured drivers and one bounded non-admitting read.
+
+
+- [0049: Named capabilities native source proof](0049-named-capabilities-native-source-proof.md)
+  appends capabilities31 after the unchanged 30/read prefix with ten owners; CLI
+  transitions and unmodified artifact retention remain distinct, private and non-admitting.
+
+- [0048: Inner memory native source proof](0048-inner-memory-native-source-proof.md)
+  appends memory30 after the original 29/readers with nine owners; live local
+  pressure and actual child-victim evidence remain private and non-admitting.
+
 - [0047: Device mapping native source proof](0047-device-mapping-native-source-proof.md)
   appends only device29 after PIDs27/read and nofile28/read; supersedes only
   ADR0046's roster/owner counts to 29/eight, retaining resolver and non-admission rules.
@@ -67,14 +87,6 @@ barrier is superseded while its historical evidence keeps its original status.
 - [0042: Finite sudo monitor UID shape](0042-sudo-monitor-uid-shape.md)
 - [0043: Prepare thread-aware PIDs source coverage](0043-thread-aware-pids-source-contract.md)
 - [0044: Typed PIDs source and private proof v2](0044-typed-pids-source-and-proof-v2.md)
-- [0051: Fixed ordinary mediated profile builder](0051-ordinary-mediated-profile-builder.md)
-
-ADR 0051 adds only an opt-in pure policy builder with thirteen explicit ABI4
-family rules, including seven POSIX queue permissions. The rejected all-rule
-candidate's static ABI incompatibility remains historical. Existing maintained-profile
-callers and immutable consumer pins remain unchanged; consumer source integration
-and fresh native qualification are separate obligations. Numbers 0048–0050 are
-reserved for the separately scoped Memory, Capabilities and Logging decisions.
 
 ADR 0043 prepares pure topology contracts and controls only. It does not replace
 current collector guards, emit proof v2, establish physical budget fit, or qualify

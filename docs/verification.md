@@ -1,18 +1,60 @@
 # Verification
 
+## Explicit logging source invocation 32
+
+[ADR 0050](decisions/0050-logging-native-source-proof.md) and the
+[logging contract](native-logging-contract.md) append six explicit CLI/rendered
+controls after original29/read, memory30/read and capabilities31/read. The
+canonical 32-invocation sequence has eleven delegated cleanup owners. One actual
+read retains exact canary/refusal bytes and actual CLI status, including NUL
+rejection, without shell-variable normalization. The immediate private reader
+runs without publication; the nineteen-argument emitter repeats validation and
+independently enforces a closed non-admitting result before output. This proves
+configured retention and a bounded read only. Rotation, durability, default
+behavior and public admission remain outside scope. Final source review/gates
+and fresh whole32 four-profile native time/output/cleanup qualification remain due.
+
+
+## Named capabilities source invocation 31
+
+[ADR 0049](decisions/0049-named-capabilities-native-source-proof.md) and the
+[named-capabilities contract](native-capabilities-contract.md) append eleven
+idle controls after the unchanged 30/read prefix, with 32 invocations and eleven
+delegated owners. Independent CLI zero/add-back and ALL/minus controls establish
+transitions; the three unmodified product artifacts establish exact configured
+retention and consistent namespace-local kernel state against measured defaults.
+The mandatory private reader recomputes raw evidence without public projection
+or admission. Complete final-source review/gates and fresh exact-candidate
+four-lane whole 32 time/output fit and cleanup remain pending. Logging32 follows capabilities31/read under ADR 0050.
+
+## Inner memory source invocation 30
+
+[ADR 0048](decisions/0048-inner-memory-native-source-proof.md) and the
+[memory contract](native-memory-contract.md) append memory30 after the complete
+unchanged original 29/readers, with nine delegated owners. Six CLI/rendered
+omitted/finite 64 MiB/zero controls use one supervisor and one bound allocation
+child, real live leaf-local pressure/victim counters, a processed OOM event before
+parent release and the genuine final Engine flag. Private guest root `/` is valid;
+hidden ancestors remain unobserved. Actual child 137 and supervisor-propagated
+parent 137 are distinct. No public memory field, capability or catalogue admission
+is added. Complete final-source gates, independent review and fresh four-profile
+whole 32 execution/fit/cleanup remain pending. Capabilities31 source follows
+under ADR 0049; logging32/read follows under ADR 0050.
+
+
 ## Device mapping source invocation 29
 
 [ADR 0047](decisions/0047-device-mapping-native-source-proof.md) appends the
 [finite device proof](native-device-mapping-contract.md) after unchanged
-PIDs27/read and nofile28/read. The 29-call lane has eight delegated owners;
+PIDs27/read and nofile28/read. The current 32-call lane has eleven delegated owners;
 original invocation22 resolver semantics, private custody and non-admission
 rules remain intact. Independent CLI/rendered controls check exact mapping,
 nonsymlink character identity and a bounded held-descriptor read only. The
 private reader is mandatory without emission and repeated by the unchanged
 19-argument emitter. No denied-write/create or DeviceMappings admission claim
 follows. Fresh complete and exact-candidate whole-four-lane native gates,
-actual byte/time fit and verified cleanup remain pending. Memory effects,
-named capability add/drop and logging source proofs remain open.
+actual byte/time fit and verified cleanup remain pending. Memory and named capability source are appended under ADR 0048/0049;
+logging32/read follows under ADR 0050.
 
 
 ## Expanded invocation 22 verification
@@ -22,9 +64,9 @@ The current [hostname/resolver contract](native-hostname-contract.md) and
 invocation 22 under its existing HealthRun/owner with four fresh resolver fixtures,
 while preserving all four hostname controls. Private schema 2/hostname-v2.json
 requires both sections; public hostname-v1, the 19-argument emitter and capability/
-catalogue maps remain unchanged. The original 28 invocation names retain their order; device29 now appends an
-eighth owner scope under ADR 0047. Resolver failure can prevent reaching PIDs27.
-PIDs27/read and nofile28/read must succeed before device29/read. Earlier qualification is not reusable;
+catalogue maps remain unchanged. The original 29 invocation names and readers retain their order; memory30 now
+appends a ninth owner scope under ADR 0048. Resolver failure can prevent reaching PIDs27.
+PIDs27/read and nofile28/read must succeed before device29/read and memory30/read. Earlier qualification is not reusable;
 source checks and actual combined native byte/time fit remain pending. No resolver
 connectivity, IPv6-network, application-acceptance or publication claim follows.
 
@@ -44,7 +86,7 @@ Focused synthetic controls exercise order, PIDs fail-fast behavior, separate
 owner scope, once-bound deadline, bounded/token-free diagnostics, all four lanes
 and both outer backends, reader custody/context/refusal and unchanged emission.
 They do not execute a native fixture. Independent review, complete final-edit
-gates, fresh exact-candidate four-lane 29-call evidence, actual proof/time/output
+gates, fresh exact-candidate four-lane32-call evidence, actual proof/time/output
 fit and original lane EXIT cleanup remain required. Rootless PIDs/delegation and
 hosted-runtime prerequisites are mandatory; nofile cannot be run around them.
 Historical 26/27-call receipts do not qualify this changed candidate, BoxFerry
@@ -158,7 +200,7 @@ checks actual private artifact/source/raw-tool hashes and static ELF structure.
 The emitter repeats the reader and adds only an unadmitted source outcome.
 No PidsLimit capability or catalogue grant follows. Pure checks and source
 integration do not qualify a lane: complete final-source checks, genuine fresh
-exact-candidate current 29-call four-lane runs, original lane EXIT cleanup and independent
+exact-candidate current 32-call four-lane runs, original lane EXIT cleanup and independent
 review remain due. Nofile28 follows only a successful PIDs27 and strict reader. Historical first26 run
 claims below remain unchanged and cannot qualify the new candidate.
 
