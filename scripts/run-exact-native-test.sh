@@ -330,6 +330,76 @@ except (OSError, ValueError):
     if (( run_status == 0 )); then run_status=1; fi
   fi
 fi
+# Measurement refusals are distinct from constructor/setup observations. Read
+# original bytes only for the exact PIDs test; never reflect supplied text.
+pids_measurement_refusal=
+if (( exact_pids && !raw_capture_invalid )); then
+  measurement_projection_status=0
+  pids_measurement_refusal=$(python3 -I -c '
+import hashlib, os, re, stat, sys
+try:
+    descriptor = os.open(sys.argv[2], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, "rb") as capture:
+        info = os.fstat(capture.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o600
+                or info.st_size > 1048576):
+            raise ValueError()
+        data = capture.read(1048577)
+        if len(data) != info.st_size or b"\0" in data:
+            raise ValueError()
+    prefix = b"DOCKERLENS_NATIVE_PIDS_MEASUREMENT_REFUSAL: code="
+    family = b"DOCKERLENS_NATIVE_PIDS_MEASUREMENT_REFUSAL"
+    lines = data.split(b"\n")
+    observations = [(index, line) for index, line in enumerate(lines) if line.startswith(family)]
+    if not observations:
+        sys.exit(0)
+    positive = any(line == b"DOCKERLENS_NATIVE_CHECK: pids_evidence" or line.startswith(b"test result: ok.") for line in lines)
+    if sys.argv[3] == "0" or positive:
+        sys.stdout.buffer.write(prefix + b"unclassified\n")
+        sys.exit(3)
+    other = (b"DOCKERLENS_NATIVE_PIDS_SETUP_REFUSAL:", b"DOCKERLENS_NATIVE_PIDS_IO:",
+             b"DOCKERLENS_NATIVE_PIDS_START:", b"DOCKERLENS_NATIVE_PIDS_BIND:")
+    if any(line.startswith(other) for line in lines):
+        sys.exit(4)
+    descriptor = os.open(sys.argv[1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, "rb") as registry:
+        info = os.fstat(registry.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                or info.st_uid != os.geteuid() or info.st_mode & 0o022
+                or not 0 < info.st_size <= 2262):
+            raise ValueError()
+        raw = registry.read(2263)
+    if len(raw) != info.st_size or hashlib.sha256(raw).hexdigest() != "7e69a1dd044be9883d7bc9c22c1c6e64117435ec602f3b4af7f6ec6fedd54401":
+        raise ValueError()
+    codes = raw[:-1].split(b"\n")
+    if (not raw.endswith(b"\n") or len(codes) != 78 or codes != sorted(set(codes))
+            or any(len(code) > 28 or re.fullmatch(rb"pids-[a-z]+(?:-[a-z]+)*", code) is None for code in codes)):
+        raise ValueError()
+    if len(observations) != 1:
+        sys.exit(0)
+    index, line = observations[0]
+    if (index == len(lines) - 1 or len(line) > 96 or not line.startswith(prefix)
+            or line[len(prefix):] not in set(codes) | {b"unclassified"}):
+        sys.exit(0)
+    sys.stdout.buffer.write(prefix + line[len(prefix):] + b"\n")
+except (OSError, ValueError):
+    pass
+' "$(dirname "$0")/../src/native_pids_measurement_refusals.txt" "$capture_directory/run.raw" "$original_run_status" 2>/dev/null) || measurement_projection_status=$?
+  if (( measurement_projection_status == 3 )); then
+    pids_setup_refusal=
+    result=
+    if (( run_status == 0 )); then run_status=1; fi
+  elif (( measurement_projection_status == 4 )); then
+    pids_setup_refusal=
+    pids_measurement_refusal=
+  fi
+elif (( !exact_pids )) && grep -q '^DOCKERLENS_NATIVE_PIDS_MEASUREMENT_REFUSAL' <<<"$result"; then
+  # A foreign selected test cannot supply PIDs measurement evidence.
+  result=
+  if (( run_status == 0 )); then run_status=1; fi
+fi
+
 # Only libtest's numeric summary is safe to print. Test and compiler output can
 # contain protected native values, socket payloads, or authored secrets.
 summary=$(grep -Eo '^test result: (ok|FAILED)\. [0-9]+ passed; [0-9]+ failed; [0-9]+ ignored; [0-9]+ measured; [0-9]+ filtered out;' <<<"$result" | tail -n 1 || true)
@@ -615,6 +685,7 @@ esac
 if (( run_status != 0 )); then
   echo "required native test $target::$test_name failed (exit $run_status)" >&2
   if [[ -n $pids_setup_refusal ]]; then echo "$pids_setup_refusal" >&2; fi
+  if [[ -n $pids_measurement_refusal ]]; then echo "$pids_measurement_refusal" >&2; fi
   if [[ -n $port_causal_marker && $port_causal_marker != "$marker" ]]; then echo "$port_causal_marker" >&2; fi
   if [[ -n $marker ]]; then echo "$marker" >&2; fi
   if [[ -n $lifecycle_causal_marker && $lifecycle_causal_marker != "$marker" ]]; then echo "$lifecycle_causal_marker" >&2; fi

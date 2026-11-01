@@ -92,6 +92,34 @@ fn pids_constructor_refused(error: &str) -> ! {
     panic!("private native PIDs setup refused");
 }
 
+// Measurement is a separate failure boundary from constructor/setup. Only this
+// exact reviewed static vocabulary may leave the private measurement result.
+fn pids_measurement_refusal_registry_valid(registry: &str) -> bool {
+    registry.ends_with('\n')
+        && registry.len() <= 78 * 29
+        && hash(registry.as_bytes())
+            == "7e69a1dd044be9883d7bc9c22c1c6e64117435ec602f3b4af7f6ec6fedd54401"
+        && registry.lines().count() == 78
+}
+
+fn pids_measurement_refusal_code(error: &str) -> &'static str {
+    let registry = include_str!("native_pids_measurement_refusals.txt");
+    if !pids_measurement_refusal_registry_valid(registry) {
+        return "unclassified";
+    }
+    registry
+        .lines()
+        .find(|code| *code == error)
+        .unwrap_or("unclassified")
+}
+
+fn pids_measurement_refusal_diagnostic(error: &str) -> String {
+    format!(
+        "DOCKERLENS_NATIVE_PIDS_MEASUREMENT_REFUSAL: code={}",
+        pids_measurement_refusal_code(error)
+    )
+}
+
 // A startup record is only a closed site observation from an existing stderr
 // capture. It does not authenticate source authority or establish a root cause.
 const STARTUP_PREFIX: &str = "DOCKERLENS_NATIVE_PIDS_START:";
@@ -3815,7 +3843,8 @@ fn live_pids_limits_and_effects_match_engine() {
         Err(error) => {
             std::panic::resume_unwind(error);
         }
-        Ok(Err(_phase)) => {
+        Ok(Err(phase)) => {
+            eprintln!("{}", pids_measurement_refusal_diagnostic(phase));
             panic!("private native PIDs observation refused");
         }
         Ok(Ok(value)) => value,
@@ -5806,4 +5835,77 @@ fn pids_wire_rejects_received_rights_and_requires_clean_eof() {
     );
     let mut data = [0; 1];
     assert_eq!(wire.receive(&mut data), Err("pids-ancillary"));
+}
+
+#[test]
+fn pids_measurement_refusal_maps_authored_measurement_checks_without_constructor_widening() {
+    for code in [
+        "pids-version",
+        "pids-info",
+        "pids-unqualified-destination",
+        "pids-artifact-copy-io",
+        "pids-controller-frame",
+        "pids-cgroup-type",
+        "pids-measurement-custody",
+        "pids-decode",
+    ] {
+        assert_eq!(pids_measurement_refusal_code(code), code);
+        assert_eq!(
+            pids_measurement_refusal_diagnostic(code),
+            format!("DOCKERLENS_NATIVE_PIDS_MEASUREMENT_REFUSAL: code={code}")
+        );
+    }
+    assert_eq!(
+        pids_constructor_refusal_code("pids-version"),
+        "unclassified"
+    );
+    assert_eq!(
+        pids_measurement_refusal_code("pids-bootstrap"),
+        "unclassified"
+    );
+    assert_eq!(
+        pids_measurement_refusal_code("pids-shutdown"),
+        "unclassified"
+    );
+}
+
+#[test]
+fn pids_measurement_refusal_redacts_unknown_private_and_cross_family_values() {
+    let expected = "DOCKERLENS_NATIVE_PIDS_MEASUREMENT_REFUSAL: code=unclassified";
+    for input in [
+        "",
+        "pids-new-measurement",
+        "pids-version ",
+        "pids-version\nprivate",
+        "pids-version\rprivate",
+        "pids-version\0private",
+        "pids-version:secret",
+        "nofile-status",
+        "pids-bootstrap",
+        "/run/private/native.sock",
+        "private exception: permission denied",
+        "保護された値",
+    ] {
+        assert_eq!(pids_measurement_refusal_diagnostic(input), expected);
+    }
+    assert_eq!(
+        pids_measurement_refusal_diagnostic(&"private".repeat(65536)),
+        expected
+    );
+    assert!(expected.len() <= 96 && expected.is_ascii() && expected.lines().count() == 1);
+}
+
+#[test]
+fn pids_measurement_refusal_registry_binds_exact_packaged_bytes() {
+    let registry = include_str!("native_pids_measurement_refusals.txt");
+    assert!(pids_measurement_refusal_registry_valid(registry));
+    for changed in [
+        registry.trim_end().to_owned(),
+        registry.replace('\n', "\r\n"),
+        registry.replace("pids-version", "pids-verson"),
+        registry.replace("pids-version", "pids-info"),
+        format!("{registry}pids-z\n"),
+    ] {
+        assert!(!pids_measurement_refusal_registry_valid(&changed));
+    }
 }
