@@ -502,11 +502,12 @@ def validate_measured(proof, context):
             exact(row["gid"], uid)
     validate_copy_receipt(copy["io"], copy["size"])
     decoded = measured["decoded"]
-    keys(decoded, ("route", "selected_ids", "reserved_calls", "reserved_body_bytes", "reserved_transport_bytes", "actual_requests",
-                   "actual_body_bytes", "limits", "decoded_limits", "origin", "scope"))
-    for field, value in (("route", "explicit_unix_socket"), ("selected_ids", 6), ("reserved_calls", 16),
+    keys(decoded, ("schema_version", "contract", "route", "selected_ids", "reserved_calls", "reserved_body_bytes", "reserved_transport_bytes", "actual_requests",
+                   "actual_body_bytes", "limits", "observations", "scope"))
+    for field, value in (("schema_version", 2), ("contract", "pids-create-observations-v2"),
+                         ("route", "explicit_unix_socket"), ("selected_ids", 6), ("reserved_calls", 16),
                          ("reserved_body_bytes", 262144), ("reserved_transport_bytes", 278528),
-                         ("origin", "effective"), ("scope", "actual_readonly_product_acquisition")):
+                         ("scope", "actual_readonly_product_acquisition")):
         exact(decoded[field], value)
     exact(decoded["limits"], {"max_requests": 16, "max_selected_resources": 6, "max_expansions": 8,
                              "max_response_bytes": 32768, "max_total_bytes": 262144, "max_elapsed_seconds": 10})
@@ -526,7 +527,8 @@ def validate_measured(proof, context):
         name = f"dl-pids-{context['run_id']}-{slot}"
         exact(definition["name"], name)
         exact(definition["pids_limit"], maximum)
-        expected_decoded[cid] = maximum
+        expected_decoded[cid] = {"availability": "null" if maximum == -1 else "present",
+                                 "value": None if maximum == -1 else maximum, "origin": "effective"}
         document = definition["definition"]
         if slot.startswith("cli"):
             exact(document, {"oracle": "independently_authored_cli", "pids_limit": maximum,
@@ -553,7 +555,7 @@ def validate_measured(proof, context):
                         {"Type": "bind", "Source": copy["path"], "Target": "/dl-pids-worker", "ReadOnly": True},
                         {"Type": "bind", "Source": f"/dockerlens-native/pids-control/{slot}",
                          "Target": "/dl-pids-control", "ReadOnly": False}]}}}])
-    exact(decoded["decoded_limits"], expected_decoded)
+    exact(decoded["observations"], expected_decoded)
 
 
 def validate_pids_proof(proof, expected_context):

@@ -62,6 +62,14 @@ due before diagnosing the actual rootful measurement code.
 
 ### Configured-fixture witness
 
+[ADR 0052](decisions/0052-controlled-pids-create-observations.md) corrects the controlled CREATE
+readback expectation using exact-version Engine source review: nonpositive CREATE PidsLimit is
+normalized to a nullable pointer, so these two independently authored, identity-bound Unlimited
+CREATE slots require explicit null. Missing never aliases null; finite 16/64 and every other
+guard remain exact. This test-specific readback contract does not interpret unknown public source
+null as authored unlimited intent or prove an actual unlimited kernel effect. CLI argv and the
+independent complete API literal still request numeric -1. UPDATE is outside this correction.
+
 Physical case creation visits the existing rendered/API controls first, at logical
 indices 3, 4, 5, then CLI controls 0, 1, 2. Each original configured-state guard
 still fails immediately; no worker starts unless all six cases pass. Definitions
@@ -104,7 +112,8 @@ inspect response, including checks after the first mismatch:
 7. Running is boolean false.
 8. PIDs experiment label equals the current run.
 9. PIDs slot label equals the fixed slot.
-10. PIDs limit equals the authored 16, 64, or -1.
+10. PidsLimit is explicitly present: exact numeric 16/64 for finite slots, or JSON null for
+    the two owned Unlimited CREATE slots. Outbound request intent remains numeric -1.
 11. Init is explicit boolean false.
 12. Entrypoint equals the authored one-element array.
 13. Cmd equals the authored three-element array.
@@ -238,9 +247,19 @@ RLIMIT_NPROC match the root source; finite NPROC is allowed when corroborated.
 Configuration, counts or EAGAIN alone never establish causal PIDs enforcement.
 
 An independently bounded, read-only product acquisition of all six exact IDs
-must decode each effective limit. Its body and conservative transport bounds
-are debited before I/O; the old uncharged general context acquisition is not
+must retain each actual effective limit observation, including explicit null. Its body and
+conservative transport bounds are debited before I/O; the old uncharged general context acquisition is not
 reused. Native test capability claims remain private to the renderer experiment.
+
+The nested `measured.decoded` acquisition contract is schema_version 2 with discriminator
+`pids-create-observations-v2`. Its closed `observations` map contains exactly the six bound IDs;
+each row has availability, value and origin. Actual finite rows are present/16 or present/64,
+and controlled Unlimited CREATE rows are null/JSON-null, all effective. The production decoder
+is unchanged: Null has no value and remains distinct from Missing; no authored -1 is inserted.
+The independent reader rejects absent/unknown versions, scalar legacy maps, mixed/extra fields,
+unknown/mismatched IDs, missing values and contradictory availability/origin/value states. Outer
+pids-v2/schema2 and all measured effects remain unchanged. Historical candidate-bound records
+are retained, never relabelled or silently upgraded. Current reading requires this nested version.
 
 ## Cleanup and independent reading
 

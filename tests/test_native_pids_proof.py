@@ -127,7 +127,9 @@ def fixture(lane="upstream-rootful", backend="podman", *, expected_context=None)
         case = case_fixture(slot)
         maximum = 16 if slot.endswith("16") else (64 if slot.endswith("64") else -1)
         cid, name = f"{index + 1:064x}", f"dl-pids-{run_id}-" + slot
-        decoded[cid] = maximum
+        observed = (16, 64, None, 16, 64, None)[index]
+        decoded[cid] = {"availability": "null" if observed is None else "present",
+                        "value": observed, "origin": "effective"}
         document = {"oracle": "independently_authored_cli", "pids_limit": maximum, "entrypoint": "/dl-pids-worker", "fixed_mounts": 2}
         if slot.startswith("rendered"):
             prerequisites = []
@@ -150,10 +152,10 @@ def fixture(lane="upstream-rootful", backend="podman", *, expected_context=None)
         "outer_before": outer, "outer_after_confirmation": deepcopy(outer), "outer_final": deepcopy(outer), "artifact": artifact_fixture(context["candidate_sha"]),
         "measured": {"daemon": {"release": context["engine_release"], "advertised_api": context["api_version"], "mode": context["mode"],
             "reported_pids": True, "cgroup_driver": "systemd", "cgroup_version": "2", "kernel_identity_source": "held_peer_and_live_worker"},
-            "artifact_copy": copied, "decoded": {"route": "explicit_unix_socket", "selected_ids": 6, "reserved_calls": 16, "reserved_body_bytes": 262144,
+            "artifact_copy": copied, "decoded": {"schema_version": 2, "contract": "pids-create-observations-v2", "route": "explicit_unix_socket", "selected_ids": 6, "reserved_calls": 16, "reserved_body_bytes": 262144,
                 "reserved_transport_bytes": 278528, "actual_requests": 8, "actual_body_bytes": 20000,
                 "limits": {"max_requests": 16, "max_selected_resources": 6, "max_expansions": 8, "max_response_bytes": 32768, "max_total_bytes": 262144, "max_elapsed_seconds": 10},
-                "decoded_limits": decoded, "origin": "effective", "scope": "actual_readonly_product_acquisition"}},
+                "observations": decoded, "scope": "actual_readonly_product_acquisition"}},
         "cases": cases, "root": {"api": {"inspect_calls_reserved": 18, "inspect_body_bytes_reserved": 589824,
                 "runtime_probe_calls_reserved": 1, "runtime_probe_body_bytes_reserved": 4096},
             "source": {"external_reserved": external, "root_reserved": {"bytes": 100000, "reads": 10000}, "total_reserved": {"bytes": 300000, "reads": 10100},
@@ -505,6 +507,92 @@ class PidsProofTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertEqual(result.stdout, b"")
         self.assertEqual(result.stderr, b"invalid private pids proof\n")
+
+
+    def test_create_observations_are_actual_typed_values_not_requested_limits(self):
+        proof = fixture()
+        reader.validate_pids_proof(proof, deepcopy(proof["context"]))
+        self.assertEqual((proof["schema_version"], proof["contract"]), (2, "pids-v2"))
+        acquired = proof["measured"]["decoded"]
+        self.assertEqual((acquired["schema_version"], acquired["contract"]), (2, "pids-create-observations-v2"))
+        for index, value in enumerate((16, 64, None, 16, 64, None)):
+            definition = proof["cases"][index]["definition"]
+            self.assertEqual(acquired["observations"][definition["id"]],
+                             {"availability": "null" if value is None else "present", "value": value, "origin": "effective"})
+            if value is None:
+                self.assertEqual(definition["pids_limit"], -1)
+                source = definition["definition"]
+                self.assertEqual(source["requests"][0]["body"]["HostConfig"]["PidsLimit"] if index == 5 else source["pids_limit"], -1)
+
+    def test_unlimited_create_observations_never_synthesize_numeric_minus_one(self):
+        for index in (2, 5):
+            proof = fixture()
+            cid = proof["cases"][index]["definition"]["id"]
+            proof["measured"]["decoded"]["observations"][cid] = {"availability": "present", "value": -1, "origin": "effective"}
+            with self.assertRaises(ValueError):
+                reader.validate_pids_proof(proof, proof["context"])
+
+    def test_acquisition_contract_refuses_old_mixed_versions_and_unknown_discriminators(self):
+        for field, value in [("schema_version", None), ("schema_version", 1), ("schema_version", True), ("schema_version", 2.0),
+                             ("schema_version", 3), ("contract", None), ("contract", "pids-create-observations-v1"),
+                             ("contract", "pids-v2"), ("contract", "unknown")]:
+            proof = fixture()
+            proof["measured"]["decoded"][field] = value
+            with self.assertRaises(ValueError, msg=str((field, value))):
+                reader.validate_pids_proof(proof, proof["context"])
+        for case in ("old-map", "mixed-map", "missing-contract"):
+            proof = fixture()
+            acquired = proof["measured"]["decoded"]
+            if case == "missing-contract":
+                del acquired["contract"]
+            else:
+                acquired["decoded_limits"] = {row["definition"]["id"]: row["definition"]["pids_limit"] for row in proof["cases"]}
+                if case == "old-map":
+                    del acquired["observations"]
+            with self.assertRaises(ValueError):
+                reader.validate_pids_proof(proof, proof["context"])
+
+    def test_acquisition_rows_refuse_unknown_missing_contradictory_types_and_ids(self):
+        for index in range(6):
+            for field, value in [("availability", "missing"), ("availability", "redacted"), ("availability", "unknown"),
+                                 ("availability", "null"), ("availability", "present"), ("value", None), ("value", -1),
+                                 ("value", 0), ("value", False), ("value", "16"), ("value", 16.0), ("origin", "configured"),
+                                 ("origin", "runtime_assigned"), ("origin", "unknown")]:
+                proof = fixture()
+                cid = proof["cases"][index]["definition"]["id"]
+                row = proof["measured"]["decoded"]["observations"][cid]
+                if type(row[field]) is type(value) and row[field] == value:
+                    continue
+                row[field] = value
+                with self.assertRaises(ValueError, msg=str((index, field, value))):
+                    reader.validate_pids_proof(proof, proof["context"])
+        for case in ("unknown-id", "missing-id", "mismatched-id", "missing-value"):
+            proof = fixture()
+            acquired = proof["measured"]["decoded"]["observations"]
+            cid = proof["cases"][0]["definition"]["id"]
+            if case == "unknown-id":
+                acquired["f" * 64] = acquired.pop(cid)
+            elif case == "missing-id":
+                del acquired[cid]
+            elif case == "mismatched-id":
+                other = proof["cases"][2]["definition"]["id"]
+                acquired[cid], acquired[other] = acquired[other], acquired[cid]
+            else:
+                del acquired[cid]["value"]
+            with self.assertRaises(ValueError, msg=case):
+                reader.validate_pids_proof(proof, proof["context"])
+
+    def test_create_observation_null_does_not_relax_outbound_literal_or_cli_intent(self):
+        for index in (2, 5):
+            for value in (None, 0, False):
+                proof = fixture()
+                source = proof["cases"][index]["definition"]["definition"]
+                if index == 5:
+                    source["requests"][0]["body"]["HostConfig"]["PidsLimit"] = value
+                else:
+                    source["pids_limit"] = value
+                with self.assertRaises(ValueError):
+                    reader.validate_pids_proof(proof, proof["context"])
 
 
 if __name__ == "__main__":

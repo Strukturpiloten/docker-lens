@@ -1273,3 +1273,42 @@ fn runtime_availability_and_failure_categories_are_closed() {
         Err(DecodeError::InvalidShape(FieldPath::ResourceLimit))
     ));
 }
+
+#[test]
+fn pids_null_and_missing_remain_distinct_from_numeric_native_sentinels() {
+    for (body, availability, value) in [
+        (
+            r#"{"HostConfig":{"PidsLimit":null}}"#,
+            Availability::Null,
+            None,
+        ),
+        (r#"{"HostConfig":{}}"#, Availability::Missing, None),
+        (r#"{}"#, Availability::Missing, None),
+        (
+            r#"{"HostConfig":{"PidsLimit":16}}"#,
+            Availability::Present,
+            Some(16),
+        ),
+        (
+            r#"{"HostConfig":{"PidsLimit":64}}"#,
+            Availability::Present,
+            Some(64),
+        ),
+        (
+            r#"{"HostConfig":{"PidsLimit":0}}"#,
+            Availability::Present,
+            Some(0),
+        ),
+        (
+            r#"{"HostConfig":{"PidsLimit":-1}}"#,
+            Availability::Present,
+            Some(-1),
+        ),
+    ] {
+        let decoded = decode_capture(&container(body)).unwrap();
+        let observed = &decoded.containers[0].runtime.pids_limit;
+        assert_eq!(observed.availability, availability);
+        assert_eq!(observed.value().copied(), value);
+        assert_eq!(observed.origin, Origin::Effective);
+    }
+}

@@ -165,6 +165,13 @@ impl ConfiguredFixtureSlot {
             Self::CliUnlimited | Self::RenderedUnlimited => -1,
         }
     }
+    // This is only a controlled CREATE readback expectation, never general null intent.
+    fn configured_limit_matches(self, field: Option<&Value>) -> bool {
+        match self {
+            Self::CliUnlimited | Self::RenderedUnlimited => field == Some(&Value::Null),
+            _ => field.and_then(Value::as_i64) == Some(self.maximum()),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -277,7 +284,7 @@ impl ConfiguredFixtureWitness {
             command.is_some_and(|values| values.len() == 3),
         ];
         // Evaluate every atomic predicate, even after an earlier mismatch.
-        // The original short-circuit acceptance guard remains unchanged.
+        // The owning CREATE guard uses this same presence-aware PIDs expectation.
         let checks = [
             status == 200,
             fields[0].and_then(Value::as_str).is_some_and(identifier),
@@ -290,7 +297,7 @@ impl ConfiguredFixtureWitness {
             fields[4].is_some_and(|value| *value == false),
             fields[5].is_some_and(|value| *value == expected.owner),
             fields[6].is_some_and(|value| *value == slot.name()),
-            fields[7].is_some_and(|value| *value == slot.maximum()),
+            slot.configured_limit_matches(fields[7]),
             fields[8].is_some_and(|value| *value == false),
             entrypoint.is_some_and(|values| lengths[0] && values[0] == "/dl-pids-worker"),
             command.is_some_and(|values| {
@@ -3343,6 +3350,102 @@ impl OuterIdentity {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PidsCreateObservation {
+    Sixteen,
+    SixtyFour,
+    Null,
+}
+
+impl PidsCreateObservation {
+    fn observe(
+        slot: ConfiguredFixtureSlot,
+        field: &crate::observation::Observed<i64>,
+    ) -> Option<Self> {
+        use crate::observation::{Availability, Origin};
+        if field.origin != Origin::Effective {
+            return None;
+        }
+        match (slot, field.availability, field.value()) {
+            (
+                ConfiguredFixtureSlot::Cli16 | ConfiguredFixtureSlot::Rendered16,
+                Availability::Present,
+                Some(16),
+            ) => Some(Self::Sixteen),
+            (
+                ConfiguredFixtureSlot::Cli64 | ConfiguredFixtureSlot::Rendered64,
+                Availability::Present,
+                Some(64),
+            ) => Some(Self::SixtyFour),
+            (
+                ConfiguredFixtureSlot::CliUnlimited | ConfiguredFixtureSlot::RenderedUnlimited,
+                Availability::Null,
+                None,
+            ) => Some(Self::Null),
+            _ => None,
+        }
+    }
+
+    fn json(self) -> Value {
+        let (availability, value) = match self {
+            Self::Sixteen => ("present", json!(16)),
+            Self::SixtyFour => ("present", json!(64)),
+            Self::Null => ("null", Value::Null),
+        };
+        json!({"availability":availability,"value":value,"origin":"effective"})
+    }
+}
+
+fn decoded_create_observations<'a>(
+    ids: &[Option<String>],
+    fields: impl IntoIterator<
+        Item = (
+            &'a crate::observation::Observed<crate::evidence::ProtectedValue>,
+            &'a crate::observation::Observed<i64>,
+        ),
+    >,
+) -> PidsResult<BTreeMap<String, PidsCreateObservation>> {
+    use crate::observation::{Availability, Origin};
+    if ids.len() != SLOTS.len() {
+        return Err("pids-decode");
+    }
+    let mut expected = BTreeMap::new();
+    for (index, id) in ids.iter().enumerate() {
+        let id = id
+            .as_deref()
+            .filter(|id| identifier(id))
+            .ok_or("pids-decode")?;
+        if expected
+            .insert(
+                id,
+                ConfiguredFixtureSlot::from_index(index).ok_or("pids-decode")?,
+            )
+            .is_some()
+        {
+            return Err("pids-decode");
+        }
+    }
+    let mut reported = BTreeMap::new();
+    for (id, limit) in fields {
+        let text = id
+            .value()
+            .and_then(|value| std::str::from_utf8(value.as_bytes()).ok())
+            .ok_or("pids-decode")?;
+        if id.availability != Availability::Present || id.origin != Origin::RuntimeAssigned {
+            return Err("pids-decode");
+        }
+        let slot = expected.get(text).copied().ok_or("pids-decode")?;
+        let observation = PidsCreateObservation::observe(slot, limit).ok_or("pids-decode")?;
+        if reported.insert(text.to_owned(), observation).is_some() {
+            return Err("pids-decode");
+        }
+    }
+    if reported.len() != SLOTS.len() {
+        return Err("pids-decode");
+    }
+    Ok(reported)
+}
+
 fn create_configured_cases(
     mut create: impl FnMut(usize) -> PidsResult<Value>,
 ) -> PidsResult<Vec<Value>> {
@@ -3718,7 +3821,13 @@ impl NativeProducer {
             || actual["State"]["Running"] != false
             || actual["Config"]["Labels"][LABEL] != self.run.run
             || actual["Config"]["Labels"][SLOT_LABEL] != slot
-            || actual["HostConfig"]["PidsLimit"] != maximum
+            || !ConfiguredFixtureSlot::from_index(index).is_some_and(|slot| {
+                slot.configured_limit_matches(
+                    actual
+                        .get("HostConfig")
+                        .and_then(|host| host.get("PidsLimit")),
+                )
+            })
             || actual["HostConfig"]["Init"] != false
             || actual["Config"]["Entrypoint"] != json!(["/dl-pids-worker"])
             || actual["Config"]["Cmd"] != json!([slot, self.nonce, self.deadline_ns.to_string()])
@@ -3817,45 +3926,22 @@ impl NativeProducer {
         {
             return Err("pids-decode");
         }
-        let mut reported = BTreeMap::new();
-        for container in &decoded.containers {
-            let id = container
-                .id
-                .value()
-                .and_then(|id| std::str::from_utf8(id.as_bytes()).ok())
-                .ok_or("pids-decode")?;
-            let limit = container
-                .runtime
-                .pids_limit
-                .value()
-                .copied()
-                .ok_or("pids-decode")?;
-            if container.runtime.pids_limit.availability
-                != crate::observation::Availability::Present
-                || container.runtime.pids_limit.origin != crate::observation::Origin::Effective
-                || reported.insert(id.to_owned(), limit).is_some()
-            {
-                return Err("pids-decode");
-            }
-        }
-        for (index, slot) in SLOTS.iter().enumerate() {
-            let id = self.run.ids[index].as_ref().ok_or("pids-id")?;
-            let expected = if slot.ends_with("16") {
-                16
-            } else if slot.ends_with("64") {
-                64
-            } else {
-                -1
-            };
-            if reported.get(id) != Some(&expected) {
-                return Err("pids-decode");
-            }
-        }
+        let reported = decoded_create_observations(
+            &self.run.ids,
+            decoded
+                .containers
+                .iter()
+                .map(|container| (&container.id, &container.runtime.pids_limit)),
+        )?
+        .into_iter()
+        .map(|(id, observation)| (id, observation.json()))
+        .collect::<BTreeMap<_, _>>();
+
         Ok(
-            json!({"route":"explicit_unix_socket","selected_ids":6,"reserved_calls":REQUESTS,"reserved_body_bytes":BODIES,
+            json!({"schema_version":2,"contract":"pids-create-observations-v2","route":"explicit_unix_socket","selected_ids":6,"reserved_calls":REQUESTS,"reserved_body_bytes":BODIES,
             "reserved_transport_bytes":TRANSPORT,"actual_requests":capture.bounds().request_count,"actual_body_bytes":capture.bounds().bytes_read,
             "limits":{"max_requests":REQUESTS,"max_selected_resources":6,"max_expansions":8,"max_response_bytes":32768,"max_total_bytes":BODIES,"max_elapsed_seconds":10},
-            "decoded_limits":reported,"origin":"effective","scope":"actual_readonly_product_acquisition"}),
+            "observations":reported,"scope":"actual_readonly_product_acquisition"}),
         )
     }
 
@@ -6191,21 +6277,21 @@ fn configured_fixture_authored_input(slot: &str, maximum: i64) -> Value {
             "Cmd": [slot, "PRIVATE_NONCE_CANARY", "123456789"]
         },
         "State": {"Running": false},
-        "HostConfig": {"PidsLimit": maximum, "Init": false},
+        "HostConfig": {"PidsLimit": if maximum == -1 { Value::Null } else { json!(maximum) }, "Init": false},
         "RestartCount": 0
     })
 }
 
 #[test]
 fn pids_configured_fixture_witness_has_independent_all_slot_expectations() {
-    use ConfiguredFixtureShape::{Array, False, MinusOne, Sixteen, SixtyFour, String, Zero};
+    use ConfiguredFixtureShape::{Array, False, Null, Sixteen, SixtyFour, String, Zero};
     for (index, (slot, maximum, shape)) in [
         ("cli16", 16, Sixteen),
         ("cli64", 64, SixtyFour),
-        ("cli_unlimited", -1, MinusOne),
+        ("cli_unlimited", -1, Null),
         ("rendered16", 16, Sixteen),
         ("rendered64", 64, SixtyFour),
-        ("rendered_unlimited", -1, MinusOne),
+        ("rendered_unlimited", -1, Null),
     ]
     .into_iter()
     .enumerate()
@@ -6479,7 +6565,10 @@ fn pids_configured_api_failure_retains_sparse_ownership_without_cli_or_starts() 
         bound[index] = Some(100 + index);
         if index == 5 {
             let mut actual = configured_fixture_authored_input("rendered_unlimited", -1);
-            actual["HostConfig"]["PidsLimit"] = Value::Null;
+            actual["HostConfig"]
+                .as_object_mut()
+                .unwrap()
+                .remove("PidsLimit");
             refusal = ConfiguredFixtureWitness::observe(
                 index,
                 200,
@@ -6514,7 +6603,7 @@ fn pids_configured_api_failure_retains_sparse_ownership_without_cli_or_starts() 
     assert!(refusal.is_some_and(|witness| witness.slot
         == ConfiguredFixtureSlot::RenderedUnlimited
         && !witness.checks[9]
-        && witness.shapes[7] == ConfiguredFixtureShape::Null));
+        && witness.shapes[7] == ConfiguredFixtureShape::Missing));
 }
 
 #[test]
@@ -6581,4 +6670,280 @@ fn pids_configured_creation_error_keeps_unbound_attempt_for_existing_teardown() 
             .zip(bound)
             .any(|(attempted, id)| *attempted && id.is_none())
     );
+}
+
+#[test]
+fn pids_controlled_create_readback_is_presence_aware_for_all_six_slots() {
+    for index in 0..6 {
+        let slot = ConfiguredFixtureSlot::from_index(index).unwrap();
+        let mut actual = configured_fixture_authored_input(slot.name(), slot.maximum());
+        assert!(
+            slot.configured_limit_matches(
+                actual
+                    .get("HostConfig")
+                    .and_then(|host| host.get("PidsLimit"))
+            )
+        );
+        for value in [
+            Value::Null,
+            json!(-1),
+            json!(0),
+            json!(16),
+            json!(64),
+            json!(false),
+            json!("16"),
+            json!(16.0),
+            json!({}),
+            json!([]),
+        ] {
+            let expected = match index {
+                0 | 3 => value.as_i64() == Some(16),
+                1 | 4 => value.as_i64() == Some(64),
+                _ => value == Value::Null,
+            };
+            actual["HostConfig"]["PidsLimit"] = value;
+            let witness = ConfiguredFixtureWitness::observe(
+                index,
+                200,
+                &actual,
+                &configured_fixture_authored_expected(),
+            )
+            .unwrap();
+            assert_eq!(witness.checks[9], expected);
+            assert_eq!(
+                slot.configured_limit_matches(
+                    actual
+                        .get("HostConfig")
+                        .and_then(|host| host.get("PidsLimit"))
+                ),
+                expected
+            );
+        }
+        actual["HostConfig"]
+            .as_object_mut()
+            .unwrap()
+            .remove("PidsLimit");
+        assert!(
+            !slot.configured_limit_matches(
+                actual
+                    .get("HostConfig")
+                    .and_then(|host| host.get("PidsLimit"))
+            )
+        );
+        let witness = ConfiguredFixtureWitness::observe(
+            index,
+            200,
+            &actual,
+            &configured_fixture_authored_expected(),
+        )
+        .unwrap();
+        assert!(!witness.checks[9]);
+        assert_eq!(witness.shapes[7], ConfiguredFixtureShape::Missing);
+    }
+}
+
+struct AuthoredCreateAcquisition {
+    ids: Vec<Option<String>>,
+    fields: Vec<(
+        crate::observation::Observed<crate::evidence::ProtectedValue>,
+        crate::observation::Observed<i64>,
+    )>,
+}
+
+fn authored_create_acquisition() -> AuthoredCreateAcquisition {
+    use crate::observation::{Availability, Observed, Origin};
+    let mut ids = Vec::new();
+    let mut fields = Vec::new();
+    for (index, value) in [Some(16), Some(64), None, Some(16), Some(64), None]
+        .into_iter()
+        .enumerate()
+    {
+        let id = format!("{:064x}", index + 1);
+        fields.push((
+            Observed::present(
+                crate::evidence::ProtectedValue::new(id.as_bytes().to_vec()),
+                Availability::Present,
+                Origin::RuntimeAssigned,
+            ),
+            value.map_or_else(
+                || Observed::unavailable(Availability::Null, Origin::Effective),
+                |value| Observed::present(value, Availability::Present, Origin::Effective),
+            ),
+        ));
+        ids.push(Some(id));
+    }
+    AuthoredCreateAcquisition { ids, fields }
+}
+
+#[test]
+fn pids_create_acquisition_preserves_actual_null_without_authored_minus_one() {
+    let fixture = authored_create_acquisition();
+    let observations = decoded_create_observations(
+        &fixture.ids,
+        fixture.fields.iter().map(|(id, limit)| (id, limit)),
+    )
+    .unwrap();
+    for (index, expected) in [
+        json!({"availability":"present","value":16,"origin":"effective"}),
+        json!({"availability":"present","value":64,"origin":"effective"}),
+        json!({"availability":"null","value":null,"origin":"effective"}),
+        json!({"availability":"present","value":16,"origin":"effective"}),
+        json!({"availability":"present","value":64,"origin":"effective"}),
+        json!({"availability":"null","value":null,"origin":"effective"}),
+    ]
+    .iter()
+    .enumerate()
+    {
+        assert_eq!(
+            &observations[fixture.ids[index].as_deref().unwrap()].json(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn pids_create_acquisition_refuses_unproved_values_origins_and_presence() {
+    use crate::observation::{Availability, Observed, Origin};
+    for index in 0..6 {
+        for availability in [
+            Availability::Missing,
+            Availability::Null,
+            Availability::Empty,
+            Availability::Present,
+            Availability::Redacted,
+        ] {
+            for value in [None, Some(-1), Some(0), Some(16), Some(64)] {
+                for origin in [
+                    Origin::Configured,
+                    Origin::Effective,
+                    Origin::RuntimeAssigned,
+                    Origin::Unknown,
+                ] {
+                    let mut fixture = authored_create_acquisition();
+                    fixture.fields[index].1 = value.map_or_else(
+                        || Observed::unavailable(availability, origin),
+                        |value| Observed::present(value, availability, origin),
+                    );
+                    let valid = origin == Origin::Effective
+                        && match index {
+                            0 | 3 => availability == Availability::Present && value == Some(16),
+                            1 | 4 => availability == Availability::Present && value == Some(64),
+                            _ => availability == Availability::Null && value.is_none(),
+                        };
+                    let result = decoded_create_observations(
+                        &fixture.ids,
+                        fixture.fields.iter().map(|(id, limit)| (id, limit)),
+                    );
+                    assert_eq!(result.is_ok(), valid);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn pids_create_acquisition_refuses_unknown_duplicate_missing_and_mismatched_ids() {
+    use crate::observation::{Availability, Observed, Origin};
+    for case in [
+        "unknown",
+        "duplicate",
+        "missing",
+        "wrong-origin",
+        "wrong-availability",
+        "swapped-limits",
+        "missing-binding",
+        "duplicate-binding",
+        "short-inventory",
+    ] {
+        let mut fixture = authored_create_acquisition();
+        match case {
+            "unknown" => {
+                fixture.fields[0].0 = Observed::present(
+                    crate::evidence::ProtectedValue::new(
+                        b"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+                            .to_vec(),
+                    ),
+                    Availability::Present,
+                    Origin::RuntimeAssigned,
+                )
+            }
+            "duplicate" => {
+                fixture.fields[3].0 = Observed::present(
+                    crate::evidence::ProtectedValue::new(
+                        fixture.ids[0].as_ref().unwrap().as_bytes().to_vec(),
+                    ),
+                    Availability::Present,
+                    Origin::RuntimeAssigned,
+                )
+            }
+            "missing" => {
+                fixture.fields[0].0 =
+                    Observed::unavailable(Availability::Missing, Origin::RuntimeAssigned)
+            }
+            "wrong-origin" => fixture.fields[0].0.origin = Origin::Unknown,
+            "wrong-availability" => fixture.fields[0].0.availability = Availability::Redacted,
+            "swapped-limits" => fixture.fields.swap(0, 2),
+            "missing-binding" => fixture.ids[0] = None,
+            "duplicate-binding" => fixture.ids[3] = fixture.ids[0].clone(),
+            _ => {
+                fixture.fields.pop();
+            }
+        }
+        // Swapping whole observation rows is harmless: the mapping is ID-bound, not positional.
+        if case == "swapped-limits" {
+            fixture.fields[0].1 = Observed::present(16, Availability::Present, Origin::Effective);
+        }
+        assert!(
+            decoded_create_observations(
+                &fixture.ids,
+                fixture.fields.iter().map(|(id, limit)| (id, limit))
+            )
+            .is_err(),
+            "{case}"
+        );
+    }
+    let mut fixture = authored_create_acquisition();
+    fixture.fields.reverse();
+    assert!(
+        decoded_create_observations(
+            &fixture.ids,
+            fixture.fields.iter().map(|(id, limit)| (id, limit))
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn pids_controlled_unlimited_null_never_bypasses_other_fixture_guards() {
+    for index in [2, 5] {
+        let slot = ConfiguredFixtureSlot::from_index(index).unwrap();
+        for predicate in [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13] {
+            let mut actual = configured_fixture_authored_input(slot.name(), -1);
+            let mut expected = configured_fixture_authored_expected();
+            let mut status = 200;
+            match predicate {
+                0 => status = 503,
+                1 => actual["Id"] = json!("not-an-id"),
+                2 => {
+                    expected.id = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                }
+                3 => actual["Name"] = json!("/different-owned-name"),
+                4 => actual["Config"]["Image"] = json!("different-image"),
+                5 => actual["Config"]["Labels"][OWNER] = json!("different-owner"),
+                6 => actual["State"]["Running"] = json!(true),
+                7 => actual["Config"]["Labels"][LABEL] = json!("different-owner"),
+                8 => actual["Config"]["Labels"][SLOT_LABEL] = json!("cli16"),
+                10 => actual["HostConfig"]["Init"] = json!(true),
+                11 => actual["Config"]["Entrypoint"] = json!([]),
+                12 => actual["Config"]["Cmd"] = json!([]),
+                _ => actual["RestartCount"] = json!(1),
+            }
+            let witness =
+                ConfiguredFixtureWitness::observe(index, status, &actual, &expected).unwrap();
+            assert!(witness.checks[9]);
+            assert!(!witness.checks[predicate]);
+            assert!(!witness.checks.iter().all(|passed| *passed));
+        }
+    }
+    assert!(ConfiguredFixtureSlot::from_index(6).is_none());
 }

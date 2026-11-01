@@ -1,5 +1,9 @@
 # Architecture decisions
 
+- [0052: Controlled PIDs CREATE observations](0052-controlled-pids-create-observations.md)
+  separates explicit minus-one request intent from owned CREATE null readback and versions only
+  private acquisition observations; public uncertainty and actual effect obligations remain strict.
+
 - [0051: Fixed ordinary mediated profile builder](0051-ordinary-mediated-profile-builder.md)
   adds only an opt-in pure builder with thirteen explicit ABI4 family rules,
   including seven POSIX queue permissions. The rejected all-rule candidate remains
