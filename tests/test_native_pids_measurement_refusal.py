@@ -148,13 +148,205 @@ class MeasurementRefusalTests(unittest.TestCase):
     def test_diagnostic_occurs_after_existing_cleanup_and_no_acceptance_data_changes(self):
         source = (ROOT / "src/native_pids_tests.rs").read_text()
         live = source[source.index("fn live_pids_limits_and_effects_match_engine()"):]
-        self.assertLess(live.index("terminal_cleanup("), live.index("pids_measurement_refusal_diagnostic(phase)"))
-        self.assertLess(live.index("pids_measurement_refusal_diagnostic(phase)"), live.index('panic!("private native PIDs observation refused")'))
+        self.assertLess(live.index("terminal_cleanup("), live.index("pids_configured_fixture_diagnostic("))
+        self.assertLess(live.index("pids_configured_fixture_diagnostic("), live.index('panic!("private native PIDs observation refused")'))
         self.assertIn("Ok(Err(phase))", live)
         self.assertIn('include_str!("native_pids_measurement_refusals.txt")', source)
         result, _ = self.wrapper(SUCCESS, status=0)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn(PREFIX.encode(), result.stdout + result.stderr)
+
+
+    @staticmethod
+    def configured_line(slot="cli16", checks="11111111110111", shapes=None, lengths="11"):
+        if shapes is None:
+            shapes = "string,string,string,string,false,string,string,sixteen,null,array,array,zero"
+        return (PREFIX + "pids-configured-fixture slot=" + slot + " checks=" + checks
+                + " shapes=" + shapes + " lengths=" + lengths)
+
+    def test_configured_witness_projects_independently_coherent_slots_checks_and_shapes(self):
+        # Literal expected limit classes for all six roles, independent of the
+        # wrapper mapping. The sole mismatch is Init=null versus explicit false.
+        for slot, limit in (("cli16", "sixteen"), ("cli64", "sixty_four"), ("cli_unlimited", "minus_one"),
+                            ("rendered16", "sixteen"), ("rendered64", "sixty_four"), ("rendered_unlimited", "minus_one")):
+            shapes = "string,string,string,string,false,string,string," + limit + ",null,array,array,zero"
+            line = self.configured_line(slot=slot, shapes=shapes)
+            result, trace = self.wrapper(line, status=101)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(len(trace), 2)
+            self.assertEqual(result.stderr.count((line + "\n").encode()), 1)
+
+        passing_shapes = "string,string,string,string,false,string,string,sixteen,false,array,array,zero"
+        # Coherent failures authored per predicate, not arbitrary bit flips on
+        # a stale null-Init record. Noncanonical Id also cannot equal created Id.
+        cases = (
+            ("HTTP status", "01111111111111", passing_shapes, "11"),
+            ("noncanonical Id", "10011111111111", passing_shapes, "11"),
+            ("different canonical Id", "11011111111111", passing_shapes, "11"),
+            ("different name", "11101111111111", passing_shapes, "11"),
+            ("different image", "11110111111111", passing_shapes, "11"),
+            ("different original owner", "11111011111111", passing_shapes, "11"),
+            ("running true", "11111101111111", "string,string,string,string,true,string,string,sixteen,false,array,array,zero", "11"),
+            ("different experiment owner", "11111110111111", passing_shapes, "11"),
+            ("different slot label", "11111111011111", passing_shapes, "11"),
+            ("different limit", "11111111101111", "string,string,string,string,false,string,string,sixty_four,false,array,array,zero", "11"),
+            ("Init null", "11111111110111", "string,string,string,string,false,string,string,sixteen,null,array,array,zero", "11"),
+            ("different entrypoint contents", "11111111111011", passing_shapes, "11"),
+            ("different command contents", "11111111111101", passing_shapes, "11"),
+            ("nonzero restarts", "11111111111110", "string,string,string,string,false,string,string,sixteen,false,array,array,integer", "11"),
+            ("different entrypoint length", "11111111111011", passing_shapes, "01"),
+            ("different command length", "11111111111101", passing_shapes, "10"),
+            ("nonarray entrypoint and command", "11111111111001", "string,string,string,string,false,string,string,sixteen,false,null,object,zero", "00"),
+        )
+        for label, checks, shapes, lengths in cases:
+            with self.subTest(label=label):
+                line = self.configured_line(checks=checks, shapes=shapes, lengths=lengths)
+                result, _ = self.wrapper(line, status=101)
+                self.assertIn((line + "\n").encode(), result.stderr)
+
+        # Every allowed shape is coherent at Id with both syntax and equality
+        # false; even a string may contain a noncanonical private value.
+        for shape in ("missing", "null", "false", "true", "zero", "minus_one", "sixteen", "sixty_four",
+                      "integer", "number", "string", "array", "object"):
+            shapes = ",".join([shape, *passing_shapes.split(",")[1:]])
+            line = self.configured_line(checks="10011111111111", shapes=shapes)
+            result, _ = self.wrapper(line, status=101)
+            self.assertIn((line + "\n").encode(), result.stderr)
+        line = self.configured_line(checks="01111011110101", lengths="10")
+        result, _ = self.wrapper(line + "\n" + SECRET, status=101)
+        self.assertIn((line + "\n").encode(), result.stderr)
+        self.assertNotIn(SECRET.encode(), result.stdout + result.stderr)
+
+    def test_configured_witness_rejects_cross_field_contradictions(self):
+        # Keep HTTP=false in every contradictory case so the all-true guard
+        # cannot mask a missing cross-field rule. All other starting facts are
+        # independently coherent, including explicit Init=false.
+        checks = "01111111111111"
+        shapes = "string,string,string,string,false,string,string,sixteen,false,array,array,zero".split(",")
+        cases = []
+        for label, field in (("canonical Id requires string", 0), ("name requires string", 1),
+                             ("image requires string", 2), ("original owner requires string", 3),
+                             ("experiment owner requires string", 5), ("slot label requires string", 6)):
+            changed = shapes.copy()
+            changed[field] = "null"
+            cases.append((label, self.configured_line(checks=checks, shapes=",".join(changed))))
+        cases.append(("equal Id implies canonical", self.configured_line(checks="00111111111111", shapes=",".join(shapes))))
+
+        for label, bit, field in (("Running", 6, 4), ("Init", 10, 8)):
+            changed_checks = checks[:bit] + "0" + checks[bit + 1:]
+            cases.append((label + " false must match", self.configured_line(checks=changed_checks, shapes=",".join(shapes))))
+            for wrong_shape in ("missing", "null", "true", "zero", "string"):
+                changed = shapes.copy()
+                changed[field] = wrong_shape
+                cases.append((label + " nonfalse must not match " + wrong_shape,
+                              self.configured_line(checks=checks, shapes=",".join(changed))))
+
+        for slot, expected, wrong in (("cli16", "sixteen", "sixty_four"), ("cli64", "sixty_four", "minus_one"),
+                                     ("cli_unlimited", "minus_one", "zero"), ("rendered16", "sixteen", "minus_one"),
+                                     ("rendered64", "sixty_four", "sixteen"), ("rendered_unlimited", "minus_one", "sixteen")):
+            changed = shapes.copy()
+            changed[7] = expected
+            cases.append((slot + " authored limit must match", self.configured_line(slot=slot, checks="01111111101111", shapes=",".join(changed))))
+            changed[7] = wrong
+            cases.append((slot + " wrong limit must not match", self.configured_line(slot=slot, checks=checks, shapes=",".join(changed))))
+        for wrong_shape in ("missing", "null", "false", "number", "integer"):
+            changed = shapes.copy()
+            changed[7] = wrong_shape
+            cases.append(("invalid limit shape " + wrong_shape, self.configured_line(checks=checks, shapes=",".join(changed))))
+
+        cases.append(("zero restarts must match", self.configured_line(checks="01111111111110", shapes=",".join(shapes))))
+        for wrong_shape in ("missing", "null", "false", "integer", "number"):
+            changed = shapes.copy()
+            changed[11] = wrong_shape
+            cases.append(("nonzero restart shape " + wrong_shape, self.configured_line(checks=checks, shapes=",".join(changed))))
+
+        for label, bit, field, lengths in (("entrypoint", 11, 9, "01"), ("command", 12, 10, "10")):
+            changed = shapes.copy()
+            changed[field] = "string"
+            nonmatch = checks[:bit] + "0" + checks[bit + 1:]
+            cases.append((label + " nonarray cannot have matching length",
+                          self.configured_line(checks=nonmatch, shapes=",".join(changed))))
+            cases.append((label + " nonarray cannot match contents",
+                          self.configured_line(checks=checks, shapes=",".join(changed), lengths=lengths)))
+            cases.append((label + " wrong array length cannot match contents",
+                          self.configured_line(checks=checks, shapes=",".join(shapes), lengths=lengths)))
+        for label, line in cases:
+            with self.subTest(label=label):
+                result, _ = self.wrapper(line, status=101)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn(PREFIX.encode(), result.stdout + result.stderr)
+
+    def test_configured_witness_rejects_incomplete_unknown_reordered_or_private_metadata(self):
+        valid = self.configured_line()
+        shapes = "string,string,string,string,false,string,string,sixteen,null,array,array,zero"
+        malformed = [
+            self.configured_line(slot="cli17"), self.configured_line(slot=SECRET),
+            self.configured_line(checks="1" * 14), self.configured_line(checks="0" * 13),
+            self.configured_line(checks="0" * 15), self.configured_line(checks="2" + "0" * 13),
+            self.configured_line(shapes=shapes + ",null"), self.configured_line(shapes=",".join(shapes.split(",")[:-1])),
+            self.configured_line(shapes=shapes.replace("sixteen", "sixteen:" + SECRET)),
+            self.configured_line(shapes=shapes.replace("sixteen", "16")),
+            self.configured_line(lengths="0"), self.configured_line(lengths="000"), self.configured_line(lengths="02"),
+            valid.replace(" slot=cli16 checks=11111111110111", " checks=11111111110111 slot=cli16"),
+            valid.replace(" slot=cli16", " slot=cli16 slot=cli16"),
+            valid + " lengths=11", valid + " private=" + SECRET, valid + " ", valid + "\r" + SECRET,
+            valid + "\0" + SECRET, valid + "x" * 400,
+            valid.replace("code=pids-configured-fixture", "code=pids-info"),
+            valid.replace("code=pids-configured-fixture", "code=unclassified"),
+            valid.replace(" shapes=", "  shapes="),
+        ]
+        for line in malformed:
+            with self.subTest(line=line):
+                result, _ = self.wrapper(line, status=101)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn(PREFIX.encode(), result.stdout + result.stderr)
+                self.assertNotIn(SECRET.encode(), result.stdout + result.stderr)
+        result, _ = self.wrapper(valid, status=101, terminate_output=False)
+        self.assertNotIn(PREFIX.encode(), result.stdout + result.stderr)
+
+    def test_configured_witness_retains_duplicate_mixed_success_and_foreign_selector_refusals(self):
+        line = self.configured_line()
+        for other in (line, PREFIX + "pids-configured-fixture", PREFIX + "pids-info",
+                      SETUP_REFUSAL + "pids-outer", "DOCKERLENS_NATIVE_PIDS_IO: phase=ready kind=eof",
+                      "DOCKERLENS_NATIVE_PIDS_START: s=s_imports k=import", "DOCKERLENS_NATIVE_PIDS_BIND: s=w_capture_adopt"):
+            for output in (line + "\n" + other, other + "\n" + line):
+                result, _ = self.wrapper(output, status=101)
+                self.assertNotIn(PREFIX.encode(), result.stdout + result.stderr)
+        for status in (0, 101):
+            for positive in (SUCCESS, "DOCKERLENS_NATIVE_CHECK: pids_evidence"):
+                result, _ = self.wrapper(line + "\n" + positive, status=status)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn(line.encode(), result.stdout + result.stderr)
+                self.assertNotIn(b"required native test passed:", result.stdout + result.stderr)
+                self.assertNotIn(b"test result: ok.", result.stdout + result.stderr)
+            result, _ = self.wrapper(line, status=status, test_name="different_native_pids_test")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn(PREFIX.encode(), result.stdout + result.stderr)
+
+    def test_configured_witness_keeps_original_panic_timeout_and_cleanup_dominance(self):
+        line = self.configured_line()
+        for status in (101, 124, 130, 143):
+            output = ("DOCKERLENS_NATIVE_CHECK: pids_context\nDOCKERLENS_NATIVE_CHECK: pids_cleanup\n" + line
+                      + f"\nthread '{SELECTED}' panicked at src/native_pids_tests.rs:123:4:\n" + SECRET + "\n" + HANDOFF)
+            result, _ = self.wrapper(output, status=status)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(f"(exit {status})".encode(), result.stderr)
+            self.assertIn((line + "\n").encode(), result.stderr)
+            self.assertIn(HANDOFF.encode(), result.stderr)
+            self.assertNotIn(SECRET.encode(), result.stdout + result.stderr)
+        result, _ = self.wrapper(line, status=101, capture_failure="cleanup")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"private capture cleanup unavailable", result.stderr)
+        for failure in ("create", "write"):
+            result, _ = self.wrapper(line, status=101, capture_failure=failure)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn(PREFIX.encode(), result.stdout + result.stderr)
+
+    def test_bare_configured_phase_remains_available_when_no_witness_is_constructed(self):
+        line = PREFIX + "pids-configured-fixture"
+        result, _ = self.wrapper(line, status=101)
+        self.assertIn((line + "\n").encode(), result.stderr)
+        self.assertNotIn(b" slot=", result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

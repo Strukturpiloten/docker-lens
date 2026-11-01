@@ -60,6 +60,70 @@ PIDs support, fixture repair, host migration or native qualification. Final
 independent review/complete gates and fresh exact-source native evidence remain
 due before diagnosing the actual rootful measurement code.
 
+### Configured-fixture witness
+
+Run 41281982479 at exact candidate 946be4f returned
+`pids-configured-fixture` in both rootful lanes. That code alone does not reveal
+which of the six slots or configured-state predicates failed. It occurs after
+creation and the by-name ownership bind, at the later by-ID inspect guard,
+before starting any of the six workers. It does not identify a PIDs enforcement
+failure or justify treating null as explicit false.
+
+For this code only, the existing measurement marker may append one closed
+suffix, in fixed order: `slot`, `checks`, `shapes`, `lengths`. The complete line
+is at most 320 ASCII bytes inside the unchanged private capture ceiling. Bare
+measurement lines retain their 96-byte limit and the same 78-code registry/hash.
+The six slot values are `cli16`, `cli64`, `cli_unlimited`, `rendered16`,
+`rendered64`, and `rendered_unlimited`.
+
+`checks` contains exactly fourteen bits, left to right; 1 means the original
+predicate matched. All are evaluated against the same already-fetched immutable
+inspect response, including checks after the first mismatch:
+
+1. HTTP status equals 200.
+2. Returned ID has canonical syntax.
+3. Returned ID equals the created ID.
+4. Name equals the owned name.
+5. Configured image equals the borrowed image.
+6. Original owner label equals the current run.
+7. Running is boolean false.
+8. PIDs experiment label equals the current run.
+9. PIDs slot label equals the fixed slot.
+10. PIDs limit equals the authored 16, 64, or -1.
+11. Init is explicit boolean false.
+12. Entrypoint equals the authored one-element array.
+13. Cmd equals the authored three-element array.
+14. RestartCount equals numeric zero.
+
+`shapes` contains twelve comma-separated enums in this order: Id, Name,
+Config.Image, original owner label, State.Running, PIDs experiment label, PIDs
+slot label, HostConfig.PidsLimit, HostConfig.Init, Config.Entrypoint, Config.Cmd,
+RestartCount. A missing nested path is `missing`; explicit null is `null`.
+The remaining closed classes are `false`, `true`, `zero`, `minus_one`, `sixteen`,
+`sixty_four`, `integer` (all other integers), `number` (non-integer JSON number
+representation), `string`, `array`, and `object`. These are categories, never
+arbitrary observed values. `lengths` contains two bits for an Entrypoint array
+of length one and a Cmd array of length three, respectively.
+
+The private witness retains only the slot enum, boolean arrays and shape enums.
+It adds no daemon, clock, filesystem, process or controller read and changes no
+acceptance predicate. It carries no inspect clone, ID/name/image, labels,
+argv, run/nonce, deadline or exception text. The original failure branch emits
+it only after terminal cleanup. An unavailable witness or all-passing check set leaves the original bare phase
+and failure intact; an all-passing witness cannot accompany a configured-fixture
+refusal.
+
+The existing exact-selector private-capture parser reconstructs only this fixed
+suffix for this one code. Missing, unknown, duplicated, reordered, truncated or
+wrong-cardinality metadata cannot project; mixed observation families, foreign
+selectors and any success contradiction retain their original refusal rules.
+No new diagnostic family, capability, collector, runtime authority, workload,
+budget, cleanup rule, dependency, pin or Renovate ownership is introduced.
+Independently authored inspect mutations cover every predicate and simultaneous
+failures; wrapper controls cover the fixed vocabulary and failure/cleanup
+precedence. These are source controls, not native qualification. Fresh exact
+native observations are still required to identify the actual discrepancy.
+
 ## Launcher prerequisites
 
 The launcher reuses its existing inner cgroup version and driver queries to
