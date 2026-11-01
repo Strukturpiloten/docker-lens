@@ -25,6 +25,9 @@ from test_native_kernel_settings_proof import fixture as kernel_settings_fixture
 from test_native_pids_proof import materialize_pids_proof
 from test_native_nofile_proof import fixture as nofile_fixture
 from test_native_device_mapping_proof import fixture as device_mapping_fixture
+from test_native_memory_proof import fixture as memory_fixture, bind_context as bind_memory_context
+from test_native_capabilities_proof import fixture as capabilities_fixture, bind_context as bind_capabilities_context
+from test_native_logging_proof import fixture as logging_fixture, bind_context as bind_logging_context
 from test_native_runtime_filesystem_proof import fixture as runtime_filesystem_fixture
 from test_native_tmpfs_effect_proof import fixture as tmpfs_effect_fixture
 from test_native_health_start_interval_boundary_proof import fixture as health_boundary_fixture
@@ -381,6 +384,9 @@ class NativeEvidenceTests(unittest.TestCase):
                  pids_missing: bool = False, pids_mutate=None,
                  nofile: object = None, nofile_missing: bool = False,
                  device_mapping: object = None, device_mapping_missing: bool = False,
+                 memory: object = None, memory_missing: bool = False,
+                 capabilities: object = None, capabilities_missing: bool = False,
+                 logging: object = None, logging_missing: bool = False,
                  outer_backend: str = "podman",
                  port_proof_override: object = None) -> tuple[subprocess.CompletedProcess[str], Path]:
         temporary = tempfile.TemporaryDirectory()
@@ -546,6 +552,21 @@ class NativeEvidenceTests(unittest.TestCase):
             device_path = root / "device-mapping-v1.json"
             device_path.write_text(json.dumps(payload if device_mapping is None else device_mapping), encoding="utf-8")
             device_path.chmod(0o600)
+        if not memory_missing:
+            payload = bind_memory_context(memory_fixture(lane, outer_backend=outer_backend if outer_backend in ("podman", "docker") else "podman"), external["context"])
+            memory_path = root / "memory-limits-v1.json"
+            memory_path.write_text(json.dumps(payload if memory is None else memory), encoding="utf-8")
+            memory_path.chmod(0o600)
+        if not capabilities_missing:
+            payload = bind_capabilities_context(capabilities_fixture(lane, outer_backend=outer_backend if outer_backend in ("podman", "docker") else "podman"), external["context"])
+            cap_path = root / "named-capabilities-v1.json"
+            cap_path.write_text(json.dumps(payload if capabilities is None else capabilities), encoding="utf-8")
+            cap_path.chmod(0o600)
+        if not logging_missing:
+            payload = bind_logging_context(logging_fixture(lane, outer_backend=outer_backend if outer_backend in ("podman", "docker") else "podman"), external["context"])
+            logging_path = root / "logging-v1.json"
+            logging_path.write_text(json.dumps(payload if logging is None else logging, separators=(",", ":")), encoding="utf-8")
+            logging_path.chmod(0o600)
         if not pids_missing:
             pids_context = {
                 "candidate_sha": sha, "run_id": RUN_ID, "lane": lane,

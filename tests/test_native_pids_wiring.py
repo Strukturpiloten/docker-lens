@@ -817,8 +817,9 @@ else:
         calls = re.findall(r'run-exact-native-test\.sh" ([a-z_0-9]+) ([a-z_0-9]+)', source)
         self.assertEqual(calls[25:], [("native_kernel_settings", "live_kernel_settings_match_engine"), ("native_pids", TEST),
                                      ("native_nofile", "live_nofile_limits_and_effects_match_engine"),
-                                 ("native_device_mapping", "live_device_mapping_matches_engine")])
-        self.assertEqual(len(calls), 29)
+                                 ("native_device_mapping", "live_device_mapping_matches_engine"),
+                                 ("native_memory", "live_memory_limits_and_effects_match_engine"), ("native_capabilities", "live_named_capabilities_match_engine"), ("native_logging", "live_logging_matches_engine")])
+        self.assertEqual(len(calls), 32)
         reader = source.index('python3 "$script_dir/native_pids_proof.py"')
         child = source.index('"$(dirname "$0")/run-exact-native-test.sh" native_pids')
         prebuild = source.index('python3 "$script_dir/build-native-pids-worker.py"')
@@ -854,7 +855,7 @@ if sys.argv[1] == "-c":
     raise SystemExit(0)
 name = sys.argv[1].rsplit("/", 1)[-1]
 event = {"build-native-pids-worker.py":"prebuild", "native_pids_proof.py":"reader",
-         "native_nofile_proof.py":"nofile_reader", "native_device_mapping_proof.py":"device_reader"}[name]
+         "native_nofile_proof.py":"nofile_reader", "native_device_mapping_proof.py":"device_reader", "native_memory_proof.py":"memory_reader", "native_capabilities_proof.py":"capabilities_reader", "native_logging_proof.py":"logging_reader"}[name]
 with open(os.environ["TRACE"], "a") as stream:
     stream.write(event + "\\n")
 raise SystemExit(int(os.environ["FAILURE"] == event))
@@ -866,6 +867,12 @@ set -euo pipefail
 if [[ $1 == native_pids && $2 == live_pids_limits_and_effects_match_engine ]]; then
   printf 'child\\n' >> "$TRACE"
   [[ $FAILURE != child ]]
+elif [[ $1 == native_logging && $2 == live_logging_matches_engine ]]; then
+  printf 'logging_child\\n' >> "$TRACE"
+elif [[ $1 == native_capabilities && $2 == live_named_capabilities_match_engine ]]; then
+  printf 'capabilities_child\\n' >> "$TRACE"
+elif [[ $1 == native_memory && $2 == live_memory_limits_and_effects_match_engine ]]; then
+  printf 'memory_child\\n' >> "$TRACE"
 elif [[ $1 == native_device_mapping && $2 == live_device_mapping_matches_engine ]]; then
   printf 'device_child\\n' >> "$TRACE"
 else
@@ -905,7 +912,7 @@ trap cleanup EXIT
                             env={**os.environ, **variables, "PATH": str(root) + os.pathsep + os.environ["PATH"],
                                  "TRACE": str(root / "trace"), "FAILURE": failure, "run_dir": directory, "script_dir": directory,
                                  "NATIVE_PIDS_CANDIDATE_SHA": "a" * 40, "DOCKERLENS_NATIVE_CANDIDATE_SHA": "a" * 40,
-                                      "NATIVE_DEVICE_MAPPING_CANDIDATE_SHA": "a" * 40, "NATIVE_NOFILE_CANDIDATE_SHA": "a" * 40, "NATIVE_BIND_RELABEL_DAEMON_UID": "0",
+                                      "NATIVE_DEVICE_MAPPING_CANDIDATE_SHA": "a" * 40, "NATIVE_MEMORY_CANDIDATE_SHA": "a" * 40, "NATIVE_CAPABILITIES_CANDIDATE_SHA": "a" * 40, "NATIVE_LOGGING_CANDIDATE_SHA": "a" * 40, "NATIVE_NOFILE_CANDIDATE_SHA": "a" * 40, "NATIVE_BIND_RELABEL_DAEMON_UID": "0",
                                  "apparmor_profile": profile, "DOCKERLENS_NATIVE_EVIDENCE_DIR": evidence})
                         trace = (root / "trace").read_text().splitlines()
                         expected = ["prebuild", "child", "reader"]
@@ -914,7 +921,7 @@ trap cleanup EXIT
                             self.assertEqual(trace, expected[:expected.index(failure) + 1] + ["teardown"])
                         else:
                             self.assertEqual(result.returncode, 0, result.stderr)
-                            expected.extend(["nofile_child", "nofile_reader", "device_child", "device_reader"])
+                            expected.extend(["nofile_child", "nofile_reader", "device_child", "device_reader", "memory_child", "memory_reader", "capabilities_child", "capabilities_reader", "logging_child", "logging_reader"])
                             if evidence and not profile:
                                 expected.append("emitter")
                             expected.extend(["complete", "teardown"])

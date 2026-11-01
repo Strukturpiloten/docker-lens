@@ -9,6 +9,15 @@ import sys
 from pathlib import Path
 
 from native_source_accounting import outer_snapshot_cost
+from native_logging_proof import (
+    CONTRACT as LOGGING_CONTRACT, FILENAME as LOGGING_FILENAME, read_logging_proof,
+)
+from native_capabilities_proof import (
+    CONTRACT as CAPABILITIES_CONTRACT, FILENAME as CAPABILITIES_FILENAME, read_capabilities_proof,
+)
+from native_memory_proof import (
+    CONTRACT as MEMORY_CONTRACT, FILENAME as MEMORY_FILENAME, read_memory_proof,
+)
 from native_device_mapping_proof import (
     CONTRACT as DEVICE_MAPPING_CONTRACT, FILENAME as DEVICE_MAPPING_FILENAME, read_device_mapping_proof,
 )
@@ -581,6 +590,31 @@ def emit(version_path: Path, shapes_path: Path, source_path: Path, network_path:
             or type(device["capability_admission"]) is not list or device["capability_admission"] != []
             or device["catalogue_admission"] is not False):
         raise ValueError("invalid private device mapping reader result")
+    memory = read_memory_proof(
+        capture_dir / MEMORY_FILENAME, capture_dir, external_context, outer_backend=outer_backend)
+    if (type(memory) is not dict
+            or set(memory) != {"contract", "capability_admission", "catalogue_admission"}
+            or type(memory["contract"]) is not str or memory["contract"] != MEMORY_CONTRACT
+            or type(memory["capability_admission"]) is not list or memory["capability_admission"] != []
+            or memory["catalogue_admission"] is not False):
+        raise ValueError("invalid private memory reader result")
+    capabilities = read_capabilities_proof(
+        capture_dir / CAPABILITIES_FILENAME, capture_dir, external_context, outer_backend=outer_backend)
+    if (type(capabilities) is not dict
+            or set(capabilities) != {"contract", "capability_admission", "catalogue_admission"}
+            or type(capabilities["contract"]) is not str or capabilities["contract"] != CAPABILITIES_CONTRACT
+            or type(capabilities["capability_admission"]) is not list or capabilities["capability_admission"] != []
+            or capabilities["catalogue_admission"] is not False):
+        raise ValueError("invalid private named capabilities reader result")
+
+    logging = read_logging_proof(
+        capture_dir / LOGGING_FILENAME, capture_dir, external_context, outer_backend=outer_backend)
+    if (type(logging) is not dict
+            or set(logging) != {"contract", "capability_admission", "catalogue_admission"}
+            or type(logging["contract"]) is not str or logging["contract"] != LOGGING_CONTRACT
+            or type(logging["capability_admission"]) is not list or logging["capability_admission"] != []
+            or logging["catalogue_admission"] is not False):
+        raise ValueError("invalid private logging reader result")
     # Only these closed mappings follow the complete, validated native proof
     # files above. They extend raw lane evidence, never the reviewed catalogue.
     # Other network probes and source daemon reports grant no capability here.

@@ -51,6 +51,7 @@ EXPECTED_CALLS = [
     ("native_pids", "live_pids_limits_and_effects_match_engine"),
     ("native_nofile", "live_nofile_limits_and_effects_match_engine"),
     ("native_device_mapping", "live_device_mapping_matches_engine"),
+            ("native_memory", "live_memory_limits_and_effects_match_engine"), ("native_capabilities", "live_named_capabilities_match_engine"), ("native_logging", "live_logging_matches_engine"),
 ]
 
 
@@ -95,7 +96,7 @@ sys.exit(int(os.environ["STATUS"]))
         end = source.index('\n)\n', owner)
         scoped = re.findall(r'^[ \t]*"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source[owner:end], re.M)
         self.assertEqual(scoped, EXPECTED_CALLS[16:21])
-        self.assertEqual(source.count('export NATIVE_LIFECYCLE_CLEANUP_OWNER='), 8)
+        self.assertEqual(source.count('export NATIVE_LIFECYCLE_CLEANUP_OWNER='), 11)
         self.assertLess(source.index('unset NATIVE_LIFECYCLE_CLEANUP_OWNER'), source.index('run-exact-native-test.sh" native_capture'))
         emission = source.index('python3 "$script_dir/native-evidence.py"')
         self.assertLess(end, emission)

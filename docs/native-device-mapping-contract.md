@@ -4,7 +4,11 @@
 mandatory device child as invocation 29 after PIDs27 and its strict reader, then
 nofile28 and its strict reader. The original 28 names, order, owner scopes and
 reader failure dominance remain intact. Invocation 22 retains ADR 0046's resolver
-semantics. Eight delegated cleanup scopes now exist. This is unadmitted source
+semantics. [ADR 0048](decisions/0048-inner-memory-native-source-proof.md) now appends
+memory30 after this strict device reader; [ADR 0049](decisions/0049-named-capabilities-native-source-proof.md)
+then appends capabilities31/read. [ADR 0050](decisions/0050-logging-native-source-proof.md)
+adds logging32/read: 32 invocations and eleven delegated owners. Device behavior
+below remains unchanged. This is unadmitted source
 preparation, not native qualification or application acceptance.
 
 ## Independent controls and actual read
@@ -106,7 +110,8 @@ cancellation dispositions, exact counters, cleanup uncertainty, selection,
 original deadline and strict invocation/reader order. These are offline source
 checks, not genuine device reads. Final-source complete gates, independent review
 and fresh exact-candidate Debian11 API1.41 and upstream API1.56 rootful/rootless
-whole-29-call runs with actual reads and verified cleanup remain required.
-Memory effects, named capability add/drop and logging proofs remain open; this
-slice closes none of them. Catalogue admission, historical 57-shape preservation,
+whole 32-call runs with actual reads and verified cleanup remain required.
+Memory proof source now follows under ADR 0048, with native qualification still
+pending. Named capability source is appended under ADR 0049; logging32/read follows under ADR 0050. This device
+slice closes none of those obligations. Catalogue admission, historical 57-shape preservation,
 BoxFerry application acceptance and publication remain separate obligations.

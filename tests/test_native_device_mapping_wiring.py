@@ -87,8 +87,8 @@ else:
     def test_original28_order_and_exactly_one_immediate_device_reader(self):
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         calls = re.findall(r'^[ \t]*"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source, re.M)
-        self.assertEqual(calls, ORIGINAL27 + [("native_nofile", "live_nofile_limits_and_effects_match_engine"), (TARGET, TEST)])
-        self.assertEqual(source.count("export NATIVE_LIFECYCLE_CLEANUP_OWNER="), 8)
+        self.assertEqual(calls, ORIGINAL27 + [("native_nofile", "live_nofile_limits_and_effects_match_engine"), (TARGET, TEST), ("native_memory", "live_memory_limits_and_effects_match_engine"), ("native_capabilities", "live_named_capabilities_match_engine"), ("native_logging", "live_logging_matches_engine")])
+        self.assertEqual(source.count("export NATIVE_LIFECYCLE_CLEANUP_OWNER="), 11)
         stages = ['run-exact-native-test.sh" native_pids ', 'python3 "$script_dir/native_pids_proof.py"',
                   'run-exact-native-test.sh" native_nofile ', 'python3 "$script_dir/native_nofile_proof.py"',
                   'run-exact-native-test.sh" native_device_mapping ', 'python3 "$script_dir/native_device_mapping_proof.py"',
@@ -97,7 +97,7 @@ else:
         self.assertEqual(positions, sorted(positions))
         self.assertEqual(source.count(stages[-2]), 1)
         reader = positions[-2]
-        command = shlex.split(source[reader:positions[-1]].replace('\\\n', ' '))
+        command = shlex.split(source[reader:source.index("\n\n",reader)].replace('\\\n', ' '))
         self.assertEqual(command[2:], ["$run_dir", "$NATIVE_DEVICE_MAPPING_CANDIDATE_SHA", "$run_id", "$lane",
                                       "$server_version", "$api_version", "$expected_mode", "$installed_docker_package",
                                       "$NATIVE_FIXTURE_IMAGE", "$image", "$NATIVE_OUTER_CONTAINER_ID", "$NATIVE_BIND_RELABEL_DAEMON_UID"])
@@ -110,7 +110,7 @@ else:
                 result, events, _ = self.tail(lane, backend)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual([item["event"] for item in events],
-                                 ["prebuild", "pids_child", "pids_reader", "nofile_child", "nofile_reader", "device_child", "device_reader", "complete", "teardown"])
+                                 ["prebuild", "pids_child", "pids_reader", "nofile_child", "nofile_reader", "device_child", "device_reader", "memory_child", "memory_reader", "capabilities_child", "capabilities_reader", "logging_child", "logging_reader", "complete", "teardown"])
                 self.assertEqual(events[5]["owner"], "native_conformance_outer_v1")
                 self.assertEqual(events[6]["backend"], backend)
                 result, events, _ = self.tail(lane, backend, device_mutate=lambda p: p["cleanup"].update(uncertain=True))

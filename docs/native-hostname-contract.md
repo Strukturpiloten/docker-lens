@@ -3,10 +3,12 @@
 [ADR 0046](decisions/0046-hostname-resolver-source-proof-v2.md) expands mandatory
 invocation 22, `native_health_metadata_tests::lifecycle::hostname::live_hostname_matches_engine`,
 under its existing owner. [ADR 0047](decisions/0047-device-mapping-native-source-proof.md)
-now appends device29 as the eighth delegated owner after the original 28 ordered
-invocations. All resolver/custody/non-admission rules here remain intact. Invocation 22 now includes resolver observations; resolver
+records device29 as the eighth delegated owner after the original 28 ordered
+invocations. [ADR 0048](decisions/0048-inner-memory-native-source-proof.md) now
+appends memory30 as the ninth owner after device29/read. [ADR 0049](decisions/0049-named-capabilities-native-source-proof.md)
+then appends capabilities31/read as the tenth owner. All resolver/custody/non-admission rules here remain intact. Invocation 22 now includes resolver observations; resolver
 failure can prevent reaching PIDs27. PIDs27 and its immediate reader must still
-succeed before nofile28/read and the appended device29/read. Earlier qualification cannot qualify this changed source.
+succeed before nofile28/read and device29/read and the appended memory30/read, then capabilities31/read. Earlier qualification cannot qualify this changed source.
 This is test-only source preparation, not native qualification, catalogue admission,
 application acceptance or publication authority.
 

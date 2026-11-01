@@ -1,15 +1,32 @@
 # DockerLens
 
+The [logging source contract](docs/native-logging-contract.md) and
+[ADR 0050](docs/decisions/0050-logging-native-source-proof.md) register logging32
+only after unchanged original29/read, memory30/read and capabilities31/read.
+The current canonical sequence has 32 invocations and eleven delegated owners.
+Six explicit CLI/rendered controls retain exact configured driver/options and
+one actual bounded canary read or closed none refusal. Private validation adds
+no capability/catalogue admission. Final complete review/gates, fresh full32
+four-profile native qualification, actual byte/time fit and cleanup remain due.
+
+
 The current [hostname/resolver contract](docs/native-hostname-contract.md) and
 [ADR 0046](docs/decisions/0046-hostname-resolver-source-proof-v2.md) expand
 invocation 22 under its existing HealthRun/owner with four fresh resolver fixtures,
 while preserving all four hostname controls. Private schema 2/hostname-v2.json
 requires both sections; public hostname-v1, the 19-argument emitter and capability/
-catalogue maps remain unchanged. The original 28 invocation names retain their order; device29 now appends an
-eighth owner scope under ADR 0047. Resolver failure can prevent reaching PIDs27.
-PIDs27/read and nofile28/read must succeed before device29/read. Earlier qualification is not reusable;
+catalogue maps remain unchanged. The original 29 invocation names and readers retain their order; memory30 now
+appends a ninth owner scope under ADR 0048. Resolver failure can prevent reaching PIDs27.
+PIDs27/read and nofile28/read must succeed before device29/read and memory30/read. Earlier qualification is not reusable;
 source checks and actual combined native byte/time fit remain pending. No resolver
 connectivity, IPv6-network, application-acceptance or publication claim follows.
+
+The [memory source contract](docs/native-memory-contract.md) and
+[ADR 0048](docs/decisions/0048-inner-memory-native-source-proof.md) add only the
+private six-control local-pressure/child-victim proof after device29/read. Its
+surviving supervisor preserves actual leaf counters and distinguishes child OOM
+from propagated parent status. No memory capability is admitted; fresh native
+qualification, actual whole-lane fit and cleanup remain required.
 
 Building DockerLens requires Rust 1.98.1 or newer. The repository pins Rust
 1.98.1 for development, linting, documentation, and validation.
@@ -52,7 +69,7 @@ owner scope after the unchanged first 26 calls. Its bounded prebuild, six-case
 producer and immediate independent reader run before deferred publication or
 outer cleanup, including without public emission. Only an unadmitted PIDs
 source outcome is added. Fresh exact-candidate four-lane qualification of the
-current 29-call lane, whole-lane cleanup and milestone completion remain pending.
+current 32-call lane, whole-lane cleanup and milestone completion remain pending.
 
 The current [typed PIDs source](docs/native-pids-threaded-contract.md) supports
 explicit domain/thread-root/threaded roles with fixed local-membership discovery
@@ -97,7 +114,7 @@ representations retain their existing behavior.
 
 This is candidate pre-merge rehearsal admission. Production merge, main
 admission and release remain blocked until fresh exact-final-candidate complete
-and four-lane twenty-nine-test native gates, fresh independently reviewed volume-only
+and four-lane thirty-one-test native gates, fresh independently reviewed volume-only
 consumer rehearsals of all six actual authored fixtures under
 [ADR 0012](docs/decisions/0012-candidate-volume-label-admission.md), and reviewed
 BoxFerry consumers of the actual Nextcloud/Supabase binds and desired external
