@@ -413,10 +413,12 @@ cat(){ command test "$FAIL_SITE" != transcript; }
         sites = ("rootuid", "rootgid", "reportwait", "reportfile", "reportlink", "workererror",
                  "workerpid", "workerexe", "workerargv", "transcript", "parentlimits", "workerlimits")
         for site in (*sites, "none"):
-            result = subprocess.run(["sh", "-c", stubs + program, "PRIVATE_NOFILE_WIRING_CANARY", "inert-worker"],
+            # Only the inert shim needs Bash: its `[` function name is rejected
+            # by Dash. Production PARENT/OBSERVE retain separate sh -n controls.
+            result = subprocess.run(["bash", "-c", stubs + program, "PRIVATE_NOFILE_WIRING_CANARY", "inert-worker"],
                                     env={**os.environ, "FAIL_SITE": site}, capture_output=True, timeout=3, check=False)
             with self.subTest(site=site):
-                self.assertEqual(result.returncode, 0 if site == "none" else 1)
+                self.assertEqual(result.returncode, 0 if site == "none" else 1, result.stderr[:1024])
                 self.assertEqual(result.stderr, b"" if site == "none" else
                                  f"DOCKERLENS_NATIVE_NOFILE_OBSERVER: site={site}\n".encode())
 
