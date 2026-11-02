@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
-"""One bounded, read-only outer-container dockerd UID observation."""
+"""One bounded, independent dockerd UID observation through the selected client.
+
+The caller supplies its checked creation ID, backend and private run directory.
+The canonical attach-only bridge owns endpoint/configuration policy; this helper
+retains its original privilege-owned timer, capture bounds and native UID oracle.
+"""
 
 import os
+from pathlib import Path
 import re
 import selectors
 import signal
@@ -15,6 +21,15 @@ QUERY = ('count=0; uid=; for p in /proc/[0-9]*/comm; do '
          'uid=$(awk \'/^Uid:/ {print $3}\' "${p%/comm}/status"); '
          'done; [ "$count" -eq 1 ]; printf "%s\\n" "$uid"')
 
+# The canonical bridge's already reviewed non-secret policy inputs, forwarded
+# after sudo scrubs its environment, without sudo -E or unreviewed forwarding.
+CONTEXT = (
+    "GITHUB_ACTIONS", "RUNNER_ENVIRONMENT", "RUNNER_OS", "GITHUB_REF", "GITHUB_EVENT_NAME",
+    "GITHUB_REPOSITORY", "GITHUB_WORKFLOW_REF", "ImageOS", "ImageVersion",
+    "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH", "DOCKER_API_VERSION",
+    "CONTAINER_HOST", "CONTAINER_CONNECTION", "CONTAINER_SSHKEY", "PODMAN_CONNECTIONS_CONF",
+)
+
 
 def uid(stdout, stderr, status, mode):
     if (status != 0 or stderr or mode not in ("rootful", "rootless")
@@ -26,21 +41,24 @@ def uid(stdout, stderr, status, mode):
     return value
 
 
-def command(outer_id):
-    if re.fullmatch(r"[0-9a-f]{64}", outer_id) is None:
+def command(outer_id, engine, directory):
+    if (re.fullmatch(r"[0-9a-f]{64}", outer_id) is None or engine not in ("podman", "docker")
+            or not Path(directory).is_absolute()):
         raise ValueError("invalid daemon UID context")
     # Root owns the timeout even on a non-root hosted runner. This observes
-    # only the selected outer container; it never changes daemon configuration.
+    # only the selected outer container; attach adds no new invocation budget.
     result = ["timeout", "--signal=TERM", "--kill-after=2s", "8s",
-              "podman", "exec", outer_id, "sh", "-ec", QUERY]
+              "env", *(f"{key}={os.environ.get(key, '')}" for key in CONTEXT),
+              "bash", str(Path(__file__).resolve().with_name("native-outer-command.sh")),
+              "--engine", engine, "--directory", directory, "exec", outer_id, "sh", "-ec", QUERY]
     return result if os.geteuid() == 0 else ["sudo", "-n", *result]
 
 
-def observe(outer_id, mode):
+def observe(outer_id, mode, engine, directory):
     if mode not in ("rootful", "rootless"):
         raise ValueError("invalid daemon UID mode")
     buffers = {"stdout": bytearray(), "stderr": bytearray()}
-    process = subprocess.Popen(command(outer_id), stdin=subprocess.DEVNULL,
+    process = subprocess.Popen(command(outer_id, engine, directory), stdin=subprocess.DEVNULL,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                start_new_session=True)
     try:
@@ -85,8 +103,8 @@ def observe(outer_id, mode):
 
 if __name__ == "__main__":
     try:
-        if len(sys.argv) != 3:
+        if len(sys.argv) != 5:
             raise ValueError("invalid daemon UID arguments")
-        print(observe(sys.argv[1], sys.argv[2]))
+        print(observe(*sys.argv[1:]))
     except (OSError, ValueError, subprocess.SubprocessError, KeyboardInterrupt):
         raise SystemExit("native daemon UID evidence rejected") from None

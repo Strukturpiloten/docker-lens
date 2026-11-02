@@ -1,0 +1,25 @@
+{
+  "source_commit": "ba22366407660447a7845d1dad5ff810de1587e0",
+  "purpose": "Immutable pre-verifier-observer method bytes; source-only diagnostic equivalence, not native evidence.",
+  "provenance": "Frozen from assigned checkout before edits; source commit supplied by primary and verified independently against git show.",
+  "methods": {
+    "LinuxSource.check_group": {
+      "source_path": "scripts/native_pids_boundary.py",
+      "class_name": "LinuxSource",
+      "method_name": "check_group",
+      "first_line": 489,
+      "last_line": 511,
+      "method_source_utf8_sha256": "5bceec17c8f68a9ee2e9ed4e07970d9879bc9e2d8a17adf4c75f722de9eb7abf",
+      "method_source": "    def check_group(self, group):\n        self.budget.check()\n        require(group.mount_record in self.read(self.proc, \"self/mountinfo\", 65536).decode(\"ascii\").splitlines())\n        self.check_mount(group.directories[0], group.mount_record)\n        require(tuple(identity(d) for d in group.directories) == group.identities)\n        # Reopen only beneath held parents to detect removal/replacement of names.\n        for parent, name, expected in zip(group.directories, group.names, group.identities[1:]):\n            fd = self.open(name, parent, directory=True)\n            try:\n                require(identity(fd) == expected and fs_magic(fd) == CGROUP_MAGIC)\n            finally:\n                self.close_fd(fd)\n        for name, held in zip(FILES, group.files):\n            fd = self.open(name, group.directories[-1])\n            try:\n                require(identity(fd) == identity(held) and fs_magic(fd) == CGROUP_MAGIC)\n            finally:\n                self.close_fd(fd)\n        fd = self.open(\"cgroup.type\", group.directories[-1])\n        try:\n            require(fs_magic(fd) == CGROUP_MAGIC and self.read_fd(fd, 32) == b\"domain\\n\")\n        finally:\n            self.close_fd(fd)\n"
+    },
+    "LocatorSource.check_group": {
+      "source_path": "scripts/native_pids_locator.py",
+      "class_name": "LocatorSource",
+      "method_name": "check_group",
+      "first_line": 388,
+      "last_line": 393,
+      "method_source_utf8_sha256": "30257b948f4f79fdc80d2947d7258c9948a701cf4af438257bb386a29eda7025",
+      "method_source": "    def check_group(self, group):\n        super().check_group(group)\n        cached = getattr(self, \"controller_groups\", {}).get(group.identities[-1])\n        if cached is not None:\n            for node in cached[1]:\n                self.check_controller(*node)\n"
+    }
+  }
+}

@@ -29,8 +29,8 @@ class LifecycleEvidenceTests(unittest.TestCase):
                 for field in ("StopTimeout", "HealthStartInterval"):
                     self.assertNotIn(field, record["capability_outcome"])
                     self.assertNotIn(field, record["admitted_shapes"])
-                self.assertEqual(len(record["capability_outcome"]), 30 if debian else 31)
-                self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 47 if debian else 49)
+                self.assertEqual(len(record["capability_outcome"]), 31 if debian else 32)
+                self.assertEqual(sum(map(len, record["admitted_shapes"].values())), 48 if debian else 50)
                 for private in ("lifecycle-term", "lifecycle-health-failure", "StartedAt", "FinishedAt",
                                 "outer_before", "image_before", "cleanup", "owner",
                                 "a" * 64, "f" * 64):

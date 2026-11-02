@@ -455,7 +455,7 @@ fn host_ip_overlaps(left: PortHostIp, right: PortHostIp) -> bool {
 }
 
 fn validate_container_settings(settings: &ContainerSettings) -> Result<(), IntentError> {
-    if matches!(settings.memory_limit, Some(MemoryLimit::Bytes(value)) if value.get() > i64::MAX as u64)
+    if matches!(settings.memory_limit, Some(MemoryLimit::Bytes(value)) if !(6_291_456..=i64::MAX as u64).contains(&value.get()))
         || matches!(settings.pids_limit, Some(PidsLimit::Count(value)) if value.get() > i64::MAX as u64)
         || settings
             .shm_size_bytes

@@ -67,6 +67,9 @@ mod stop_signal;
 #[path = "native_lifecycle_tests.rs"]
 mod lifecycle;
 
+#[path = "native_command_clear_tests.rs"]
+mod command_clear;
+
 fn required(name: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| panic!("closed health metadata environment"))
 }
@@ -274,7 +277,232 @@ fn capture_room(calls: usize, bytes: usize, cleanup: bool) -> bool {
             .is_some_and(|total| total <= bytes_limit)
 }
 
+// A read-only absence control is not an owned mutation slot. Binding is closed
+// to this one invocation, exact legacy profile, and the original run token; no
+// caller-supplied path/name or arbitrary authorization callback is accepted.
+enum HealthAbsenceLookup {
+    Disabled,
+    LifecycleDefaultLegacy {
+        original_run: String,
+        original_lane: String,
+    },
+}
+
+impl HealthAbsenceLookup {
+    fn for_invocation(
+        candidate_key: &str,
+        deadline_key: &str,
+        run: &str,
+        lane: &str,
+        api: &str,
+    ) -> Self {
+        if candidate_key == "NATIVE_LIFECYCLE_DEFAULT_EFFECT_CANDIDATE_SHA"
+            && deadline_key == "NATIVE_LIFECYCLE_DEFAULT_EFFECT_DEADLINE_EPOCH"
+            && matches!(lane, "debian11-rootful" | "debian11-rootless")
+            && api == "1.41"
+            && run.len() == 8
+            && run.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        {
+            Self::LifecycleDefaultLegacy {
+                original_run: run.to_owned(),
+                original_lane: lane.to_owned(),
+            }
+        } else {
+            Self::Disabled
+        }
+    }
+
+    fn name(&self, run: &str, lane: &str, api: &str) -> Option<String> {
+        match self {
+            Self::LifecycleDefaultLegacy {
+                original_run,
+                original_lane,
+            } if run == original_run && lane == original_lane && api == "1.41" => {
+                Some(format!("dl-def-{original_run}-zero-cli-refusal"))
+            }
+            _ => None,
+        }
+    }
+}
+
+// Disabled for every owner except nofile. Only already-waited failed statuses
+// are retained; a new capture cannot inherit the preceding command's status.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NofileObserverSite {
+    RootUid,
+    RootGid,
+    ReportWait,
+    ReportFile,
+    ReportLink,
+    WorkerError,
+    WorkerPid,
+    WorkerExe,
+    WorkerArgv,
+    Transcript,
+    ParentLimits,
+    WorkerLimits,
+}
+impl NofileObserverSite {
+    const ALL: [Self; 12] = [
+        Self::RootUid,
+        Self::RootGid,
+        Self::ReportWait,
+        Self::ReportFile,
+        Self::ReportLink,
+        Self::WorkerError,
+        Self::WorkerPid,
+        Self::WorkerExe,
+        Self::WorkerArgv,
+        Self::Transcript,
+        Self::ParentLimits,
+        Self::WorkerLimits,
+    ];
+    fn name(self) -> &'static str {
+        match self {
+            Self::RootUid => "rootuid",
+            Self::RootGid => "rootgid",
+            Self::ReportWait => "reportwait",
+            Self::ReportFile => "reportfile",
+            Self::ReportLink => "reportlink",
+            Self::WorkerError => "workererror",
+            Self::WorkerPid => "workerpid",
+            Self::WorkerExe => "workerexe",
+            Self::WorkerArgv => "workerargv",
+            Self::Transcript => "transcript",
+            Self::ParentLimits => "parentlimits",
+            Self::WorkerLimits => "workerlimits",
+        }
+    }
+    fn from_capture(bytes: &[u8]) -> Option<Self> {
+        const PREFIX: &[u8] = b"DOCKERLENS_NATIVE_NOFILE_OBSERVER";
+        if bytes.len() > 8192 || bytes.contains(&0) || !bytes.ends_with(b"\n") {
+            return None;
+        }
+        let mut records = bytes
+            .split(|byte| *byte == b'\n')
+            .filter(|line| line.starts_with(PREFIX));
+        let line = records.next()?;
+        if records.next().is_some() {
+            return None;
+        }
+        let name = line.strip_prefix(b"DOCKERLENS_NATIVE_NOFILE_OBSERVER: site=")?;
+        Self::ALL
+            .into_iter()
+            .find(|site| site.name().as_bytes() == name)
+    }
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NofileObserverUnavailable {
+    Empty,
+    Oversize,
+    Nul,
+    NonUtf8,
+    Unterminated,
+    MarkerAbsent,
+    DuplicateMarker,
+    MalformedMarker,
+}
+impl NofileObserverUnavailable {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Empty => "empty",
+            Self::Oversize => "oversize",
+            Self::Nul => "nul",
+            Self::NonUtf8 => "non_utf8",
+            Self::Unterminated => "unterminated",
+            Self::MarkerAbsent => "marker_absent",
+            Self::DuplicateMarker => "duplicate_marker",
+            Self::MalformedMarker => "malformed_marker",
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NofileObserverCapture {
+    Matched(NofileObserverSite),
+    Unavailable(NofileObserverUnavailable),
+}
+impl NofileObserverCapture {
+    fn from_capture(bytes: &[u8]) -> Self {
+        // Legacy byte acceptance wins, including non-UTF8 nonmarker noise.
+        if let Some(site) = NofileObserverSite::from_capture(bytes) {
+            return Self::Matched(site);
+        }
+        let reason = if bytes.len() > 8192 {
+            NofileObserverUnavailable::Oversize
+        } else if bytes.contains(&0) {
+            NofileObserverUnavailable::Nul
+        } else if !bytes.is_empty() && !bytes.ends_with(b"\n") {
+            NofileObserverUnavailable::Unterminated
+        } else if bytes.is_empty() {
+            NofileObserverUnavailable::Empty
+        } else {
+            let mut markers = bytes
+                .split(|byte| *byte == b'\n')
+                .filter(|line| line.starts_with(b"DOCKERLENS_NATIVE_NOFILE_OBSERVER"));
+            let first = markers.next();
+            if markers.next().is_some() {
+                NofileObserverUnavailable::DuplicateMarker
+            } else if first.is_some() {
+                NofileObserverUnavailable::MalformedMarker
+            } else if std::str::from_utf8(bytes).is_err() {
+                NofileObserverUnavailable::NonUtf8
+            } else {
+                NofileObserverUnavailable::MarkerAbsent
+            }
+        };
+        Self::Unavailable(reason)
+    }
+}
+#[derive(Default)]
+struct NofileCommandObservation {
+    current_failure: Cell<Option<std::process::ExitStatus>>,
+    observer_capture: Cell<Option<NofileObserverCapture>>,
+    first_failure: Cell<Option<std::process::ExitStatus>>,
+}
+
+impl NofileCommandObservation {
+    fn reset(&self) {
+        self.observer_capture.set(None);
+        self.current_failure.set(None);
+        self.first_failure.set(None);
+    }
+    fn begin_capture(&self) {
+        self.observer_capture.set(None);
+        self.current_failure.set(None);
+    }
+    fn observe_stderr(&self, status: std::process::ExitStatus, error: &[u8]) {
+        self.observe(status);
+        self.observer_capture.set(if status.success() {
+            None
+        } else {
+            Some(NofileObserverCapture::from_capture(error))
+        });
+    }
+
+    fn observe_stderr_overflow(&self, status: std::process::ExitStatus, overflow: bool) {
+        // This hook accepts only already-computed capture metadata. It must
+        // never inspect an untrusted/truncated prefix before the stream guard.
+        if overflow && !status.success() {
+            self.observe(status);
+            self.observer_capture
+                .set(Some(NofileObserverCapture::Unavailable(
+                    NofileObserverUnavailable::Oversize,
+                )));
+        }
+    }
+
+    fn observe(&self, status: std::process::ExitStatus) {
+        if !status.success() {
+            self.current_failure.set(Some(status));
+            if self.first_failure.get().is_none() {
+                self.first_failure.set(Some(status));
+            }
+        }
+    }
+}
+
 struct HealthRun {
+    nofile_command_observation: Option<NofileCommandObservation>,
     run: String,
     lane: String,
     candidate: String,
@@ -290,11 +518,13 @@ struct HealthRun {
     names: Vec<String>,
     ids: Vec<Option<String>>,
     attempted: Vec<bool>,
+    absence_lookup: HealthAbsenceLookup,
     deadline: Instant,
     calls: Cell<usize>,
     bytes: Cell<usize>,
     facts: Option<DaemonFacts>,
     cleaned: bool,
+    cleanup_delegated: bool,
 }
 
 struct HealthExpectation {
@@ -394,7 +624,10 @@ impl HealthRun {
             })
             .collect::<Vec<_>>();
         names.push(format!("dl-health-{run}-seed"));
+        let absence_lookup =
+            HealthAbsenceLookup::for_invocation(candidate_key, deadline_key, &run, &lane, &api);
         Self {
+            nofile_command_observation: None,
             derived_tag: format!("dl-health-{}:inherited", run.to_ascii_lowercase()),
             run,
             lane,
@@ -410,11 +643,13 @@ impl HealthRun {
             names,
             ids: vec![None; 9],
             attempted: vec![false; 9],
+            absence_lookup,
             deadline: Instant::now() + remaining,
             calls: Cell::new(0),
             bytes: Cell::new(0),
             facts: None,
             cleaned: false,
+            cleanup_delegated: false,
         }
     }
 
@@ -439,6 +674,9 @@ impl HealthRun {
     }
 
     fn capture(&self, command: &mut Command, input: Option<&[u8]>, cleanup: bool) -> Vec<u8> {
+        if let Some(observation) = &self.nofile_command_observation {
+            observation.begin_capture();
+        }
         assert!(
             capture_room(self.calls.get(), self.bytes.get(), cleanup),
             "reserved native command/byte budget"
@@ -477,15 +715,31 @@ impl HealthRun {
         let (error, error_overflow) = err.join().unwrap_or_else(|_| panic!("private stderr join"));
         self.bytes
             .set(self.bytes.get() + output.len() + error.len());
+        if let Some(observation) = &self.nofile_command_observation {
+            observation.observe_stderr_overflow(status, error_overflow || error.len() > 8192);
+        }
         assert!(
             !overflow && !error_overflow && self.bytes.get() <= MAX_BYTES,
             "private stream budget"
         );
+        if let Some(observation) = &self.nofile_command_observation {
+            observation.observe_stderr(status, &error);
+        }
         assert!(
             status.success(),
             "original native command must complete successfully"
         );
         output
+    }
+
+    fn charge_outer_snapshot(&self, cleanup: bool) {
+        let extra = crate::native_outer_test_command::snapshot_extra_calls();
+        self.calls.set(self.calls.get() + extra);
+        self.bytes.set(self.bytes.get() + extra * 65536);
+        assert!(
+            capture_room(self.calls.get(), self.bytes.get(), cleanup),
+            "outer snapshot reserve"
+        );
     }
 
     fn outer(&self, args: &[String], cleanup: bool) -> Vec<u8> {
@@ -495,7 +749,8 @@ impl HealthRun {
             _ => panic!("closed privilege selector"),
         };
         let mut command = self.timer(cleanup, elevated);
-        command.args(["podman", "exec", &self.outer]);
+        command.args(crate::native_outer_test_command::prefix());
+        command.args(["exec", &required("NATIVE_OUTER_CONTAINER_ID")]);
         command.args(args);
         self.capture(&mut command, None, cleanup)
     }
@@ -510,7 +765,11 @@ impl HealthRun {
         self.outer(&command, cleanup)
     }
 
-    fn api(&self, method: &str, path: &str, body: Option<&Value>, cleanup: bool) -> (u16, Value) {
+    fn legacy_default_absence_name(&self) -> Option<String> {
+        self.absence_lookup.name(&self.run, &self.lane, &self.api)
+    }
+
+    fn request_allowed(&self, method: &str, path: &str) -> bool {
         let prefix = format!("/v{}", self.api);
         let keys = self
             .names
@@ -520,6 +779,9 @@ impl HealthRun {
         let container_read = keys
             .clone()
             .any(|key| path == format!("{prefix}/containers/{key}/json"));
+        let legacy_absence_read = self
+            .legacy_default_absence_name()
+            .is_some_and(|name| path == format!("{prefix}/containers/{name}/json"));
         let container_start = self
             .ids
             .iter()
@@ -542,14 +804,23 @@ impl HealthRun {
             .derived_id
             .as_ref()
             .is_some_and(|id| path == format!("{prefix}/images/{id}?force=0"));
+        method == "GET"
+            && (path == "/version"
+                || path == format!("{prefix}/info")
+                || container_read
+                || legacy_absence_read
+                || image_read)
+            || method == "POST" && (create || container_start)
+            || method == "DELETE" && (container_delete || image_delete)
+    }
+
+    fn request_allowed_with_body(&self, method: &str, path: &str, body: Option<&Value>) -> bool {
+        self.request_allowed(method, path) && (method != "GET" || body.is_none())
+    }
+
+    fn api(&self, method: &str, path: &str, body: Option<&Value>, cleanup: bool) -> (u16, Value) {
         assert!(
-            method == "GET"
-                && (path == "/version"
-                    || path == format!("{prefix}/info")
-                    || container_read
-                    || image_read)
-                || method == "POST" && (create || container_start)
-                || method == "DELETE" && (container_delete || image_delete),
+            self.request_allowed_with_body(method, path, body),
             "allowlisted exact native request"
         );
         let input = body.map(|body| {
@@ -1496,13 +1767,57 @@ impl HealthRun {
 
 impl Drop for HealthRun {
     fn drop(&mut self) {
-        if !self.cleaned {
+        if self.owns_drop_cleanup() {
             let clean = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.cleanup()))
                 .unwrap_or(false);
             if !clean {
                 eprintln!("DOCKERLENS_NATIVE_CHECK: health_metadata_cleanup_unverified");
             }
         }
+    }
+}
+
+impl HealthRun {
+    fn owns_drop_cleanup(&self) -> bool {
+        !self.cleaned && !self.cleanup_delegated
+    }
+}
+
+const PRIVATE_PROOF_LIMIT: usize = 16 * 1024;
+const MAX_PRIVATE_PROOF_LIMIT: usize = 512 * 1024;
+
+fn private_proof_bytes(proof: &Value, max_bytes: usize) -> Vec<u8> {
+    assert!(
+        (1..=MAX_PRIVATE_PROOF_LIMIT).contains(&max_bytes),
+        "reviewed private proof bound"
+    );
+    let bytes = serde_json::to_vec(proof).unwrap_or_else(|_| panic!("private proof encoding"));
+    assert!(
+        !bytes.is_empty() && bytes.len() <= max_bytes,
+        "bounded private proof"
+    );
+    bytes
+}
+
+#[test]
+fn private_proof_payload_limits_preserve_default_and_reject_overflow() {
+    for bound in [PRIVATE_PROOF_LIMIT, MAX_PRIVATE_PROOF_LIMIT] {
+        let exact = json!("x".repeat(bound - 2));
+        assert_eq!(private_proof_bytes(&exact, bound).len(), bound);
+        let oversized = json!("x".repeat(bound - 1));
+        assert!(std::panic::catch_unwind(|| private_proof_bytes(&oversized, bound)).is_err());
+    }
+    let old_overflow = json!("x".repeat(PRIVATE_PROOF_LIMIT - 1));
+    assert!(
+        std::panic::catch_unwind(|| private_proof_bytes(&old_overflow, PRIVATE_PROOF_LIMIT))
+            .is_err()
+    );
+    for bound in [0, MAX_PRIVATE_PROOF_LIMIT + 1, usize::MAX] {
+        assert!(std::panic::catch_unwind(|| private_proof_bytes(&json!({}), bound)).is_err());
+    }
+    for value in [json!("é"), json!("\n")] {
+        assert_eq!(private_proof_bytes(&value, 4).len(), 4);
+        assert!(std::panic::catch_unwind(|| private_proof_bytes(&value, 3)).is_err());
     }
 }
 
@@ -1573,12 +1888,12 @@ impl ProofTarget {
     }
 
     fn publish(&self, proof: &Value) {
+        self.publish_bounded(proof, PRIVATE_PROOF_LIMIT);
+    }
+
+    fn publish_bounded(&self, proof: &Value, max_bytes: usize) {
         self.check();
-        let bytes = serde_json::to_vec(proof).unwrap_or_else(|_| panic!("private proof encoding"));
-        assert!(
-            !bytes.is_empty() && bytes.len() <= 16384,
-            "bounded private proof"
-        );
+        let bytes = private_proof_bytes(proof, max_bytes);
         let relative = PathBuf::from(format!(
             "/proc/self/fd/{}/{}",
             std::os::fd::AsRawFd::as_raw_fd(&self.held),
