@@ -150,20 +150,28 @@ class KernelTree:
 
 class LocatorTests(unittest.TestCase):
     def test_locate_failure_record_is_closed_best_effort_and_has_no_exception_text(self):
-        stages = ("input", "inspect", "discovery", "membership", "distinctness", "recheck", "freeze", "transfer")
+        stages = ("input", "inspect", "discovery", "membership", "distinctness", "recheck", "freeze", "transfer", "namespace", "module", "epoch",
+                  "discwalk", "disccoverage", "discrecords", "discmatch", "discrecheck", "discrelease")
         categories = ("BindingFailed", "UnsupportedPeerPidfd", "PeerExited", "NamespaceUnreachable", "NoMatch",
-                      "AmbiguousMatch", "UnsupportedEventSemantics", "ConfiguredOuterUnavailable", "unclassified")
+                      "AmbiguousMatch", "UnsupportedEventSemantics", "ConfiguredOuterUnavailable", "BoundaryRefusal", "TopologyRefusal", "unclassified")
         self.assertEqual(l.LOCATE_STAGES, stages)
         self.assertEqual(l.LOCATE_CATEGORIES, categories)
         for stage in stages:
             for category in categories:
-                error = l.LocatorRefusal(category) if category != "unclassified" else RuntimeError("PRIVATE_LOCATE_CANARY")
+                error = (l.boundary.Refusal("PRIVATE_LOCATE_CANARY") if category == "BoundaryRefusal" else
+                         l.topology.TopologyRefusal("PRIVATE_LOCATE_CANARY") if category == "TopologyRefusal" else
+                         RuntimeError("PRIVATE_LOCATE_CANARY") if category == "unclassified" else l.LocatorRefusal(category))
                 with patch.object(l.os, "write", return_value=0) as write:
                     l._locate_failure(stage, error)
                 write.assert_called_once_with(2, f"DOCKERLENS_NATIVE_PIDS_LOCATE: stage={stage} category={category}\n".encode())
         class Foreign(l.LocatorRefusal):
             pass
-        for error in (Foreign("NoMatch"), OSError("PRIVATE_LOCATE_CANARY"), KeyboardInterrupt()):
+        class ForeignBoundary(l.boundary.Refusal):
+            pass
+        class ForeignTopology(l.topology.TopologyRefusal):
+            pass
+        for error in (Foreign("NoMatch"), ForeignBoundary("PRIVATE_LOCATE_CANARY"),
+                      ForeignTopology("PRIVATE_LOCATE_CANARY"), OSError("PRIVATE_LOCATE_CANARY"), KeyboardInterrupt()):
             with patch.object(l.os, "write") as write:
                 l._locate_failure("inspect", error)
             self.assertIn(b"category=unclassified\n", write.call_args.args[1])
@@ -201,7 +209,7 @@ class LocatorTests(unittest.TestCase):
                             return len(record)
                         slots = {} if stage == "input" else tree.ids
                         # Existing boundary.Refusal guards have no LocatorRefusal category.
-                        expected_category = "unclassified" if stage in ("input", "distinctness") else category
+                        expected_category = "BoundaryRefusal" if stage in ("input", "distinctness") else category
                         fault = (lambda *args: SimpleNamespace(process=SimpleNamespace(pid=200), group=args[3])) if stage == "distinctness" else error
                         target, member = {
                             "input": (runtime, "inspect"), "inspect": (runtime, "inspect"),
@@ -222,9 +230,33 @@ class LocatorTests(unittest.TestCase):
                             self.assertEqual(refused.exception.category, "BindingFailed")
                         self.assertTrue(runtime.failed)
                         self.assertEqual(runtime.bound, {})
-                        self.assertEqual(trace[0], f"DOCKERLENS_NATIVE_PIDS_LOCATE: stage={stage} category={expected_category}\n".encode())
+                        self.assertEqual(trace[0], f"DOCKERLENS_NATIVE_PIDS_LOCATE: stage={'module' if stage == 'discovery' else stage} category={expected_category}\n".encode())
                         self.assertEqual(trace[1:], ["abort"] if stage in ("membership", "distinctness", "recheck", "freeze", "transfer") else [])
                     self.run_tree(True, run)
+
+    def test_refined_discovery_escape_has_one_record_and_retains_direct_exception_class(self):
+        for site in ("namespace", "epoch", "discmatch"):
+            def run(tree):
+                runtime = self.runtime(tree)
+                discovery = l._discovery_module()
+                scope = runtime.source.type_scope()
+                error = l.topology.TopologyRefusal("PRIVATE_LOCATE_CANARY")
+                target, member = {"namespace": (l.boundary, "identity"), "epoch": (scope, "begin_locate"),
+                                  "discmatch": (discovery._Lease, "finish")}[site]
+                with patch.object(target, member, side_effect=error), patch.object(l.os, "write") as write:
+                    with self.assertRaises(l.LocatorRefusal):
+                        runtime.locate_batch(tree.ids)
+                write.assert_called_once_with(2, f"DOCKERLENS_NATIVE_PIDS_LOCATE: stage={site} category=TopologyRefusal\n".encode())
+                self.assertTrue(runtime.failed)
+                self.assertEqual(runtime.bound, {})
+            with self.subTest(site=site):
+                self.run_tree(True, run)
+        for category in ("BoundaryRefusal", "TopologyRefusal"):
+            error = l.LocatorRefusal()
+            error.category = category
+            with patch.object(l.os, "write") as write:
+                l._locate_failure("discwalk", error)
+            write.assert_called_once_with(2, b"DOCKERLENS_NATIVE_PIDS_LOCATE: stage=discwalk category=unclassified\n")
 
     def test_locate_diagnostic_cannot_replace_original_transfer_abort_failure(self):
         def run(tree):

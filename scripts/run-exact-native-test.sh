@@ -412,9 +412,10 @@ try:
             locate_index, locate_line = locates[0]
             if locate_index == len(lines) - 1 or len(locate_line) > 111:
                 sys.exit(0)
-            stages = (b"input", b"inspect", b"discovery", b"membership", b"distinctness", b"recheck", b"freeze", b"transfer")
+            stages = (b"input", b"inspect", b"discovery", b"membership", b"distinctness", b"recheck", b"freeze", b"transfer", b"namespace", b"module", b"epoch",
+              b"discwalk", b"disccoverage", b"discrecords", b"discmatch", b"discrecheck", b"discrelease")
             categories = (b"BindingFailed", b"UnsupportedPeerPidfd", b"PeerExited", b"NamespaceUnreachable", b"NoMatch",
-                          b"AmbiguousMatch", b"UnsupportedEventSemantics", b"ConfiguredOuterUnavailable", b"unclassified")
+                          b"AmbiguousMatch", b"UnsupportedEventSemantics", b"ConfiguredOuterUnavailable", b"BoundaryRefusal", b"TopologyRefusal", b"unclassified")
             match = re.fullmatch(rb"DOCKERLENS_NATIVE_PIDS_LOCATE: stage=([a-z]+) category=([A-Za-z]+)", locate_line)
             if match is None:
                 sys.exit(0)
@@ -522,11 +523,15 @@ try:
     for index, line in observations:
         if index == len(lines) - 1 or len(line) > 256:
             raise ValueError()
-        match = re.fullmatch(rb"DOCKERLENS_NATIVE_NOFILE_FAILURE: caller_case=(soft64_hard128|soft128_hard128|soft64_hard_unlimited|both_unlimited|all) caller_role=(oracle|rendered|pair|none) caller_operation=([a-z_]+) observed_termination=(exit|signal|unknown) code=([0-9]+|none)", line)
+        match = re.fullmatch(rb"DOCKERLENS_NATIVE_NOFILE_FAILURE: caller_case=(soft64_hard128|soft128_hard128|soft64_hard_unlimited|both_unlimited|all) caller_role=(oracle|rendered|pair|none) caller_operation=([a-z_]+) observed_termination=(exit|signal|unknown) code=([0-9]+|none)(?: observer_site=([a-z]+))?", line)
         if match is not None:
             if work is not None or cleanup is not None:
                 raise ValueError()
-            case, role, operation, termination, code = match.groups()
+            case, role, operation, termination, code, observer_site = match.groups()
+            if observer_site is not None and (operation != b"observe" or termination not in (b"exit", b"signal")
+                or observer_site not in (b"rootuid", b"rootgid", b"reportwait", b"reportfile", b"reportlink", b"workererror",
+                                         b"workerpid", b"workerexe", b"workerargv", b"transcript", b"parentlimits", b"workerlimits")):
+                raise ValueError()
             if operation != b"context" and b"DOCKERLENS_NATIVE_CHECK: nofile_effects" not in lines[:cleanup_indices[0]]:
                 raise ValueError()
             slot_ops = (b"fresh_name", b"create", b"bind", b"configured_before", b"start", b"configured_started", b"observe", b"witness", b"configured_after", b"refusal_stable", b"slot_accounting")

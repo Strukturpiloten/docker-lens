@@ -189,6 +189,68 @@ class DiscoveryTests(unittest.TestCase):
                     role = discovery.Role(locator.ORDER[record.pid - 200])
                     lease.select(role, candidate)
 
+    def test_failure_site_preserves_original_exception_and_cleanup_without_success_emission(self):
+        for site in ("discwalk", "disccoverage", "discrecords", "discmatch", "discrecheck"):
+            fixture = SyntheticSource()
+            error = RuntimeError("PRIVATE_DISCOVERY_CANARY")
+            observed = []
+            coverage = discovery.topology.coverage_plan
+            coverage_calls = []
+            def coverage_fault(*args):
+                coverage_calls.append(None)
+                if len(coverage_calls) > len(fixture.graph):
+                    raise error
+                return coverage(*args)
+            def consume(lease):
+                self.consume_peer(lease)
+                if site == "discmatch":
+                    raise error
+                if site == "discrecheck":
+                    fixture.source.check_process = lambda _process: (_ for _ in ()).throw(error)
+            with fixture.environment(), ExitStack() as stack:
+                if site == "discwalk":
+                    stack.enter_context(patch.object(boundary, "fs_magic", side_effect=error))
+                elif site == "disccoverage":
+                    stack.enter_context(patch.object(discovery.topology, "coverage_plan", side_effect=coverage_fault))
+                elif site == "discrecords":
+                    stack.enter_context(patch.object(boundary, "start_from_stat", side_effect=error))
+                with self.subTest(site=site), self.assertRaises(RuntimeError) as refused:
+                    discovery.discover(fixture.source, fixture.outer, discovery.Mode.PEER, consume,
+                                       failure_site=observed.append)
+                self.assertIs(refused.exception, error)
+                self.assertEqual(observed, [site])
+                self.assertEqual(fixture.source.owned, fixture.baseline)
+        fixture = SyntheticSource()
+        observed = []
+        with fixture.environment():
+            transfer = discovery.discover(fixture.source, fixture.outer, discovery.Mode.PEER,
+                                           self.consume_peer, failure_site=observed.append)
+            transfer.close()
+        self.assertEqual(observed, [])
+
+    def test_failure_site_sink_cannot_replace_escaping_work_or_release_exception(self):
+        for release in (False, True):
+            fixture = SyntheticSource()
+            error = RuntimeError("PRIVATE_DISCOVERY_CANARY")
+            observed = []
+            original_release = discovery._Cleanup.release
+            def cleanup(owner, keep):
+                original_release(owner, keep)
+                if release and keep == fixture.baseline:
+                    raise error
+            def consume(_lease):
+                raise error
+            def observer(site):
+                observed.append(site)
+                raise KeyboardInterrupt()
+            with fixture.environment(), patch.object(discovery._Cleanup, "release", cleanup):
+                with self.assertRaises(RuntimeError) as refused:
+                    discovery.discover(fixture.source, fixture.outer, discovery.Mode.PEER, consume,
+                                       failure_site=observer)
+                self.assertIs(refused.exception, error)
+            self.assertEqual(observed, ["discrelease" if release else "discmatch"])
+            self.assertEqual(fixture.source.owned, fixture.baseline)
+
     def test_peer_scope_transfer_and_shared_graph_witnesses_have_one_owner(self):
         fixture = SyntheticSource()
         with fixture.environment():

@@ -205,6 +205,16 @@ Issue #172 retains caller context for an unsuccessful observation, separately fr
   observed_termination and code. Cases/roles/operations are finite owner enums, never resource
   names, IDs, commands or private payloads. This is the caller's current boundary, not proof of
   process/source entry or an internal cause. A pure validation failure has unknown termination.
+  A failed Observe command may additionally retain `observer_site` from its already
+  bounded stderr: `rootuid`, `rootgid`, `reportwait`, `reportfile`, `reportlink`,
+  `workererror`, `workerpid`, `workerexe`, `workerargv`, `transcript`, `parentlimits`,
+  or `workerlimits`. The fixed observer's failure-only EXIT trap reports the current
+  existing check and preserves its original exit status. It adds no runtime command,
+  file read, retry or deadline. The closed parser rejects unknown, duplicate, partial,
+  NUL or overflowed detail; absent detail never repairs failure. Only nonzero Observe
+  termination can carry this optional suffix, within the original 256-byte public
+  record bound. All ordinary stdout/stderr limits remain 65550/8192 bytes.
+
 - `DOCKERLENS_NATIVE_NOFILE_CLEANUP_REFUSAL` has reason ownership_guard, inner_unverified or
   panic, plus first_observed_termination and code. An ownership-guard refusal enters no inner
   cleanup and always has unknown termination. Other refusals may retain the first failed command

@@ -18,12 +18,25 @@ Rootless none/v2 refusal is never positive evidence or permission for nofile28.
 ## Failure-only LocateBatch observation
 
 An escaping `locate_batch` operation records only its finite operation stage and an existing
-closed `LocatorRefusal` category, or `unclassified`. The best-effort single stderr write
+closed `LocatorRefusal` category, exact direct `boundary.Refusal` / topology refusal
+class (`BoundaryRefusal` / `TopologyRefusal`), or `unclassified`. Subclasses remain
+unclassified; no exception message, arguments, errno, context or custom property is read. The best-effort single stderr write
 precedes the original transfer abort; abort, propagation and failure state remain mandatory.
 It retains no exception text, native identifier, path or payload and performs no new source
 operation. The original 1024-byte root stderr reader and sole post-retirement snapshot can
 forward this record only for the retained first measurement EOF awaiting LocateBatch.
 Caller EOF alone still does not prove source entry or identify any guard's cause.
+
+The discovery envelope now distinguishes the existing namespace identity, fixed
+module load and epoch operations (`namespace`, `module`, `epoch`). The existing
+discovery lease labels its walk, coverage plan, provisional records, matching,
+recheck and final release as `discwalk`, `disccoverage`, `discrecords`, `discmatch`,
+`discrecheck`, `discrelease`. Its optional in-process callback supplies one finite
+escaping site to the original caller emission; successful discovery emits nothing.
+A release exception superseding work retains the release site and original exception.
+These labels identify an escaping operation, not its native cause. Existing coarse
+`discovery` records remain valid historical observations. The 111-byte record,
+112-byte writer, 1024-byte root capture, EOF pairing and retirement remain fixed.
 
 The exact wrapper projects the observation only alongside the matching failed measurement
 refusal, as finite `source_stage` and `source_category` fields. START/BIND lifetimes remain

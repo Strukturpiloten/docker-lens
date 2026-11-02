@@ -176,7 +176,11 @@ class NofileSourceTests(unittest.TestCase):
         capture = shared.split("fn capture(", 1)[1].split("fn charge_outer_snapshot", 1)[0]
         self.assertLess(capture.index("observation.begin_capture()"), capture.index("capture_room("))
         self.assertLess(capture.index("original native command must complete successfully"), capture.index("output\n"))
-        self.assertLess(capture.index('"private stream budget"'), capture.index("observation.observe(status)"))
+        observed = capture.index("observation.observe_stderr(status, &error)")
+        self.assertLess(capture.index('"private stream budget"'), observed)
+        self.assertLess(observed, capture.index("original native command must complete successfully"))
+        self.assertEqual(capture.count("observation.observe_stderr(status, &error)"), 1)
+        self.assertNotIn("observation.observe(status)", capture)
         self.assertIn("nofile_command_observation: None", shared)
         self.assertIn("nofile_command_observation: None", (ROOT / "src/native_lifecycle_default_effect_tests.rs").read_text())
         live = self.raw().split("fn live_nofile_limits_and_effects_match_engine()", 1)[1]

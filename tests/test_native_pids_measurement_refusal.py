@@ -389,18 +389,62 @@ class MeasurementRefusalTests(unittest.TestCase):
                 result, _ = self.wrapper(line, status=101)
                 self.assertEqual((line + "\n").encode() in result.stderr, projects)
 
+    def test_actual_closed_locate_parser_writer_and_eof_pairing_without_workspace_build(self):
+        import subprocess
+        import tempfile
+        source = (ROOT / "src/native_pids_tests.rs").read_text()
+        begin = source.index("#[derive(Clone, Copy, Debug, PartialEq, Eq)]\nenum CapturedConstructorObservation")
+        end = source.index("#[derive(Clone, Copy, Debug, PartialEq, Eq)]\nstruct ClosedStartupFault", begin)
+        definitions = source[begin:end]
+        controls = r'''#[derive(Clone, Copy, Debug, PartialEq, Eq)] struct ClosedStartupFault;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)] struct ClosedBindSite;
+#[derive(Clone, Copy)] enum MeasurementCaller { LocateBatch, Sample }
+const STARTUP_PREFIX: &str = "DOCKERLENS_NATIVE_PIDS_START";
+const BIND_PREFIX: &str = "DOCKERLENS_NATIVE_PIDS_BIND";
+fn constructor_observation_from_capture(_: &[u8], _: bool) -> Option<CapturedConstructorObservation> { None }
+fn main() {
+    for stage in LOCATE_STAGES {
+        for category in LOCATE_CATEGORIES {
+            let record = format!("DOCKERLENS_NATIVE_PIDS_LOCATE: stage={stage} category={category}\n");
+            assert!(record.len() <= 112);
+            let captured = root_observation_from_capture(record.as_bytes(), false).unwrap();
+            let closed = locate_failure_for_eof(Some(MeasurementCaller::LocateBatch), Some(captured)).unwrap();
+            assert!(locate_failure_for_eof(Some(MeasurementCaller::Sample), Some(captured)).is_none());
+            assert!(locate_failure_for_eof(None, Some(captured)).is_none());
+            let mut written = Vec::new();
+            write_locate_failure(&mut written, closed);
+            assert_eq!(written, record.as_bytes());
+            assert!(root_observation_from_capture(record.as_bytes(), true).is_none());
+            for invalid in [record.repeat(2), record.trim_end().to_string(), format!("{record}\0"),
+                            format!("{record}DOCKERLENS_NATIVE_PIDS_BIND: s=w_capture_adopt\n"),
+                            record.replace(category, "PRIVATE_LOCATE_CANARY")] {
+                assert!(root_observation_from_capture(invalid.as_bytes(), false).is_none());
+            }
+        }
+    }
+}'''
+        with tempfile.TemporaryDirectory(prefix="dl-locate-parser-") as directory:
+            root = Path(directory)
+            (root / "locate.rs").write_text(definitions + controls)
+            built = subprocess.run(["rustc", "--edition=2024", str(root / "locate.rs"), "-o", str(root / "locate")],
+                                   cwd=ROOT, capture_output=True, timeout=30, check=False)
+            self.assertEqual(built.returncode, 0, built.stderr)
+            result = subprocess.run([str(root / "locate")], capture_output=True, timeout=3, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_locate_source_observation_projects_only_with_retained_locate_eof(self):
         caller = PREFIX + "pids-eof caller=locate_batch slot=none phase=none"
-        for stage in ("input", "inspect", "discovery", "membership", "distinctness", "recheck", "freeze", "transfer"):
-            for category in ("BindingFailed", "UnsupportedPeerPidfd", "PeerExited", "NamespaceUnreachable", "NoMatch",
-                             "AmbiguousMatch", "UnsupportedEventSemantics", "ConfiguredOuterUnavailable", "unclassified"):
-                source = f"DOCKERLENS_NATIVE_PIDS_LOCATE: stage={stage} category={category}"
-                expected = caller + f" source_stage={stage} source_category={category}"
-                result, _ = self.wrapper(source + "\nDOCKERLENS_NATIVE_CHECK: pids_cleanup\n" + caller, status=101)
-                self.assertEqual(result.stderr.count((expected + "\n").encode()), 1)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertNotIn(source.encode(), result.stdout + result.stderr)
-
+        stages = ("input", "inspect", "discovery", "membership", "distinctness", "recheck", "freeze", "transfer",
+                  "namespace", "module", "epoch", "discwalk", "disccoverage", "discrecords", "discmatch", "discrecheck", "discrelease")
+        categories = ("BindingFailed", "UnsupportedPeerPidfd", "PeerExited", "NamespaceUnreachable", "NoMatch",
+                      "AmbiguousMatch", "UnsupportedEventSemantics", "ConfiguredOuterUnavailable", "BoundaryRefusal", "TopologyRefusal", "unclassified")
+        for stage, category in [(stage, "BoundaryRefusal") for stage in stages] + [("discmatch", category) for category in categories]:
+            source = f"DOCKERLENS_NATIVE_PIDS_LOCATE: stage={stage} category={category}"
+            expected = caller + f" source_stage={stage} source_category={category}"
+            result, _ = self.wrapper(source + "\nDOCKERLENS_NATIVE_CHECK: pids_cleanup\n" + caller, status=101)
+            self.assertEqual(result.stderr.count((expected + "\n").encode()), 1)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn(source.encode(), result.stdout + result.stderr)
     def test_locate_record_unknown_partial_duplicate_mixed_and_success_remain_failed(self):
         source = "DOCKERLENS_NATIVE_PIDS_LOCATE: stage=discovery category=NoMatch"
         caller = PREFIX + "pids-eof caller=locate_batch slot=none phase=none"

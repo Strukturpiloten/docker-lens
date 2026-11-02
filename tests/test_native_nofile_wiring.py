@@ -94,7 +94,7 @@ fn live_nofile_limits_and_effects_match_engine() {
             for token, value in (("CONTEXT", markers["context"]), ("EFFECTS", markers["effects"]),
                                  ("CLEANUP", markers["cleanup"]),
                                  ("HANDOFF", 'b"' + HANDOFF.decode().replace("\n", "\\n") + '"'),
-                                 ("WORK", 'b"' + self.failure_line().decode().replace("\n", "\\n") + '"'),
+                                 ("WORK", 'b"' + (self.failure_line(operation="observe", code="1").rstrip(b"\n") + b" observer_site=workerexe\n").decode().replace("\n", "\\n") + '"'),
                                  ("REFUSAL", 'b"' + self.cleanup_line(reason="ownership_guard", termination="unknown", code="none").decode().replace("\n", "\\n") + '"')):
                 fixture = fixture.replace(token, value)
             (root / "transport.rs").write_text(fixture)
@@ -110,6 +110,7 @@ fn live_nofile_limits_and_effects_match_engine() {
                 self.assertEqual(result.returncode, 0 if mode == "success" else 1, result.stderr)
                 output = result.stdout + result.stderr
                 self.assertEqual(b"DOCKERLENS_NATIVE_NOFILE_FAILURE:" in output, mode in ("work", "both"))
+                self.assertEqual(b" observer_site=workerexe" in output, mode in ("work", "both"))
                 self.assertEqual(b"DOCKERLENS_NATIVE_NOFILE_CLEANUP_REFUSAL:" in output, mode in ("cleanup", "both"))
                 self.assertEqual(HANDOFF.rstrip() in output, mode in ("cleanup", "both"))
                 self.assertNotIn(SECRET, output)
@@ -395,6 +396,97 @@ trap cleanup EXIT
             self.assertEqual([item["event"] for item in events][-2:], ["nofile_reader", "teardown"])
             self.assertEqual(result.stderr, b"invalid private nofile proof\n")
 
+
+    def test_actual_observer_program_reports_only_fixed_failing_site_with_inert_commands(self):
+        source = (ROOT / "src/native_nofile_tests.rs").read_text()
+        program = source.split('const OBSERVE: &str = r#"', 1)[1].split('"#;', 1)[0]
+        # All existing commands are inert shell functions; no host/guest procfs or runtime is read.
+        stubs = r'''test(){ if command test "$site" = "$FAIL_SITE";then return 1;fi;return 0; }
+[(){ if command test "$1" = -f;then command test "$FAIL_SITE" != reportwait;else command test "$1" "$2" "$3";fi; }
+id(){ printf '0\n'; }
+seq(){ printf '1\n'; }
+sleep(){ command test "$FAIL_SITE" != reportwait; }
+awk(){ if command test "$site" = "$FAIL_SITE";then return 1;fi;printf '2\n'; }
+cmp(){ command test "$FAIL_SITE" != workerargv; }
+cat(){ command test "$FAIL_SITE" != transcript; }
+'''
+        sites = ("rootuid", "rootgid", "reportwait", "reportfile", "reportlink", "workererror",
+                 "workerpid", "workerexe", "workerargv", "transcript", "parentlimits", "workerlimits")
+        for site in (*sites, "none"):
+            result = subprocess.run(["sh", "-c", stubs + program, "PRIVATE_NOFILE_WIRING_CANARY", "inert-worker"],
+                                    env={**os.environ, "FAIL_SITE": site}, capture_output=True, timeout=3, check=False)
+            with self.subTest(site=site):
+                self.assertEqual(result.returncode, 0 if site == "none" else 1)
+                self.assertEqual(result.stderr, b"" if site == "none" else
+                                 f"DOCKERLENS_NATIVE_NOFILE_OBSERVER: site={site}\n".encode())
+
+    def test_actual_rust_observer_parser_and_work_freezing_without_workspace_build(self):
+        health = (ROOT / "src/native_health_metadata_tests.rs").read_text()
+        nofile = (ROOT / "src/native_nofile_tests.rs").read_text()
+        begin = health.index("#[derive(Clone, Copy, Debug, Eq, PartialEq)]\nenum NofileObserverSite")
+        definitions = health[begin:health.index("struct HealthRun {", begin)]
+        cases = nofile[nofile.index("const CASES:"):nofile.index("const REQUESTS:")]
+        begin = nofile.index("#[derive(Clone, Copy, Debug, Eq, PartialEq)]\nenum NofileOperation")
+        definitions += cases + nofile[begin:nofile.index("#[derive(Clone, Copy, Debug, Eq, PartialEq)]\nenum NofileCleanupRefusal", begin)]
+        controls = r'''fn main() {
+    use std::os::unix::process::ExitStatusExt;
+    let failed = std::process::ExitStatus::from_raw(1 << 8);
+    let run = HealthRun { nofile_command_observation: Some(NofileCommandObservation::default()) };
+    let diagnostics = NofileDiagnostics::default();
+    for site in NofileObserverSite::ALL {
+        let record = format!("DOCKERLENS_NATIVE_NOFILE_OBSERVER: site={}\n", site.name());
+        assert_eq!(NofileObserverSite::from_capture(record.as_bytes()), Some(site));
+        for invalid in [record.repeat(2), record.trim_end().to_string(), record.replace(site.name(), "PRIVATE_CANARY"),
+                        format!("{record}\0"), format!("{record}{}", "x".repeat(8192))] {
+            assert_eq!(NofileObserverSite::from_capture(invalid.as_bytes()), None);
+        }
+        diagnostics.select(&run, 0, NofileRole::Oracle, NofileOperation::Observe);
+        let observation = run.nofile_command_observation.as_ref().unwrap();
+        observation.observe_stderr(failed, record.as_bytes());
+        let frozen = diagnostics.failure(&run).unwrap();
+        assert!(frozen.ends_with(&format!(" observed_termination=exit code=1 observer_site={}", site.name())));
+        assert!(frozen.len() <= 256);
+        observation.reset();
+        assert!(observation.observer_site.get().is_none());
+        assert!(observation.first_failure.get().is_none());
+        assert!(!diagnostics.failure(&run).unwrap().contains("observer_site="));
+        assert!(frozen.contains("observer_site="));
+        observation.observe_stderr(std::process::ExitStatus::from_raw(0), record.as_bytes());
+        assert!(observation.observer_site.get().is_none());
+        diagnostics.select(&run, 0, NofileRole::Oracle, NofileOperation::Create);
+        observation.observe_stderr(failed, record.as_bytes());
+        assert!(!diagnostics.failure(&run).unwrap().contains("observer_site="));
+        observation.begin_capture();
+        assert!(observation.observer_site.get().is_none());
+    }
+}'''
+        with tempfile.TemporaryDirectory(prefix="dl-nofile-observer-") as directory:
+            root = Path(directory)
+            (root / "observer.rs").write_text("use std::cell::Cell;\n" + definitions +
+                "struct HealthRun { nofile_command_observation: Option<NofileCommandObservation> }\n" + controls)
+            built = subprocess.run(["rustc", "--edition=2024", str(root / "observer.rs"), "-o", str(root / "observer")],
+                                   cwd=ROOT, capture_output=True, timeout=30, check=False)
+            self.assertEqual(built.returncode, 0, built.stderr)
+            result = subprocess.run([str(root / "observer")], capture_output=True, timeout=3, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_observer_suffix_projects_only_for_failed_observe_and_never_cleanup(self):
+        original = self.failure_line(operation="observe", code="1")
+        sites = ("rootuid", "rootgid", "reportwait", "reportfile", "reportlink", "workererror",
+                 "workerpid", "workerexe", "workerargv", "transcript", "parentlimits", "workerlimits")
+        for site in sites:
+            work = original.rstrip(b"\n") + f" observer_site={site}\n".encode()
+            cleanup = self.cleanup_line(termination="unknown", code="none")
+            result, _calls, _dates = self.wrapper(self.failure_transcript(work, cleanup), 101)
+            self.assertIn(work, result.stderr)
+            self.assertIn(cleanup, result.stderr)
+            self.assertNotIn(b"first_observed_termination=exit code=1", result.stderr)
+        for work in (original.rstrip(b"\n") + b" observer_site=PRIVATE_NOFILE_WIRING_CANARY\n",
+                     self.failure_line().rstrip(b"\n") + b" observer_site=workerexe\n",
+                     self.failure_line(operation="observe", termination="unknown", code="none").rstrip(b"\n") + b" observer_site=workerexe\n"):
+            result, _calls, _dates = self.wrapper(self.failure_transcript(work), 101)
+            self.assertNotIn(b"DOCKERLENS_NATIVE_NOFILE_FAILURE:", result.stderr)
+            self.assertNotIn(SECRET, result.stderr)
 
     @staticmethod
     def failure_line(case="soft64_hard128", role="oracle", operation="create", termination="exit", code="125"):

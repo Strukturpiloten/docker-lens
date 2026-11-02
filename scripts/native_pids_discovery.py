@@ -273,7 +273,21 @@ class _Lease:
         return tuple((role, *self._selected[role]) for role in roles)
 
 
-def discover(source, outer, mode, consume):
+def discover(source, outer, mode, consume, *, failure_site=None):
+    """Retain one finite escaping site for the existing caller-owned failure record."""
+    progress = ["discwalk"]
+    try:
+        return _discover(source, outer, mode, consume, progress)
+    except BaseException:
+        if failure_site is not None:
+            try:
+                failure_site(progress[0])
+            except BaseException:
+                pass
+        raise
+
+
+def _discover(source, outer, mode, consume, progress):
     """Run one bounded lease; matching callback receives only this local lease.
 
     No caller path/PID/FD list, source-provider selection or serialized authority
@@ -361,6 +375,7 @@ def discover(source, outer, mode, consume):
         proc_identity = boundary.identity(source.proc)
         root_identity, root_mount = metadata(root)
         walk(root, None, outer.membership, 0)
+        progress[0] = "disccoverage"
         plan = {step.node: step for step in topology.coverage_plan(
             tuple(topology.Node(index, node.parent, node.kind) for index, node in enumerate(nodes)), 0)}
         by_membership = {node.membership: index for index, node in enumerate(nodes)}
@@ -369,11 +384,14 @@ def discover(source, outer, mode, consume):
             for pid in node.pids:
                 require(pid not in leaders and len(leaders) < 512)
                 leaders[pid] = index
+        progress[0] = "discrecords"
         records = tuple(provisional(pid, leaders[pid]) for pid in sorted(leaders))
         require(len({record.directory_identity for record in records}) == len(records))
         lease = _Lease(source, mode, records, cleanup)
+        progress[0] = "discmatch"
         consume(lease)
         selected = lease.finish()
+        progress[0] = "discrecheck"
         # Pass B: complete held graph, named objects, coverage and local records.
         require(boundary.fs_magic(source.proc) == boundary.PROC_MAGIC
                 and boundary.identity(source.proc) == proc_identity)
@@ -405,15 +423,19 @@ def discover(source, outer, mode, consume):
         process_owned = set().union(*(scope for _role, _candidate, scope in selected))
         witness_owned = {witness.directory for witness in witnesses.values() if not witness.borrowed}
     except BaseException:
+        failed_site = progress[0]
+        progress[0] = "discrelease"
         if lease is not None:
             # A malformed trusted caller may abandon an acquisition context.
             # Retire it before ROOT cleanup so delayed generator finalization
             # cannot close later Source scopes from a stale ownership snapshot.
             lease._retired = True
         cleanup.release(baseline)
+        progress[0] = failed_site
         raise
     types = tuple(TypeObservation((*node.identity, root_mount),
                                  (*nodes[node.parent].identity, root_mount) if node.parent is not None else None,
                                  node.kind) for node in nodes)
+    progress[0] = "discrelease"
     cleanup.release(baseline | process_owned | witness_owned)
     return DiscoveryTransfer(source, selections, tuple(witnesses.values()), process_owned, witness_owned, types)

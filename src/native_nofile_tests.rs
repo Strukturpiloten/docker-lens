@@ -62,14 +62,16 @@ test ! -s "$d/error"
 } >"$d/parent.tmp"
 mv "$d/parent.tmp" "$d/parent";wait "$c""#;
 
-const OBSERVE: &str = r#"set -eu;LC_ALL=C;export LC_ALL;test "$(id -u)" = 0;test "$(id -g)" = 0;d=/tmp/dl-nf
+const OBSERVE: &str = r#"set -eu;LC_ALL=C;export LC_ALL;site=rootuid
+trap 'status=$?;trap - 0;if [ "$status" -ne 0 ];then printf "DOCKERLENS_NATIVE_NOFILE_OBSERVER: site=%s\n" "$site" >&2 || :;fi;exit "$status"' 0
+test "$(id -u)" = 0;site=rootgid;test "$(id -g)" = 0;d=/tmp/dl-nf;site=reportwait
 for i in $(seq 1 100);do if [ -f "$d/parent" ];then break;fi;sleep 0.05;done
-test -f "$d/parent";test ! -L "$d/parent";test ! -s "$d/error"
-c=$(awk '$1=="bound_pre"{print $4}' "$d/parent");test -n "$c"
-test "/proc/$c/exe" -ef /bin/awk;printf '%s\000' /bin/awk -v "token=$0-child" "$1" | cmp "/proc/$c/cmdline" -
-cat "$d/parent" "$d/report"
+site=reportfile;test -f "$d/parent";site=reportlink;test ! -L "$d/parent";site=workererror;test ! -s "$d/error"
+site=workerpid;c=$(awk '$1=="bound_pre"{print $4}' "$d/parent");test -n "$c"
+site=workerexe;test "/proc/$c/exe" -ef /bin/awk;site=workerargv;printf '%s\000' /bin/awk -v "token=$0-child" "$1" | cmp "/proc/$c/cmdline" -
+site=transcript;cat "$d/parent" "$d/report"
 s(){ printf '%s ' "$1";awk '/^Max open files /{printf "%s %s ",$4,$5}' /proc/"$2"/limits;awk '/^Pid:/{printf "%s ",$2}/^PPid:/{print $2}' /proc/"$2"/status;}
-s root_parent 1;s root_worker "$c""#;
+site=parentlimits;s root_parent 1;site=workerlimits;s root_worker "$c""#;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum NofileOperation {
@@ -225,8 +227,20 @@ impl NofileDiagnostics {
             .as_ref()
             .and_then(|observation| observation.current_failure.get());
         let (termination, code) = NofileTermination::observed(status).fields();
+        let site = if self.caller.get()?.operation == NofileOperation::Observe
+            && termination != "unknown"
+        {
+            run.nofile_command_observation
+                .as_ref()
+                .and_then(|observation| observation.observer_site.get())
+        } else {
+            None
+        };
+        let suffix = site.map_or_else(String::new, |site| {
+            format!(" observer_site={}", site.name())
+        });
         Some(format!(
-            "DOCKERLENS_NATIVE_NOFILE_FAILURE: caller_case={case} caller_role={role} caller_operation={operation} observed_termination={termination} code={code}"
+            "DOCKERLENS_NATIVE_NOFILE_FAILURE: caller_case={case} caller_role={role} caller_operation={operation} observed_termination={termination} code={code}{suffix}"
         ))
     }
 }

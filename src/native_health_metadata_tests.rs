@@ -327,20 +327,96 @@ impl HealthAbsenceLookup {
 
 // Disabled for every owner except nofile. Only already-waited failed statuses
 // are retained; a new capture cannot inherit the preceding command's status.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NofileObserverSite {
+    RootUid,
+    RootGid,
+    ReportWait,
+    ReportFile,
+    ReportLink,
+    WorkerError,
+    WorkerPid,
+    WorkerExe,
+    WorkerArgv,
+    Transcript,
+    ParentLimits,
+    WorkerLimits,
+}
+impl NofileObserverSite {
+    const ALL: [Self; 12] = [
+        Self::RootUid,
+        Self::RootGid,
+        Self::ReportWait,
+        Self::ReportFile,
+        Self::ReportLink,
+        Self::WorkerError,
+        Self::WorkerPid,
+        Self::WorkerExe,
+        Self::WorkerArgv,
+        Self::Transcript,
+        Self::ParentLimits,
+        Self::WorkerLimits,
+    ];
+    fn name(self) -> &'static str {
+        match self {
+            Self::RootUid => "rootuid",
+            Self::RootGid => "rootgid",
+            Self::ReportWait => "reportwait",
+            Self::ReportFile => "reportfile",
+            Self::ReportLink => "reportlink",
+            Self::WorkerError => "workererror",
+            Self::WorkerPid => "workerpid",
+            Self::WorkerExe => "workerexe",
+            Self::WorkerArgv => "workerargv",
+            Self::Transcript => "transcript",
+            Self::ParentLimits => "parentlimits",
+            Self::WorkerLimits => "workerlimits",
+        }
+    }
+    fn from_capture(bytes: &[u8]) -> Option<Self> {
+        const PREFIX: &[u8] = b"DOCKERLENS_NATIVE_NOFILE_OBSERVER";
+        if bytes.len() > 8192 || bytes.contains(&0) || !bytes.ends_with(b"\n") {
+            return None;
+        }
+        let mut records = bytes
+            .split(|byte| *byte == b'\n')
+            .filter(|line| line.starts_with(PREFIX));
+        let line = records.next()?;
+        if records.next().is_some() {
+            return None;
+        }
+        let name = line.strip_prefix(b"DOCKERLENS_NATIVE_NOFILE_OBSERVER: site=")?;
+        Self::ALL
+            .into_iter()
+            .find(|site| site.name().as_bytes() == name)
+    }
+}
 #[derive(Default)]
 struct NofileCommandObservation {
     current_failure: Cell<Option<std::process::ExitStatus>>,
+    observer_site: Cell<Option<NofileObserverSite>>,
     first_failure: Cell<Option<std::process::ExitStatus>>,
 }
 
 impl NofileCommandObservation {
     fn reset(&self) {
+        self.observer_site.set(None);
         self.current_failure.set(None);
         self.first_failure.set(None);
     }
     fn begin_capture(&self) {
+        self.observer_site.set(None);
         self.current_failure.set(None);
     }
+    fn observe_stderr(&self, status: std::process::ExitStatus, error: &[u8]) {
+        self.observe(status);
+        self.observer_site.set(if status.success() {
+            None
+        } else {
+            NofileObserverSite::from_capture(error)
+        });
+    }
+
     fn observe(&self, status: std::process::ExitStatus) {
         if !status.success() {
             self.current_failure.set(Some(status));
@@ -570,7 +646,7 @@ impl HealthRun {
             "private stream budget"
         );
         if let Some(observation) = &self.nofile_command_observation {
-            observation.observe(status);
+            observation.observe_stderr(status, &error);
         }
         assert!(
             status.success(),

@@ -333,7 +333,7 @@ class TypedDiscoveryTranscriptTests(unittest.TestCase):
                                                    tuple(new - old for old, new in zip(before, after))))
                         return kind
 
-                    def discover(actual_source, outer, mode, consume):
+                    def discover(actual_source, outer, mode, consume, *, failure_site=None):
                         self.assertIs(actual_source, source)
                         self.assertIs(type(actual_source), locator.LocatorSource)
                         discoveries.append(mode)
@@ -341,7 +341,8 @@ class TypedDiscoveryTranscriptTests(unittest.TestCase):
                             self.assertIs(type(lease), discovery._Lease)
                             self.assertEqual({record.pid for record in lease.candidates}, {100, 110, 200, 201, 202, 203, 204, 205})
                             return consume(lease)
-                        transfer = original_discover(actual_source, outer, mode, observed)
+                        transfer = original_discover(actual_source, outer, mode, observed,
+                                                     failure_site=failure_site)
                         self.assertEqual(len(transfer.types), 13 if daemon_tasks == 1 else 14)
                         self.assertEqual(len(transfer.selections), 1 if mode is discovery.Mode.PEER else 6)
                         return transfer

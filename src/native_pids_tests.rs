@@ -731,6 +731,15 @@ const LOCATE_STAGES: &[&str] = &[
     "recheck",
     "freeze",
     "transfer",
+    "namespace",
+    "module",
+    "epoch",
+    "discwalk",
+    "disccoverage",
+    "discrecords",
+    "discmatch",
+    "discrecheck",
+    "discrelease",
 ];
 const LOCATE_CATEGORIES: &[&str] = &[
     "BindingFailed",
@@ -741,6 +750,8 @@ const LOCATE_CATEGORIES: &[&str] = &[
     "AmbiguousMatch",
     "UnsupportedEventSemantics",
     "ConfiguredOuterUnavailable",
+    "BoundaryRefusal",
+    "TopologyRefusal",
     "unclassified",
 ];
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -7267,7 +7278,16 @@ fn pids_locate_capture_is_closed_unique_and_never_a_constructor_observation() {
             "distinctness",
             "recheck",
             "freeze",
-            "transfer"
+            "transfer",
+            "namespace",
+            "module",
+            "epoch",
+            "discwalk",
+            "disccoverage",
+            "discrecords",
+            "discmatch",
+            "discrecheck",
+            "discrelease",
         ]
     );
     assert_eq!(
@@ -7281,7 +7301,9 @@ fn pids_locate_capture_is_closed_unique_and_never_a_constructor_observation() {
             "AmbiguousMatch",
             "UnsupportedEventSemantics",
             "ConfiguredOuterUnavailable",
-            "unclassified"
+            "BoundaryRefusal",
+            "TopologyRefusal",
+            "unclassified",
         ]
     );
     for stage in LOCATE_STAGES {

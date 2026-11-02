@@ -1,6 +1,10 @@
 # Changelog
 
 ## Unreleased
+
+- Refine test-only PIDs discovery and nofile observer failures with finite existing-operation
+  sites using the original bounded diagnostic streams. Preserve guards, budgets, cleanup
+  independence and successful proofs; these source diagnostics grant no capability or native acceptance.
 - Validate authored finite container memory as exact bytes from 6 MiB through
 signed maximum; reject smaller positive limits and overflow without rounding.
 Omitted memory stays distinct from explicit unlimited/zero; requested memory

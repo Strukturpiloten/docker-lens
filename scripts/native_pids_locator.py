@@ -176,10 +176,11 @@ class LocatorRefusal(boundary.Refusal):
 
 
 LOCATE_STAGES = ("input", "inspect", "discovery", "membership", "distinctness",
-                 "recheck", "freeze", "transfer")
+                 "recheck", "freeze", "transfer", "namespace", "module", "epoch",
+                 "discwalk", "disccoverage", "discrecords", "discmatch", "discrecheck", "discrelease")
 LOCATE_CATEGORIES = ("BindingFailed", "UnsupportedPeerPidfd", "PeerExited",
                      "NamespaceUnreachable", "NoMatch", "AmbiguousMatch",
-                     "UnsupportedEventSemantics", "ConfiguredOuterUnavailable", "unclassified")
+                     "UnsupportedEventSemantics", "ConfiguredOuterUnavailable", "BoundaryRefusal", "TopologyRefusal", "unclassified")
 
 
 def _locate_failure(stage, error):
@@ -191,8 +192,13 @@ def _locate_failure(stage, error):
         category = "unclassified"
         if type(error) is LocatorRefusal:
             observed = object.__getattribute__(error, "category")
-            if type(observed) is str and observed in LOCATE_CATEGORIES:
+            if (type(observed) is str and observed in LOCATE_CATEGORIES
+                    and observed not in ("BoundaryRefusal", "TopologyRefusal")):
                 category = next(value for value in LOCATE_CATEGORIES if value == observed)
+        elif type(error) is boundary.Refusal:
+            category = "BoundaryRefusal"
+        elif type(error) is topology.TopologyRefusal:
+            category = "TopologyRefusal"
         os.write(2, ("DOCKERLENS_NATIVE_PIDS_LOCATE: stage=" + stage
                      + " category=" + category + "\n").encode("ascii"))
     except BaseException:
@@ -1118,9 +1124,11 @@ class RuntimeLocator:
             before = {slot: self.inspect(cid) for slot, cid in slots.items()}
             if self.slot_label is not None:
                 require(all(dict(before[slot][3]).get(self.slot_label) == slot for slot in ORDER))
-            stage = "discovery"
+            stage = "namespace"
             daemon_ns = boundary.identity(self.daemon.namespaces[0])
+            stage = "module"
             discovery = _discovery_module()
+            stage = "epoch"
             self.source.type_scope().begin_locate()
             matched = set()
             def consume(lease):
@@ -1139,7 +1147,13 @@ class RuntimeLocator:
                                 lease.select(discovery.Role(slot), candidate)
                 if matched != set(ORDER):
                     raise LocatorRefusal("NoMatch")
-            transfer = discovery.discover(self.source, self.outer_group, discovery.Mode.WORKERS, consume)
+            def discovery_failure(site):
+                nonlocal stage
+                if type(site) is str and site in LOCATE_STAGES:
+                    stage = next(value for value in LOCATE_STAGES if value == site)
+            stage = "discovery"
+            transfer = discovery.discover(self.source, self.outer_group, discovery.Mode.WORKERS, consume,
+                                          failure_site=discovery_failure)
             stage = "membership"
             self.source.adopt_discovery_types(transfer, self.outer_group)
             observed_identities = {row.identity[:2]: row.identity for row in transfer.types}
