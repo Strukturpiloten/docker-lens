@@ -107,7 +107,11 @@ class KernelTree:
         self.source.reader_cgroup_namespace = self.source.open(str(self.ns / "cgroup"))
         self.source.reader_time_namespace = self.source.open(str(self.ns / "time"))
         self.source.authenticated_parent_cgroup_namespace = self.source.reader_cgroup_namespace
-        self.source.fd_mount_id = lambda _fd: int(self.source.read(self.source.proc, "self/mount-id", 4096))
+        def mount_id(_fd, observer=None):
+            if observer is None:
+                return int(self.source.read(self.source.proc, "self/mount-id", 4096))
+            return int(self.source.read(self.source.proc, "self/mount-id", 4096, observer=observer))
+        self.source.fd_mount_id = mount_id
 
     def make_group(self, directory, maximum, pids):
         directory.mkdir(exist_ok=True)
@@ -154,6 +158,7 @@ class LocatorTests(unittest.TestCase):
                   "discwalk", "disccoverage", "discrecords", "discmatch", "discrecheck", "discrelease")
         categories = ("BindingFailed", "UnsupportedPeerPidfd", "PeerExited", "NamespaceUnreachable", "NoMatch",
                       "AmbiguousMatch", "UnsupportedEventSemantics", "ConfiguredOuterUnavailable", "BoundaryRefusal", "TopologyRefusal", "unclassified")
+        stages += b.MATCHING_SITES
         self.assertEqual(l.LOCATE_STAGES, stages)
         self.assertEqual(l.LOCATE_CATEGORIES, categories)
         for stage in stages:

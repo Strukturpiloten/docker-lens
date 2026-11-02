@@ -1,10 +1,11 @@
 """Strict metadata-only AST erasure shared by immutable source controls."""
 import ast
-import copy
+
+from native_pids_matching_support import normalized_matching_metadata
 
 
 def normalized_type_metadata(method):
-    method = copy.deepcopy(method)
+    method = normalized_matching_metadata(method)
     if method.name == "check_group" and not any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "_type_observation" for n in ast.walk(method)):
         return method
 

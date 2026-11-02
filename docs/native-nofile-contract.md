@@ -215,6 +215,18 @@ Issue #172 retains caller context for an unsuccessful observation, separately fr
   termination can carry this optional suffix, within the original 256-byte public
   record bound. All ordinary stdout/stderr limits remain 65550/8192 bytes.
 
+If no valid site is available, a completed failed Observe command may instead
+carry one closed `observer_capture` reason: `empty`, `oversize`, `nul`, `non_utf8`,
+`unterminated`, `marker_absent`, `duplicate_marker`, or `malformed_marker`.
+The legacy byte parser runs first, retaining a valid unique stderr marker even
+with non-UTF8 ordinary noise. Otherwise priority is oversize, NUL, unterminated,
+empty, duplicate marker-looking records, malformed sole marker, non-UTF8 noise,
+then marker absent. A marker only on stdout remains absent. Raw bytes, CLI text,
+paths and IDs are never projected. Successful commands, other operations,
+unknown termination and cleanup carry no observer detail. Actual nested
+HealthRun capture controls use an inert outer command; they do not establish
+native stderr routing, observer progress, effective limits or an OS failure.
+
 - `DOCKERLENS_NATIVE_NOFILE_CLEANUP_REFUSAL` has reason ownership_guard, inner_unverified or
   panic, plus first_observed_termination and code. An ownership-guard refusal enters no inner
   cleanup and always has unknown termination. Other refusals may retain the first failed command
@@ -224,7 +236,10 @@ Issue #172 retains caller context for an unsuccessful observation, separately fr
 An optional nofile-only observation stores an already-waited nonzero command exit (1..255),
 signal (1..64), or unknown; no stderr/exception text is retained. It is disabled for every other
 HealthRun owner. Every capture clears current status before any budget/spawn/wait/stream step;
-only a status that passes the original stream bounds is eligible. Each caller boundary clears
+raw stderr observation remains after the original stream bounds. The only
+pre-guard exception records `oversize` for a completed failed command using
+already-computed overflow/length metadata; it never parses a truncated prefix
+and preserves the original stream-budget failure. Each caller boundary clears
 prior status, and successful commands supply no failed termination. Timeout/cancellation exit
 numbers, when actually returned by the existing waited command, are observed numbers rather
 than inferred elapsed time or signal delivery.

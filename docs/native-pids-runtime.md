@@ -34,6 +34,29 @@ recheck and final release as `discwalk`, `disccoverage`, `discrecords`, `discmat
 `discrecheck`, `discrelease`. Its optional in-process callback supplies one finite
 escaping site to the original caller emission; successful discovery emits nothing.
 A release exception superseding work retains the release site and original exception.
+Matching additionally refines `discmatch` through 73 fixed operation/guard sites:
+lease binding, process acquisition/recheck, time namespaces, namespace ancestry,
+original status/stat/cgroup parsers, private-init matching, selection, purity,
+finish and rollback. The optional lease-local metadata is outside source authority;
+default callers retain their original argument shapes. The innermost escaping
+operation wins. Successful cleanup restores the pending work site; a cleanup
+exception that actually supersedes work retains its own site and original
+first-error selection. Outer discovery cleanup still wins as `discrelease`.
+Successful or handled operations emit nothing, and abandoned leases cannot
+replace a frozen site after retirement. A local direct exception reference is used
+only for identity comparison, so a handled inner failure cannot label a different
+escape. It is cleared on success/final escape; no exception property, traceback,
+message or serialization is inspected or exported.
+
+The static union retains all 17 existing stages and all 11 categories. Its longest
+producer record is 91 ASCII bytes including LF; the longest projected measurement
+line is 173 bytes including LF. The original record, stderr and helper caps remain
+111, 1024 and 65536 bytes. Authored controls exercise each fixed site, compare the
+actual trusted callback and source/custody reservation ledgers with metadata
+inactive/active, and preserve the original method bodies after strict metadata
+AST erasure. These controls do not identify the cause of a native CI failure or
+replace the complete authored IPC transcript and fresh native qualification.
+
 These labels identify an escaping operation, not its native cause. Existing coarse
 `discovery` records remain valid historical observations. The 111-byte record,
 112-byte writer, 1024-byte root capture, EOF pairing and retirement remain fixed.

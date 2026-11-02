@@ -212,63 +212,77 @@ def _state(source):
 
 
 class _Lease:
-    def __init__(self, source, mode, candidates, cleanup):
+    def __init__(self, source, mode, candidates, cleanup, observer=None):
         self.source, self.mode, self.candidates, self.cleanup = source, mode, candidates, cleanup
         self._active, self._chosen = None, None
         self._retired = False
         self._seen, self._selected = set(), {}
         self._expected = _state(source)
+        self._matching = observer
 
     @contextmanager
     def acquire(self, record):
-        require(not self._retired and self._active is None and _state(self.source) == self._expected)
-        require(any(record is candidate for candidate in self.candidates) and record.pid not in self._seen)
+        with boundary.matching_scope(self._matching, "mleaseentry"):
+            require(not self._retired and self._active is None and _state(self.source) == self._expected)
+        with boundary.matching_scope(self._matching, "mrecord"):
+            require(any(record is candidate for candidate in self.candidates) and record.pid not in self._seen)
         self._seen.add(record.pid)
         previous = frozenset(self.source.owned)
         retained = False
         try:
-            process = self.source.process(record.pid, record.start)
-            require(type(process) is boundary.Process
-                    and process.pid == record.pid and process.start == record.start
-                    and boundary.identity(process.directory) == record.directory_identity
-                    and process.identity[0] == record.directory_identity
-                    and process.membership == record.membership)
-            status, vector = locator.status_vectors(self.source.read(process.directory, "status", 4096), record.pid)
-            require(status == process.status)
-            chain = self.source.namespace_chain(process.namespaces[0], vector)
+            process = boundary.matching_call(self._matching, self.source.process, record.pid, record.start)
+            with boundary.matching_scope(self._matching, "mprocbind"):
+                require(type(process) is boundary.Process
+                        and process.pid == record.pid and process.start == record.start
+                        and boundary.identity(process.directory) == record.directory_identity
+                        and process.identity[0] == record.directory_identity
+                        and process.membership == record.membership)
+            status, vector = boundary.matching_call(self._matching, locator.status_vectors,
+                boundary.matching_call(self._matching, self.source.read, process.directory, "status", 4096), record.pid)
+            with boundary.matching_scope(self._matching, "mstatussame"):
+                require(status == process.status)
+            chain = boundary.matching_call(self._matching, self.source.namespace_chain, process.namespaces[0], vector)
             # Capture the complete virtual Source.process + namespace_chain delta,
             # including LocatorSource.process_times and every retained parent FD.
             scope = frozenset(self.source.owned - previous)
-            require(process.directory in scope)
+            with boundary.matching_scope(self._matching, "mscope"):
+                require(process.directory in scope)
             candidate = Candidate(process, status, chain, record)
             self._active, self._chosen = candidate, None
             before_callback = _state(self.source)
-            yield candidate
-            require(not self._retired and _state(self.source) == before_callback)
+            with boundary.matching_scope(self._matching, "mcallback"):
+                yield candidate
+            with boundary.matching_scope(self._matching, "mcallbackpure"):
+                require(not self._retired and _state(self.source) == before_callback)
             if self._chosen is not None:
                 self._selected[self._chosen] = (candidate, scope)
                 retained = True
         finally:
             self._active, self._chosen = None, None
             if not retained and not self._retired:
-                self.cleanup.release(previous)
+                with boundary.matching_scope(self._matching, "mrollback", cleanup=True):
+                    self.cleanup.release(previous)
             self._expected = _state(self.source)
 
     def select(self, role, candidate):
         roles = (Role.PEER,) if self.mode is Mode.PEER else tuple(role for role in Role if role is not Role.PEER)
-        require(not self._retired and self._active is not None
-                and type(role) is Role and role in roles and role not in self._selected
-                and self._chosen is None and candidate is self._active)
+        with boundary.matching_scope(self._matching, "mselect"):
+            require(not self._retired and self._active is not None
+                    and type(role) is Role and role in roles and role not in self._selected
+                    and self._chosen is None and candidate is self._active)
         self._chosen = role
 
     def finish(self):
-        require(not self._retired and self._active is None and _state(self.source) == self._expected)
+        with boundary.matching_scope(self._matching, "mfinishstate"):
+            require(not self._retired and self._active is None and _state(self.source) == self._expected)
         roles = (Role.PEER,) if self.mode is Mode.PEER else tuple(role for role in Role if role is not Role.PEER)
-        require(set(self._selected) == set(roles))
+        with boundary.matching_scope(self._matching, "mfinishroles"):
+            require(set(self._selected) == set(roles))
         # LocateBatch must inspect every leader to reject ambiguous matches.
         # Peer binding acquires only its independently authenticated peer PID.
         if self.mode is Mode.WORKERS:
-            require(self._seen == {record.pid for record in self.candidates})
+            with boundary.matching_scope(self._matching, "mfinishseen"):
+                require(self._seen == {record.pid for record in self.candidates})
         self._retired = True
         return tuple((role, *self._selected[role]) for role in roles)
 
@@ -276,18 +290,24 @@ class _Lease:
 def discover(source, outer, mode, consume, *, failure_site=None):
     """Retain one finite escaping site for the existing caller-owned failure record."""
     progress = ["discwalk"]
+    observer = boundary.matching_observation() if failure_site is not None else None
     try:
-        return _discover(source, outer, mode, consume, progress)
-    except BaseException:
+        if observer is None:
+            return _discover(source, outer, mode, consume, progress)
+        result = _discover(source, outer, mode, consume, progress, observer=observer)
+        boundary.matching_finish(observer)
+        return result
+    except BaseException as error:
         if failure_site is not None:
+            matching = boundary.matching_finish(observer, error)
             try:
-                failure_site(progress[0])
+                failure_site(matching if progress[0] == "discmatch" and matching is not None else progress[0])
             except BaseException:
                 pass
         raise
 
 
-def _discover(source, outer, mode, consume, progress):
+def _discover(source, outer, mode, consume, progress, observer=None):
     """Run one bounded lease; matching callback receives only this local lease.
 
     No caller path/PID/FD list, source-provider selection or serialized authority
@@ -387,7 +407,10 @@ def _discover(source, outer, mode, consume, progress):
         progress[0] = "discrecords"
         records = tuple(provisional(pid, leaders[pid]) for pid in sorted(leaders))
         require(len({record.directory_identity for record in records}) == len(records))
-        lease = _Lease(source, mode, records, cleanup)
+        if observer is None:
+            lease = _Lease(source, mode, records, cleanup)
+        else:
+            lease = _Lease(source, mode, records, cleanup, observer=observer)
         progress[0] = "discmatch"
         consume(lease)
         selected = lease.finish()

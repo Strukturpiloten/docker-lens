@@ -227,18 +227,22 @@ impl NofileDiagnostics {
             .as_ref()
             .and_then(|observation| observation.current_failure.get());
         let (termination, code) = NofileTermination::observed(status).fields();
-        let site = if self.caller.get()?.operation == NofileOperation::Observe
+        let capture = if self.caller.get()?.operation == NofileOperation::Observe
             && termination != "unknown"
         {
             run.nofile_command_observation
                 .as_ref()
-                .and_then(|observation| observation.observer_site.get())
+                .and_then(|observation| observation.observer_capture.get())
         } else {
             None
         };
-        let suffix = site.map_or_else(String::new, |site| {
-            format!(" observer_site={}", site.name())
-        });
+        let suffix = match capture {
+            Some(NofileObserverCapture::Matched(site)) => format!(" observer_site={}", site.name()),
+            Some(NofileObserverCapture::Unavailable(reason)) => {
+                format!(" observer_capture={}", reason.name())
+            }
+            None => String::new(),
+        };
         Some(format!(
             "DOCKERLENS_NATIVE_NOFILE_FAILURE: caller_case={case} caller_role={role} caller_operation={operation} observed_termination={termination} code={code}{suffix}"
         ))

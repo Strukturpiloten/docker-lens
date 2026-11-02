@@ -391,30 +391,104 @@ impl NofileObserverSite {
             .find(|site| site.name().as_bytes() == name)
     }
 }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NofileObserverUnavailable {
+    Empty,
+    Oversize,
+    Nul,
+    NonUtf8,
+    Unterminated,
+    MarkerAbsent,
+    DuplicateMarker,
+    MalformedMarker,
+}
+impl NofileObserverUnavailable {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Empty => "empty",
+            Self::Oversize => "oversize",
+            Self::Nul => "nul",
+            Self::NonUtf8 => "non_utf8",
+            Self::Unterminated => "unterminated",
+            Self::MarkerAbsent => "marker_absent",
+            Self::DuplicateMarker => "duplicate_marker",
+            Self::MalformedMarker => "malformed_marker",
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NofileObserverCapture {
+    Matched(NofileObserverSite),
+    Unavailable(NofileObserverUnavailable),
+}
+impl NofileObserverCapture {
+    fn from_capture(bytes: &[u8]) -> Self {
+        // Legacy byte acceptance wins, including non-UTF8 nonmarker noise.
+        if let Some(site) = NofileObserverSite::from_capture(bytes) {
+            return Self::Matched(site);
+        }
+        let reason = if bytes.len() > 8192 {
+            NofileObserverUnavailable::Oversize
+        } else if bytes.contains(&0) {
+            NofileObserverUnavailable::Nul
+        } else if !bytes.is_empty() && !bytes.ends_with(b"\n") {
+            NofileObserverUnavailable::Unterminated
+        } else if bytes.is_empty() {
+            NofileObserverUnavailable::Empty
+        } else {
+            let mut markers = bytes
+                .split(|byte| *byte == b'\n')
+                .filter(|line| line.starts_with(b"DOCKERLENS_NATIVE_NOFILE_OBSERVER"));
+            let first = markers.next();
+            if markers.next().is_some() {
+                NofileObserverUnavailable::DuplicateMarker
+            } else if first.is_some() {
+                NofileObserverUnavailable::MalformedMarker
+            } else if std::str::from_utf8(bytes).is_err() {
+                NofileObserverUnavailable::NonUtf8
+            } else {
+                NofileObserverUnavailable::MarkerAbsent
+            }
+        };
+        Self::Unavailable(reason)
+    }
+}
 #[derive(Default)]
 struct NofileCommandObservation {
     current_failure: Cell<Option<std::process::ExitStatus>>,
-    observer_site: Cell<Option<NofileObserverSite>>,
+    observer_capture: Cell<Option<NofileObserverCapture>>,
     first_failure: Cell<Option<std::process::ExitStatus>>,
 }
 
 impl NofileCommandObservation {
     fn reset(&self) {
-        self.observer_site.set(None);
+        self.observer_capture.set(None);
         self.current_failure.set(None);
         self.first_failure.set(None);
     }
     fn begin_capture(&self) {
-        self.observer_site.set(None);
+        self.observer_capture.set(None);
         self.current_failure.set(None);
     }
     fn observe_stderr(&self, status: std::process::ExitStatus, error: &[u8]) {
         self.observe(status);
-        self.observer_site.set(if status.success() {
+        self.observer_capture.set(if status.success() {
             None
         } else {
-            NofileObserverSite::from_capture(error)
+            Some(NofileObserverCapture::from_capture(error))
         });
+    }
+
+    fn observe_stderr_overflow(&self, status: std::process::ExitStatus, overflow: bool) {
+        // This hook accepts only already-computed capture metadata. It must
+        // never inspect an untrusted/truncated prefix before the stream guard.
+        if overflow && !status.success() {
+            self.observe(status);
+            self.observer_capture
+                .set(Some(NofileObserverCapture::Unavailable(
+                    NofileObserverUnavailable::Oversize,
+                )));
+        }
     }
 
     fn observe(&self, status: std::process::ExitStatus) {
@@ -641,6 +715,9 @@ impl HealthRun {
         let (error, error_overflow) = err.join().unwrap_or_else(|_| panic!("private stderr join"));
         self.bytes
             .set(self.bytes.get() + output.len() + error.len());
+        if let Some(observation) = &self.nofile_command_observation {
+            observation.observe_stderr_overflow(status, error_overflow || error.len() > 8192);
+        }
         assert!(
             !overflow && !error_overflow && self.bytes.get() <= MAX_BYTES,
             "private stream budget"

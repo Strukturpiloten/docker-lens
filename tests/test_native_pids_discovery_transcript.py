@@ -285,7 +285,11 @@ class TypedDiscoveryTranscriptTests(unittest.TestCase):
                         path = os.readlink("/proc/self/fd/" + str(fd))
                         return boundary.CGROUP_MAGIC if path.startswith(str(hierarchy)) else boundary.PROC_MAGIC
 
-                    def checked_open(name, parent=None, **options):
+                    matching_forwarding = {"open": 0, "mount_id": 0}
+
+                    def checked_open(name, parent=None, *, observer=None, **options):
+                        if type(observer) is boundary._MatchingObservation:
+                            matching_forwarding["open"] += 1
                         parent_path = os.readlink("/proc/self/fd/" + str(parent)) if parent is not None else "/"
                         requested = Path(os.path.normpath(os.path.join(parent_path, str(name))))
                         if requested.name == "cgroup.procs":
@@ -299,7 +303,9 @@ class TypedDiscoveryTranscriptTests(unittest.TestCase):
                                 require(parts[2] not in forbidden)
                         require(not any(requested == leaf or leaf in requested.parents for leaf in removed_leaves))
                         try:
-                            return original_open(name, parent, **options)
+                            if observer is None:
+                                return original_open(name, parent, **options)
+                            return original_open(name, parent, observer=observer, **options)
                         except OSError:
                             failed_opens.append(True)
                             raise
@@ -317,11 +323,15 @@ class TypedDiscoveryTranscriptTests(unittest.TestCase):
                                 checked_open(name, parent)
                     self.assertEqual((source.budget.reads, source.budget.bytes, source.budget.opens, source.budget.fds), guard_before)
 
-                    def charged_mount_id(fd):
+                    def charged_mount_id(fd, observer=None):
+                        if type(observer) is boundary._MatchingObservation:
+                            matching_forwarding["mount_id"] += 1
                         directory = tree.proc / "self/fdinfo"
                         directory.mkdir(exist_ok=True)
                         (directory / str(fd)).write_text("pos:\t0\nflags:\t0100000\nmnt_id:\t10\n")
-                        return boundary.LinuxSource.fd_mount_id(source, fd)
+                        if observer is None:
+                            return boundary.LinuxSource.fd_mount_id(source, fd)
+                        return boundary.LinuxSource.fd_mount_id(source, fd, observer=observer)
 
                     def read_type(directory):
                         phase = source.type_scope().phase
@@ -339,6 +349,7 @@ class TypedDiscoveryTranscriptTests(unittest.TestCase):
                         discoveries.append(mode)
                         def observed(lease):
                             self.assertIs(type(lease), discovery._Lease)
+                            self.assertEqual(lease._matching is None, mode is discovery.Mode.PEER)
                             self.assertEqual({record.pid for record in lease.candidates}, {100, 110, 200, 201, 202, 203, 204, 205})
                             return consume(lease)
                         transfer = original_discover(actual_source, outer, mode, observed,
@@ -445,6 +456,8 @@ class TypedDiscoveryTranscriptTests(unittest.TestCase):
                         if value.get("op") != "OuterFinalize":
                             return original_response(actual_channel, value)
                         self.assertEqual(discoveries, [discovery.Mode.PEER, discovery.Mode.WORKERS])
+                        self.assertGreater(matching_forwarding["open"], 0)
+                        self.assertGreater(matching_forwarding["mount_id"], 0)
                         self.assertEqual({slot: len(values) for slot, values in samples.items()}, {slot: 4 for slot in locator.ORDER})
                         self.assertEqual(seal_releases, [True])
                         self.assertEqual(baseline_reads, [(str(tree.cg), (2, 59, 1, 0))])

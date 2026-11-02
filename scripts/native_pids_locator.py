@@ -100,8 +100,9 @@ class RuntimeBudget(boundary.Budget):
             self.fd()
 
     def check(self, observer=None):
-        boundary.startup_require("budget_deadline", boundary._observe(
-            self.clock() < (self.deadline_ns if self.cleanup_only else self.work_ns), observer, "time"))
+        with boundary.matching_scope(observer, "mbudgettime"):
+            boundary.startup_require("budget_deadline", boundary._observe(
+                self.clock() < (self.deadline_ns if self.cleanup_only else self.work_ns), observer, "time"))
 
     def begin_cleanup(self):
         require(not self.cleanup_only)
@@ -178,6 +179,7 @@ class LocatorRefusal(boundary.Refusal):
 LOCATE_STAGES = ("input", "inspect", "discovery", "membership", "distinctness",
                  "recheck", "freeze", "transfer", "namespace", "module", "epoch",
                  "discwalk", "disccoverage", "discrecords", "discmatch", "discrecheck", "discrelease")
+LOCATE_STAGES += boundary.MATCHING_SITES
 LOCATE_CATEGORIES = ("BindingFailed", "UnsupportedPeerPidfd", "PeerExited",
                      "NamespaceUnreachable", "NoMatch", "AmbiguousMatch",
                      "UnsupportedEventSemantics", "ConfiguredOuterUnavailable", "BoundaryRefusal", "TopologyRefusal", "unclassified")
@@ -231,12 +233,13 @@ def _host_group_escape(observer, site):
         raise
 
 
-def status_vectors(body, pid):
-    status = boundary.process_status(body, pid, leader=True)
+def status_vectors(body, pid, observer=None):
+    status = boundary.matching_call(observer, boundary.process_status, body, pid, leader=True)
     rows = [line.split()[1:] for line in body.splitlines() if line.startswith(b"NStgid:")]
-    boundary.startup_require("status_nstgid", len(rows) == 1 and rows[0] and all(x.isdigit() for x in rows[0]))
-    groups = tuple(int(x) for x in rows[0])
-    boundary.startup_require("status_nstgid", groups == status[2])  # leader, in every represented namespace
+    with boundary.matching_scope(observer, "mstatusnstgid"):
+        boundary.startup_require("status_nstgid", len(rows) == 1 and rows[0] and all(x.isdigit() for x in rows[0]))
+        groups = tuple(int(x) for x in rows[0])
+        boundary.startup_require("status_nstgid", groups == status[2])  # leader, in every represented namespace
     return status, groups
 
 
@@ -270,30 +273,33 @@ class LocatorSource(boundary.LinuxSource):
                 self.close()
             raise
 
-    def process(self, pid, start, within=None):
-        process = super().process(pid, start, within)
+    def process(self, pid, start, within=None, observer=None):
+        process = boundary.matching_call(observer, super().process, pid, start, within)
         with boundary.startup_scope("proc_timens"):
-            time_namespace = self.open("ns/time", process.directory, magic=True)
-            require(boundary.identity(time_namespace) == boundary.identity(self.reader_time_namespace))
-        with boundary.startup_scope("proc_live"):
+            with boundary.matching_scope(observer, "mtimeopen"):
+                time_namespace = boundary.matching_call(observer, self.open, "ns/time", process.directory, magic=True)
+            with boundary.matching_scope(observer, "mtimematch"):
+                require(boundary.identity(time_namespace) == boundary.identity(self.reader_time_namespace))
+        with boundary.startup_scope("proc_live"), boundary.matching_scope(observer, "mtimelive"):
             live(process.pidfd)
-        if not hasattr(self, "process_times"):
-            self.process_times = {}
-        self.process_times[process] = time_namespace
+        with boundary.matching_scope(observer, "mtimeregister"):
+            if not hasattr(self, "process_times"):
+                self.process_times = {}
+            self.process_times[process] = time_namespace
         return process
 
-    def check_process(self, process):
-        super().check_process(process)
+    def check_process(self, process, observer=None):
+        boundary.matching_call(observer, super().check_process, process)
         time_namespace = getattr(self, "process_times", {}).get(process)
         if time_namespace is not None:
-            with boundary.startup_scope("proc_timens"):
-                reopened = self.open("ns/time", process.directory, magic=True)
+            with boundary.startup_scope("proc_timens"), boundary.matching_scope(observer, "mctimeopen"):
+                reopened = boundary.matching_call(observer, self.open, "ns/time", process.directory, magic=True)
             try:
-                with boundary.startup_scope("proc_timens"):
+                with boundary.startup_scope("proc_timens"), boundary.matching_scope(observer, "mctimematch"):
                     require(boundary.identity(reopened) == boundary.identity(time_namespace)
                             == boundary.identity(self.reader_time_namespace))
             finally:
-                with boundary.startup_cleanup():
+                with boundary.startup_cleanup(), boundary.matching_scope(observer, "mctimeclose", cleanup=True):
                     self.close_fd(reopened)
 
     def check_task_time_namespace(self, directory):
@@ -729,23 +735,31 @@ class LocatorSource(boundary.LinuxSource):
         finally:
             self.close_fd(reopened)
 
-    def namespace_chain(self, active, vector):
+    def namespace_chain(self, active, vector, observer=None):
         """Return actual R..active object identities, retaining every parent FD."""
-        chain = [active]
-        target = boundary.identity(self.reader_namespace)
-        while boundary.identity(chain[-1]) != target:
-            require(len(chain) < 16)
-            self.budget.fd()
-            try:
-                parent = fcntl.ioctl(chain[-1], NS_GET_PARENT)
-            except OSError:
-                raise LocatorRefusal("NamespaceUnreachable") from None
-            self.own(parent)
-            os.set_inheritable(parent, False)
-            require(boundary.identity(parent) not in tuple(boundary.identity(fd) for fd in chain))
-            chain.append(parent)
-        identities = tuple(boundary.identity(fd) for fd in reversed(chain))
-        require(len(identities) == len(vector))
+        with boundary.matching_scope(observer, "mnamespaceactive"):
+            chain = [active]
+            target = boundary.identity(self.reader_namespace)
+            while boundary.identity(chain[-1]) != target:
+                with boundary.matching_scope(observer, "mnamespacedepth"):
+                    require(len(chain) < 16)
+                with boundary.matching_scope(observer, "mnamespacereserve"):
+                    boundary.matching_call(observer, self.budget.fd)
+                with boundary.matching_scope(observer, "mnamespaceparent"):
+                    try:
+                        parent = fcntl.ioctl(chain[-1], NS_GET_PARENT)
+                    except OSError:
+                        raise LocatorRefusal("NamespaceUnreachable") from None
+                with boundary.matching_scope(observer, "mnamespaceadopt"):
+                    self.own(parent)
+                    os.set_inheritable(parent, False)
+                with boundary.matching_scope(observer, "mnamespacecycle"):
+                    require(boundary.identity(parent) not in tuple(boundary.identity(fd) for fd in chain))
+                chain.append(parent)
+            with boundary.matching_scope(observer, "mnamespaceobjects"):
+                identities = tuple(boundary.identity(fd) for fd in reversed(chain))
+            with boundary.matching_scope(observer, "mnamespacevector"):
+                require(len(identities) == len(vector))
         return identities
 
     def entries(self, directory):
@@ -1140,13 +1154,16 @@ class RuntimeLocator:
                         index = chain.index(daemon_ns)
                         for slot in ORDER:
                             if vector[index] == before[slot][0]:
-                                require(index < len(chain) - 1 and vector[-1] == 1)
+                                with boundary.matching_scope(lease._matching, "mprivate"):
+                                    require(index < len(chain) - 1 and vector[-1] == 1)
                                 if slot in matched:
-                                    raise LocatorRefusal("AmbiguousMatch")
+                                    with boundary.matching_scope(lease._matching, "mambiguous"):
+                                        raise LocatorRefusal("AmbiguousMatch")
                                 matched.add(slot)
                                 lease.select(discovery.Role(slot), candidate)
                 if matched != set(ORDER):
-                    raise LocatorRefusal("NoMatch")
+                    with boundary.matching_scope(lease._matching, "mnomatch"):
+                        raise LocatorRefusal("NoMatch")
             def discovery_failure(site):
                 nonlocal stage
                 if type(site) is str and site in LOCATE_STAGES:

@@ -5,6 +5,7 @@ import unittest
 
 import test_native_pids_wiring as legacy
 from test_native_pids_wiring import HANDOFF, SELECTED, SETUP_REFUSAL
+from test_native_pids_matching import EXPECTED as MATCHING_SITES
 
 ROOT = Path(__file__).resolve().parents[1]
 PREFIX = "DOCKERLENS_NATIVE_PIDS_MEASUREMENT_REFUSAL: code="
@@ -406,7 +407,7 @@ fn main() {
     for stage in LOCATE_STAGES {
         for category in LOCATE_CATEGORIES {
             let record = format!("DOCKERLENS_NATIVE_PIDS_LOCATE: stage={stage} category={category}\n");
-            assert!(record.len() <= 112);
+            assert!(record.len() <= 91);
             let captured = root_observation_from_capture(record.as_bytes(), false).unwrap();
             let closed = locate_failure_for_eof(Some(MeasurementCaller::LocateBatch), Some(captured)).unwrap();
             assert!(locate_failure_for_eof(Some(MeasurementCaller::Sample), Some(captured)).is_none());
@@ -438,6 +439,7 @@ fn main() {
                   "namespace", "module", "epoch", "discwalk", "disccoverage", "discrecords", "discmatch", "discrecheck", "discrelease")
         categories = ("BindingFailed", "UnsupportedPeerPidfd", "PeerExited", "NamespaceUnreachable", "NoMatch",
                       "AmbiguousMatch", "UnsupportedEventSemantics", "ConfiguredOuterUnavailable", "BoundaryRefusal", "TopologyRefusal", "unclassified")
+        stages += tuple(MATCHING_SITES)
         for stage, category in [(stage, "BoundaryRefusal") for stage in stages] + [("discmatch", category) for category in categories]:
             source = f"DOCKERLENS_NATIVE_PIDS_LOCATE: stage={stage} category={category}"
             expected = caller + f" source_stage={stage} source_category={category}"

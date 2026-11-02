@@ -1215,7 +1215,7 @@ class BindObservationTests(unittest.TestCase):
             log.append("complete_pending")
         channel.response.side_effect = response
         with patch.object(s, "_BIND", recorder), patch.object(s.os, "write") as output, \
-                patch.object(l, "status_vectors", side_effect=lambda *_args: (log.append("outer_vector"), ((), (100, 1)))[1]), \
+                patch.object(l, "status_vectors", side_effect=lambda *_args, observer=None: (log.append("outer_vector"), ((), (100, 1)))[1]), \
                 patch.object(l, "HeldEndpoint", side_effect=lambda *_args: (log.append("endpoint"), object())[1]), \
                 patch.object(l, "RuntimeLocator", side_effect=lambda *_args, **_options: (log.append("daemon_context"), runtime)[1]):
             with self.assertRaises(RuntimeError) as caught:

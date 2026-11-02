@@ -449,17 +449,17 @@ cat(){ command test "$FAIL_SITE" != transcript; }
         assert!(frozen.ends_with(&format!(" observed_termination=exit code=1 observer_site={}", site.name())));
         assert!(frozen.len() <= 256);
         observation.reset();
-        assert!(observation.observer_site.get().is_none());
+        assert!(observation.observer_capture.get().is_none());
         assert!(observation.first_failure.get().is_none());
         assert!(!diagnostics.failure(&run).unwrap().contains("observer_site="));
         assert!(frozen.contains("observer_site="));
         observation.observe_stderr(std::process::ExitStatus::from_raw(0), record.as_bytes());
-        assert!(observation.observer_site.get().is_none());
+        assert!(observation.observer_capture.get().is_none());
         diagnostics.select(&run, 0, NofileRole::Oracle, NofileOperation::Create);
         observation.observe_stderr(failed, record.as_bytes());
         assert!(!diagnostics.failure(&run).unwrap().contains("observer_site="));
         observation.begin_capture();
-        assert!(observation.observer_site.get().is_none());
+        assert!(observation.observer_capture.get().is_none());
     }
 }'''
         with tempfile.TemporaryDirectory(prefix="dl-nofile-observer-") as directory:
@@ -471,6 +471,125 @@ cat(){ command test "$FAIL_SITE" != transcript; }
             self.assertEqual(built.returncode, 0, built.stderr)
             result = subprocess.run([str(root / "observer")], capture_output=True, timeout=3, check=False)
             self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_actual_nested_docker_capture_classifies_stderr_and_preserves_phase_separation(self):
+        health = (ROOT / "src/native_health_metadata_tests.rs").read_text()
+        nofile = (ROOT / "src/native_nofile_tests.rs").read_text()
+        # Extract unchanged production methods, including their real byte guards.
+        def item(source, signature):
+            start = source.index(signature)
+            opened = source.index("{", start)
+            depth = 1
+            end = opened + 1
+            while depth:
+                depth += (source[end] == "{") - (source[end] == "}")
+                end += 1
+            return source[start:end]
+        begin = health.index("#[derive(Clone, Copy, Debug, Eq, PartialEq)]\nenum NofileObserverSite")
+        definitions = health[begin:health.index("struct HealthRun {", begin)]
+        definitions += nofile[nofile.index("const CASES:"):nofile.index("const REQUESTS:")]
+        begin = nofile.index("#[derive(Clone, Copy, Debug, Eq, PartialEq)]\nenum NofileOperation")
+        definitions += nofile[begin:nofile.index("fn number(", begin)]
+        functions = "\n".join(item(health, signature) for signature in
+            ("fn required(", "fn stream(", "fn capture_room("))
+        methods = "\n".join(item(health, signature) for signature in
+            ("fn remaining(", "fn timer(", "fn capture(", "fn outer(", "fn docker("))
+        harness = r'''use std::cell::Cell;
+use std::io::{Read, Write};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+const MAX_CALLS: usize = 400;
+const MAX_BYTES: usize = 4 * 1024 * 1024;
+const CLEANUP_CALLS: usize = 100;
+const CLEANUP_BYTES: usize = 2 * 1024 * 1024;
+mod native_outer_test_command {
+    pub fn prefix() -> Vec<String> { vec![std::env::var("INERT_OUTER").unwrap()] }
+}
+struct HealthRun {
+    nofile_command_observation: Option<NofileCommandObservation>,
+    deadline: Instant, calls: Cell<usize>, bytes: Cell<usize>,
+}
+fn main() {
+    std::panic::set_hook(Box::new(|_| {}));
+    let run = HealthRun { nofile_command_observation: Some(NofileCommandObservation::default()),
+        deadline: Instant::now() + Duration::from_secs(180), calls: Cell::new(0), bytes: Cell::new(0) };
+    let diagnostics = NofileDiagnostics::default();
+    let operation = if std::env::var("OPERATION").unwrap() == "observe" {
+        NofileOperation::Observe
+    } else { NofileOperation::Create };
+    diagnostics.select(&run, 0, NofileRole::Oracle, operation);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run.docker(&["observe".to_owned()], false)));
+    let observation = run.nofile_command_observation.as_ref().unwrap();
+    assert_eq!(result.is_err(), std::env::var("EXPECT_FAILURE").unwrap() == "1");
+    let frozen_line = result.as_ref().err().and_then(|_| diagnostics.failure(&run));
+    observation.reset();
+    // A later cleanup capture cannot supply the work termination.
+    observation.observe(std::os::unix::process::ExitStatusExt::from_raw(7 << 8));
+    if let Some(line) = frozen_line { println!("{line}"); }
+    if std::env::var("CLEANUP").unwrap() == "1" {
+        for reason in [NofileCleanupRefusal::InnerUnverified, NofileCleanupRefusal::Panic, NofileCleanupRefusal::OwnershipGuard] {
+            println!("{}", reason.diagnostic(observation.first_failure.get()));
+        }
+    }
+}
+'''
+        with tempfile.TemporaryDirectory(prefix="dl-nofile-nested-") as directory:
+            root = Path(directory)
+            fake = root / "outer"
+            fake.write_text("#!/usr/bin/python3\nimport base64,json,os,sys\n"
+                "open(os.environ['ARGV'], 'w').write(json.dumps(sys.argv[1:]))\n"
+                "sys.stdout.buffer.write(base64.b64decode(os.environ['OUT']))\n"
+                "sys.stderr.buffer.write(base64.b64decode(os.environ['ERR']))\n"
+                "sys.exit(int(os.environ['STATUS']))\n")
+            fake.chmod(0o700)
+            (root / "capture.rs").write_text(harness + definitions + functions + "impl HealthRun {" + methods + "}")
+            built = subprocess.run(["rustc", "--edition=2024", str(root / "capture.rs"), "-o", str(root / "capture")],
+                cwd=ROOT, capture_output=True, timeout=30, check=False)
+            self.assertEqual(built.returncode, 0, built.stderr)
+            marker = b"DOCKERLENS_NATIVE_NOFILE_OBSERVER: site=workerexe\n"
+            # Explicit independent expectations, including mixed-fault priority.
+            cases = [(b"", b"", "empty"), (marker, b"ordinary CLI error\n", "marker_absent"),
+                (b"", marker + b"x" * 8193, "oversize"), (b"", marker + b"\0\n", "nul"),
+                (b"", b"\xff\n", "non_utf8"), (b"", marker + b"CLI tail", "unterminated"),
+                (b"", b"ordinary CLI error\n", "marker_absent"), (b"", marker * 2, "duplicate_marker"),
+                (b"", b"DOCKERLENS_NATIVE_NOFILE_OBSERVER: site=PRIVATE_CANARY\n", "malformed_marker"),
+                (b"", b"before\n" + marker + b"after\n", "site"),
+                (b"", b"\xff\n" + marker, "site"),
+                (b"", b"DOCKERLENS_NATIVE_NOFILE_OBSERVER: site=PRIVATE_CANARY\n\xff\n", "malformed_marker"),
+                (b"", b"DOCKERLENS_NATIVE_NOFILE_OBSERVER: site=PRIVATE_CANARY\n" * 2 + b"\xff\n", "duplicate_marker"),
+                (b"", b"\0", "nul"), (b"x" * 65551, marker, "stream_guard")]
+            for stdout, stderr, expected in cases:
+                for status, operation in ((1, "observe"), (0, "observe"), (1, "create")):
+                    with self.subTest(expected=expected, status=status, operation=operation):
+                        # Successful overflow still fails the original byte guard.
+                        failed = status != 0 or len(stderr) > 8192 or len(stdout) > 65550
+                        env = {**os.environ, "INERT_OUTER": str(fake), "ARGV": str(root / "argv"),
+                            "NATIVE_PODMAN_USE_SUDO": "0", "NATIVE_OUTER_CONTAINER_ID": "inert-owned-outer",
+                            "OUT": base64.b64encode(stdout).decode(), "ERR": base64.b64encode(stderr).decode(),
+                            "STATUS": str(status), "OPERATION": operation, "EXPECT_FAILURE": str(int(failed)),
+                            "CLEANUP": str(int(status == 1 and operation == "observe"))}
+                        result = subprocess.run([str(root / "capture")], env=env, capture_output=True, timeout=5, check=False)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(json.loads((root / "argv").read_text()), ["exec", "inert-owned-outer", "docker", "-H",
+                            "unix:///dockerlens-native/docker.sock", "observe"])
+                        self.assertNotIn(b"PRIVATE_CANARY", result.stdout + result.stderr)
+                        self.assertEqual(result.stderr, b"")
+                        if status == 1 and operation == "observe" and expected != "stream_guard":
+                            suffix = b"observer_site=workerexe" if expected == "site" else f"observer_capture={expected}".encode()
+                            lines = result.stdout.splitlines()
+                            self.assertTrue(lines[0].endswith(suffix), lines)
+                            self.assertEqual(len(lines), 4)
+                            for line in lines[1:3]:
+                                self.assertTrue(line.endswith(b"first_observed_termination=exit code=7"), line)
+                            self.assertTrue(lines[3].endswith(b"first_observed_termination=unknown code=none"))
+                            work = lines[0] + b"\n"
+                            cleanup = lines[1] + b"\n"
+                            projected, _, _ = self.wrapper(self.failure_transcript(work, cleanup), 101)
+                            self.assertIn(work, projected.stderr)
+                            self.assertIn(cleanup, projected.stderr)
+                            self.assertLess(projected.stderr.index(work), projected.stderr.index(cleanup))
+                        else:
+                            self.assertNotIn(b"observer_", result.stdout)
 
     def test_observer_suffix_projects_only_for_failed_observe_and_never_cleanup(self):
         original = self.failure_line(operation="observe", code="1")
@@ -489,6 +608,29 @@ cat(){ command test "$FAIL_SITE" != transcript; }
             result, _calls, _dates = self.wrapper(self.failure_transcript(work), 101)
             self.assertNotIn(b"DOCKERLENS_NATIVE_NOFILE_FAILURE:", result.stderr)
             self.assertNotIn(SECRET, result.stderr)
+
+    def test_capture_availability_is_closed_and_only_failed_observe_qualifies(self):
+        reasons = ('empty', 'oversize', 'nul', 'non_utf8', 'unterminated',
+            'marker_absent', 'duplicate_marker', 'malformed_marker')
+        for reason in reasons:
+            work = self.failure_line(operation='observe', code='1').rstrip(b'\n') + f' observer_capture={reason}\n'.encode()
+            self.assertLessEqual(len(work.rstrip(b'\n')), 256)
+            result, _, _ = self.wrapper(self.failure_transcript(work), 101)
+            self.assertIn(work, result.stderr)
+        original = self.failure_line(operation='observe', code='1').rstrip(b'\n')
+        for suffix in (b' observer_capture=PRIVATE_NOFILE_WIRING_CANARY', b' observer_capture=Non_utf8',
+                b' observer_capture=empty observer_site=workerexe', b' observer_capture=empty observer_capture=nul'):
+            result, _, _ = self.wrapper(self.failure_transcript(original + suffix + b'\n'), 101)
+            self.assertNotIn(b'DOCKERLENS_NATIVE_NOFILE_FAILURE:', result.stderr)
+            self.assertNotIn(SECRET, result.stdout + result.stderr)
+        for line in (self.failure_line().rstrip(b'\n'),
+                self.failure_line(operation='observe', termination='unknown', code='none').rstrip(b'\n')):
+            result, _, _ = self.wrapper(self.failure_transcript(line + b' observer_capture=empty\n'), 101)
+            self.assertNotIn(b'DOCKERLENS_NATIVE_NOFILE_FAILURE:', result.stderr)
+        # This grammar keeps cleanup's phase-specific termination semantics.
+        guard = self.cleanup_line('ownership_guard', 'exit', '1')
+        result, _, _ = self.wrapper(self.failure_transcript(cleanup=guard), 101)
+        self.assertNotIn(b'DOCKERLENS_NATIVE_NOFILE_CLEANUP_REFUSAL:', result.stderr)
 
     @staticmethod
     def failure_line(case="soft64_hard128", role="oracle", operation="create", termination="exit", code="125"):

@@ -144,11 +144,16 @@ def _observe(value, observer, kind):
     """Return the identical original value even if diagnostic metadata fails."""
     if observer is not None:
         try:
-            if observer.note(kind, value) is not True and type(observer) is _TypeObservation:
-                object.__setattr__(observer, "valid", False)
+            if observer.note(kind, value) is not True:
+                if type(observer) is _MatchingObservation:
+                    _matching_disable(observer)
+                elif type(observer) is _TypeObservation:
+                    object.__setattr__(observer, "valid", False)
         except BaseException:
             try:
-                if type(observer) is _TypeObservation:
+                if type(observer) is _MatchingObservation:
+                    _matching_disable(observer)
+                elif type(observer) is _TypeObservation:
                     object.__setattr__(observer, "valid", False)
             except BaseException:
                 pass
@@ -230,6 +235,137 @@ def startup_require(site, condition):
         raise error
 
 
+MATCHING_SITES = (
+    'mleaseentry', 'mrecord', 'mprocbind', 'mstatussame', 'mscope',
+    'mcallback', 'mcallbackpure', 'mselect', 'mfinishstate', 'mfinishroles',
+    'mfinishseen', 'mrollback', 'mprocpid', 'mprocstartvalue', 'mprocpidfd',
+    'mprocdir', 'mprocfs', 'mprocstart', 'mproccgroup', 'mprocwithin',
+    'mprocroot', 'mprocns', 'mprocstatus', 'mprocidentity', 'mproccheck',
+    'mcheckbudget', 'mchecklive', 'mcheckstart', 'mcheckcgroup', 'mcheckstatus',
+    'mcheckreopen', 'mcheckidentity', 'mcheckclose', 'mtimeopen', 'mtimematch',
+    'mtimelive', 'mtimeregister', 'mctimeopen', 'mctimematch', 'mctimeclose',
+    'mnamespaceactive', 'mnamespacedepth', 'mnamespacereserve', 'mnamespaceparent', 'mnamespaceadopt',
+    'mnamespacecycle', 'mnamespaceobjects', 'mnamespacevector', 'mstatdelimiter', 'mstatstate',
+    'mstatstart', 'mcgrouprecord', 'mstatusfields', 'mstatuspid', 'mstatustgid',
+    'mstatusuid', 'mstatusnspid', 'mfdmount', 'mstatusnstgid', 'mprivate',
+    'mambiguous', 'mnomatch', 'mbudgettime', 'mbudgetreads', 'mbudgetbytes',
+    'mbudgetfds', 'mbudgetopens', 'mreadopen', 'mreadfs', 'mreadseek',
+    'mreadsyscall', 'mreadcap', 'mreadclose',
+)
+
+
+class _MatchingObservation:
+    """Local fixed-token metadata, never source state or an exception classifier."""
+
+    def __init__(self):
+        self.token, self.exception, self.valid, self.frozen = None, None, True, False
+
+    def note(self, kind, value):
+        if value is False:
+            token = {"time": "mbudgettime", "reads": "mbudgetreads", "bytes": "mbudgetbytes",
+                     "fds": "mbudgetfds", "opens": "mbudgetopens", "cap": "mreadcap"}.get(kind)
+            if token is not None:
+                _matching_update(self, token)
+        return True
+
+
+def _matching_disable(observer):
+    try:
+        if type(observer) is _MatchingObservation:
+            object.__setattr__(observer, "exception", None)
+            object.__setattr__(observer, "valid", False)
+    except BaseException:
+        pass
+
+
+def matching_site(observer):
+    try:
+        if (type(observer) is _MatchingObservation and observer.valid is True
+                and type(observer.token) is str and observer.token in MATCHING_SITES):
+            return observer.token
+    except BaseException:
+        _matching_disable(observer)
+    return None
+
+
+def _matching_update(observer, token, exception=None):
+    try:
+        if (type(observer) is _MatchingObservation and observer.valid is True
+                and observer.frozen is False):
+            observer.token, observer.exception = token, exception
+    except BaseException:
+        _matching_disable(observer)
+
+
+def matching_observation():
+    try:
+        return _MatchingObservation()
+    except BaseException:
+        return None
+
+
+def matching_finish(observer, exception=None):
+    """Freeze only the actual escape and immediately release its local reference."""
+    token = matching_site(observer)
+    try:
+        if type(observer) is _MatchingObservation:
+            if exception is None or observer.exception is not exception:
+                token = None
+            observer.token, observer.exception, observer.frozen = None, None, True
+    except BaseException:
+        _matching_disable(observer)
+        return None
+    return token
+
+
+class _MatchingScope:
+    def __init__(self, observer, site, cleanup):
+        self.observer, self.site = observer, site
+        # Only cleanup may carry a pending work escape across successful work.
+        # Ordinary operations discard handled failures at entry, including when
+        # a trusted caller later abandons an acquisition generator.
+        self.previous = (matching_site(observer), observer.exception) if cleanup else (None, None)
+
+    def __enter__(self):
+        _matching_update(self.observer, None)
+        return self
+
+    def __exit__(self, _kind, error, _traceback):
+        try:
+            if error is None:
+                _matching_update(self.observer, *self.previous)
+            else:
+                token = matching_site(self.observer)
+                # Only object identity is inspected. A handled inner failure
+                # cannot label a different exception escaping its outer scope.
+                pending = self.observer.exception
+                if token is None or (pending is not None and pending is not error):
+                    token = self.site
+                _matching_update(self.observer, token, error)
+        except BaseException:
+            _matching_disable(self.observer)
+        finally:
+            self.previous = None
+        return False
+
+
+def matching_scope(observer, site, *, cleanup=False):
+    if observer is not None:
+        try:
+            if type(observer) is _MatchingObservation and type(site) is str and site in MATCHING_SITES:
+                return _MatchingScope(observer, site, cleanup)
+        except BaseException:
+            _matching_disable(observer)
+    return _INACTIVE_STARTUP_SCOPE
+
+
+def matching_call(observer, function, *args, **options):
+    """Preserve the original invocation shape when no matching observer exists."""
+    if observer is None:
+        return function(*args, **options)
+    return function(*args, observer=observer, **options)
+
+
 def integer(value, low=1, high=(1 << 63) - 1):
     require(type(value) is int and low <= value <= high)
     return value
@@ -250,7 +386,8 @@ class Budget:
         self.peak_fds = 0
 
     def check(self, observer=None):
-        startup_require("budget_deadline", _observe(self.clock() < self.work_ns, observer, "time"))
+        with matching_scope(observer, "mbudgettime"):
+            startup_require("budget_deadline", _observe(self.clock() < self.work_ns, observer, "time"))
 
     def read(self, maximum, observer=None):
         if observer is None:
@@ -259,8 +396,10 @@ class Budget:
             self.check(observer=observer)
         self.reads += 1
         self.bytes += maximum
-        startup_require("budget_reads", _observe(self.reads <= 65536, observer, "reads"))
-        startup_require("budget_bytes", _observe(self.bytes <= SOURCE_BYTES, observer, "bytes"))
+        with matching_scope(observer, "mbudgetreads"):
+            startup_require("budget_reads", _observe(self.reads <= 65536, observer, "reads"))
+        with matching_scope(observer, "mbudgetbytes"):
+            startup_require("budget_bytes", _observe(self.bytes <= SOURCE_BYTES, observer, "bytes"))
 
     def fd(self, observer=None):
         if observer is None:
@@ -270,8 +409,10 @@ class Budget:
         self.fds += 1
         self.opens += 1
         self.peak_fds = max(self.peak_fds, self.fds)
-        startup_require("budget_fds", _observe(self.fds <= 256, observer, "fds"))
-        startup_require("budget_opens", _observe(self.opens <= 32768, observer, "opens"))
+        with matching_scope(observer, "mbudgetfds"):
+            startup_require("budget_fds", _observe(self.fds <= 256, observer, "fds"))
+        with matching_scope(observer, "mbudgetopens"):
+            startup_require("budget_opens", _observe(self.opens <= 32768, observer, "opens"))
 
     def emit(self, maximum):
         self.check()
@@ -329,39 +470,49 @@ def unescape_mount(value):
     return re.sub(r"\\(040|011|012|134)", lambda m: chr(int(m[1], 8)), value)
 
 
-def start_from_stat(body, pid):
+def start_from_stat(body, pid, observer=None):
     # comm can contain spaces and parentheses. The closing delimiter is the last ')'.
-    head, separator, rest = body.rpartition(b") ")
-    startup_require("stat_delimiter", separator and head.startswith(str(pid).encode() + b" ("))
+    with matching_scope(observer, "mstatdelimiter"):
+        head, separator, rest = body.rpartition(b") ")
+        startup_require("stat_delimiter", separator and head.startswith(str(pid).encode() + b" ("))
     fields = rest.split()
-    startup_require("stat_state", len(fields) >= 20 and fields[0] not in (b"Z", b"X", b"x"))
-    startup_require("stat_start", fields[19].isdigit())
-    with startup_scope("stat_start"):
-        return integer(int(fields[19]))
+    with matching_scope(observer, "mstatstate"):
+        startup_require("stat_state", len(fields) >= 20 and fields[0] not in (b"Z", b"X", b"x"))
+    with matching_scope(observer, "mstatstart"):
+        startup_require("stat_start", fields[19].isdigit())
+        with startup_scope("stat_start"):
+            return integer(int(fields[19]))
 
 
-def cgroup_path(body):
-    with startup_scope("cgroup_record"):
+def cgroup_path(body, observer=None):
+    with startup_scope("cgroup_record"), matching_scope(observer, "mcgrouprecord"):
         lines = body.decode("ascii").splitlines()
         require(len(lines) == 1 and lines[0].startswith("0::"))
         return components(lines[0][3:])
 
 
-def process_status(body, pid, leader=False):
+def process_status(body, pid, leader=False, observer=None):
     fields = {}
     for line in body.splitlines():
         key, separator, value = line.partition(b":")
-        startup_require("status_fields", separator and key not in fields)
+        with matching_scope(observer, "mstatusfields"):
+            startup_require("status_fields", separator and key not in fields)
         fields[key] = value.split()
-    startup_require("status_pid", fields.get(b"Pid") == [str(pid).encode()])
+    with matching_scope(observer, "mstatuspid"):
+        startup_require("status_pid", fields.get(b"Pid") == [str(pid).encode()])
     wanted = (b"Tgid", b"Uid", b"NSpid")
-    startup_require("status_fields", all(key in fields and all(x.isdigit() for x in fields[key]) for key in wanted))
+    with matching_scope(observer, "mstatusfields"):
+        startup_require("status_fields", all(key in fields and all(x.isdigit() for x in fields[key]) for key in wanted))
     tgid, uid, nested = (tuple(int(x) for x in fields[key]) for key in wanted)
-    startup_require("status_tgid", len(tgid) == 1)
-    startup_require("status_uid", len(uid) == 4)
-    startup_require("status_nspid", 1 <= len(nested) <= 16)
-    startup_require("status_nspid", tgid[0] > 0 and nested[0] == pid and all(x > 0 for x in nested))
-    startup_require("status_tgid", not leader or tgid[0] == pid)
+    with matching_scope(observer, "mstatustgid"):
+        startup_require("status_tgid", len(tgid) == 1)
+    with matching_scope(observer, "mstatusuid"):
+        startup_require("status_uid", len(uid) == 4)
+    with matching_scope(observer, "mstatusnspid"):
+        startup_require("status_nspid", 1 <= len(nested) <= 16)
+        startup_require("status_nspid", tgid[0] > 0 and nested[0] == pid and all(x > 0 for x in nested))
+    with matching_scope(observer, "mstatustgid"):
+        startup_require("status_tgid", not leader or tgid[0] == pid)
     return tgid, uid, nested
 
 
@@ -454,17 +605,20 @@ class LinuxSource:
             self.budget.read(capacity)
         else:
             self.budget.read(capacity, observer=observer)
-        os.lseek(fd, 0, os.SEEK_SET)
+        with matching_scope(observer, "mreadseek"):
+            os.lseek(fd, 0, os.SEEK_SET)
         chunks = []
         size = 0
         while True:
             # Precharge each actual bounded syscall, including partial/EOF/error
             # calls. Whole-file caps still apply; unused charges never refund.
-            chunk = os.read(fd, capacity)
+            with matching_scope(observer, "mreadsyscall"):
+                chunk = os.read(fd, capacity)
             if not chunk:
                 break
             size += len(chunk)
-            require(_observe(size <= maximum, observer, "cap"))
+            with matching_scope(observer, "mreadcap"):
+                require(_observe(size <= maximum, observer, "cap"))
             chunks.append(chunk)
             capacity = min(1024, maximum + 1 - size)
             if observer is None:
@@ -473,69 +627,81 @@ class LinuxSource:
                 self.budget.read(capacity, observer=observer)
         return b"".join(chunks)
 
-    def read(self, parent, name, maximum):
-        fd = self.open(name, parent)
+    def read(self, parent, name, maximum, observer=None):
+        with matching_scope(observer, "mreadopen"):
+            fd = matching_call(observer, self.open, name, parent)
         try:
-            with startup_scope("source_readfs"):
-                require(fs_magic(fd) == PROC_MAGIC)
+            with startup_scope("source_readfs"), matching_scope(observer, "mreadfs"):
+                require(matching_call(observer, fs_magic, fd) == PROC_MAGIC)
             with startup_scope("source_read"):
-                return self.read_fd(fd, maximum)
+                return matching_call(observer, self.read_fd, fd, maximum)
         finally:
-            with startup_cleanup():
+            with startup_cleanup(), matching_scope(observer, "mreadclose", cleanup=True):
                 self.close_fd(fd)
 
-    def process(self, pid, start, within=None):
+    def process(self, pid, start, within=None, observer=None):
         with startup_scope("proc_pidfd"):
-            integer(pid, high=(1 << 31) - 1)
-            integer(start)
-            self.budget.fd()
-            pidfd = self.own(os.pidfd_open(pid, 0))
-        with startup_scope("proc_dir"):
-            directory = self.open(str(pid), self.proc, directory=True)
-        with startup_scope("proc_fs"):
-            require(fs_magic(directory) == PROC_MAGIC)
-        with startup_scope("proc_start"):
-            require(start_from_stat(self.read(directory, "stat", 1024), pid) == start)
-        with startup_scope("proc_cgroup"):
-            membership = cgroup_path(self.read(directory, "cgroup", 1024))
+            with matching_scope(observer, "mprocpid"):
+                integer(pid, high=(1 << 31) - 1)
+            with matching_scope(observer, "mprocstartvalue"):
+                integer(start)
+            with matching_scope(observer, "mprocpidfd"):
+                matching_call(observer, self.budget.fd)
+                pidfd = self.own(os.pidfd_open(pid, 0))
+        with startup_scope("proc_dir"), matching_scope(observer, "mprocdir"):
+            directory = matching_call(observer, self.open, str(pid), self.proc, directory=True)
+        with startup_scope("proc_fs"), matching_scope(observer, "mprocfs"):
+            require(matching_call(observer, fs_magic, directory) == PROC_MAGIC)
+        with startup_scope("proc_start"), matching_scope(observer, "mprocstart"):
+            require(matching_call(observer, start_from_stat,
+                matching_call(observer, self.read, directory, "stat", 1024), pid) == start)
+        with startup_scope("proc_cgroup"), matching_scope(observer, "mproccgroup"):
+            membership = matching_call(observer, cgroup_path,
+                matching_call(observer, self.read, directory, "cgroup", 1024))
             if within is not None:
-                require(len(membership) > len(within.membership))
-                require(membership[:len(within.membership)] == within.membership)
-        with startup_scope("proc_root"):
-            root = self.open("root", directory, directory=True, magic=True)
-        with startup_scope("proc_ns"):
-            namespaces = tuple(self.open("ns/" + name, directory, magic=True) for name in NS)
-        with startup_scope("proc_status"):
-            status = process_status(self.read(directory, "status", 4096), pid, leader=True)
-        with startup_scope("proc_identity"):
+                with matching_scope(observer, "mprocwithin"):
+                    require(len(membership) > len(within.membership))
+                    require(membership[:len(within.membership)] == within.membership)
+        with startup_scope("proc_root"), matching_scope(observer, "mprocroot"):
+            root = matching_call(observer, self.open, "root", directory, directory=True, magic=True)
+        with startup_scope("proc_ns"), matching_scope(observer, "mprocns"):
+            namespaces = tuple(matching_call(observer, self.open, "ns/" + name, directory, magic=True) for name in NS)
+        with startup_scope("proc_status"), matching_scope(observer, "mprocstatus"):
+            status = matching_call(observer, process_status,
+                matching_call(observer, self.read, directory, "status", 4096), pid, leader=True)
+        with startup_scope("proc_identity"), matching_scope(observer, "mprocidentity"):
             proc = Process(pid, start, directory, pidfd, root, namespaces, membership,
-                           (identity(directory), (identity(root), self.fd_mount_id(root)),
+                (identity(directory), (identity(root), matching_call(observer, self.fd_mount_id, root)),
                             tuple(identity(fd) for fd in namespaces)), status)
-        with startup_scope("proc_check"):
-            self.check_process(proc)
+        with startup_scope("proc_check"), matching_scope(observer, "mproccheck"):
+            matching_call(observer, self.check_process, proc)
         return proc
 
-    def check_process(self, proc):
-        self.budget.check()
-        with startup_scope("proc_live"):
+    def check_process(self, proc, observer=None):
+        with matching_scope(observer, "mcheckbudget"):
+            matching_call(observer, self.budget.check)
+        with startup_scope("proc_live"), matching_scope(observer, "mchecklive"):
             require(not select.select([proc.pidfd], [], [], 0)[0])
-        with startup_scope("proc_start"):
-            require(start_from_stat(self.read(proc.directory, "stat", 1024), proc.pid) == proc.start)
-        with startup_scope("proc_cgroup"):
-            require(cgroup_path(self.read(proc.directory, "cgroup", 1024)) == proc.membership)
-        with startup_scope("proc_status"):
-            require(process_status(self.read(proc.directory, "status", 4096), proc.pid, leader=True) == proc.status)
+        with startup_scope("proc_start"), matching_scope(observer, "mcheckstart"):
+            require(matching_call(observer, start_from_stat,
+                matching_call(observer, self.read, proc.directory, "stat", 1024), proc.pid) == proc.start)
+        with startup_scope("proc_cgroup"), matching_scope(observer, "mcheckcgroup"):
+            require(matching_call(observer, cgroup_path,
+                matching_call(observer, self.read, proc.directory, "cgroup", 1024)) == proc.membership)
+        with startup_scope("proc_status"), matching_scope(observer, "mcheckstatus"):
+            require(matching_call(observer, process_status,
+                matching_call(observer, self.read, proc.directory, "status", 4096), proc.pid, leader=True) == proc.status)
         reopened = []
         try:
-            with startup_scope("proc_reopen"):
-                reopened.append(self.open(str(proc.pid), self.proc, directory=True))
-                reopened.append(self.open("root", reopened[0], directory=True, magic=True))
-                reopened.extend(self.open("ns/" + n, reopened[0], magic=True) for n in NS)
-            with startup_scope("proc_identity"):
-                require((identity(reopened[0]), (identity(reopened[1]), self.fd_mount_id(reopened[1])),
+            with startup_scope("proc_reopen"), matching_scope(observer, "mcheckreopen"):
+                reopened.append(matching_call(observer, self.open, str(proc.pid), self.proc, directory=True))
+                reopened.append(matching_call(observer, self.open, "root", reopened[0], directory=True, magic=True))
+                reopened.extend(matching_call(observer, self.open, "ns/" + n, reopened[0], magic=True) for n in NS)
+            with startup_scope("proc_identity"), matching_scope(observer, "mcheckidentity"):
+                require((identity(reopened[0]), (identity(reopened[1]), matching_call(observer, self.fd_mount_id, reopened[1])),
                          tuple(identity(fd) for fd in reopened[2:])) == proc.identity)
         finally:
-            with startup_cleanup():
+            with startup_cleanup(), matching_scope(observer, "mcheckclose", cleanup=True):
                 for fd in reopened:
                     self.close_fd(fd)
 
@@ -639,9 +805,9 @@ class LinuxSource:
         device = os.fstat(fd).st_dev
         require(fields[2] == str(os.major(device)) + ":" + str(os.minor(device)))
 
-    def fd_mount_id(self, fd):
-        with startup_scope("proc_fdinfo"):
-            info = self.read(self.proc, "self/fdinfo/" + str(fd), 4096)
+    def fd_mount_id(self, fd, observer=None):
+        with startup_scope("proc_fdinfo"), matching_scope(observer, "mfdmount"):
+            info = matching_call(observer, self.read, self.proc, "self/fdinfo/" + str(fd), 4096)
             ids = [line.split()[1:] for line in info.splitlines() if line.startswith(b"mnt_id:")]
             require(len(ids) == 1 and len(ids[0]) == 1 and ids[0][0].isdigit())
             return integer(int(ids[0][0]))

@@ -206,7 +206,7 @@ class DiscoveryTests(unittest.TestCase):
                 if site == "discmatch":
                     raise error
                 if site == "discrecheck":
-                    fixture.source.check_process = lambda _process: (_ for _ in ()).throw(error)
+                    fixture.source.check_process = lambda _process, observer=None: (_ for _ in ()).throw(error)
             with fixture.environment(), ExitStack() as stack:
                 if site == "discwalk":
                     stack.enter_context(patch.object(boundary, "fs_magic", side_effect=error))

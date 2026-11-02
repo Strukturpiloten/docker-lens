@@ -413,7 +413,22 @@ try:
             if locate_index == len(lines) - 1 or len(locate_line) > 111:
                 sys.exit(0)
             stages = (b"input", b"inspect", b"discovery", b"membership", b"distinctness", b"recheck", b"freeze", b"transfer", b"namespace", b"module", b"epoch",
-              b"discwalk", b"disccoverage", b"discrecords", b"discmatch", b"discrecheck", b"discrelease")
+              b"discwalk", b"disccoverage", b"discrecords", b"discmatch", b"discrecheck", b"discrelease",
+              b"mleaseentry", b"mrecord", b"mprocbind", b"mstatussame", b"mscope",
+              b"mcallback", b"mcallbackpure", b"mselect", b"mfinishstate", b"mfinishroles",
+              b"mfinishseen", b"mrollback", b"mprocpid", b"mprocstartvalue", b"mprocpidfd",
+              b"mprocdir", b"mprocfs", b"mprocstart", b"mproccgroup", b"mprocwithin",
+              b"mprocroot", b"mprocns", b"mprocstatus", b"mprocidentity", b"mproccheck",
+              b"mcheckbudget", b"mchecklive", b"mcheckstart", b"mcheckcgroup", b"mcheckstatus",
+              b"mcheckreopen", b"mcheckidentity", b"mcheckclose", b"mtimeopen", b"mtimematch",
+              b"mtimelive", b"mtimeregister", b"mctimeopen", b"mctimematch", b"mctimeclose",
+              b"mnamespaceactive", b"mnamespacedepth", b"mnamespacereserve", b"mnamespaceparent", b"mnamespaceadopt",
+              b"mnamespacecycle", b"mnamespaceobjects", b"mnamespacevector", b"mstatdelimiter", b"mstatstate",
+              b"mstatstart", b"mcgrouprecord", b"mstatusfields", b"mstatuspid", b"mstatustgid",
+              b"mstatusuid", b"mstatusnspid", b"mfdmount", b"mstatusnstgid", b"mprivate",
+              b"mambiguous", b"mnomatch", b"mbudgettime", b"mbudgetreads", b"mbudgetbytes",
+              b"mbudgetfds", b"mbudgetopens", b"mreadopen", b"mreadfs", b"mreadseek",
+              b"mreadsyscall", b"mreadcap", b"mreadclose")
             categories = (b"BindingFailed", b"UnsupportedPeerPidfd", b"PeerExited", b"NamespaceUnreachable", b"NoMatch",
                           b"AmbiguousMatch", b"UnsupportedEventSemantics", b"ConfiguredOuterUnavailable", b"BoundaryRefusal", b"TopologyRefusal", b"unclassified")
             match = re.fullmatch(rb"DOCKERLENS_NATIVE_PIDS_LOCATE: stage=([a-z]+) category=([A-Za-z]+)", locate_line)
@@ -523,14 +538,18 @@ try:
     for index, line in observations:
         if index == len(lines) - 1 or len(line) > 256:
             raise ValueError()
-        match = re.fullmatch(rb"DOCKERLENS_NATIVE_NOFILE_FAILURE: caller_case=(soft64_hard128|soft128_hard128|soft64_hard_unlimited|both_unlimited|all) caller_role=(oracle|rendered|pair|none) caller_operation=([a-z_]+) observed_termination=(exit|signal|unknown) code=([0-9]+|none)(?: observer_site=([a-z]+))?", line)
+        match = re.fullmatch(rb"DOCKERLENS_NATIVE_NOFILE_FAILURE: caller_case=(soft64_hard128|soft128_hard128|soft64_hard_unlimited|both_unlimited|all) caller_role=(oracle|rendered|pair|none) caller_operation=([a-z_]+) observed_termination=(exit|signal|unknown) code=([0-9]+|none)(?: observer_(?:site=([a-z]+)|capture=([a-z0-9_]+)))?", line)
         if match is not None:
             if work is not None or cleanup is not None:
                 raise ValueError()
-            case, role, operation, termination, code, observer_site = match.groups()
+            case, role, operation, termination, code, observer_site, observer_capture = match.groups()
             if observer_site is not None and (operation != b"observe" or termination not in (b"exit", b"signal")
                 or observer_site not in (b"rootuid", b"rootgid", b"reportwait", b"reportfile", b"reportlink", b"workererror",
                                          b"workerpid", b"workerexe", b"workerargv", b"transcript", b"parentlimits", b"workerlimits")):
+                raise ValueError()
+            if observer_capture is not None and (operation != b"observe" or termination not in (b"exit", b"signal")
+                or observer_capture not in (b"empty", b"oversize", b"nul", b"non_utf8", b"unterminated",
+                                            b"marker_absent", b"duplicate_marker", b"malformed_marker")):
                 raise ValueError()
             if operation != b"context" and b"DOCKERLENS_NATIVE_CHECK: nofile_effects" not in lines[:cleanup_indices[0]]:
                 raise ValueError()
