@@ -3,6 +3,8 @@ name: Check
 
 on:
   pull_request:
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
   workflow_dispatch:
@@ -42,6 +44,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
       - name: Validate scaffold
         run: ./scripts/check-all.sh --check
@@ -86,9 +89,9 @@ jobs:
           NATIVE_RESULT: ${{ needs.native-conformance.result }}
         run: |
           test "$SCAFFOLD_RESULT" = success
-          if [[ "$EVENT_NAME" == pull_request ]]; then
+          if [[ "$EVENT_NAME" == pull_request || "$EVENT_NAME" == merge_group ]]; then
             test "$NATIVE_RESULT" = skipped
-            echo 'PR validation is offline-only; native Engine evidence is not claimed'
+            echo 'PR and queue validation is offline-only; native Engine evidence is not claimed'
           elif [[ "$EVENT_NAME" == push && "$EVENT_REF" == refs/heads/main ]]; then
             test "$NATIVE_RESULT" = success
           else

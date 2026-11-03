@@ -1,0 +1,129 @@
+{
+  "schema": 2,
+  "repository": "Strukturpiloten/docker-lens",
+  "jobs": [
+    "rust",
+    "msrv",
+    "dependencies",
+    "api",
+    "documentation",
+    "lockfile-release-age"
+  ],
+  "profile_jobs": {
+    "prose": [
+      "documentation"
+    ],
+    "executable-docs": [
+      "rust",
+      "msrv",
+      "dependencies",
+      "api",
+      "documentation",
+      "lockfile-release-age"
+    ]
+  },
+  "public_documentation_root": "docs/",
+  "full_documentation_roots": [
+    "docs/decisions/",
+    "docs/evidence/"
+  ],
+  "executable_documentation_roots": [],
+  "executable_documentation_paths": [
+    "README.md"
+  ],
+  "documentation_examples_manifest": null,
+  "local_commands": {
+    "prose": [
+      [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests",
+        "-v"
+      ],
+      [
+        "git",
+        "diff",
+        "--check"
+      ]
+    ],
+    "executable-docs": [
+      [
+        "bash",
+        "scripts/check-all.sh",
+        "--check"
+      ]
+    ],
+    "full": [
+      [
+        "bash",
+        "scripts/check-all.sh",
+        "--check"
+      ]
+    ]
+  },
+  "tasks": {
+    "rust-quality": {
+      "commands": [
+        [
+          "cargo",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        [
+          "cargo",
+          "ci-check"
+        ],
+        [
+          "cargo",
+          "ci-clippy"
+        ],
+        [
+          "cargo",
+          "ci-test"
+        ],
+        [
+          "cargo",
+          "ci-doctest"
+        ],
+        [
+          "cargo",
+          "ci-doc"
+        ]
+      ],
+      "timeout_seconds": 1800
+    },
+    "msrv": {
+      "commands": [
+        [
+          "cargo",
+          "ci-check"
+        ]
+      ],
+      "timeout_seconds": 900
+    },
+    "documentation": {
+      "commands": [
+        [
+          "python3",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "tests",
+          "-v"
+        ],
+        [
+          "git",
+          "diff",
+          "--check"
+        ]
+      ],
+      "timeout_seconds": 900
+    }
+  }
+}

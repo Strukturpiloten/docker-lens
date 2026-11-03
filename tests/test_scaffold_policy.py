@@ -270,6 +270,7 @@ class ScaffoldPolicyTests(unittest.TestCase):
             ("workflow_dispatch", "refs/heads/main", (True, False, False, False)),
             ("workflow_dispatch", "refs/heads/feature", (False, False, False, True)),
             ("pull_request", "refs/pull/1/merge", (False, True, False, True)),
+            ("merge_group", "refs/heads/gh-readonly-queue/main/pr-1", (False, True, False, True)),
             ("push", "refs/heads/main", (False, True, True, True)),
             ("push", "refs/heads/feature", (False, True, False, True)),
         ):
