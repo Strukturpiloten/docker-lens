@@ -52,7 +52,7 @@ class ScaffoldPolicyTests(unittest.TestCase):
             renovate["enabledManagers"],
             ["cargo", "github-actions", "custom.regex"],
         )
-        self.assertEqual(len(renovate["customManagers"]), 2)
+        self.assertEqual(len(renovate["customManagers"]), 4)
         manager = renovate["customManagers"][0]
         self.assertEqual(manager["datasourceTemplate"], "github-tags")
         extractor = manager["matchStrings"][0].replace("(?<currentValue>", "(?P<currentValue>")
@@ -97,8 +97,11 @@ class ScaffoldPolicyTests(unittest.TestCase):
         self.assertIn("five distinct version-tag", (ROOT / "docs/dependency-policy.md").read_text())
         for workflow in (ROOT / ".github/workflows").glob("*.yml"):
             text = workflow.read_text()
-            for action in re.findall(r"uses: (.+)", text):
-                self.assertRegex(action, r"^[^@]+@[0-9a-f]{40} # v\d+\.\d+\.\d+$")
+            for action in re.findall(r"(?m)^\s*(?:- )?uses: (.+)", text):
+                if action.startswith("Strukturpiloten/boxferry/.github/workflows/shared-"):
+                    self.assertRegex(action, r"^Strukturpiloten/boxferry/\.github/workflows/shared-[a-z-]+\.yml@[0-9a-f]{40} # automation-v1 interface v1$")
+                else:
+                    self.assertRegex(action, r"^[^@]+@[0-9a-f]{40} # v\d+\.\d+\.\d+$")
         for name in ("check.yml", "release-validation.yml", "native-validation.yml"):
             workflow = (ROOT / ".github/workflows" / name).read_text()
             self.assertIn("name: dockerlens-native-${{ matrix.lane }}", workflow)
@@ -292,7 +295,7 @@ class ScaffoldPolicyTests(unittest.TestCase):
     def test_diagnostic_pins_have_existing_unique_renovate_ownership(self) -> None:
         renovate = json.loads((ROOT / "renovate.json").read_text())
         self.assertEqual(renovate["enabledManagers"].count("github-actions"), 1)
-        self.assertEqual(len(renovate["customManagers"]), 2)
+        self.assertEqual(len(renovate["customManagers"]), 4)
         workflow = (ROOT / ".github/workflows/check.yml").read_text()
         diagnostic = workflow.split("  hosted-prerequisite-diagnostic:\n", 1)[1].split("  scaffold:\n", 1)[0]
         self.assertEqual(re.findall(r"uses: (.+)", diagnostic), [

@@ -28,3 +28,5 @@ retained groups for candidate rehearsal. ADR 0017's None/false/true, conditional
 schema-3 and pure snapshot boundaries remain; fresh final-candidate sixteen-test
 native and actual consumer gates still block ready/merge/main admission and
 release. Historical evidence and earlier obligations are preserved.
+
+- [0021: Seed the trusted shared reader](0021-shared-automation-bootstrap.md)
