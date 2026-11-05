@@ -1,76 +1,41 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "config:recommended"
+    "github>Strukturpiloten/boxferry//renovate-presets/common#5b4deb3fa2e06a0eea1643bbbdecec34e18b1281",
+    "github>Strukturpiloten/boxferry//renovate-presets/rust#5b4deb3fa2e06a0eea1643bbbdecec34e18b1281"
   ],
   "enabledManagers": [
     "cargo",
     "github-actions",
+    "rust-toolchain",
     "custom.regex"
+  ],
+  "ignorePaths": [
+    "**/target/**",
+    "**/_automation/**",
+    "**/_policy/**",
+    "**/tests/**",
+    "docs/evidence/**"
   ],
   "customManagers": [
     {
       "customType": "regex",
-      "managerFilePatterns": [
-        "/^rust-toolchain\\.toml$/"
-      ],
-      "matchStrings": [
-        "channel\\s*=\\s*\"(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\""
-      ],
-      "depNameTemplate": "rust-lang/rust",
-      "datasourceTemplate": "github-tags",
-      "versioningTemplate": "semver"
-    },
-    {
-      "customType": "regex",
-      "managerFilePatterns": [
-        "/^scripts\\/native-conformance\\.sh$/"
-      ],
+      "managerFilePatterns": ["/^scripts\\/native-conformance\\.sh$/"],
       "matchStrings": [
         "# renovate: datasource=(?<datasource>docker) depName=(?<depName>[^\\s]+)\\s+[A-Z_]+_IMAGE='[^']+:(?<currentValue>[^@']+)@(?<currentDigest>sha256:[a-f0-9]{64})'"
-      ]
-    },
-    {
-      "customType": "regex",
-      "depNameTemplate": "Strukturpiloten/boxferry",
-      "datasourceTemplate": "github-digest",
-      "currentValueTemplate": "automation-v1",
-      "description": "Update the consumer adoption manifest at the same immutable shared revision.",
-      "managerFilePatterns": [
-        "/^\\.github/automation\\.json$/"
-      ],
-      "matchStrings": [
-        "(?<prefix>\"revision\"[ \\t]*:[ \\t]*\")(?<currentDigest>[a-f0-9]{40})(?<suffix>\")"
-      ]
-    },
-    {
-      "customType": "regex",
-      "depNameTemplate": "Strukturpiloten/boxferry",
-      "datasourceTemplate": "github-digest",
-      "currentValueTemplate": "automation-v1",
-      "description": "Update explicit shared workflow revision inputs and environment pins.",
-      "managerFilePatterns": [
-        "/^\\.github/workflows/.*\\.ya?ml$/"
-      ],
-      "matchStrings": [
-        "(?<prefix>(?:^|\\n)[ \\t]*(?:automation_sha|automation-sha|AUTOMATION_SHA):[ \\t]*[\"\\']?)(?<currentDigest>[a-f0-9]{40})(?<suffix>[\"\\']?)"
       ]
     }
   ],
   "packageRules": [
     {
-      "description": "Keep the exact already-qualified native fixture tuples fixed during shared automation adoption. Docker #127 owns independently reviewed replacement qualification; nearby development/runtime images remain automatic.",
-      "matchFileNames": [
-        "scripts/native-conformance.sh"
+      "description": [
+        "Keep the exact already-qualified native fixture tuples fixed during shared automation adoption. Docker #127 owns independently reviewed replacement qualification; nearby development/runtime images remain automatic."
       ],
+      "matchFileNames": ["scripts/native-conformance.sh"],
       "groupName": "DockerLens native conformance images",
       "pinDigests": true,
-      "matchManagers": [
-        "custom.regex"
-      ],
-      "matchDatasources": [
-        "docker"
-      ],
+      "matchManagers": ["custom.regex"],
+      "matchDatasources": ["docker"],
       "matchPackageNames": [
         "ghcr.io/strukturpiloten/docker-29-rootful",
         "ghcr.io/strukturpiloten/docker-29-rootless",
@@ -79,18 +44,6 @@
         "docker.io/library/busybox"
       ],
       "enabled": false
-    },
-    {
-      "description": "Temporary bootstrap: group immutable shared pins before the age reader is consumed by candidate CI. Final adoption enables automatic checked updates.",
-      "matchManagers": [
-        "github-actions",
-        "custom.regex"
-      ],
-      "matchPackageNames": [
-        "Strukturpiloten/boxferry"
-      ],
-      "groupName": "Shared BoxFerry automation",
-      "automerge": false
     }
   ]
 }

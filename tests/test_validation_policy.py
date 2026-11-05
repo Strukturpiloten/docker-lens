@@ -42,7 +42,8 @@ class ValidationPolicyTests(unittest.TestCase):
             ["python3", "-m", "unittest", "discover", "-s", "tests", "-v"],
             ["git", "diff", "--check"],
         ]
-        self.assertEqual(self.policy["local_commands"]["prose"], expected)
+        selective = [["env", "DOCKERLENS_METADATA_UNCHANGED=1", *expected[0]], expected[1]]
+        self.assertEqual(self.policy["local_commands"]["prose"], selective)
         self.assertEqual(self.policy["tasks"]["documentation"]["commands"], expected)
         self.assertEqual(self.policy["public_documentation_root"], "docs/")
         self.assertEqual(

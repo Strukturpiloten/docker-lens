@@ -7,15 +7,16 @@ The scaffold policy tests check alignment and MSRV failure propagation through
 the shared local, PR/main, native-dispatch, and release offline gate. Earlier
 verification records below retain the Rust versions used at those checkpoints.
 
-## Shared automation prerequisite
+## Shared development automation
 
-[ADR 0020](decisions/0020-trusted-shared-validation-policy.md) seeds the trusted
-validation policy and equivalent Cargo aliases. Check now runs its complete
-offline gate on merge queue candidates, binding checkout to the tested SHA.
-Main native validation and complete local gates remain active. Selective PR
-and merge queue execution is a follow-up
-that must read policy from an already trusted base revision. The seed adds no
-software pins or Renovate managers.
+[ADR 0022](decisions/0022-shared-development-automation.md) activates the
+[staged shared mechanics](shared-automation.md) after ADR 0020's trusted policy
+and the separate manifest/service seed. PR/queue selection reads the trusted
+base; unknown and policy changes remain complete. The single Required CI gate
+rejects unexpected skips and preserves offline-only PRs and mandatory native main
+lanes. Main-only prerequisite diagnostics and exact-reviewed native dispatch
+retain their existing boundaries. Shared tooling does not qualify the pending
+Docker #127 hosted-backend rollout or expand product compatibility.
 
 ## Hosted prerequisite diagnostic
 

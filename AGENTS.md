@@ -178,3 +178,18 @@ are maintainer-owned routing policy, not automatically updated software release 
 Use an available codebase-memory graph for structural exploration, or an existing usable CodeGraph
 index. Do not create an index without user authorization. Use `rg` and targeted reads when no graph
 can answer the question, and directly for configuration and documentation.
+
+## Shared automation adoption
+
+Read `docs/shared-automation.md` and ADR 0022 before changing workflow callers.
+Keep the interface-1 manifest, reusable refs/inputs and common/Rust presets at
+one reviewed immutable source. Never fall back to candidate admission policy.
+`validation-plan.py` is the canonical stable raw-argv frontloader; change common
+logic in the shared source, not a consumer fork. Downloaded development tools
+come from that source's version/checksum inventory.
+
+The current native harness still selects outer Podman on hosted and local
+callers. Docker #127 / held PR #128 and BoxFerry #469 own the outstanding hosted
+Docker rollout; do not claim it delivered or alter the held runtime source as
+part of this adoption. Keep the complete offline, reviewed native dispatch,
+main native and validation-only release gates. No publication is authorized.

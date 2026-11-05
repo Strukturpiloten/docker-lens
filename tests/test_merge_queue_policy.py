@@ -13,17 +13,15 @@ class MergeQueuePolicyTests(unittest.TestCase):
     def test_queue_runs_complete_gate_at_the_event_candidate(self) -> None:
         workflow = (ROOT / ".github/workflows/check.yml").read_text()
         self.assertIn("  merge_group:\n    types: [checks_requested]\n", workflow)
-        scaffold = workflow.split("  scaffold:\n", 1)[1].split(
-            "  native-conformance:\n", 1
-        )[0]
-        self.assertIn("ref: ${{ github.sha }}", scaffold)
-        self.assertIn("persist-credentials: false", scaffold)
-        self.assertIn("run: ./scripts/check-all.sh --check", scaffold)
-        self.assertNotIn("continue-on-error", scaffold)
+        self.assertIn("candidate-sha: ${{ github.sha }}", workflow)
+        self.assertIn("github.event.merge_group.base_sha", workflow)
+        self.assertIn("--tested-sha", workflow)
+        self.assertIn("--needs-json", workflow)
+        self.assertNotIn("continue-on-error", workflow)
 
     def test_queue_gate_rejects_incomplete_unplanned_or_unknown_outcomes(self) -> None:
         workflow = (ROOT / ".github/workflows/check.yml").read_text()
-        gate = workflow.split("  check-gate:\n", 1)[1].split("        run: |\n", 1)[1]
+        gate = workflow.split("      - name: Fail on skipped, cancelled, or failed validation\n", 1)[1].split("        run: |\n", 1)[1]
         script = textwrap.dedent(gate)
         for event, ref, offline, native, expected in (
             (

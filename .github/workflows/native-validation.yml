@@ -55,6 +55,8 @@ jobs:
         run: |
           [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - name: Set up exact shared CI Node
+        uses: ./.github/actions/setup-node
       - name: Complete offline gate
         run: ./scripts/check-all.sh --check
 
@@ -67,7 +69,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [debian11-rootful, debian11-rootless, upstream-rootful, upstream-rootless]
+        lane:
+          [
+            debian11-rootful,
+            debian11-rootless,
+            upstream-rootful,
+            upstream-rootless,
+          ]
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:

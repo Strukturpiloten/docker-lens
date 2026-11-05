@@ -9,11 +9,18 @@ import textwrap
 import tomllib
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class ScaffoldPolicyTests(unittest.TestCase):
+    def workflow_flow_list(self, source: str, key: str) -> list[str]:
+        match = re.search(r"(?m)^\s*" + re.escape(key) + r":\s*(\[[^\]]*\])", source)
+        self.assertIsNotNone(match, f"missing {key} flow-list")
+        assert match is not None
+        return [item.strip() for item in match[1][1:-1].split(",") if item.strip()]
+
     def test_rust_minimum_and_development_toolchain_contract(self) -> None:
         manifest = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
         toolchain = tomllib.loads((ROOT / "rust-toolchain.toml").read_text(encoding="utf-8"))
@@ -45,23 +52,59 @@ class ScaffoldPolicyTests(unittest.TestCase):
         self.assertIn("./scripts/native-conformance.sh", workflow)
         self.assertNotIn("continue-on-error", workflow)
         self.assertNotIn("cargo publish", workflow)
+        api = workflow.split("  api:\n", 1)[1].split("  shared-release-gate:\n", 1)[0]
+        self.assertIn("api_purpose: published", api)
+        self.assertIn('release_type: ""', api)
+        self.assertIn("PUBLISHED_API_CANDIDATE_SHA: ${{ needs.api.outputs.published_api_candidate_sha }}", workflow)
+        self.assertIn('test "$PUBLISHED_API_CANDIDATE_SHA" = "$EXPECTED_SHA"', workflow)
+
+    def assert_action_reference(self, action: str, *, nested: bool = False) -> None:
+        if not nested and action in {
+            "./.github/actions/setup-node",
+            "./source/.github/actions/setup-node",
+        }:
+            composite = (ROOT / ".github/actions/setup-node/action.yml").read_text()
+            references = re.findall(r"(?m)^\s*(?:- )?uses: (.+)", composite)
+            self.assertTrue(references, "the owned composite must retain its pinned external Action")
+            for reference in references:
+                self.assert_action_reference(reference, nested=True)
+        elif not nested and action.startswith("./_automation/.github/actions/"):
+            self.assertIn(action, {
+                "./_automation/.github/actions/shared-source",
+                "./_automation/.github/actions/shared-python",
+            })
+        elif not nested and action.startswith("Strukturpiloten/boxferry/.github/workflows/shared-"):
+            self.assertRegex(action, r"^Strukturpiloten/boxferry/\.github/workflows/shared-[a-z-]+\.yml@[0-9a-f]{40} # automation-v1 interface v1$")
+        else:
+            self.assertFalse(action.startswith("./"), "unknown local Action path")
+            self.assertRegex(action, r"^[^@]+@[0-9a-f]{40} # v\d+\.\d+\.\d+$")
+
+    def test_only_owned_local_composites_can_expand_to_pinned_actions(self) -> None:
+        for action in ("./.github/actions/setup-node", "./source/.github/actions/setup-node"):
+            self.assert_action_reference(action)
+        invalid = (
+            "./.github/actions/unknown",
+            "./source/.github/actions/setup-node-extra",
+            "./.github/actions/setup-node@" + "a" * 40 + " # v7.1.0",
+            "actions/setup-node@main # v7.1.0",
+            "actions/setup-node@" + "a" * 40,
+        )
+        for action in invalid:
+            with self.subTest(action=action), self.assertRaises(AssertionError):
+                self.assert_action_reference(action)
+        for action in ("actions/setup-node@main # v7.1.0", "./_automation/.github/actions/shared-python"):
+            with patch.object(Path, "read_text", return_value="  - uses: " + action), self.assertRaises(AssertionError):
+                self.assert_action_reference("./.github/actions/setup-node")
 
     def test_action_pins_and_renovate_ownership(self) -> None:
         renovate = json.loads((ROOT / "renovate.json").read_text())
-        self.assertEqual(
-            renovate["enabledManagers"],
-            ["cargo", "github-actions", "custom.regex"],
-        )
-        self.assertEqual(len(renovate["customManagers"]), 4)
-        manager = renovate["customManagers"][0]
-        self.assertEqual(manager["datasourceTemplate"], "github-tags")
-        extractor = manager["matchStrings"][0].replace("(?<currentValue>", "(?P<currentValue>")
-        toolchain = tomllib.loads((ROOT / "rust-toolchain.toml").read_text())
-        matches = list(re.finditer(extractor, (ROOT / "rust-toolchain.toml").read_text()))
-        self.assertEqual([match.group("currentValue") for match in matches],
-                         [toolchain["toolchain"]["channel"]])
-        self.assertEqual(manager["managerFilePatterns"], ["/^rust-toolchain\\.toml$/"])
-        native_manager = renovate["customManagers"][1]
+        self.assertEqual(renovate["enabledManagers"],
+                         ["cargo", "github-actions", "rust-toolchain", "custom.regex"])
+        self.assertEqual(len(renovate["customManagers"]), 1)
+        self.assertEqual(len(renovate["extends"]), 2)
+        for reference in renovate["extends"]:
+            self.assertRegex(reference, r"^github>Strukturpiloten/boxferry//renovate-presets/(common|rust)#[0-9a-f]{40}$")
+        native_manager = renovate["customManagers"][0]
         self.assertEqual(native_manager["managerFilePatterns"], ["/^scripts\\/native-conformance\\.sh$/"])
         native_extractor = re.sub(
             r"\(\?<(\w+)>", r"(?P<\1>", native_manager["matchStrings"][0]
@@ -96,12 +139,8 @@ class ScaffoldPolicyTests(unittest.TestCase):
         self.assertIn('"$volume"', native_script)
         self.assertIn("five distinct version-tag", (ROOT / "docs/dependency-policy.md").read_text())
         for workflow in (ROOT / ".github/workflows").glob("*.yml"):
-            text = workflow.read_text()
-            for action in re.findall(r"(?m)^\s*(?:- )?uses: (.+)", text):
-                if action.startswith("Strukturpiloten/boxferry/.github/workflows/shared-"):
-                    self.assertRegex(action, r"^Strukturpiloten/boxferry/\.github/workflows/shared-[a-z-]+\.yml@[0-9a-f]{40} # automation-v1 interface v1$")
-                else:
-                    self.assertRegex(action, r"^[^@]+@[0-9a-f]{40} # v\d+\.\d+\.\d+$")
+            for action in re.findall(r"(?m)^\s*(?:- )?uses: (.+)", workflow.read_text()):
+                self.assert_action_reference(action)
         for name in ("check.yml", "release-validation.yml", "native-validation.yml"):
             workflow = (ROOT / ".github/workflows" / name).read_text()
             self.assertIn("name: dockerlens-native-${{ matrix.lane }}", workflow)
@@ -114,7 +153,12 @@ class ScaffoldPolicyTests(unittest.TestCase):
         native = (ROOT / "scripts/native-conformance.sh").read_text()
         self.assertNotIn("cargo test", fast)
         self.assertIn("cargo test --all-targets --locked", complete)
-        self.assertIn("python3 -m unittest discover", complete)
+        self.assertIn("scripts/validation-plan.py run --task documentation", complete)
+        self.assertIn("scripts/validation-plan.py run --task api-development", complete)
+        self.assertNotIn("cargo semver-checks", complete)
+        api = (ROOT / ".github/workflows/check.yml").read_text().split("  api:\n", 1)[1].split("  documentation:\n", 1)[0]
+        self.assertIn("api_purpose: development", api)
+        self.assertIn("initial_api_contract: false", api)
         self.assertIn("exit 1", native)
         self.assertIn("podman_cmd=(sudo -n podman)", native)
         self.assertIn('timeout --signal=TERM --kill-after=2s 8s "${podman_cmd[@]}" "$@"', native)
@@ -143,7 +187,7 @@ class ScaffoldPolicyTests(unittest.TestCase):
         self.assertIn("set -euo pipefail", complete)
         self.assertIn('\n"$(dirname "$0")/check-msrv.sh"\n', complete)
         self.assertLess(complete.index("check-msrv.sh"), complete.index("cargo test --all-targets"))
-        for workflow in ("check.yml", "native-validation.yml", "release-validation.yml"):
+        for workflow in ("native-validation.yml", "release-validation.yml"):
             self.assertIn("./scripts/check-all.sh --check",
                           (ROOT / ".github/workflows" / workflow).read_text(encoding="utf-8"))
 
@@ -215,10 +259,12 @@ class ScaffoldPolicyTests(unittest.TestCase):
     def test_native_lanes_and_release_aggregate_remain_required(self) -> None:
         check = (ROOT / ".github/workflows/check.yml").read_text()
         release = (ROOT / ".github/workflows/release-validation.yml").read_text()
-        lanes = "[debian11-rootful, debian11-rootless, upstream-rootful, upstream-rootless]"
-        self.assertIn(lanes, check)
-        self.assertIn(lanes, release)
-        self.assertIn("needs: [scaffold, native-conformance]", check)
+        expected_lanes = ["debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless"]
+        self.assertEqual(self.workflow_flow_list(check, "lane"), expected_lanes)
+        self.assertEqual(self.workflow_flow_list(release, "lane"), expected_lanes)
+        self.assertEqual(self.workflow_flow_list(check.split("  check-gate:\n", 1)[1], "needs"),
+                         ["validation-plan", "rust", "msrv", "dependencies", "api", "documentation",
+                          "lockfile-release-age", "native-conformance"])
         native_job = check.split("  native-conformance:\n", 1)[1].split("  check-gate:\n", 1)[0]
         self.assertIn("if: github.event_name == 'push' && github.ref == 'refs/heads/main'", native_job)
         self.assertEqual(check.count("./scripts/native-conformance.sh"), 1)
@@ -227,14 +273,15 @@ class ScaffoldPolicyTests(unittest.TestCase):
         self.assertIn('test "$NATIVE_RESULT" = success', check)
         self.assertIn("fail-fast: false", release)
         self.assertIn("if: always()", release)
-        self.assertIn("needs: [candidate, native-conformance]", release)
+        self.assertEqual(self.workflow_flow_list(release.split("  release-gate:\n", 1)[1], "needs"),
+                         ["candidate", "native-conformance", "dependencies", "api", "shared-release-gate"])
         self.assertIn('test "$NATIVE_RESULT" = success', release)
         self.assertIn('git fetch --no-tags origin main', release)
 
     def test_hosted_diagnostic_dispatch_is_closed_and_does_not_replace_required_ci(self) -> None:
         check = (ROOT / ".github/workflows/check.yml").read_text()
-        diagnostic = check.split("  hosted-prerequisite-diagnostic:\n", 1)[1].split("  scaffold:\n", 1)[0]
-        scaffold = check.split("  scaffold:\n", 1)[1].split("  native-conformance:\n", 1)[0]
+        diagnostic = check.split("  hosted-prerequisite-diagnostic:\n", 1)[1].split("  validation-plan:\n", 1)[0]
+        scaffold = check.split("  validation-plan:\n", 1)[1].split("  native-conformance:\n", 1)[0]
         aggregate = check.split("  check-gate:\n", 1)[1]
         self.assertIn("  workflow_dispatch:\n", check)
         self.assertNotIn("inputs:", check)
@@ -254,7 +301,9 @@ class ScaffoldPolicyTests(unittest.TestCase):
         self.assertIn("if: github.event_name != 'workflow_dispatch'", scaffold)
         self.assertIn("name: Required CI\n", aggregate)
         self.assertIn("if: always() && !(github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')", aggregate)
-        self.assertIn("needs: [scaffold, native-conformance]", aggregate)
+        self.assertEqual(self.workflow_flow_list(aggregate, "needs"),
+                         ["validation-plan", "rust", "msrv", "dependencies", "api", "documentation",
+                          "lockfile-release-age", "native-conformance"])
         self.assertEqual(check.count("name: Required CI"), 1)
         self.assertIn("permissions:\n  contents: read", check)
         self.assertNotIn("write", check)
@@ -263,7 +312,7 @@ class ScaffoldPolicyTests(unittest.TestCase):
 
     def test_hosted_diagnostic_event_ref_job_selection(self) -> None:
         workflow = (ROOT / ".github/workflows/check.yml").read_text()
-        job_names = ("hosted-prerequisite-diagnostic", "scaffold", "native-conformance", "check-gate")
+        job_names = ("hosted-prerequisite-diagnostic", "validation-plan", "native-conformance", "check-gate")
         conditions = {}
         for name in job_names:
             body = workflow.split("  " + name + ":\n", 1)[1]
@@ -295,9 +344,9 @@ class ScaffoldPolicyTests(unittest.TestCase):
     def test_diagnostic_pins_have_existing_unique_renovate_ownership(self) -> None:
         renovate = json.loads((ROOT / "renovate.json").read_text())
         self.assertEqual(renovate["enabledManagers"].count("github-actions"), 1)
-        self.assertEqual(len(renovate["customManagers"]), 4)
+        self.assertEqual(len(renovate["customManagers"]), 1)
         workflow = (ROOT / ".github/workflows/check.yml").read_text()
-        diagnostic = workflow.split("  hosted-prerequisite-diagnostic:\n", 1)[1].split("  scaffold:\n", 1)[0]
+        diagnostic = workflow.split("  hosted-prerequisite-diagnostic:\n", 1)[1].split("  validation-plan:\n", 1)[0]
         self.assertEqual(re.findall(r"uses: (.+)", diagnostic), [
             "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2",
             "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2",
@@ -307,7 +356,7 @@ class ScaffoldPolicyTests(unittest.TestCase):
 
     def test_pr_gate_is_offline_only_and_main_requires_native(self) -> None:
         check = (ROOT / ".github/workflows/check.yml").read_text()
-        gate = check.split("  check-gate:\n", 1)[1].split("        run: |\n", 1)[1]
+        gate = check.split("      - name: Fail on skipped, cancelled, or failed validation\n", 1)[1].split("        run: |\n", 1)[1]
         script = textwrap.dedent(gate)
         for scenario, event, ref, native, should_pass in (
             ("fork code", "pull_request", "refs/pull/1/merge", "skipped", True),
@@ -353,10 +402,20 @@ class ScaffoldPolicyTests(unittest.TestCase):
         self.assertIn('test "$ADMISSION_RESULT" = success', workflow)
         self.assertIn('test "$CANDIDATE_RESULT" = success', workflow)
         self.assertIn('test "$NATIVE_RESULT" = success', workflow)
-        self.assertIn("[debian11-rootful, debian11-rootless, upstream-rootful, upstream-rootless]", workflow)
+        self.assertEqual(self.workflow_flow_list(native_job, "lane"), [
+            "debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless",
+        ])
         self.assertNotIn("cargo publish", workflow)
         self.assertNotIn("gh release", workflow)
         self.assertIn("A draft PR stays unmergeable during validation", (ROOT / "docs/verification.md").read_text())
+
+
+    def test_native_lane_order_and_membership_survive_only_format_changes(self) -> None:
+        expected = ["debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless"]
+        for source in ("lane: [" + ", ".join(expected) + "]", "lane:\n  [\n    " + ",\n    ".join(expected) + ",\n  ]"):
+            self.assertEqual(self.workflow_flow_list(source, "lane"), expected)
+        for changed in (expected[:-1], list(reversed(expected)), [*expected, "unreviewed"]):
+            self.assertNotEqual(self.workflow_flow_list("lane: [" + ", ".join(changed) + "]", "lane"), expected)
 
 
 if __name__ == "__main__":

@@ -16,7 +16,9 @@ jobs:
   candidate:
     name: Exact candidate and complete scaffold gate
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
+    outputs:
+      candidate_sha: ${{ inputs.expected_sha }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -28,8 +30,11 @@ jobs:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
         run: |
           [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "${GITHUB_SHA}" = "$EXPECTED_SHA"
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           test "$(git rev-parse origin/main)" = "$EXPECTED_SHA"
+      - name: Set up exact shared CI Node
+        uses: ./.github/actions/setup-node
       - name: Complete scaffold gate
         run: ./scripts/check-all.sh --check
 
@@ -38,10 +43,18 @@ jobs:
     needs: candidate
     runs-on: ubuntu-24.04
     timeout-minutes: 35
+    outputs:
+      candidate_sha: ${{ inputs.expected_sha }}
     strategy:
       fail-fast: false
       matrix:
-        lane: [debian11-rootful, debian11-rootless, upstream-rootful, upstream-rootless]
+        lane:
+          [
+            debian11-rootful,
+            debian11-rootless,
+            upstream-rootful,
+            upstream-rootless,
+          ]
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -67,10 +80,45 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  dependencies:
+    needs: candidate
+    uses: Strukturpiloten/boxferry/.github/workflows/shared-rust-dependencies.yml@5b4deb3fa2e06a0eea1643bbbdecec34e18b1281 # automation-v1 interface v1
+    with:
+      candidate_sha: ${{ inputs.expected_sha }}
+      automation_sha: 5b4deb3fa2e06a0eea1643bbbdecec34e18b1281
+      policy_sha: ${{ inputs.expected_sha }}
+      config_path: scripts/validation-policy.json
+
+  api:
+    needs: candidate
+    uses: Strukturpiloten/boxferry/.github/workflows/shared-rust-semver.yml@5b4deb3fa2e06a0eea1643bbbdecec34e18b1281 # automation-v1 interface v1
+    with:
+      candidate_sha: ${{ inputs.expected_sha }}
+      automation_sha: 5b4deb3fa2e06a0eea1643bbbdecec34e18b1281
+      policy_sha: ${{ inputs.expected_sha }}
+      config_path: scripts/validation-policy.json
+      package: docker-lens
+      api_purpose: published
+      release_type: ""
+      initial_api_contract: false
+
+  shared-release-gate:
+    name: Shared exact-candidate release policy
+    if: always()
+    needs: [candidate, native-conformance, dependencies, api]
+    uses: Strukturpiloten/boxferry/.github/workflows/shared-release-validation.yml@5b4deb3fa2e06a0eea1643bbbdecec34e18b1281 # automation-v1 interface v1
+    with:
+      candidate_sha: ${{ inputs.expected_sha }}
+      automation_sha: 5b4deb3fa2e06a0eea1643bbbdecec34e18b1281
+      policy_sha: ${{ inputs.expected_sha }}
+      config_path: scripts/release-policy.json
+      needs_json: ${{ toJSON(needs) }}
+
   release-gate:
     name: All exact-candidate validation required
     if: always()
-    needs: [candidate, native-conformance]
+    needs:
+      [candidate, native-conformance, dependencies, api, shared-release-gate]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -78,9 +126,20 @@ jobs:
         env:
           CANDIDATE_RESULT: ${{ needs.candidate.result }}
           NATIVE_RESULT: ${{ needs.native-conformance.result }}
+          DEPENDENCIES_RESULT: ${{ needs.dependencies.result }}
+          API_RESULT: ${{ needs.api.result }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          PUBLISHED_API_CANDIDATE_SHA: ${{ needs.api.outputs.published_api_candidate_sha }}
+          SHARED_RESULT: ${{ needs.shared-release-gate.result }}
         run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$PUBLISHED_API_CANDIDATE_SHA" = "$EXPECTED_SHA"
           test "$CANDIDATE_RESULT" = success
           test "$NATIVE_RESULT" = success
+          test "$DEPENDENCIES_RESULT" = success
+          test "$API_RESULT" = success
+          test "$SHARED_RESULT" = success
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ inputs.expected_sha }}

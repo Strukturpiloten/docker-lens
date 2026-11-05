@@ -107,3 +107,10 @@ evidence for live #10 acquisition and #12 target
 request conformance is required before any compatibility claim. See
 [architecture](docs/architecture.md) and
 [verification](docs/verification.md).
+
+## Shared development checks
+
+Common CI, dependency eligibility and local planner mechanics use an immutable
+BoxFerry development source. Product crates remain independent. Follow the
+[shared automation guide](docs/shared-automation.md) for staged adoption and
+rollback; native runtime qualification and release approval remain separate.
