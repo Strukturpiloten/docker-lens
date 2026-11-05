@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "repository": "Strukturpiloten/docker-lens",
+  "packages": [
+    "docker-lens"
+  ],
+  "required_jobs": [
+    "candidate",
+    "native-conformance",
+    "dependencies",
+    "api"
+  ],
+  "publication_enabled": false
+}

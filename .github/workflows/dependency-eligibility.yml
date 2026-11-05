@@ -20,12 +20,18 @@ concurrency:
 
 jobs:
   eligibility:
+    permissions:
+      actions: write
+      checks: read
+      contents: read
+      pull-requests: write
+      statuses: write
     name: Trusted dependency metadata
     if: >-
       github.event_name == 'schedule' ||
       (github.event_name == 'workflow_run' &&
       (github.event.workflow_run.event == 'pull_request' ||
       github.event.workflow_run.event == 'merge_group'))
-    uses: Strukturpiloten/boxferry/.github/workflows/shared-dependency-eligibility.yml@322024da130587ba14ea9f7eb499e5f41a07e43d # automation-v1 interface v1
+    uses: Strukturpiloten/boxferry/.github/workflows/shared-dependency-eligibility.yml@5b4deb3fa2e06a0eea1643bbbdecec34e18b1281 # automation-v1 interface v1
     with:
-      automation-sha: 322024da130587ba14ea9f7eb499e5f41a07e43d
+      automation-sha: 5b4deb3fa2e06a0eea1643bbbdecec34e18b1281

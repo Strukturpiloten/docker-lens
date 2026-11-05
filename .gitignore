@@ -1,3 +1,8 @@
 __pycache__/
 .codegraph/
 target/
+
+# Shared automation checkouts and Python caches are development artifacts.
+_automation/
+_policy/
+*.pyc

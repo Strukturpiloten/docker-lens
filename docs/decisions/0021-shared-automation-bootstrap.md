@@ -20,5 +20,5 @@ source upgrades remain held until #174 installs the exact-candidate age reader
 and common automatic policy together. Keep the exact five qualified
 native fixture tuples fixed; #127 owns separately qualified replacements.
 
-See [the trusted automation seed](../shared-automation-bootstrap.md). Missing trusted base
+See [shared development automation](../shared-automation.md). Missing trusted base
 policy never authorizes candidate fallback.

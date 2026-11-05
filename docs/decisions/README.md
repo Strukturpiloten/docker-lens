@@ -30,3 +30,6 @@ native and actual consumer gates still block ready/merge/main admission and
 release. Historical evidence and earlier obligations are preserved.
 
 - [0021: Seed the trusted shared reader](0021-shared-automation-bootstrap.md)
+- [0022: Shared development automation](0022-shared-development-automation.md)
+
+- [0023: Development and published API checks](0023-development-and-published-api-checks.md)

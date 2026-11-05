@@ -1,17 +1,28 @@
 # Dependency and pin policy
 
+Common Cargo, Rust toolchain, Action and source-adoption update policy lives in
+immutable BoxFerry common/Rust presets. See [shared automation](shared-automation.md)
+for staged trust, the 72-hour rule, exact first-party exception and rollback.
+The native-image regex still owns exactly five tag/digest pairs; no image or
+historical native evidence is changed by this adoption. Downloaded development
+tools have one version/checksum inventory in the immutable shared source, with
+both Linux architectures validated and partial updates rejected.
+
+The following records preserve product-specific ownership and historical source
+provenance. Their recorded versions are not a second shared development-tool pin
+list.
+
 The [hosted prerequisite diagnostic](hosted-prerequisite-diagnostic.md) adds no
 software installation, product dependency or operational version pin. Its sole
 consumer is Check's main-only diagnostic job; normal PR/main validation, native
 dispatch, release validation and the other workspace products retain their gates.
 The new Action occurrences reuse the existing full checkout v4.2.2 and
 upload-artifact v4.6.2 SHAs and remain uniquely extracted by the enabled GitHub
-Actions manager. The two regex-manager paths, five native-image extractions,
-grouping/manual approvals, Cargo and toolchain ownership are unchanged; dedicated
-policy regressions verify no duplicate or moved extraction, so Renovate needs no
-configuration edit. The `Required CI` display correction changes no job identity
+Actions manager. The original diagnostic introduced no new pin source. The later shared adoption
+moves common ownership to immutable presets while preserving all five native-image
+extractions and historical evidence; native RE2 regressions verify unique owners. The `Required CI` display correction changes no job identity
 or software pin. Runner Python/coreutils/dpkg/systemd follow the existing mutable
-Ubuntu 24.04 runner unavailable-integrity/manual-review boundary. Observed
+Ubuntu 24.04 runner unavailable-integrity boundary. Observed
 installed package versions and hash-only helper/control/unit metadata are not
 new pins, authenticated publisher integrity or permission to update/install them.
 No third-party source is redistributed; copyright hashes and fixed provenance
@@ -38,29 +49,32 @@ manager, manager path, grouping rule, or additional dependency is needed.
 The Rust 1.98.1 minimum alignment changes no extraction path or dependency
 resolution. The existing toolchain regex extracts exactly one 1.98.1 channel;
 the enabled Cargo manager owns the manifest and lockfile, and GitHub Actions
-owns Action refs. No new or duplicate manager is needed. Existing native-image
-grouping and manual review remain unchanged. Local validation, PR/main Check,
+owns Action refs. No new or duplicate manager is needed. The exact qualified native-image tuples
+remain fixed during this overhaul. Local validation, PR/main Check,
 reviewed native dispatch, and Release validation consume the same
 `scripts/check-all.sh` and manifest-derived `scripts/check-msrv.sh`; no workflow
 pin or definition needs a separate version edit. Historical evidence and native
 Engine baselines retain their recorded versions.
 
-The ignored health-metadata proof uses the dev-only exact `libc = 0.2.189`
-declaration for platform-correct no-follow/directory open flags. That version
-and its registry checksum already existed in the locked socket2 graph; no
-package version or checksum was invented or changed. Product dependencies
-remain serde_json/socket2. Renovate's enabled Cargo manager owns this new
-`Cargo.toml` dev pin and the existing lockfile; no custom manager/path/grouping
-or approval rule is added. The policy regression checks its unique native Cargo
-ownership. The crate's Linux-only native validation is unchanged.
+The ignored health-metadata proof uses a dev-only exact `libc` requirement
+for platform-correct no-follow/directory open flags. Its initial `0.2.189`
+version and checksum already existed in the locked socket2 graph; that is
+historical introduction evidence, not a fixed native-runtime target. Ordinary
+Renovate Cargo updates may advance the exact manifest requirement and matching
+unique crates.io lock entry together, retaining its registry checksum. The
+policy regression checks that coupling, valid checksum metadata and sole native
+Cargo ownership instead of freezing the historical version or checksum. Product
+dependencies remain serde_json/socket2; no custom manager, grouping or approval
+rule is added. The crate's Linux-only native validation is unchanged.
 
 GitHub Actions use full commit SHAs with exact release-tag comments on
 ubuntu-24.04. Renovate owns Cargo, GitHub Actions, and the pinned Rust toolchain.
 One native-image regex manager extracts the five distinct version-tag plus
 manifest-digest pairs in scripts/native-conformance.sh: four GHCR Engine images
 and the BusyBox fixture. The policy test checks exact extraction and unique
-ownership. Image updates require full native reruns and independent review;
-automerge is disabled.
+ownership. Native image changes remain subject to the separately owned exact-candidate
+qualification policy and fresh native evidence; shared automatic dependency
+mechanics do not grant compatibility admission.
 
 The four Engine images were published by containers#260 at commit
 0b136a13a8bb612d91960ae5d07e72f449c89ec1. Their AMD64 and ARM64
@@ -110,7 +124,7 @@ The native bridge prerequisite uses the Ubuntu runner's kernel-provided
 pins no independently versioned module. Kernel/module bytes follow the
 version-selected but mutable `ubuntu-24.04` GitHub-hosted runner image;
 GitHub exposes no stable per-image or per-module digest to this repository.
-This is an explicit unavailable-integrity and manual-review exception, not
+This is an explicit unavailable-integrity prerequisite exception, not
 a floating new package dependency: no package or
 module installation, sysctl write, or fallback pin is introduced. Renovate's
 existing GitHub Actions manager continues to own full Action refs, and the
@@ -121,3 +135,7 @@ The canonical harness is consumed by `check.yml` main push,
 exact-main dispatch. All three inherit the same prerequisite without a
 workflow edit. The other five workspace repositories do not invoke this
 DockerLens native harness, so no cross-repository consumer changes are needed.
+
+The [fixed-fixture inventory](shared-automation.md#fixed-qualified-native-fixtures)
+records the exact five disabled native-image/path tuples; other dependency
+updates inherit the shared automatic policy.
