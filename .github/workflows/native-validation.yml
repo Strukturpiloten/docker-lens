@@ -24,7 +24,7 @@ concurrency:
 jobs:
   admission:
     name: Validate dispatcher and exact reviewed PR head
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -41,7 +41,7 @@ jobs:
   candidate:
     name: Complete offline gate at exact PR head
     needs: admission
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -64,7 +64,7 @@ jobs:
     name: Native Engine ${{ matrix.lane }}
     needs: candidate
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 35
     strategy:
       fail-fast: false
@@ -114,7 +114,7 @@ jobs:
     name: All reviewed native validation required
     if: always()
     needs: [admission, candidate, native-conformance]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
       - name: Reject failed, skipped, or cancelled lanes
