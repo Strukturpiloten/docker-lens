@@ -19,6 +19,7 @@ import unittest
 from collections.abc import Iterator
 from copy import deepcopy
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import boxferry_ci
@@ -512,10 +513,11 @@ class SharedAutomationTests(unittest.TestCase):
     def test_release_is_validation_only_with_every_exact_native_prerequisite(self) -> None:
         policy = load_release(ROOT / "scripts/release-policy.json", "Strukturpiloten/docker-lens")
         self.assertFalse(policy["publication_enabled"])
-        needs = {
+        needs: dict[str, Any] = {
             job: {"result": "success", "outputs": {"candidate_sha": SHA}}
             for job in policy["required_jobs"]
         }
+        needs["api"]["outputs"]["published_api_candidate_sha"] = SHA
         verify_release(policy, needs, SHA)
         for job in policy["required_jobs"]:
             invalid = deepcopy(needs)
@@ -774,13 +776,30 @@ if name == 'python3' and arguments[1:4] == ['run', '--task', 'api-development']:
         self.assertIn("EXPECTED_SHA: ${{ inputs.expected_sha }}", guard_step)
         guard = textwrap.dedent(guard_step.split("        run: |\n", 1)[1])
         policy = load_release(ROOT / "scripts/release-policy.json", "Strukturpiloten/docker-lens")
-        needs = {
+        needs: dict[str, Any] = {
             job: {"result": "success", "outputs": {"candidate_sha": SHA}}
             for job in policy["required_jobs"]
         }
-        # The shared release interface remains candidate-only: the caller's separate
-        # required final guard must reject development or missing published evidence.
-        verify_release(policy, needs, SHA)
+        needs["api"]["outputs"]["published_api_candidate_sha"] = SHA
+        # The shared gate requires one published proof alongside every generic binding;
+        # the caller's final guard also binds that proof to the successful API job.
+        self.assertEqual(verify_release(policy, needs, SHA), SHA)
+        generic_only = deepcopy(needs)
+        del generic_only["api"]["outputs"]["published_api_candidate_sha"]
+        with self.assertRaisesRegex(ReleaseError, "exactly one explicit published API"):
+            verify_release(policy, generic_only, SHA)
+        for published in ("b" * 40, "malformed", "", None, True):
+            invalid = deepcopy(needs)
+            invalid["api"]["outputs"]["published_api_candidate_sha"] = published
+            with (
+                self.subTest(published=published),
+                self.assertRaisesRegex(ReleaseError, "invalid published API binding: api"),
+            ):
+                verify_release(policy, invalid, SHA)
+        duplicate = deepcopy(needs)
+        duplicate["candidate"]["outputs"]["published_api_candidate_sha"] = SHA
+        with self.assertRaisesRegex(ReleaseError, "exactly one explicit published API"):
+            verify_release(policy, duplicate, SHA)
         for output, api_result, expected, success in (
             (SHA, "success", SHA, True),
             ("", "success", SHA, False),

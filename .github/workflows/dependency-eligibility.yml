@@ -1,5 +1,5 @@
 ---
-name: Dependency eligibility
+name: Dependency eligibility service
 
 on: # zizmor: ignore[dangerous-triggers] -- Trusted listener delegates only immutable shared code; it never executes candidate code.
   schedule:
@@ -20,18 +20,15 @@ concurrency:
 
 jobs:
   eligibility:
+    name: Trusted dependency metadata
+    if: >-
+      github.event_name == 'schedule' || (github.event_name == 'workflow_run' && (github.event.workflow_run.event == 'pull_request' || github.event.workflow_run.event == 'merge_group'))
     permissions:
       actions: write
       checks: read
       contents: read
       pull-requests: write
       statuses: write
-    name: Trusted dependency metadata
-    if: >-
-      github.event_name == 'schedule' ||
-      (github.event_name == 'workflow_run' &&
-      (github.event.workflow_run.event == 'pull_request' ||
-      github.event.workflow_run.event == 'merge_group'))
-    uses: Strukturpiloten/boxferry/.github/workflows/shared-dependency-eligibility.yml@5b4deb3fa2e06a0eea1643bbbdecec34e18b1281 # automation-v1 interface v1
+    uses: Strukturpiloten/boxferry/.github/workflows/shared-dependency-eligibility.yml@9eb757145e7e078ba8944df525c9884eec87effc # automation-v1 interface v1
     with:
-      automation-sha: 5b4deb3fa2e06a0eea1643bbbdecec34e18b1281
+      automation-sha: 9eb757145e7e078ba8944df525c9884eec87effc
