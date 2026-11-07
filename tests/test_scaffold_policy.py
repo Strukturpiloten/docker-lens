@@ -342,17 +342,151 @@ class ScaffoldPolicyTests(unittest.TestCase):
                 self.assertEqual(tuple(actual), expected)
 
     def test_diagnostic_pins_have_existing_unique_renovate_ownership(self) -> None:
-        renovate = json.loads((ROOT / "renovate.json").read_text())
-        self.assertEqual(renovate["enabledManagers"].count("github-actions"), 1)
-        self.assertEqual(len(renovate["customManagers"]), 1)
         workflow = (ROOT / ".github/workflows/check.yml").read_text()
-        diagnostic = workflow.split("  hosted-prerequisite-diagnostic:\n", 1)[1].split("  validation-plan:\n", 1)[0]
-        self.assertEqual(re.findall(r"uses: (.+)", diagnostic), [
-            "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2",
-            "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2",
-        ])
-        self.assertEqual(len([name for name in (ROOT / ".github/workflows").glob("*.yml")
-                              if "native-outer-runtime-profile.py" in name.read_text()]), 1)
+        canonical = (ROOT / ".github/workflows/native-validation.yml").read_text()
+        configuration = (ROOT / "renovate.json").read_text()
+
+        def check_pins(workflow: str, canonical: str, configuration: str) -> tuple[str, str]:
+            renovate = json.loads(configuration)
+            self.assertEqual(renovate["enabledManagers"].count("github-actions"), 1)
+            self.assertEqual(len(renovate["customManagers"]), 1)
+            self.assertEqual(
+                renovate["customManagers"][0]["managerFilePatterns"],
+                [r"/^scripts\/native-conformance\.sh$/"],
+            )
+            # Local manual native-image rules cannot override inherited Action policy.
+            for rule in renovate["packageRules"]:
+                self.assertEqual(rule["matchManagers"], ["custom.regex"])
+                self.assertEqual(rule["matchFileNames"], ["scripts/native-conformance.sh"])
+                self.assertNotIn("automerge", rule)
+                self.assertNotIn("dependencyDashboardApproval", rule)
+
+            references = re.findall(r"(?m)^\s*(?:- )?uses: (.+)$", canonical)
+            expected = []
+            for action in ("actions/checkout", "actions/upload-artifact"):
+                pins = [ref for ref in references if ref.split("@", 1)[0] == action]
+                self.assertTrue(pins, f"canonical native workflow must declare {action}")
+                for pin in pins:
+                    self.assert_action_reference(pin)
+                self.assertEqual(len(set(pins)), 1, f"conflicting canonical {action} pins")
+                expected.append(pins[0])
+            diagnostic = workflow.split("  hosted-prerequisite-diagnostic:\n", 1)[1].split(
+                "  validation-plan:\n", 1
+            )[0]
+            self.assertEqual(re.findall(r"uses: (.+)", diagnostic), expected)
+            return expected[0], expected[1]
+
+        checkout, artifact = check_pins(workflow, canonical, configuration)
+        # A coherent Renovate upgrade changes declarations, not a version literal in this test.
+        updated_checkout = "actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0"
+        check_pins(
+            workflow.replace(checkout, updated_checkout),
+            canonical.replace(checkout, updated_checkout),
+            configuration,
+        )
+        digest = checkout.split("@", 1)[1].split(" ", 1)[0]
+        other_digest = ("0" if digest[0] != "0" else "1") + digest[1:]
+        other_checkout = "actions/checkout@" + other_digest + " # v99.0.0"
+        mutations = [
+            (
+                "diagnostic divergence",
+                workflow.replace(checkout, other_checkout),
+                canonical,
+                configuration,
+            ),
+            (
+                "missing canonical declaration",
+                workflow,
+                canonical.replace("uses: " + checkout, "run: true"),
+                configuration,
+            ),
+            (
+                "conflicting canonical pins",
+                workflow,
+                canonical.replace(checkout, other_checkout, 1),
+                configuration,
+            ),
+            (
+                "unexpected diagnostic Action",
+                workflow.replace(
+                    artifact, artifact + "\n      - uses: actions/cache@" + "a" * 40 + " # v1.2.3"
+                ),
+                canonical,
+                configuration,
+            ),
+        ]
+        for invalid in (
+            "actions/checkout@main # v4.4.0",
+            "actions/checkout@" + "a" * 39 + " # v4.4.0",
+            "actions/checkout@" + "a" * 40,
+            "actions/checkout@" + "a" * 40 + " # v4.4",
+        ):
+            mutations.append(
+                (
+                    invalid,
+                    workflow.replace(checkout, invalid),
+                    canonical.replace(checkout, invalid),
+                    configuration,
+                )
+            )
+        action_extractor = (
+            r"uses: (?<depName>actions/checkout)@(?<currentDigest>[0-9a-f]{40})"
+            r" # (?<currentValue>v[0-9]+\.[0-9]+\.[0-9]+)"
+        )
+        for mutation in (
+            "missing manager",
+            "duplicate manager",
+            "overlapping custom owner",
+            "duplicate custom owner",
+            "Action group override",
+            "Action approval override",
+        ):
+            changed = json.loads(configuration)
+            if mutation == "missing manager":
+                changed["enabledManagers"].remove("github-actions")
+            elif mutation == "duplicate manager":
+                changed["enabledManagers"].append("github-actions")
+            elif mutation == "overlapping custom owner":
+                changed["customManagers"][0]["managerFilePatterns"].append(
+                    "/^\\.github/workflows/check\\.yml$/"
+                )
+                changed["customManagers"][0]["matchStrings"].append(action_extractor)
+                changed["customManagers"][0]["datasourceTemplate"] = "github-tags"
+            elif mutation == "duplicate custom owner":
+                changed["customManagers"].append(
+                    {
+                        "customType": "regex",
+                        "datasourceTemplate": "github-tags",
+                        "managerFilePatterns": ["/^\\.github/workflows/check\\.yml$/"],
+                        "matchStrings": [action_extractor],
+                    }
+                )
+            else:
+                field = (
+                    "groupName"
+                    if mutation == "Action group override"
+                    else "dependencyDashboardApproval"
+                )
+                changed["packageRules"].append(
+                    {
+                        "matchManagers": ["github-actions"],
+                        field: "unreviewed group" if field == "groupName" else True,
+                    }
+                )
+            mutations.append((mutation, workflow, canonical, json.dumps(changed)))
+        for label, changed_workflow, changed_canonical, changed_configuration in mutations:
+            with self.subTest(mutation=label), self.assertRaises(AssertionError):
+                check_pins(changed_workflow, changed_canonical, changed_configuration)
+        self.assertEqual(
+            len(
+                [
+                    name
+                    for name in (ROOT / ".github/workflows").glob("*.yml")
+                    if "native-outer-runtime-profile.py" in name.read_text()
+                ]
+            ),
+            1,
+        )
 
     def test_pr_gate_is_offline_only_and_main_requires_native(self) -> None:
         check = (ROOT / ".github/workflows/check.yml").read_text()
