@@ -34,7 +34,7 @@ jobs:
           umask 077
           set -o noclobber
           timeout --signal=TERM --kill-after=2s 55s python3 -B scripts/native-outer-runtime-profile.py > "$RUNNER_TEMP/dockerlens-hosted-prerequisite.json"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dockerlens-hosted-prerequisite
           path: ${{ runner.temp }}/dockerlens-hosted-prerequisite.json
@@ -243,7 +243,7 @@ jobs:
           DOCKERLENS_NATIVE_EVIDENCE_DIR: ${{ runner.temp }}/dockerlens-native-evidence
           DOCKERLENS_NATIVE_CANDIDATE_SHA: ${{ github.sha }}
         run: ./scripts/native-conformance.sh "${{ matrix.lane }}"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dockerlens-native-${{ matrix.lane }}
           path: ${{ runner.temp }}/dockerlens-native-evidence/${{ matrix.lane }}.json
