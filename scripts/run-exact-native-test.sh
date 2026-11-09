@@ -196,6 +196,17 @@ case $target in
     fi
     if [[ -z $panic_site ]]; then panic_site='DOCKERLENS_NATIVE_PANIC: source=native_stop_signal_tests location=unavailable'; fi
     ;;
+  native_network_attachment)
+    # The first panic before cleanup is causal, even if its site is unavailable.
+    # Never substitute a later selected-thread cleanup or aggregate assertion.
+    if [[ $selected == native_network_attachment_tests::live_network_attachments_match_engine ]]; then
+      panic_site=$(awk '/^DOCKERLENS_NATIVE_CHECK: network_attachment_cleanup(_unverified)?$/ { exit } /^[[:space:]]*thread .* panicked at([[:space:]]|$)/ { print; exit }' <<<"$result" | sed -nE \
+        "s/^thread '${selected}'( \([0-9]{1,10}\))? panicked at src\/(native_network_attachment_tests)\.rs:([1-9][0-9]{0,5}):([1-9][0-9]{0,3}):$/DOCKERLENS_NATIVE_PANIC: source=\2 line=\3 column=\4/p")
+    fi
+    if [[ -z $panic_site ]]; then
+      panic_site='DOCKERLENS_NATIVE_PANIC: source=native_network_attachment_tests location=unavailable'
+    fi
+    ;;
   native_bind_relabel)
     # The test catches its original assertion, then cleans up and may panic at
     # a final aggregate assertion. Only the first selected-test site before the
