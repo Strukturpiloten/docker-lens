@@ -102,6 +102,7 @@ jobs:
       policy_sha: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}
       config_path: scripts/validation-policy.json
       task: rust-quality
+      require_configured_task: true
 
   msrv:
     name: Minimum supported Rust
@@ -114,6 +115,7 @@ jobs:
       policy_sha: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}
       config_path: scripts/validation-policy.json
       task: msrv
+      require_configured_task: true
 
   dependencies:
     name: Dependency and license policy
