@@ -138,6 +138,12 @@ class SharedAutomationTests(unittest.TestCase):
                     )
                     one_pin(job, field, filename)
                     one_pin(job, "automation[_-]sha", filename)
+                    if "shared-rust-ci.yml@" in job:
+                        self.assertEqual(
+                            re.findall(r"(?m)^      require_configured_task: ([^\n]+)$", job),
+                            ["true"],
+                            filename + " requires strict task selection",
+                        )
                     calls_found += 1
             steps = re.findall(r"(?ms)^      - .*?(?=^      - |^  [\w-]+:\n|\Z)", source)
             for step in steps:
@@ -232,6 +238,77 @@ class SharedAutomationTests(unittest.TestCase):
             },
             {name: source.replace(revision, other) for name, source in workflows.items()},
         )
+
+    def test_shared_rust_calls_reject_missing_false_and_quoted_strict_flags(self) -> None:
+        manifest = json.loads((ROOT / ".github/automation.json").read_text())
+        renovate = json.loads((ROOT / "renovate.json").read_text())
+        workflows = {
+            path.name: path.read_text() for path in (ROOT / ".github/workflows").glob("*.yml")
+        }
+        source = workflows["check.yml"]
+        for name in ("rust", "msrv"):
+            match = re.search(rf"(?ms)^  {name}:\n.*?(?=^  [\w-]+:\n|\Z)", source)
+            assert match is not None
+            original = match[0]
+            flag = "      require_configured_task: true\n"
+            self.assertEqual(original.count(flag), 1)
+            for replacement in (
+                "",
+                "      require_configured_task: false\n",
+                '      require_configured_task: "true"\n',
+            ):
+                proposed = {
+                    **workflows,
+                    "check.yml": source.replace(
+                        original, original.replace(flag, replacement, 1), 1
+                    ),
+                }
+                with (
+                    self.subTest(job=name, replacement=replacement),
+                    self.assertRaises(AssertionError),
+                ):
+                    self.assert_shared_pin_identity(manifest, renovate, proposed)
+
+    def test_selected_producer_strict_tasks_keep_exact_commands_and_budgets(self) -> None:
+        import argparse
+        import dataclasses
+
+        from boxferry_ci.__main__ import _task
+
+        expected = {
+            "rust-quality": (
+                (
+                    ("cargo", "fmt", "--all", "--", "--check"),
+                    ("cargo", "ci-check"),
+                    ("cargo", "ci-clippy"),
+                    ("cargo", "ci-test"),
+                    ("cargo", "ci-doctest"),
+                    ("cargo", "ci-doc"),
+                ),
+                1800,
+            ),
+            "msrv": ((("cargo", "ci-check"),), 900),
+        }
+        self.assertNotIn("coverage", self.policy.tasks)
+        for name, (commands, timeout) in expected.items():
+            self.assertIn(name, self.policy.tasks)
+            self.assertEqual(self.policy.tasks[name].commands, commands)
+            self.assertEqual(self.policy.tasks[name].timeout_seconds, timeout)
+            for operation in ("check-task", "run"):
+                args = argparse.Namespace(
+                    command=operation, task=name, require_configured_task=True
+                )
+                self.assertEqual(_task(args, self.policy), self.policy.tasks[name])
+                missing = dataclasses.replace(
+                    self.policy,
+                    tasks={key: value for key, value in self.policy.tasks.items() if key != name},
+                )
+                with (
+                    self.subTest(task=name, operation=operation),
+                    patch("boxferry_ci.__main__.git", side_effect=AssertionError("alias fallback")),
+                    self.assertRaisesRegex(ContractError, "not explicitly configured"),
+                ):
+                    _task(args, missing)
 
     def test_stable_frontloader_and_all_shared_pins_are_one_immutable_identity(self) -> None:
         manifest = json.loads((ROOT / ".github/automation.json").read_text())
