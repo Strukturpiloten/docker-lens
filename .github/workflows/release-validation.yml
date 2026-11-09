@@ -82,19 +82,19 @@ jobs:
 
   dependencies:
     needs: candidate
-    uses: Strukturpiloten/boxferry/.github/workflows/shared-rust-dependencies.yml@48b7e97fc5e1021969a94f73b21dfc6b6c523cd5 # automation-v1 interface v1
+    uses: Strukturpiloten/boxferry/.github/workflows/shared-rust-dependencies.yml@d8af3a01f3daedf2e91145202655fa4a8458e028 # automation-v1 interface v1
     with:
       candidate_sha: ${{ inputs.expected_sha }}
-      automation_sha: 48b7e97fc5e1021969a94f73b21dfc6b6c523cd5
+      automation_sha: d8af3a01f3daedf2e91145202655fa4a8458e028
       policy_sha: ${{ inputs.expected_sha }}
       config_path: scripts/validation-policy.json
 
   api:
     needs: candidate
-    uses: Strukturpiloten/boxferry/.github/workflows/shared-rust-semver.yml@48b7e97fc5e1021969a94f73b21dfc6b6c523cd5 # automation-v1 interface v1
+    uses: Strukturpiloten/boxferry/.github/workflows/shared-rust-semver.yml@d8af3a01f3daedf2e91145202655fa4a8458e028 # automation-v1 interface v1
     with:
       candidate_sha: ${{ inputs.expected_sha }}
-      automation_sha: 48b7e97fc5e1021969a94f73b21dfc6b6c523cd5
+      automation_sha: d8af3a01f3daedf2e91145202655fa4a8458e028
       policy_sha: ${{ inputs.expected_sha }}
       config_path: scripts/validation-policy.json
       package: docker-lens
@@ -106,10 +106,10 @@ jobs:
     name: Shared exact-candidate release policy
     if: always()
     needs: [candidate, native-conformance, dependencies, api]
-    uses: Strukturpiloten/boxferry/.github/workflows/shared-release-validation.yml@48b7e97fc5e1021969a94f73b21dfc6b6c523cd5 # automation-v1 interface v1
+    uses: Strukturpiloten/boxferry/.github/workflows/shared-release-validation.yml@d8af3a01f3daedf2e91145202655fa4a8458e028 # automation-v1 interface v1
     with:
       candidate_sha: ${{ inputs.expected_sha }}
-      automation_sha: 48b7e97fc5e1021969a94f73b21dfc6b6c523cd5
+      automation_sha: d8af3a01f3daedf2e91145202655fa4a8458e028
       policy_sha: ${{ inputs.expected_sha }}
       config_path: scripts/release-policy.json
       needs_json: ${{ toJSON(needs) }}
