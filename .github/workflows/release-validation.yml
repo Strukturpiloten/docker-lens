@@ -15,7 +15,7 @@ permissions:
 jobs:
   candidate:
     name: Exact candidate and complete scaffold gate
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     outputs:
       candidate_sha: ${{ inputs.expected_sha }}
@@ -41,7 +41,7 @@ jobs:
   native-conformance:
     name: Native Engine ${{ matrix.lane }}
     needs: candidate
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 35
     outputs:
       candidate_sha: ${{ inputs.expected_sha }}
@@ -119,7 +119,7 @@ jobs:
     if: always()
     needs:
       [candidate, native-conformance, dependencies, api, shared-release-gate]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
       - name: Fail on skipped, cancelled, or failed validation
