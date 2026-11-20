@@ -14,14 +14,14 @@ class AgentConfigurationTests(unittest.TestCase):
         self.assertEqual(config["model_reasoning_effort"], "xhigh")
         self.assertTrue(config["agents"]["enabled"])
         self.assertEqual(config["agents"]["max_concurrent_threads_per_session"], 8)
-        self.assertEqual(config["agents"]["default_subagent_model"], "gpt-6.1-sol")
+        self.assertEqual(config["agents"]["default_subagent_model"], "gpt-6.2-sol")
         self.assertEqual(config["agents"]["default_subagent_reasoning_effort"], "medium")
 
     def test_explicit_roles_and_permissions(self) -> None:
         for role, model, effort, sandbox in (
-            ("implementation-worker", "gpt-6.1-sol", "high", "workspace-write"),
-            ("specification-researcher", "gpt-6.1-sol", "high", "read-only"),
-            ("reviewer", "gpt-6.1-sol", "high", "read-only"),
+            ("implementation-worker", "gpt-6.2-sol", "high", "workspace-write"),
+            ("specification-researcher", "gpt-6.2-sol", "high", "read-only"),
+            ("reviewer", "gpt-6.2-sol", "high", "read-only"),
             ("presentation-worker", "gpt-6.1-terra", "medium", "workspace-write"),
             ("verifier", "gpt-6-luna", "high", "workspace-write"),
         ):
@@ -75,15 +75,14 @@ class AgentConfigurationTests(unittest.TestCase):
         flattened = " ".join(instructions.split())
         for required in (
             "The primary manager always uses `gpt-6-sol` with `xhigh` reasoning",
-            "Default subagents use `gpt-6.1-sol` with `medium` reasoning",
+            "Default subagents use `gpt-6.2-sol` with `medium` reasoning",
             "Implementation, specification research, and independent review use "
-            "`gpt-6.1-sol` with `high` reasoning",
+            "`gpt-6.2-sol` with `high` reasoning",
             "check-only verification uses `gpt-6-luna` with `high` reasoning",
-            "Task-specific subagents may use `gpt-6.1-sol`, `gpt-6.1-terra`, or `gpt-6-luna` with "
+            "Task-specific subagents may use `gpt-6.2-sol`, `gpt-6.1-terra`, or `gpt-6-luna` with "
             "`medium`, `high`, or `xhigh` reasoning",
-            "Use `gpt-6-astra` only with `xhigh` reasoning for particularly "
-            "difficult architectural questions",
-            "reserve Astra at `xhigh` for particularly difficult architectural questions",
+            "Reserve `gpt-6.2-astra` for very hard tasks. "
+            "It supports `medium`, `high`, or `xhigh` reasoning",
             "Use up to eight concurrent subagents plus the primary manager "
             "(nine agents in total)",
             "subject to the session's actual runtime limit",

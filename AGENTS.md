@@ -86,14 +86,12 @@ already running agents.
 
 Model defaults belong in [`.codex/config.toml`](.codex/config.toml); task-specific models and
 reasoning belong in [`.codex/agents/`](.codex/agents/). The primary manager always uses
-`gpt-6-sol` with `xhigh` reasoning. Default subagents use `gpt-6.1-sol` with `medium` reasoning.
-Implementation, specification research, and independent review use `gpt-6.1-sol` with `high`
+`gpt-6-sol` with `xhigh` reasoning. Default subagents use `gpt-6.2-sol` with `medium` reasoning.
+Implementation, specification research, and independent review use `gpt-6.2-sol` with `high`
 reasoning; check-only verification uses `gpt-6-luna` with `high`
-reasoning. Use Luna for bounded read-only exploration and Sol for difficult failure diagnosis;
-reserve Astra at `xhigh` for particularly difficult architectural questions.
-Task-specific subagents may use `gpt-6.1-sol`, `gpt-6.1-terra`, or `gpt-6-luna` with `medium`, `high`, or `xhigh`
-reasoning. Use `gpt-6-astra` only with `xhigh` reasoning for particularly difficult architectural
-questions.
+reasoning. Use Luna for bounded read-only exploration and Sol for difficult failure diagnosis.
+Task-specific subagents may use `gpt-6.2-sol`, `gpt-6.1-terra`, or `gpt-6-luna` with `medium`, `high`, or `xhigh`
+reasoning. Reserve `gpt-6.2-astra` for very hard tasks. It supports `medium`, `high`, or `xhigh` reasoning.
 These model settings do not expand the workspace scope or grant additional permissions.
 
 - Delegate bounded tasks when independent work can usefully proceed in parallel. Define the shared
