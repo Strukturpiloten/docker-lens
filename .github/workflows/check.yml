@@ -21,7 +21,7 @@ jobs:
   hosted-prerequisite-diagnostic:
     name: Hosted prerequisite diagnostic (not native validation)
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -44,7 +44,7 @@ jobs:
   validation-plan:
     name: Validation plan
     if: github.event_name != 'workflow_dispatch'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     outputs:
       plan: ${{ steps.plan.outputs.plan }}
@@ -146,7 +146,7 @@ jobs:
     name: Repository policy and Python automation
     needs: validation-plan
     if: needs.validation-plan.outputs.select_documentation == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - name: Check out immutable shared automation
@@ -222,7 +222,7 @@ jobs:
   native-conformance:
     name: Native Engine ${{ matrix.lane }}
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 35
     strategy:
       fail-fast: false
@@ -264,7 +264,7 @@ jobs:
         lockfile-release-age,
         native-conformance,
       ]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     outputs:
       candidate_sha: ${{ github.sha }}
