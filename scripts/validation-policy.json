@@ -103,20 +103,25 @@
           "check",
           "scripts/validation-plan.py",
           "scripts/setup-ci-tools.py",
-          "tests/test_shared_automation.py"
+          "scripts/release-candidate.py",
+          "tests/test_shared_automation.py",
+          "tests/test_release_publication.py"
         ],
         [
           "ruff",
           "format",
           "--check",
           "scripts/setup-ci-tools.py",
-          "tests/test_shared_automation.py"
+          "scripts/release-candidate.py",
+          "tests/test_shared_automation.py",
+          "tests/test_release_publication.py"
         ],
         [
           "ty",
           "check",
           "scripts/validation-plan.py",
-          "scripts/setup-ci-tools.py"
+          "scripts/setup-ci-tools.py",
+          "scripts/release-candidate.py"
         ],
         ["actionlint"],
         ["shellcheck", "scripts/check-all.sh"],

@@ -99,10 +99,11 @@ Engine behavior.
 
 Release validation explicitly selects published API against the canonical
 registry baseline and actual chosen manifest version. Its final required guard
-checks the distinct `published_api_candidate_sha` against the exact candidate;
-the generic shared release gate still checks ordinary candidate outputs. The
-publication policy remains disabled, and DockerLens's published `0.1.0` is not
-an initial release exception. See
+checks the distinct `published_api_candidate_sha` and the shared gate's
+`candidate_sha`. It exports that SHA after rechecking live main. The protected
+crate workflow consumes this final output and still needs qualified native
+evidence, the GitHub environment checks and the maintainer's approval.
+DockerLens's published `0.1.0` remains the baseline. See
 [ADR 0023](decisions/0023-development-and-published-api-checks.md) and
 [release guidance](releasing.md).
 

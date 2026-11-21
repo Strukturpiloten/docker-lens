@@ -185,9 +185,14 @@ jobs:
       - name: Check newly shared Python entry points
         working-directory: source
         run: |
-          uv run --locked --project ../_automation/automation ruff check scripts/validation-plan.py scripts/setup-ci-tools.py tests/test_shared_automation.py
-          uv run --locked --project ../_automation/automation ruff format --check scripts/setup-ci-tools.py tests/test_shared_automation.py
-          uv run --locked --project ../_automation/automation ty check scripts/validation-plan.py scripts/setup-ci-tools.py
+          uv run --locked --project ../_automation/automation ruff check \
+            scripts/validation-plan.py scripts/setup-ci-tools.py scripts/release-candidate.py \
+            tests/test_shared_automation.py tests/test_release_publication.py
+          uv run --locked --project ../_automation/automation ruff format --check \
+            scripts/setup-ci-tools.py scripts/release-candidate.py \
+            tests/test_shared_automation.py tests/test_release_publication.py
+          uv run --locked --project ../_automation/automation ty check \
+            scripts/validation-plan.py scripts/setup-ci-tools.py scripts/release-candidate.py
       - name: Run the repository-owned offline policy suite
         env:
           EVENT_NAME: ${{ github.event_name }}

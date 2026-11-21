@@ -1,0 +1,177 @@
+---
+name: Release DockerLens
+run-name: Release DockerLens ${{ inputs.expected_version }} at ${{ inputs.expected_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Full SHA of the exact current main candidate
+        required: true
+        type: string
+      expected_version:
+        description: Reviewed stable version in Cargo.toml and CHANGELOG.md
+        required: true
+        type: string
+      validation_only:
+        description: Validate the candidate without requesting publication approval
+        default: true
+        required: true
+        type: boolean
+
+permissions: {}
+
+concurrency:
+  group: docker-lens-release
+  cancel-in-progress: false
+
+jobs:
+  validation:
+    name: Complete exact-main release validation
+    permissions:
+      contents: read
+    uses: ./.github/workflows/release-validation.yml
+    with:
+      expected_sha: ${{ inputs.expected_sha }}
+
+  inventory:
+    name: Prepare exact version and notes without publication
+    needs: validation
+    if: needs.validation.result == 'success'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.inventory.outputs.version }}
+      notes_sha256: ${{ steps.identity.outputs.notes_sha256 }}
+    steps:
+      - name: Check out the validated candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.expected_sha }}
+          path: source
+          persist-credentials: false
+      - name: Record exact candidate, version and notes for review
+        id: identity
+        working-directory: source
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+          VALIDATED_SHA: ${{ needs.validation.outputs.candidate_sha }}
+        run: python3 scripts/release-candidate.py
+      - name: Check out immutable shared automation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Strukturpiloten/boxferry
+          # renovate: datasource=github-digest depName=Strukturpiloten/boxferry currentValue=automation-v1
+          ref: 0d79fa185035f7d52af991b83318fdb65f9706bf
+          path: _automation
+          persist-credentials: false
+      - name: Install locked shared tooling
+        uses: ./_automation/.github/actions/shared-python
+      - name: Verify the candidate crate inventory without registry credentials
+        id: inventory
+        uses: ./_automation/.github/actions/shared-crate-publish
+        with:
+          candidate-sha: ${{ inputs.expected_sha }}
+          automation-sha: 0d79fa185035f7d52af991b83318fdb65f9706bf
+          release-config: ${{ github.workspace }}/source/scripts/release-policy.json
+          package: docker-lens
+          validation-sha: ${{ needs.validation.outputs.candidate_sha }}
+          validation-result: ${{ needs.validation.result }}
+          validation-only: "true"
+
+  publish:
+    name: Publish docker-lens ${{ inputs.expected_version }}
+    needs: [validation, inventory]
+    if: >-
+      github.repository == 'Strukturpiloten/docker-lens' &&
+      github.ref == 'refs/heads/main' &&
+      github.run_attempt == 1 &&
+      inputs.validation_only == false &&
+      needs.validation.result == 'success' &&
+      needs.validation.outputs.candidate_sha == inputs.expected_sha &&
+      needs.inventory.result == 'success' &&
+      needs.inventory.outputs.version == inputs.expected_version &&
+      needs.inventory.outputs.notes_sha256 != ''
+    environment: release
+    runs-on: ubuntu-26.04
+    timeout-minutes: 35
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - name: Verify the release environment and the maintainer's approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "${GITHUB_RUN_ATTEMPT}" = 1
+          environment="repos/${GITHUB_REPOSITORY}/environments/release"
+          if ! environment_id="$(gh api "$environment" | jq -er '
+            select(.name == "release" and .can_admins_bypass == false
+              and .deployment_branch_policy.custom_branch_policies == true
+              and ([.protection_rules[] | select(.type == "required_reviewers")
+                    | .reviewers[] | [.type, .reviewer.login, .reviewer.id]]
+                   == [["User", "TheRealBecks", 1497405]]))
+            | .id | select(type == "number")
+          ')"; then
+            echo "The release environment must disable bypass and require TheRealBecks." >&2
+            exit 1
+          fi
+          if ! gh api "$environment/deployment-branch-policies" |
+            jq -e '.total_count == 1 and
+              ([.branch_policies[] | [.type, .name]] == [["branch", "main"]])' > /dev/null; then
+            echo "The release environment must allow only the main branch." >&2
+            exit 1
+          fi
+          if ! gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/approvals" |
+            jq -e --argjson id "$environment_id" '
+              type == "array" and
+              ([.[] | select(.environments | type == "array" and
+                any(.[]; .name == "release" and .id == $id))]
+                | length == 1
+                and .[0].state == "approved"
+                and .[0].user.login == "TheRealBecks"
+                and .[0].user.id == 1497405)
+            ' > /dev/null; then
+            echo "This run needs a recorded release approval from TheRealBecks." >&2
+            exit 1
+          fi
+      - name: Check out the validated candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.expected_sha }}
+          path: source
+          persist-credentials: false
+      - name: Check out immutable shared automation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Strukturpiloten/boxferry
+          # renovate: datasource=github-digest depName=Strukturpiloten/boxferry currentValue=automation-v1
+          ref: 0d79fa185035f7d52af991b83318fdb65f9706bf
+          path: _automation
+          persist-credentials: false
+      - name: Install locked shared tooling
+        uses: ./_automation/.github/actions/shared-python
+      - name: Recheck main, crate version and approved notes
+        working-directory: source
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+          VALIDATED_SHA: ${{ needs.validation.outputs.candidate_sha }}
+          PREPARED_VERSION: ${{ needs.inventory.outputs.version }}
+          PREPARED_NOTES_SHA256: ${{ needs.inventory.outputs.notes_sha256 }}
+        run: python3 scripts/release-candidate.py --after-approval
+      - name: Publish the approved crate through shared trusted publishing
+        uses: ./_automation/.github/actions/shared-crate-publish
+        with:
+          candidate-sha: ${{ inputs.expected_sha }}
+          automation-sha: 0d79fa185035f7d52af991b83318fdb65f9706bf
+          release-config: ${{ github.workspace }}/source/scripts/release-policy.json
+          package: docker-lens
+          validation-sha: ${{ needs.validation.outputs.candidate_sha }}
+          validation-result: ${{ needs.validation.result }}
+          validation-only: "false"
