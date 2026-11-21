@@ -338,6 +338,12 @@ class SharedAutomationTests(unittest.TestCase):
         self.assertIn("--needs-json", check)
         self.assertNotIn("initial_api_contract: true", check)
 
+    def test_listener_cache_ceiling_is_at_workflow_scope(self) -> None:
+        service = (ROOT / ".github/workflows/dependency-eligibility.yml").read_text()
+        # Recovery compares the trusted eligibility job block byte for byte.
+        declarations = re.findall(r"(?m)^[ \t]*cache-mode:[^\n]*$", service)
+        self.assertEqual(declarations, ["cache-mode: none"])
+
     def test_shared_source_upgrade_retry_owns_every_caller_pin(self) -> None:
         before = (ROOT / ".github/workflows/check.yml").read_bytes()
         current = json.loads((ROOT / ".github/automation.json").read_text())["revision"]

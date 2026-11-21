@@ -8,6 +8,8 @@ on: # zizmor: ignore[dangerous-triggers] -- Trusted listener delegates only immu
     workflows: [Check]
     types: [requested, completed]
 
+cache-mode: none
+
 permissions:
   contents: read
   actions: write
@@ -29,6 +31,6 @@ jobs:
       contents: read
       pull-requests: write
       statuses: write
-    uses: Strukturpiloten/boxferry/.github/workflows/shared-dependency-eligibility.yml@b31291a2eaf41dac300959b1098d47f18696108a # automation-v1 interface v1
+    uses: Strukturpiloten/boxferry/.github/workflows/shared-dependency-eligibility.yml@527ec4a4c6c2761256e903dfe69513211be87370 # automation-v1 interface v1
     with:
-      automation-sha: b31291a2eaf41dac300959b1098d47f18696108a
+      automation-sha: 527ec4a4c6c2761256e903dfe69513211be87370
