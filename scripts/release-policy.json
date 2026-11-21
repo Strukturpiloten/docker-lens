@@ -10,5 +10,5 @@
     "dependencies",
     "api"
   ],
-  "publication_enabled": false
+  "publication_enabled": true
 }

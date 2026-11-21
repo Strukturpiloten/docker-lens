@@ -72,7 +72,10 @@ class ScaffoldPolicyTests(unittest.TestCase):
             self.assertIn(action, {
                 "./_automation/.github/actions/shared-source",
                 "./_automation/.github/actions/shared-python",
+                "./_automation/.github/actions/shared-crate-publish",
             })
+        elif not nested and action == "./.github/workflows/release-validation.yml":
+            return
         elif not nested and action.startswith("Strukturpiloten/boxferry/.github/workflows/shared-"):
             self.assertRegex(action, r"^Strukturpiloten/boxferry/\.github/workflows/shared-[a-z-]+\.yml@[0-9a-f]{40} # automation-v1 interface v1$")
         else:

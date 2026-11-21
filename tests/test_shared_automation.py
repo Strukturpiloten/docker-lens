@@ -157,10 +157,13 @@ class SharedAutomationTests(unittest.TestCase):
                         1,
                         filename,
                     )
-                if "./_automation/.github/actions/shared-source" in step or re.search(
-                    r"(?m)^\s+automation-sha:", step
-                ):
-                    self.assertEqual(step.count("./_automation/.github/actions/shared-source"), 1)
+                composite = re.findall(
+                    r"(?m)^\s*(?:- )?uses: \./_automation/\.github/actions/"
+                    r"(?:shared-source|shared-crate-publish)\s*$",
+                    step,
+                )
+                if composite or re.search(r"(?m)^\s+automation-sha:", step):
+                    self.assertEqual(len(composite), 1, filename)
                     one_pin(step, "automation-sha", filename)
                 if "${AUTOMATION_SHA}" in step or re.search(r"(?m)^\s+AUTOMATION_SHA:", step):
                     one_pin(step, "AUTOMATION_SHA", filename)
@@ -229,6 +232,15 @@ class SharedAutomationTests(unittest.TestCase):
                 "dependency-eligibility.yml": service.replace(original, replacement, 1),
             }
             with self.subTest(service=replacement), self.assertRaises(AssertionError):
+                self.assert_shared_pin_identity(manifest, renovate, proposed)
+        release = workflows["release.yml"]
+        publish_pin = f"          automation-sha: {revision}\n"
+        for replacement in ("", publish_pin.replace(revision, other), publish_pin * 2):
+            proposed = {
+                **workflows,
+                "release.yml": release.replace(publish_pin, replacement, 1),
+            }
+            with self.subTest(publish_pin=replacement), self.assertRaises(AssertionError):
                 self.assert_shared_pin_identity(manifest, renovate, proposed)
         self.assert_shared_pin_identity(
             {**manifest, "revision": other},
@@ -593,9 +605,10 @@ class SharedAutomationTests(unittest.TestCase):
                 self.assertEqual(setup.main(["--engine", "podman", "--cargo-tools"]), 0)
             self.assertEqual(cargo.call_count, 2)
 
-    def test_release_is_validation_only_with_every_exact_native_prerequisite(self) -> None:
+    def test_release_validation_requires_every_exact_native_prerequisite(self) -> None:
         policy = load_release(ROOT / "scripts/release-policy.json", "Strukturpiloten/docker-lens")
-        self.assertFalse(policy["publication_enabled"])
+        self.assertTrue(policy["publication_enabled"])
+        self.assertNotIn("bootstrap_version", policy)
         needs: dict[str, Any] = {
             job: {"result": "success", "outputs": {"candidate_sha": SHA}}
             for job in policy["required_jobs"]
@@ -1009,6 +1022,30 @@ const validation=await validateConfig('repository',local);
 assert.deepEqual(validation.errors,[]);
 const {GlobalConfig}=require(base+'config/global.js');GlobalConfig.set({localDir:root});
 const {extractPackageFile:extractActions}=require(base+'modules/manager/github-actions/extract.js');
+const releaseFile='.github/workflows/release.yml';
+const releaseSource=fs.readFileSync(root+'/'+releaseFile,'utf8');
+const releasePin=JSON.parse(fs.readFileSync(root+'/.github/automation.json')).revision;
+const releaseActions=(await extractActions(releaseSource,releaseFile,{})).deps;
+const checkoutPins=releaseActions.filter(dep=>dep.depName==='actions/checkout');
+const runnerPins=releaseActions.filter(dep=>dep.datasource==='github-runners');
+const releaseRegex=effective.customManagers.flatMap(manager=>
+ manager.managerFilePatterns.some(p=>new RegExp(p.slice(1,-1)).test(releaseFile))?
+ (extract(releaseSource,releaseFile,manager)||{deps:[]}).deps:[]);
+assert.equal(checkoutPins.length,4);
+assert.equal(runnerPins.length,2);
+assert(runnerPins.every(dep=>dep.depName==='ubuntu' && dep.currentValue==='26.04'));
+assert.equal(releaseRegex.length,4);
+assert(releaseRegex.every(dep=>dep.depName==='Strukturpiloten/boxferry'
+ && dep.currentDigest===releasePin && dep.currentValue==='automation-v1'));
+assert(!releaseActions.some(dep=>(dep.packageName||dep.depName)==='Strukturpiloten/boxferry'));
+for(const pin of releaseRegex){
+ const policy=await applyPackageRules({...effective,...pin,manager:'regex',
+  packageName:pin.depName,packageFile:releaseFile,updateType:'digest'});
+ assert.equal(policy.groupName,'Shared BoxFerry automation');
+ assert.equal(policy.minimumReleaseAge,'0 days');
+ assert.equal(policy.automerge,true);
+ assert.equal(policy.dependencyDashboardApproval,false);
+}
 const actionFile='.github/actions/setup-node/action.yml';
 const actionSource=fs.readFileSync(root+'/'+actionFile,'utf8');
 const extracted=await extractActions(actionSource,actionFile,{});

@@ -8,6 +8,16 @@ on:
         description: Full commit SHA of the exact main candidate
         required: true
         type: string
+  workflow_call:
+    inputs:
+      expected_sha:
+        description: Full commit SHA of the exact main candidate
+        required: true
+        type: string
+    outputs:
+      candidate_sha:
+        description: Candidate verified after all release prerequisites and the final main recheck
+        value: ${{ jobs.release-gate.outputs.candidate_sha }}
 
 permissions:
   contents: read
@@ -20,6 +30,16 @@ jobs:
     outputs:
       candidate_sha: ${{ inputs.expected_sha }}
     steps:
+      - name: Require an exact main dispatch before checking out code
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_REPOSITORY" = Strukturpiloten/docker-lens
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$EXPECTED_SHA"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.expected_sha }}
@@ -121,6 +141,8 @@ jobs:
       [candidate, native-conformance, dependencies, api, shared-release-gate]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    outputs:
+      candidate_sha: ${{ steps.final.outputs.candidate_sha }}
     steps:
       - name: Fail on skipped, cancelled, or failed validation
         env:
@@ -146,10 +168,15 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Recheck current main after all lanes
+        id: final
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
+          SHARED_CANDIDATE_SHA: ${{ needs.shared-release-gate.outputs.candidate_sha }}
         run: |
+          set -euo pipefail
           [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$SHARED_CANDIDATE_SHA" = "$EXPECTED_SHA"
           git fetch --no-tags origin main
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           test "$(git rev-parse origin/main)" = "$EXPECTED_SHA"
+          printf 'candidate_sha=%s\n' "$EXPECTED_SHA" >> "$GITHUB_OUTPUT"

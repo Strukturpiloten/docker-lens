@@ -33,3 +33,4 @@ release. Historical evidence and earlier obligations are preserved.
 - [0022: Shared development automation](0022-shared-development-automation.md)
 
 - [0023: Development and published API checks](0023-development-and-published-api-checks.md)
+- [0024: Protected DockerLens crate publication](0024-protected-crate-publication.md)
