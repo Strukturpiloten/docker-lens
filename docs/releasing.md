@@ -43,36 +43,51 @@ substitute for the published baseline.
 
 ## Set up crates.io Trusted Publishing
 
-Before registry activation, configure the existing GitHub `release` environment
-to require TheRealBecks as its sole reviewer, disable administrator bypass, and
-allow only the protected main branch through its custom branch policies. Remove
-any tag policies. Trusted Publishing binds the workflow filename and environment,
-so these carrier settings must also protect against a workflow definition on a tag.
-The job checks the live settings and the maintainer's approval record on its first
-attempt.
+The existing GitHub `release` environment requires TheRealBecks, allows `main`
+and `v*` tags, and permits administrator bypass. This workflow admits only
+`refs/heads/main` and verifies the live reviewer and approval. Environment
+settings also apply to workflow definitions on other eligible refs. Trusted
+Publishing binds the workflow filename and environment. Before activation,
+verify an enforceable control that limits every definition eligible for this
+registration to the reviewed publishing policy, including those reachable
+through tag creation and administrator access. The main workflow's own ref
+check does not restrict other definitions.
 
-The registry owner then verifies or creates a [crates.io Trusted Publisher](https://crates.io/docs/trusted-publishing)
-for crate `docker-lens`, GitHub owner `Strukturpiloten`, repository `docker-lens`,
-workflow `release.yml`, environment `release`. The crate owner's settings hold
-that registration. The shared publisher uses OIDC after approval and requires
-no stored registry token.
+The [crate owner settings](https://crates.io/crates/docker-lens/settings) hold
+the [Trusted Publisher registration](https://crates.io/docs/trusted-publishing).
+A crate owner must verify or configure crate `docker-lens`, GitHub owner
+`Strukturpiloten`, repository `docker-lens`, workflow `release.yml` and
+environment `release`. A future enabling change would use the shared publisher
+and request OIDC only after the verified personal approval and final recheck.
 
 ## Request validation or maintainer approval
 
 From GitHub's **Release DockerLens** workflow, choose main and supply the full
 SHA and finalized package version. Keep `validation_only=true` for a dry run that
-also checks notes and the crate inventory. Crate publication requires a separate
-explicit dispatch with `validation_only=false` on the qualified candidate.
+also checks notes and the crate inventory. Publication is currently unavailable.
+The `validation_only=false` path checks approval evidence after the same
+candidate validation and terminates before registry authentication. Any hosted
+approval exercise needs its own authorization.
 
-In a publishing run, wait for full validation and for the publish job to request
-approval. Give the maintainer the run URL, version, exact commit and notes shown
-in the run summary. The maintainer reviews these values and uses **Review
-deployments** for the `release` environment. After approval the job checks the
-live main SHA, version and notes again before using Trusted Publishing. If main
-advances, an input differs, approval cannot be verified, or a required step fails,
-use a fresh reviewed run on the intended candidate.
+In an authorized approval exercise, wait for full validation and for the approval
+job to request review. Give the maintainer the run URL and the version, commit and notes from
+the run summary. In **Review deployments**, the maintainer selects `release`,
+copies the exact **Release approval comment** from the summary and chooses
+**Approve and deploy**.
 
-The shared publisher verifies registry visibility after upload. If the version
+GitHub's [review history](https://docs.github.com/en/rest/actions/workflow-runs#get-the-review-history-for-a-workflow-run)
+gives the reviewer, environment ID, state and comment for a run. The workflow
+requires one approved record for `release` from TheRealBecks with the exact
+first-attempt comment. The same schema carries no attempt or bypass marker,
+and GitHub accepts comments for both UI actions. Even a matching history row
+cannot demonstrate which action was taken from that schema alone.
+
+Before enabling registry access, establish an authenticated source that
+distinguishes a genuine approval from administrator bypass and binds it to the
+exact run, attempt and environment. The workflow currently rechecks live main,
+version and notes after reading the approval record, then refuses publication.
+
+Once enabled, the shared publisher verifies registry visibility after upload. If the version
 already exists, retain upload evidence or independent artifact provenance before
 associating it with this candidate. Git tags and GitHub release records are
 separate maintainer operations. Hand the published version and verified commit

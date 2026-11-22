@@ -29,6 +29,10 @@ PUBLISHER = (ROOT / ".github/workflows/release.yml").read_text()
 VALIDATION = (ROOT / ".github/workflows/release-validation.yml").read_text()
 NOTES = "\n\n- Verified release note.\n\n"
 DIGEST = hashlib.sha256(NOTES.encode()).hexdigest()
+APPROVAL = (
+    f"Approve docker-lens {VERSION} at {SHA} with notes SHA-256 {DIGEST} "
+    "for release run 123 attempt 1"
+)
 CONTEXT = {
     "GITHUB_REPOSITORY": "Strukturpiloten/docker-lens",
     "GITHUB_EVENT_NAME": "workflow_dispatch",
@@ -48,14 +52,14 @@ def step_script(source: str, name: str) -> str:
 
 
 class PublicationTests(unittest.TestCase):
-    def test_workflows_keep_validation_and_publication_permissions_separate(self):
-        inventory, publisher = PUBLISHER.split("  publish:\n", 1)
+    def test_workflow_keeps_credentials_unavailable_in_both_modes(self):
+        inventory, approval = PUBLISHER.split("  approval:\n", 1)
         self.assertIn("default: true", inventory)
         self.assertIn("uses: ./.github/workflows/release-validation.yml", inventory)
         self.assertIn('validation-only: "true"', inventory)
         for prohibited in ("environment:", "id-token:", "contents: write"):
             self.assertNotIn(prohibited, inventory)
-        self.assertIn("needs: [validation, inventory]", publisher)
+        self.assertIn("needs: [validation, inventory]", approval)
         for requirement in (
             "github.ref == 'refs/heads/main'",
             "github.run_attempt == 1",
@@ -65,28 +69,38 @@ class PublicationTests(unittest.TestCase):
             "needs.inventory.result == 'success'",
             "needs.inventory.outputs.version == inputs.expected_version",
             "needs.inventory.outputs.notes_sha256 != ''",
+            "needs.inventory.outputs.approval_comment != ''",
             "environment: release",
-            "id-token: write",
+            "actions: read",
         ):
-            self.assertIn(requirement, publisher)
-        self.assertNotIn("contents: write", publisher)
-        self.assertNotIn("bootstrap-token:", publisher)
+            self.assertIn(requirement, approval)
+        for prohibited in (
+            "id-token:",
+            "contents: write",
+            "bootstrap-token:",
+            'validation-only: "false"',
+        ):
+            self.assertNotIn(prohibited, PUBLISHER)
         self.assertEqual(
-            PUBLISHER.count("uses: ./_automation/.github/actions/shared-crate-publish"), 2
+            inventory.count("uses: ./_automation/.github/actions/shared-crate-publish"), 1
         )
-        self.assertEqual(publisher.count('validation-only: "false"'), 1)
+        self.assertNotIn("shared-crate-publish", approval)
         self.assertLess(
-            publisher.index("scripts/release-candidate.py --after-approval"),
-            publisher.index("uses: ./_automation/.github/actions/shared-crate-publish"),
+            approval.index("scripts/release-candidate.py --after-approval"),
+            approval.index("Refuse publication without proof of the approval method"),
         )
         self.assertLess(
-            publisher.index("Verify the release environment and the maintainer's approval"),
-            publisher.index("scripts/release-candidate.py --after-approval"),
+            approval.index("Verify the release environment and the recorded approval"),
+            approval.index("scripts/release-candidate.py --after-approval"),
         )
         for prohibited in ("id-token:", "environment:", "shared-crate-publish", "cargo publish"):
             self.assertNotIn(prohibited, VALIDATION)
         self.assertIn("workflow_dispatch:", VALIDATION)
         self.assertIn("value: ${{ jobs.release-gate.outputs.candidate_sha }}", VALIDATION)
+        refusal = step_script(PUBLISHER, "Refuse publication without proof of the approval method")
+        run = subprocess.run(["bash", "-c", refusal], capture_output=True, timeout=10, check=False)
+        self.assertEqual(run.returncode, 1)
+        self.assertIn(b"cannot distinguish a personal review from administrator bypass", run.stdout)
 
     def test_candidate_admission_refuses_non_main_even_at_the_expected_sha(self):
         guard = step_script(VALIDATION, "Require an exact main dispatch before checking out code")
@@ -158,15 +172,16 @@ class PublicationTests(unittest.TestCase):
                         self.assertEqual(output.read_text(), f"candidate_sha={SHA}\n")
 
     def test_personal_approval_is_required_even_if_the_environment_can_be_bypassed(self):
-        guard = step_script(
-            PUBLISHER, "Verify the release environment and the maintainer's approval"
-        )
-        reviewer = {"login": "TheRealBecks", "id": 1497405}
+        guard = step_script(PUBLISHER, "Verify the release environment and the recorded approval")
+        reviewer = {"login": "TheRealBecks", "id": 1497405, "type": "User"}
         environment = {
             "name": "release",
-            "id": 222,
-            "can_admins_bypass": False,
-            "deployment_branch_policy": {"custom_branch_policies": True},
+            "id": 22952362673,
+            "can_admins_bypass": True,
+            "deployment_branch_policy": {
+                "protected_branches": False,
+                "custom_branch_policies": True,
+            },
             "protection_rules": [
                 {
                     "type": "required_reviewers",
@@ -174,31 +189,57 @@ class PublicationTests(unittest.TestCase):
                 },
             ],
         }
-        branches = {"total_count": 1, "branch_policies": [{"type": "branch", "name": "main"}]}
+        branches = {
+            "total_count": 2,
+            "branch_policies": [
+                {"type": "branch", "name": "main"},
+                {"type": "tag", "name": "v*"},
+            ],
+        }
         approved = {
             "state": "approved",
             "user": reviewer,
-            "environments": [{"name": "release", "id": 222}],
+            "environments": [{"name": "release", "id": environment["id"]}],
+            "comment": APPROVAL,
         }
         failures = (
             {"APPROVALS": []},
             {"APPROVALS": {"row": approved}},
+            {"APPROVALS": [approved, {"state": "approved"}]},
+            {"APPROVALS": [approved, {"environments": [{}]}]},
+            {"APPROVALS": [approved, {"environments": [{"name": "other"}]}]},
+            {"APPROVALS": [approved, {"environments": [{"id": 333}]}]},
+            {"APPROVALS": [approved, {"environments": [{"name": "", "id": 333}]}]},
+            {"APPROVALS": [approved, {"environments": [{"name": "other", "id": "333"}]}]},
+            {"APPROVALS": [approved, {"environments": [{"name": "other", "id": 333.5}]}]},
             {"APPROVALS": [approved | {"state": "rejected"}]},
+            {"APPROVALS": [approved | {"state": "pending"}]},
+            {"APPROVALS": [approved | {"state": "bypassed"}]},
+            {"APPROVALS": [approved | {"comment": None}]},
+            {"APPROVALS": [approved | {"comment": "Bypass protection and start waiting jobs"}]},
+            {"APPROVALS": [approved | {"comment": APPROVAL.replace("run 123", "run 122")}]},
+            {"APPROVALS": [approved | {"comment": APPROVAL.replace(SHA, "b" * 40)}]},
+            {"APPROVALS": [approved | {"comment": APPROVAL.replace(DIGEST, "0" * 64)}]},
             {"APPROVALS": [approved | {"user": {"login": "someone-else", "id": 2}}]},
             {"APPROVALS": [approved | {"user": reviewer | {"id": 2}}]},
+            {"APPROVALS": [approved | {"user": reviewer | {"type": "Bot"}}]},
             {"APPROVALS": [approved | {"environments": [{"name": "release", "id": 333}]}]},
             {"APPROVALS": [approved, approved]},
-            {"ENVIRONMENT": environment | {"can_admins_bypass": True}},
-            {"ENVIRONMENT": environment | {"protection_rules": []}},
             {
-                "BRANCHES": {
-                    "total_count": 2,
-                    "branch_policies": [
-                        {"type": "branch", "name": "main"},
-                        {"type": "tag", "name": "v*"},
-                    ],
-                }
+                "APPROVALS": [
+                    approved,
+                    approved | {"environments": [{"name": "release", "id": 333}]},
+                ]
             },
+            {
+                "APPROVALS": [
+                    approved,
+                    approved
+                    | {"state": "rejected", "environments": [{"name": "Release", "id": 333}]},
+                ]
+            },
+            {"ENVIRONMENT": environment | {"protection_rules": []}},
+            {"BRANCHES": {"total_count": 1, "branch_policies": [{"type": "tag", "name": "main"}]}},
         )
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -219,6 +260,8 @@ class PublicationTests(unittest.TestCase):
                     {key: json.dumps(value) for key, value in failure.items()}
                     for failure in failures
                 ),
+                {"APPROVALS": json.dumps([approved, approved]) + "\n" + json.dumps([approved])},
+                {"APPROVAL_COMMENT": ""},
                 {"GITHUB_RUN_ATTEMPT": "2"},
                 {"API_EXIT": "1"},
             ):
@@ -231,6 +274,7 @@ class PublicationTests(unittest.TestCase):
                             "ENVIRONMENT": json.dumps(environment),
                             "BRANCHES": json.dumps(branches),
                             "APPROVALS": json.dumps([approved]),
+                            "APPROVAL_COMMENT": APPROVAL,
                             "API_EXIT": "0",
                         }
                         | change,
@@ -261,7 +305,10 @@ class PublicationTests(unittest.TestCase):
                 "PREPARED_NOTES_SHA256": DIGEST,
             }
             cases = (
-                ([], {}, {}, True),
+                ([], {"VALIDATION_ONLY": "true"}, {}, True),
+                ([], {"VALIDATION_ONLY": "false"}, {}, True),
+                ([], {"VALIDATION_ONLY": "false", "GITHUB_RUN_ATTEMPT": "2"}, {}, True),
+                ([], {"VALIDATION_ONLY": "false", "GITHUB_RUN_ID": "invalid"}, {}, False),
                 (["--after-approval"], {}, {}, True),
                 (["--after-approval"], {"PREPARED_NOTES_SHA256": ""}, {}, False),
                 (["--after-approval"], {"PREPARED_NOTES_SHA256": "0" * 64}, {}, False),
@@ -290,10 +337,24 @@ class PublicationTests(unittest.TestCase):
                         side_effect=lambda *key, responses=values | git_edit: responses[key],
                     ),
                 ):
+                    output.unlink(missing_ok=True)
+                    summary.unlink(missing_ok=True)
                     self.assertEqual(CANDIDATE.main(), 0 if success else 1)
-            self.assertEqual(output.read_text(), f"notes_sha256={DIGEST}\n")
-            self.assertIn(SHA, summary.read_text())
-            self.assertIn(NOTES.strip(), summary.read_text())
+                    if success and not args:
+                        show_approval = (
+                            env_edit.get("VALIDATION_ONLY") == "false"
+                            and env_edit.get("GITHUB_RUN_ATTEMPT", "1") == "1"
+                        )
+                        expected = f"notes_sha256={DIGEST}\n"
+                        if show_approval:
+                            expected += f"approval_comment={APPROVAL}\n"
+                        self.assertEqual(output.read_text(), expected)
+                        self.assertIn(SHA, summary.read_text())
+                        self.assertIn(NOTES.strip(), summary.read_text())
+                        self.assertEqual(APPROVAL in summary.read_text(), show_approval)
+                    else:
+                        self.assertFalse(output.exists())
+                        self.assertFalse(summary.exists())
 
     def test_requires_one_nonempty_final_notes_section(self):
         for changelog in (
