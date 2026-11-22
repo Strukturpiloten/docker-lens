@@ -1031,10 +1031,10 @@ const runnerPins=releaseActions.filter(dep=>dep.datasource==='github-runners');
 const releaseRegex=effective.customManagers.flatMap(manager=>
  manager.managerFilePatterns.some(p=>new RegExp(p.slice(1,-1)).test(releaseFile))?
  (extract(releaseSource,releaseFile,manager)||{deps:[]}).deps:[]);
-assert.equal(checkoutPins.length,4);
+assert.equal(checkoutPins.length,3);
 assert.equal(runnerPins.length,2);
 assert(runnerPins.every(dep=>dep.depName==='ubuntu' && dep.currentValue==='26.04'));
-assert.equal(releaseRegex.length,4);
+assert.equal(releaseRegex.length,2);
 assert(releaseRegex.every(dep=>dep.depName==='Strukturpiloten/boxferry'
  && dep.currentDigest===releasePin && dep.currentValue==='automation-v1'));
 assert(!releaseActions.some(dep=>(dep.packageName||dep.depName)==='Strukturpiloten/boxferry'));

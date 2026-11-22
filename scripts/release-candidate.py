@@ -82,12 +82,30 @@ def main() -> int:
             ):
                 raise ValueError("the approved version and notes must match this first attempt")
         else:
+            approval_comment = ""
+            if (
+                os.environ.get("VALIDATION_ONLY") == "false"
+                and os.environ["GITHUB_RUN_ATTEMPT"] == "1"
+            ):
+                run_id = os.environ["GITHUB_RUN_ID"]
+                if not re.fullmatch(r"[1-9][0-9]*", run_id):
+                    raise ValueError("the release approval requires a valid workflow run ID")
+                approval_comment = (
+                    f"Approve docker-lens {version} at {candidate} with notes SHA-256 {digest} "
+                    f"for release run {run_id} attempt 1"
+                )
             with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as summary:
                 summary.write(
                     f"## DockerLens {version}\n\nCommit `{candidate}`\n\n{notes.strip()}\n"
                 )
+                if approval_comment:
+                    summary.write(
+                        f"\nRelease approval comment:\n\n```text\n{approval_comment}\n```\n"
+                    )
             with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
                 output.write(f"notes_sha256={digest}\n")
+                if approval_comment:
+                    output.write(f"approval_comment={approval_comment}\n")
     except (OSError, KeyError, UnicodeError, tomllib.TOMLDecodeError, subprocess.SubprocessError):
         print("DockerLens release candidate evidence could not be read.", file=sys.stderr)
         return 1
