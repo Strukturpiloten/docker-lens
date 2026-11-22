@@ -1,4 +1,4 @@
-# ADR 0020: Retain observation-scoped cgroup and PIDs reports
+# ADR 0054: Retain observation-scoped cgroup and PIDs reports
 
 Status: accepted inert observation contract; native qualification and capability
 admission remain separate and unverified by this change.
@@ -29,5 +29,5 @@ Recovered pure controls cover independent availability/origin, lexical
 boundaries, malformed types, privacy and scope mismatch. They establish no
 native compatibility, destination authority or catalogue admission. No software
 pins, workflows, dependencies or Renovate ownership change. The separate
-[destination obligation](0021-rootless-pids-destination-obligation.md) does not
+[destination obligation](0055-rootless-pids-destination-obligation.md) does not
 change these reports' meaning.

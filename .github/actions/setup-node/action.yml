@@ -1,0 +1,25 @@
+---
+name: Canonical DockerLens Node prerequisite
+description: Select immutable producer CI metadata, install its exact Node, and verify before tool setup.
+inputs:
+  repository-root:
+    description: Checked-out candidate directory relative to the workspace.
+    default: .
+runs:
+  using: composite
+  steps:
+    - name: Select exact shared CI Node without requiring ambient Node
+      id: canonical-node
+      shell: bash
+      working-directory: ${{ inputs.repository-root }}
+      run: python3 scripts/validation-plan.py run --task node-toolchain
+    - name: Install selected Node
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: ${{ steps.canonical-node.outputs.node_version }}
+        check-latest: false
+        package-manager-cache: false
+    - name: Verify exact shared CI Node before provisioning
+      shell: bash
+      working-directory: ${{ inputs.repository-root }}
+      run: python3 scripts/validation-plan.py run --task node-preflight

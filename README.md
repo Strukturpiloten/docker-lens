@@ -207,3 +207,10 @@ Hosted outer-Docker upstream-rootless uses a maintained, per-job
 with exact owned-task label and removal checks before ordinary lane acceptance.
 Local hosts retain their existing policy; this prerequisite grants no cgroup/PIDs
 authority, product capability or release admission.
+
+## Shared development checks
+
+Common CI, dependency eligibility and local planner mechanics use an immutable
+BoxFerry development source. Product crates remain independent. Follow the
+[shared automation guide](docs/shared-automation.md) for staged adoption and
+rollback; native runtime qualification and release approval remain separate.

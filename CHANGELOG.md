@@ -2,6 +2,48 @@
 
 ## Unreleased
 
+## [0.2.0]
+
+### Consumer changes
+
+- Read bounded Docker Engine observations using explicitly selected container
+  IDs, names, prefixes or labels, network IDs, and volume names. The decoder
+  preserves request-bound identities, selected roots, runtime settings,
+  network membership and IPAM, and volume configuration. Engine observations
+  do not establish who authored the configuration.
+- Plan standalone container settings, multiple network attachments, and
+  external network and volume prerequisites as inert data. Review the
+  [complete artifact](docs/complete-artifact.md) to retain its prerequisite and
+  operation ordering. Request-only bytes omit the prerequisites.
+- Finite rootless PIDs settings can produce a typed unresolved destination
+  prerequisite. Use `RenderedArtifact::destination_pids_prerequisites()` and
+  assess against a caller-selected destination capture. Compatible reported
+  metadata leaves delegation and enforcement unverified. Use
+  `ResourceSupportObservation::missing(observation_id)` when no support was
+  observed. See the [destination contract](docs/destination-pids-prerequisite.md).
+- Rust 1.98.1 is the minimum, up from 1.85.0. The exact `serde_json`
+  requirement changes from `=1.0.149` to `=1.0.154`. If your manifest excludes
+  1.0.154, update its constraint and regenerate the lockfile.
+
+### Migrating Rust consumers from 0.1.0
+
+| Changed contract | Migration |
+| --- | --- |
+| Additional fields on public structs | Supply `Operation.action` with `Create` or `RequireExisting` as appropriate. Give `ContainerIntent` explicit `settings` and `networks`. Update hand-built `DecodedInventory`, `DecodedVersion`, `ContainerObservation`, `NetworkAttachment`, `NetworkObservation`, `VolumeObservation` and `MountObservation` literals for the new fields. Prefer decoded observations and retain missing facts when constructing test inputs. |
+| Enum numeric casts | Ordinals changed on `Capability`, `FieldPath`, `IntentError`, `PlanningError` and `TargetField`. Map named variants explicitly when assigning application values. Decode stored old ordinals using the 0.1.0 mapping before migrating data. |
+| Network resource shape | Construct and match `TargetResource::Network(NetworkIntent)`. Provide its role and `NetworkSource::Create` or `NetworkSource::External`. Review an external network as a destination prerequisite. |
+| Volume resource labels | Supply `labels` when constructing `TargetResource::Volume`, using an empty vector when none are authored. Match the field when you need it or use `..`. |
+| New variants on exhaustive enums | Update matches on `Selector`, `MountSource`, `Capability`, `TargetField`, `FieldPath`, `TargetResource`, `AcquisitionError`, `IntentError` and `PlanningError`. In particular, handle `ExternalVolume` as an existing-resource requirement and `Tmpfs` as a separate mount source. |
+| Healthcheck accessor | Replace `Healthcheck::command()` with `Healthcheck::test()`. Match `HealthTest::Exec`, `Shell` and `Disabled`; only the exec form is an argument vector. |
+| Container network field | Replace `ContainerIntent.network` with `networks`, a collection of `NetworkAttachmentIntent` values. Preserve each attachment's identity, aliases and requested addresses. |
+
+Native proof and failure-context sources cover configured lifecycle, identity,
+network, PIDs, nofile, device, memory, capability and logging cases. Source
+coverage does not qualify a candidate’s Engine lanes or a downstream
+application. The exact-candidate native and downstream gates remain required.
+
+## Development checkpoints before 0.2.0
+
 - Refine test-only PIDs matching failures through a closed 73-site observation
 and report finite nofile stderr-capture availability reasons. Preserve legacy marker
 acceptance, work/cleanup diagnostic separation, guards, budgets and successful proofs;

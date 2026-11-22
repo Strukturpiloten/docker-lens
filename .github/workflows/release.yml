@@ -1,0 +1,174 @@
+---
+name: Release DockerLens
+run-name: Release DockerLens ${{ inputs.expected_version }} at ${{ inputs.expected_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Full SHA of the exact current main candidate
+        required: true
+        type: string
+      expected_version:
+        description: Reviewed stable version in Cargo.toml and CHANGELOG.md
+        required: true
+        type: string
+      validation_only:
+        description: Validate the candidate without requesting publication approval
+        default: true
+        required: true
+        type: boolean
+
+permissions: {}
+
+concurrency:
+  group: docker-lens-release
+  cancel-in-progress: false
+
+jobs:
+  validation:
+    name: Complete exact-main release validation
+    permissions:
+      contents: read
+    uses: ./.github/workflows/release-validation.yml
+    with:
+      expected_sha: ${{ inputs.expected_sha }}
+
+  inventory:
+    name: Prepare exact version and notes without publication
+    needs: validation
+    if: needs.validation.result == 'success'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.inventory.outputs.version }}
+      notes_sha256: ${{ steps.identity.outputs.notes_sha256 }}
+      approval_comment: ${{ steps.identity.outputs.approval_comment }}
+    steps:
+      - name: Check out the validated candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.expected_sha }}
+          path: source
+          persist-credentials: false
+      - name: Record exact candidate, version and notes for review
+        id: identity
+        working-directory: source
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+          VALIDATED_SHA: ${{ needs.validation.outputs.candidate_sha }}
+          VALIDATION_ONLY: ${{ inputs.validation_only }}
+        run: python3 scripts/release-candidate.py
+      - name: Check out immutable shared automation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Strukturpiloten/boxferry
+          # renovate: datasource=github-digest depName=Strukturpiloten/boxferry currentValue=automation-v1
+          ref: b2e07985372159a7c522addbfba8e9b79200c332
+          path: _automation
+          persist-credentials: false
+      - name: Install locked shared tooling
+        uses: ./_automation/.github/actions/shared-python
+      - name: Verify the candidate crate inventory without registry credentials
+        id: inventory
+        uses: ./_automation/.github/actions/shared-crate-publish
+        with:
+          candidate-sha: ${{ inputs.expected_sha }}
+          automation-sha: b2e07985372159a7c522addbfba8e9b79200c332
+          release-config: ${{ github.workspace }}/source/scripts/release-policy.json
+          package: docker-lens
+          validation-sha: ${{ needs.validation.outputs.candidate_sha }}
+          validation-result: ${{ needs.validation.result }}
+          validation-only: "true"
+
+  approval:
+    name: Check release approval evidence for docker-lens ${{ inputs.expected_version }}
+    needs: [validation, inventory]
+    if: >-
+      github.repository == 'Strukturpiloten/docker-lens' &&
+      github.ref == 'refs/heads/main' &&
+      github.run_attempt == 1 &&
+      inputs.validation_only == false &&
+      needs.validation.result == 'success' &&
+      needs.validation.outputs.candidate_sha == inputs.expected_sha &&
+      needs.inventory.result == 'success' &&
+      needs.inventory.outputs.version == inputs.expected_version &&
+      needs.inventory.outputs.notes_sha256 != '' &&
+      needs.inventory.outputs.approval_comment != ''
+    environment: release
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Verify the release environment and the recorded approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPROVAL_COMMENT: ${{ needs.inventory.outputs.approval_comment }}
+        run: |
+          set -euo pipefail
+          test "${GITHUB_RUN_ATTEMPT}" = 1
+          test -n "${APPROVAL_COMMENT}"
+          environment="repos/${GITHUB_REPOSITORY}/environments/release"
+          if ! environment_id="$(gh api "$environment" | jq -ser '
+            select(length == 1) | .[0] |
+            select(.name == "release"
+              and .deployment_branch_policy.custom_branch_policies == true
+              and ([.protection_rules[] | select(.type == "required_reviewers")
+                    | .reviewers[] | [.type, .reviewer.login, .reviewer.id]]
+                   == [["User", "TheRealBecks", 1497405]]))
+            | .id | select(type == "number" and . > 0 and . == floor)
+          ')"; then
+            echo "The release environment must require TheRealBecks." >&2
+            exit 1
+          fi
+          if ! gh api "$environment/deployment-branch-policies" |
+            jq -se 'select(length == 1) | .[0].branch_policies | type == "array" and
+              any(.[]; .type == "branch" and .name == "main")' > /dev/null; then
+            echo "The release environment must allow the main branch." >&2
+            exit 1
+          fi
+          if ! gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/approvals" |
+            jq -se --argjson id "$environment_id" --arg comment "$APPROVAL_COMMENT" '
+              def identified_environment:
+                (.name | type == "string" and length > 0) and
+                (.id | type == "number" and . > 0 and . == floor);
+              select(length == 1) | .[0] | type == "array" and
+              all(.[]; .environments | type == "array" and length > 0 and
+                all(.[]; identified_environment)) and
+              ([.[] | select(any(.environments[];
+                (.name | ascii_downcase) == "release" or .id == $id))]
+                | length == 1
+                and ([.[0].environments[] | [.name, .id]] == [["release", $id]])
+                and .[0].state == "approved"
+                and .[0].user.type == "User"
+                and .[0].user.login == "TheRealBecks"
+                and .[0].user.id == 1497405
+                and .[0].comment == $comment)
+            ' > /dev/null; then
+            echo "This attempt needs an exact personal release approval from TheRealBecks." >&2
+            exit 1
+          fi
+      - name: Check out the validated candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.expected_sha }}
+          path: source
+          persist-credentials: false
+      - name: Recheck main, crate version and approved notes
+        working-directory: source
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+          VALIDATED_SHA: ${{ needs.validation.outputs.candidate_sha }}
+          PREPARED_VERSION: ${{ needs.inventory.outputs.version }}
+          PREPARED_NOTES_SHA256: ${{ needs.inventory.outputs.notes_sha256 }}
+        run: python3 scripts/release-candidate.py --after-approval
+      - name: Refuse publication without proof of the approval method
+        run: |
+          echo "::error::Publication is unavailable. GitHub review history cannot distinguish a personal review from administrator bypass."
+          exit 1

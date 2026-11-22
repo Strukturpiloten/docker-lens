@@ -2,6 +2,7 @@
 
 import contextlib
 import importlib.util
+import json
 import os
 from pathlib import Path
 import signal
@@ -331,8 +332,13 @@ class NativeUnixHttpTests(unittest.TestCase):
         self.assertEqual((child.returncode, error), (7, b"native-unix-http-v1:private-output\n"))
 
     def test_canonical_gate_discovers_independent_standalone_transport_controls(self):
-        gate = (ROOT / "scripts/check-all.sh").read_text()
-        self.assertIn("python3 -m unittest discover -s tests -v", gate)
+        gate = (ROOT / "scripts/check-all.sh").read_text().splitlines()
+        self.assertIn("python3 scripts/validation-plan.py run --task documentation", gate)
+        policy = json.loads((ROOT / "scripts/validation-policy.json").read_text())
+        self.assertEqual(policy["tasks"]["documentation"]["commands"], [
+            ["python3", "-m", "unittest", "discover", "-s", "tests", "-v"],
+            ["git", "diff", "--check"],
+        ])
         source = SCRIPT.read_text()
         self.assertNotIn("subprocess", source)
         import ast

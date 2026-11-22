@@ -60,5 +60,5 @@ state or readiness. Publicly assembled snapshots remain caller assertions.
 Errors are closed and value-free. Pure controls and test-local capability
 records are not native evidence or catalogue grants.
 
-See [ADR 0020](decisions/0020-observation-scoped-cgroup-reports.md) and
-[ADR 0021](decisions/0021-rootless-pids-destination-obligation.md).
+See [ADR 0054](decisions/0054-observation-scoped-cgroup-reports.md) and
+[ADR 0055](decisions/0055-rootless-pids-destination-obligation.md).

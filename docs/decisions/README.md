@@ -85,8 +85,11 @@ barrier is superseded while its historical evidence keeps its original status.
 - [0017: External-network internal expectation](0017-external-network-internal-expectation.md)
 - [0018: Reviewed external-network cohort](0018-reviewed-external-network-cohort.md)
 - [0019: Reviewed configured stop-signal cohort](0019-reviewed-stop-signal-cohort.md)
-- [0020: Observation-scoped cgroup and PIDs reports](0020-observation-scoped-cgroup-reports.md)
-- [0021: Unresolved rootless PIDs destination obligation](0021-rootless-pids-destination-obligation.md)
+- [0020: Seed trusted shared validation policy](0020-trusted-shared-validation-policy.md)
+- [0021: Seed the trusted shared reader](0021-shared-automation-bootstrap.md)
+- [0022: Shared development automation](0022-shared-development-automation.md)
+- [0023: Development and published API checks](0023-development-and-published-api-checks.md)
+- [0024: Protected DockerLens crate publication](0024-protected-crate-publication.md)
 - [0036: Guarded CommandClear raw-source projection](0036-command-clear-native-source-projection.md)
 - [0037: Reviewed CommandClear cohort](0037-reviewed-command-clear-cohort.md)
 - [0038: Maintained profile for the exact Box consumer](0038-maintained-profile-for-box-consumer.md)
@@ -96,6 +99,8 @@ barrier is superseded while its historical evidence keeps its original status.
 - [0042: Finite sudo monitor UID shape](0042-sudo-monitor-uid-shape.md)
 - [0043: Prepare thread-aware PIDs source coverage](0043-thread-aware-pids-source-contract.md)
 - [0044: Typed PIDs source and private proof v2](0044-typed-pids-source-and-proof-v2.md)
+- [0054: Observation-scoped cgroup and PIDs reports](0054-observation-scoped-cgroup-reports.md)
+- [0055: Unresolved rootless PIDs destination obligation](0055-rootless-pids-destination-obligation.md)
 
 ADR 0043 prepares pure topology contracts and controls only. It does not replace
 current collector guards, emit proof v2, establish physical budget fit, or qualify
@@ -107,14 +112,15 @@ to the test-only maintained profile helper; native contexts and receipts retain
 their existing contract. Trusted source/admission, Box lifecycle/evidence wiring
 and fresh exact-candidate qualification remain separate obligations.
 
-Numbers 0022–0035 are reserved for preserved unpublished f406cb22 decisions,
-including 0035 Docker gated-entry custody; reservation adopts none of them.
+Numbers 0025–0035 remain reserved for preserved unpublished f406cb22 decisions,
+including 0035 Docker gated-entry custody. The shared automation and publication
+decisions use 0020–0024. The reservation adopts none of the unpublished decisions.
 ADR 0036 versions only the current command-clear raw-source singleton. ADR 0037
 supersedes only ADR 0019's active selection, retaining its complete baseline and
 adding only guarded CommandClear. EntrypointClear remains withheld. ADR 0012's
 consumer gates and fresh final-head qualification remain required.
 
-ADRs 0020/0021 recover inert observation and destination-prerequisite contracts.
+ADRs 0054/0055 recover inert observation and destination-prerequisite contracts.
 They do not admit PIDs capabilities or authenticate delegation/enforcement.
 Schema 4 is selected only for the new finite rootless obligation; legacy artifact
 and request representations retain their existing bytes otherwise.

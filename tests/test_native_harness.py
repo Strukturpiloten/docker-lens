@@ -2068,8 +2068,25 @@ esac
                            "&& [ \"$1\" = -c ]; then "
                            "echo private-canary; exit 87; fi\n"
                            f'exec "{sys.executable}" "$@"\n')
+                # Keep the watchdog interval in its own shell. An external
+                # sleeper would retain the captured pipes after that shell exits.
+                # The private FIFO carries no data and read holds both ends.
+                os.mkfifo(state / "watchdog-clock", 0o600)
+                watchdog_fixture = root / "watchdog-clock.sh"
+                watchdog_fixture.write_text("""sleep() {
+  if [[ ${FUNCNAME[1]:-} == watchdog && $# == 1 && $1 == 5 ]]; then
+    local unused status=0
+    read -r -t "$1" unused <> "$FAKE_NATIVE_STATE/watchdog-clock" || status=$?
+    # Bash reports this timeout as 128 + SIGALRM.
+    [[ $status == 142 ]]
+  else
+    command sleep "$@"
+  fi
+}
+""", encoding="utf-8")
                 # This fake Podman fixture is local, not a native dispatch job.
                 env = {
+                    "BASH_ENV": str(watchdog_fixture),
                     "PATH": f"{bin_dir}:{os.environ['PATH']}",
                     "FAKE_NATIVE_STATE": str(state),
                     "FAKE_NATIVE_FAULT": fault,

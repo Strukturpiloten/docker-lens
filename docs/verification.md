@@ -367,6 +367,17 @@ The scaffold policy tests check alignment and MSRV failure propagation through
 the shared local, PR/main, native-dispatch, and release offline gate. Earlier
 verification records below retain the Rust versions used at those checkpoints.
 
+## Shared development automation
+
+[ADR 0022](decisions/0022-shared-development-automation.md) activates the
+[staged shared mechanics](shared-automation.md) after ADR 0020's trusted policy
+and the separate manifest/service seed. PR/queue selection reads the trusted
+base; unknown and policy changes remain complete. The single Required CI gate
+rejects unexpected skips and preserves offline-only PRs and mandatory native main
+lanes. Main-only prerequisite diagnostics and exact-reviewed native dispatch
+retain their existing boundaries. Shared tooling does not qualify the pending
+Docker #127 hosted-backend rollout or expand product compatibility.
+
 ## Explicit hosted outer Docker backend
 
 The [canonical test-only outer runtime](native-outer-runtime.md) keeps local default

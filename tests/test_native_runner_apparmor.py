@@ -7,6 +7,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import signal
 import subprocess
@@ -218,30 +219,70 @@ def private_run(*, box=False):
 
 
 class AdmissionTests(unittest.TestCase):
+    def workflow_job(self, workflow, name):
+        match = re.search(rf"(?ms)^  {re.escape(name)}:\n(.*?)(?=^  \S|\Z)", workflow)
+        self.assertIsNotNone(match, f"missing workflow job {name}")
+        return match[1]
+
+    def assert_native_upload_requires_success(self, native):
+        steps = re.split(r"(?m)^      - ", native)[1:]
+        uploads = [step for step in steps if re.search(r"(?m)^(?: {8})?uses: actions/upload-artifact@", step)]
+        self.assertEqual(len(uploads), 1)
+        upload, = uploads
+        self.assertIn("if-no-files-found: error", upload)
+        self.assertNotRegex(
+            upload, r"""(?m)^(?: {8})?(?:if|'if'|"if")[ \t]*:""",
+            "native artifact upload must retain implicit success()"
+        )
+
     def test_existing_workflow_consumers_keep_admission_and_success_only_artifacts(self):
-        for name in ("check", "native-validation", "release-validation"):
-            workflow = (ROOT / f".github/workflows/{name}.yml").read_text()
-            native = workflow.split("  native-conformance:\n", 1)[1].split("  native-gate:\n", 1)[0]
-            native = native.split("\n  check-gate:", 1)[0].split("\n  release-gate:", 1)[0]
-            self.assertIn("DOCKERLENS_OUTER_ENGINE: docker", native)
-            self.assertIn("DOCKERLENS_NATIVE_CANDIDATE_SHA:", native)
-            self.assertIn("./scripts/native-conformance.sh", native)
-            self.assertIn("if-no-files-found: error", native)
-            self.assertNotIn("continue-on-error", native)
-            self.assertNotIn("if: always()", native.split("actions/upload-artifact", 1)[1])
-            self.assertIn('test "$NATIVE_RESULT" = success', workflow)
-            if name == "check":
-                self.assertIn("if: github.event_name == 'push' && github.ref == 'refs/heads/main'", native)
-                self.assertIn("${{ github.sha }}", native)
-            elif name == "native-validation":
-                self.assertLess(native.index("ref: main"), native.index("scripts/native-dispatch-admission.py"))
-                self.assertLess(native.index("scripts/native-dispatch-admission.py"),
-                                native.index("ref: ${{ inputs.expected_sha }}"))
-                self.assertEqual(workflow.count("run: python3 scripts/native-dispatch-admission.py"), 3)
-            else:
-                self.assertNotIn("workflow_call:", workflow)
-                self.assertIn('test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"', native)
-                self.assertIn('test "$(git rev-parse origin/main)" = "$EXPECTED_SHA"', native)
+        for name, gate in (("check", "check-gate"), ("native-validation", "native-gate"),
+                           ("release-validation", "release-gate")):
+            with self.subTest(workflow=name):
+                workflow = (ROOT / f".github/workflows/{name}.yml").read_text()
+                native = self.workflow_job(workflow, "native-conformance")
+                steps = re.split(r"(?m)^      - ", native)[1:]
+                launch, = [step for step in steps if "run: ./scripts/native-conformance.sh" in step]
+                self.assertIn("DOCKERLENS_OUTER_ENGINE: docker", launch)
+                self.assertIn("DOCKERLENS_NATIVE_CANDIDATE_SHA:", launch)
+                self.assertNotIn("continue-on-error", native)
+                self.assert_native_upload_requires_success(native)
+                aggregate = self.workflow_job(workflow, gate)
+                self.assertIn("if: always()", aggregate)
+                self.assertIn("NATIVE_RESULT: ${{ needs.native-conformance.result }}", aggregate)
+                self.assertIn('test "$NATIVE_RESULT" = success', aggregate)
+                if name == "check":
+                    self.assertIn("if: github.event_name == 'push' && github.ref == 'refs/heads/main'", native)
+                    self.assertIn("${{ github.sha }}", launch)
+                elif name == "native-validation":
+                    self.assertLess(native.index("ref: main"), native.index("scripts/native-dispatch-admission.py"))
+                    self.assertLess(native.index("scripts/native-dispatch-admission.py"),
+                                    native.index("ref: ${{ inputs.expected_sha }}"))
+                    self.assertEqual(workflow.count("run: python3 scripts/native-dispatch-admission.py"), 3)
+                else:
+                    self.assertIn("  workflow_dispatch:\n", workflow)
+                    self.assertIn("  workflow_call:\n", workflow)
+                    self.assertIn('test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"', native)
+                    self.assertIn('test "$(git rev-parse origin/main)" = "$EXPECTED_SHA"', native)
+
+    def test_native_upload_condition_is_checked_on_either_side_of_uses(self):
+        workflow = (ROOT / ".github/workflows/release-validation.yml").read_text()
+        self.assertIn("if: always()", self.workflow_job(workflow, "shared-release-gate"))
+        native = self.workflow_job(workflow, "native-conformance")
+        self.assert_native_upload_requires_success(native)
+        uses = re.search(r"(?m)^      - uses: actions/upload-artifact@[^\n]+$", native)
+        self.assertIsNotNone(uses)
+        line = uses[0]
+        for condition in ("always()", "failure()", "${{ failure() }}"):
+            for before_uses in (False, True):
+                with self.subTest(condition=condition, before_uses=before_uses):
+                    if before_uses:
+                        replacement = f"      - if: {condition}\n        {line.removeprefix('      - ')}"
+                    else:
+                        replacement = f"{line}\n        if: {condition}"
+                    modified = native[:uses.start()] + replacement + native[uses.end():]
+                    with self.assertRaisesRegex(AssertionError, "native artifact upload must retain implicit success"):
+                        self.assert_native_upload_requires_success(modified)
 
     def test_receipt_schema_and_all_projected_values_are_closed(self):
         receipt = {"schema": 1, "prerequisite": "github_runner_userns_v1", "outcome": "incomplete",

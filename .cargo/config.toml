@@ -1,0 +1,7 @@
+# Shared automation task names; each alias keeps the existing locked Cargo flags.
+[alias]
+ci-check = "check --all-targets --locked"
+ci-clippy = "clippy --all-targets --locked -- -D warnings"
+ci-test = "test --all-targets --locked"
+ci-doctest = "test --doc --locked"
+ci-doc = "doc --no-deps --locked"

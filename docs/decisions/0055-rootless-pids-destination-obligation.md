@@ -1,4 +1,4 @@
-# ADR 0021: Keep finite rootless PIDs destination obligations unresolved
+# ADR 0055: Keep finite rootless PIDs destination obligations unresolved
 
 Status: accepted inert rendering and pure metadata-assessment contract; native
 qualification, destination delegation/enforcement and PIDs admission remain
@@ -41,4 +41,4 @@ grant, dependency or pin is added. Exact-candidate validation, independent
 review and downstream closed schema-4 support remain separate requirements.
 
 See the [contract reference](../destination-pids-prerequisite.md) and
-[observation decision](0020-observation-scoped-cgroup-reports.md).
+[observation decision](0054-observation-scoped-cgroup-reports.md).

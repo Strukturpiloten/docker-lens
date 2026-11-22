@@ -1,16 +1,23 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended"],
-  "enabledManagers": ["cargo", "github-actions", "custom.regex"],
+  "extends": [
+    "github>Strukturpiloten/boxferry//renovate-presets/common#b2e07985372159a7c522addbfba8e9b79200c332",
+    "github>Strukturpiloten/boxferry//renovate-presets/rust#b2e07985372159a7c522addbfba8e9b79200c332"
+  ],
+  "enabledManagers": [
+    "cargo",
+    "github-actions",
+    "rust-toolchain",
+    "custom.regex"
+  ],
+  "ignorePaths": [
+    "**/target/**",
+    "**/_automation/**",
+    "**/_policy/**",
+    "**/tests/**",
+    "docs/evidence/**"
+  ],
   "customManagers": [
-    {
-      "customType": "regex",
-      "managerFilePatterns": ["/^rust-toolchain\\.toml$/"],
-      "matchStrings": ["channel\\s*=\\s*\"(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\""],
-      "depNameTemplate": "rust-lang/rust",
-      "datasourceTemplate": "github-tags",
-      "versioningTemplate": "semver"
-    },
     {
       "customType": "regex",
       "managerFilePatterns": ["/^scripts\\/native-conformance\\.sh$/"],
@@ -21,10 +28,22 @@
   ],
   "packageRules": [
     {
-      "description": "Review native Engine image and fixture updates together with conformance evidence",
+      "description": [
+        "Keep the exact already-qualified native fixture tuples fixed during shared automation adoption. Docker #127 owns independently reviewed replacement qualification; nearby development/runtime images remain automatic."
+      ],
       "matchFileNames": ["scripts/native-conformance.sh"],
       "groupName": "DockerLens native conformance images",
-      "automerge": false
+      "pinDigests": true,
+      "matchManagers": ["custom.regex"],
+      "matchDatasources": ["docker"],
+      "matchPackageNames": [
+        "ghcr.io/strukturpiloten/docker-29-rootful",
+        "ghcr.io/strukturpiloten/docker-29-rootless",
+        "ghcr.io/strukturpiloten/docker-debian-11-rootful",
+        "ghcr.io/strukturpiloten/docker-debian-11-rootless",
+        "docker.io/library/busybox"
+      ],
+      "enabled": false
     }
   ]
 }

@@ -1,57 +1,29 @@
-# Manual crates.io releases
+# Release validation and publication
 
-The maintainer has already bootstrapped DockerLens 0.1.0 on crates.io. Subsequent
-publication remains manual. DockerLens has validation workflows, not a publisher,
-release-plz configuration, or automated GitHub release creation. An agent must
-stop before publication and hand over one coherent, verified library milestone.
-Source implementation, native qualification, merge and publication are separate
-states; none follows merely from a passing offline check.
+DockerLens uses the published 0.1.0 baseline under [ADR 0023](decisions/0023-development-and-published-api-checks.md). The DockerLens
+integration owner selects the public API, version and release notes. The maintainer
+approves crate publication in GitHub after the exact candidate has passed validation.
 
-## Readiness
+## Qualify the release candidate
 
-The expanded native-library milestone is tracked in
-[#3](https://github.com/Strukturpiloten/docker-lens/issues/3) and
-[#31](https://github.com/Strukturpiloten/docker-lens/issues/31). Finish its required
-implementation, independent review and consumer contracts before requesting a
-release. Image publication, passing offline checks and successful native runs on
-older PR heads do not satisfy this requirement. The original bootstrap
-prerequisites in #13, #22 and #23 are historical, not evidence for a later candidate.
+Require reviewed product and downstream evidence under [DockerLens #31](https://github.com/Strukturpiloten/docker-lens/issues/31)
+and [BoxFerry #343](https://github.com/Strukturpiloten/boxferry/issues/343). Preserve
+the reviewed target profiles, complete local and package gates, external-consumer
+checks and actual four-lane native evidence. Older runs do not qualify a new SHA.
+The [migration ledger](standalone-migration-ledger.md) retains the
+application-derived consumer obligations, including [ADR 0012](decisions/0012-candidate-volume-label-admission.md).
+A small consumer smoke test cannot establish application acceptance. Native
+qualification and publication approval remain separate.
 
-For the final current-main candidate require:
+Select a new stable crate version, update the manifest and lockfile together, and
+finalize accurate release notes in one matching changelog section, such as
+`## [X.Y.Z] - YYYY-MM-DD`. Merge and verify the exact final candidate on main.
 
-- The complete offline gate and package verification below.
-- Fresh successful exact-candidate `Release validation`, including all four
-  independent native lanes and its fail-closed final aggregate. A failed,
-  skipped or cancelled lane blocks publication.
-- Reviewed positive public target profiles with immutable native evidence, and
-  external-consumer checks of the typed observation and target APIs. Preserve
-  the application-derived consumer obligations in
-  [ADR 0012](decisions/0012-candidate-volume-label-admission.md) and the
-  [migration ledger](standalone-migration-ledger.md); a small smoke test cannot
-  replace those obligations or establish full BoxFerry application acceptance.
-- A package version intentionally selected by the maintainer, with an available
-  version on crates.io, and a coherent `CHANGELOG.md` describing public changes,
-  construction/schema migration requirements and remaining support limits.
-  Do not attempt to republish 0.1.0. A manifest declaration or failed registry
-  lookup does not establish version availability.
-
-Prepare a single manual handoff containing the exact merged commit, selected
-version, reviewed changelog, complete/package/native run evidence, downstream
-contract results and any remaining blockers. Continue independent work while a
-release is unnecessary. At the publication dependency, stop and let the maintainer
-release; do not create or merge a release PR, upload a crate, or deploy anything.
-
-## Validate the candidate
-
-Run from a clean Linux host checkout with the repository's development tools.
-Native suites default locally to isolated Podman-launched inner fixtures. Admitted
-hosted jobs explicitly verify/select outer Docker under the [canonical test-only
-runtime](native-outer-runtime.md), without using its host daemon as the test subject
-or mounting its socket into a guest. Fresh qualification remains required; the
-hosted workflow supplies the privileged Linux environment.
+Run from a clean Linux checkout with the repository's development tools.
+The isolated native harness uses local outer Podman and admitted hosted outer
+Docker, with [explicit backend selection](native-outer-runtime.md).
 
 ```sh
-cd /home/becks/Entwicklung/standard/github/strukturpiloten/docker-lens
 test -z "$(git status --porcelain)"
 git switch main
 git fetch origin main
@@ -64,60 +36,63 @@ cargo package --list --locked --package docker-lens
 cargo publish --dry-run --locked --package docker-lens
 
 gh workflow run release-validation.yml --ref main -f "expected_sha=$candidate_sha"
-gh run list --workflow release-validation.yml --event workflow_dispatch \
-  --commit "$candidate_sha" --json databaseId,headSha,status,conclusion,url
 ```
 
-Inspect the package listing: it contains product source, Cargo metadata, license,
-README and supporting documentation, not agent configuration, test orchestration,
-credentials or runtime artifacts. The manifest's include list is the boundary;
-Cargo may additionally generate its standard metadata files.
+Inspect the package listing for the declared boundaries in `Cargo.toml`. The
+standalone workflow validates the same complete gate used by the Release caller.
+It requires four independent native lanes, the published API baseline, shared
+dependencies and a final current-main recheck. Failed, absent, skipped, cancelled
+or mismatched prerequisites block the gate. Development API results cannot
+substitute for the published baseline.
 
-Select the newly dispatched run, confirm its SHA, and wait for its successful
-completion. Do not substitute an older run at a different revision or an offline
-PR gate. If `main` moves, a source edit is needed, or a required check fails,
-repeat validation for the new complete candidate before publishing.
+## Set up crates.io Trusted Publishing
 
-## Maintainer-only upload
+The existing GitHub `release` environment requires TheRealBecks, allows `main`
+and `v*` tags, and permits administrator bypass. This workflow admits only
+`refs/heads/main` and verifies the live reviewer and approval. Environment
+settings also apply to workflow definitions on other eligible refs. Trusted
+Publishing binds the workflow filename and environment. Before activation,
+verify an enforceable control that limits every definition eligible for this
+registration to the reviewed publishing policy, including those reachable
+through tag creation and administrator access. The main workflow's own ref
+check does not restrict other definitions.
 
-Use the intended crates.io account with permission to publish this existing
-crate. If initial local authentication is still needed, enter its token
-interactively with `cargo login`; never paste it into an issue, a command
-argument, shell history or a GitHub secret. Cargo stores it through the configured
-local credential provider. Existing authentication is not permission for an agent
-to publish.
+The [crate owner settings](https://crates.io/crates/docker-lens/settings) hold
+the [Trusted Publisher registration](https://crates.io/docs/trusted-publishing).
+A crate owner must verify or configure crate `docker-lens`, GitHub owner
+`Strukturpiloten`, repository `docker-lens`, workflow `release.yml` and
+environment `release`. A future enabling change would use the shared publisher
+and request OIDC only after the verified personal approval and final recheck.
 
-The following assumes `candidate_sha` still holds the validated commit from the
-previous section and the exact-candidate hosted release gate passed. Authentication
-does not grant permission to publish a different candidate.
+## Request validation or maintainer approval
 
-```sh
-test -z "$(git status --porcelain)"
-test "$(git rev-parse HEAD)" = "$candidate_sha"
-git fetch origin main
-test "$(git rev-parse origin/main)" = "$candidate_sha"
-cargo publish --dry-run --locked --package docker-lens
-cargo publish --locked --package docker-lens
-```
+From GitHub's **Release DockerLens** workflow, choose main and supply the full
+SHA and finalized package version. Keep `validation_only=true` for a dry run that
+also checks notes and the crate inventory. Publication is currently unavailable.
+The `validation_only=false` path checks approval evidence after the same
+candidate validation and terminates before registry authentication. Any hosted
+approval exercise needs its own authorization.
 
-The final command is the irreversible external publication step. Do not use
-`--allow-dirty` or `--no-verify`. A registry/API error blocks the upload; it is not
-evidence that a name is free. A successful Cargo upload must be followed by checking
-the published version and allowing the registry index to become available.
+In an authorized approval exercise, wait for full validation and for the approval
+job to request review. Give the maintainer the run URL and the version, commit and notes from
+the run summary. In **Review deployments**, the maintainer selects `release`,
+copies the exact **Release approval comment** from the summary and chooses
+**Approve and deploy**.
 
-An annotated Git tag and GitHub release can be created separately by the
-maintainer after verifying the published version and exact source commit. They
-are not created automatically by this procedure. Later trusted-publishing setup
-is a separate reviewed task, not a reason to put a local publishing token in GitHub.
+GitHub's [review history](https://docs.github.com/en/rest/actions/workflow-runs#get-the-review-history-for-a-workflow-run)
+gives the reviewer, environment ID, state and comment for a run. The workflow
+requires one approved record for `release` from TheRealBecks with the exact
+first-attempt comment. The same schema carries no attempt or bypass marker,
+and GitHub accepts comments for both UI actions. Even a matching history row
+cannot demonstrate which action was taken from that schema alone.
 
-Tell the BoxFerry integration task the published version and validated commit.
-BoxFerry #343 must consume that registry version and rerun package and integration
-checks; a temporary path dependency is not published-dependency verification.
+Before enabling registry access, establish an authenticated source that
+distinguishes a genuine approval from administrator bypass and binds it to the
+exact run, attempt and environment. The workflow currently rechecks live main,
+version and notes after reading the approval record, then refuses publication.
 
-## Maintenance ownership
-
-The package allowlist and publication documentation add no dependency version or
-operational pin. Renovate's existing Cargo manager continues to own declarations
-and `Cargo.lock`; no extraction path is moved and no extra manager is needed.
-Other workspace packages retain their existing protected release workflows. This
-manual release procedure does not change their shared verification responsibilities.
+Once enabled, the shared publisher verifies registry visibility after upload. If the version
+already exists, retain upload evidence or independent artifact provenance before
+associating it with this candidate. Git tags and GitHub release records are
+separate maintainer operations. Hand the published version and verified commit
+back to BoxFerry for registry-dependency verification.

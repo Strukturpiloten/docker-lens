@@ -9,6 +9,9 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
+WRAPPER_BYTES = (ROOT / "scripts/run-exact-native-test.sh").read_bytes()
+SETUP_REGISTRY_BYTES = (ROOT / "src/native_pids_setup_refusals.txt").read_bytes()
+MEASUREMENT_REGISTRY_BYTES = (ROOT / "src/native_pids_measurement_refusals.txt").read_bytes()
 CID = "a" * 64
 NONCE = "0123456789abcdef0123456789abcdef"
 TEST = "live_pids_limits_and_effects_match_engine"
@@ -70,7 +73,7 @@ sys.stdout.buffer.write(sys.stdin.buffer.read())
 
     def wrapper(self, output, status=0, listing=None, *, target="native_pids", test_name=TEST,
                 registry=None, registry_kind="file", capture_failure=None, terminate_output=True,
-                measurement_registry=None, measurement_registry_kind="file"):
+                measurement_registry=None, measurement_registry_kind="file", capture_trace=True):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "scripts").mkdir()
@@ -95,9 +98,9 @@ print(directory)
                 remove.write_text('#!/usr/bin/env bash\nprintf "PRIVATE_CAPTURE_PATH_CANARY\\n" >&2\nexit 1\n')
                 remove.chmod(0o700)
             wrapper = root / "scripts/run-exact-native-test.sh"
-            wrapper.write_bytes((ROOT / "scripts/run-exact-native-test.sh").read_bytes())
+            wrapper.write_bytes(WRAPPER_BYTES)
             registry_path = root / "src/native_pids_setup_refusals.txt"
-            registry_bytes = (ROOT / "src/native_pids_setup_refusals.txt").read_bytes() if registry is None else registry
+            registry_bytes = SETUP_REGISTRY_BYTES if registry is None else registry
             if registry_kind == "file":
                 registry_path.write_bytes(registry_bytes)
             elif registry_kind == "symlink":
@@ -108,7 +111,7 @@ print(directory)
             elif registry_kind != "missing":
                 raise AssertionError("unknown inert registry fixture")
             measurement_path = root / "src/native_pids_measurement_refusals.txt"
-            measurement_bytes = (ROOT / "src/native_pids_measurement_refusals.txt").read_bytes() if measurement_registry is None else measurement_registry
+            measurement_bytes = MEASUREMENT_REGISTRY_BYTES if measurement_registry is None else measurement_registry
             if measurement_registry_kind in ("file", "writable"):
                 measurement_path.write_bytes(measurement_bytes)
                 if measurement_registry_kind == "writable":
@@ -123,23 +126,36 @@ print(directory)
                 os.link(root / "foreign-measurement-registry", measurement_path)
             elif measurement_registry_kind != "missing":
                 raise AssertionError("unknown inert measurement registry fixture")
-            (root / "output").write_bytes(output.encode() if isinstance(output, str) else output)
+            output_bytes = output.encode() if isinstance(output, str) else output
+            (root / "output").write_bytes(output_bytes + (b"\n" if terminate_output else b""))
             selected = "native_health_metadata_tests::lifecycle::pids::" + test_name if target == "native_pids" else test_name
             listing = selected + ": test" if listing is None else listing
-            (root / "listing").write_bytes(listing.encode() if isinstance(listing, str) else listing)
+            listing_bytes = listing.encode() if isinstance(listing, str) else listing
+            (root / "listing").write_bytes(listing_bytes + b"\n")
             cargo = root / "cargo"
-            cargo.write_text('''#!/usr/bin/env python3
+            if capture_trace:
+                cargo.write_text('''#!/usr/bin/env python3
 import json, os, sys
 from pathlib import Path
 with open(os.environ["TRACE"], "a") as stream:
     stream.write(json.dumps({"argv":sys.argv[1:], "deadline":os.environ.get("NATIVE_PIDS_DEADLINE_EPOCH"),
                             "owner":os.environ.get("NATIVE_LIFECYCLE_CLEANUP_OWNER")}) + "\\n")
 if "--list" in sys.argv:
-    sys.stdout.buffer.write(Path(os.environ["LISTING_PATH"]).read_bytes() + b"\\n")
+    sys.stdout.buffer.write(Path(os.environ["LISTING_PATH"]).read_bytes())
 else:
-    sys.stdout.buffer.write(Path(os.environ["OUTPUT_PATH"]).read_bytes()
-                            + (b"\\n" if os.environ["TERMINATE_OUTPUT"] == "1" else b""))
+    sys.stdout.buffer.write(Path(os.environ["OUTPUT_PATH"]).read_bytes())
     sys.exit(int(os.environ["STATUS"]))
+''')
+            else:
+                # The two high-cardinality matrices inspect only launcher results.
+                cargo.write_text('''#!/bin/sh
+for arg do
+    if [ "$arg" = --list ]; then
+        exec cat -- "$LISTING_PATH"
+    fi
+done
+cat -- "$OUTPUT_PATH" || exit "$?"
+exit "$STATUS"
 ''')
             cargo.chmod(0o700)
             result = subprocess.run(["bash", str(wrapper), target, test_name],
@@ -147,7 +163,7 @@ else:
                 env={**os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"], "TRACE": str(root / "trace"),
                      "NATIVE_LIFECYCLE_CLEANUP_OWNER": "native_conformance_outer_v1", "LISTING_PATH": str(root / "listing"),
                      "OUTPUT_PATH": str(root / "output"), "STATUS": str(status), "TMPDIR": str(capture_parent),
-                     "CAPTURE_FAILURE": capture_failure or "", "TERMINATE_OUTPUT": "1" if terminate_output else "0"})
+                     "CAPTURE_FAILURE": capture_failure or ""})
             if capture_failure != "cleanup":
                 self.assertEqual(list(capture_parent.iterdir()), [], "private raw captures must be removed")
             else:
@@ -614,7 +630,8 @@ else:
             general, detail = SETUP_REFUSAL + code, IO_DETAIL + f" phase=bind kind={kind}"
             for site, tag in self.host_pairs():
                 bind = BIND_OBSERVATION + f" s={site} e={tag}"
-                result, _ = self.wrapper(bind + "\n" + detail + "\n" + general + "\n" + bind + "\n", status=101)
+                result, _ = self.wrapper(bind + "\n" + detail + "\n" + general + "\n" + bind + "\n",
+                                         status=101, capture_trace=False)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(b"(exit 101)", result.stderr)
                 self.assertEqual(result.stderr.count((bind + "\n").encode()), 1, (site, tag, result.stderr))
@@ -698,7 +715,7 @@ else:
         for record in records:
             for status, positive in ((0, ""), (0, "test result: ok. 1 passed; 0 failed\n"),
                     (101, "DOCKERLENS_NATIVE_CHECK: pids_evidence\n")):
-                result, _ = self.wrapper(record + positive, status=status)
+                result, _ = self.wrapper(record + positive, status=status, capture_trace=False)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertNotIn(BIND_OBSERVATION.encode(), result.stdout + result.stderr)
                 self.assertNotIn(b"PRIVATE_HOST_CANARY", result.stdout + result.stderr)
