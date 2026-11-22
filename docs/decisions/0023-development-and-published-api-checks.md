@@ -33,6 +33,39 @@ workflow adoption nor a major override or product version change conceals them.
 New development breaks still fail the canonical default compatibility allowance.
 Check's manual dispatch retains its separate diagnostic-only boundary.
 
+## Reviewed DockerLens 0.2.0 development intent
+
+The default remains minor. For the reviewed addition of `pids_limit`,
+`cgroup_driver` and `cgroup_version` to both resource-support structs, the
+development check can use major after retaining the exact minor failure and
+matching all six witnesses. The ordinary and major comparisons use the same
+canonical selector, package and held source. A different lint, additional
+witness, incomplete output or infrastructure failure cannot authorize major.
+
+An independently reviewed `scripts/development-api-intent.json` must first
+land in the trusted preparation commit. It records schema 1, the preparation
+commit's first parent as `previous_main`, the exact candidate version and
+`delta_sha256` over the complete raw Git diff from preparation to the approved
+product. Compute that diff with `git diff-tree -r --no-commit-id --raw
+--no-renames --no-abbrev -z`. Keep the record identical on both sides of the
+comparison. The record is valid only at its introducing baseline, for clean
+candidate source with the same automation manifest and the exact reviewed
+delta. The preparation PR itself uses minor.
+
+PR and queue check the record from the independently held event base against
+the synthetic tested tree. Main uses the validated push `before` for the
+single prepared transition. Local uses the existing canonical fork-base or
+clean-main first-parent selector. The advertised default tip must still be
+the preparation commit or the exact clean merged candidate. The hosted preflight reads its guard from
+that event baseline before allowing the existing reusable API job to use
+major. Candidate records and workflow inputs supply no development intent.
+The protected review must include changes to the caller workflow itself.
+
+This preparation adds no active intent record. Reconcile and independently
+review the final product delta before introducing it. Published Release
+continues to infer compatibility from the candidate manifest against its
+registry baseline and retains its separate exact-candidate approval policy.
+
 ## Adoption boundary
 
 The caller selects the admitted API producer through aligned manifest,
