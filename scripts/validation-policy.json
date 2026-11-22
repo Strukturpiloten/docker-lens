@@ -104,6 +104,8 @@
           "scripts/validation-plan.py",
           "scripts/setup-ci-tools.py",
           "scripts/release-candidate.py",
+          "scripts/development-api-intent.py",
+          "tests/test_development_api_intent.py",
           "tests/test_shared_automation.py",
           "tests/test_release_publication.py"
         ],
@@ -113,6 +115,8 @@
           "--check",
           "scripts/setup-ci-tools.py",
           "scripts/release-candidate.py",
+          "scripts/development-api-intent.py",
+          "tests/test_development_api_intent.py",
           "tests/test_shared_automation.py",
           "tests/test_release_publication.py"
         ],
@@ -121,7 +125,8 @@
           "check",
           "scripts/validation-plan.py",
           "scripts/setup-ci-tools.py",
-          "scripts/release-candidate.py"
+          "scripts/release-candidate.py",
+          "scripts/development-api-intent.py"
         ],
         ["actionlint"],
         ["shellcheck", "scripts/check-all.sh"],
@@ -145,24 +150,7 @@
     },
     "api-development": {
       "commands": [
-        [
-          "python",
-          "-m",
-          "boxferry_ci.api_baselines",
-          "run",
-          "--repository-root",
-          ".",
-          "--repository",
-          "Strukturpiloten/docker-lens",
-          "--api-purpose",
-          "development",
-          "--event",
-          "local",
-          "--package",
-          "docker-lens",
-          "--report-json",
-          "target/api-baseline-local.json"
-        ]
+        ["python", "scripts/development-api-intent.py"]
       ],
       "timeout_seconds": 1200
     },

@@ -817,33 +817,11 @@ if name == 'python3' and arguments[1:4] == ['run', '--task', 'api-development']:
                     api_exit == 0,
                 )
 
-    def test_api_leaf_is_one_canonical_development_call_without_identity_or_baseline_copy(
+    def test_api_leaf_uses_the_development_intent_guard_without_a_baseline_override(
         self,
     ) -> None:
         task = self.policy.tasks["api-development"]
-        self.assertEqual(
-            task.commands,
-            (
-                (
-                    "python",
-                    "-m",
-                    "boxferry_ci.api_baselines",
-                    "run",
-                    "--repository-root",
-                    ".",
-                    "--repository",
-                    "Strukturpiloten/docker-lens",
-                    "--api-purpose",
-                    "development",
-                    "--event",
-                    "local",
-                    "--package",
-                    "docker-lens",
-                    "--report-json",
-                    "target/api-baseline-local.json",
-                ),
-            ),
-        )
+        self.assertEqual(task.commands, (("python", "scripts/development-api-intent.py"),))
         self.assertEqual(task.timeout_seconds, 1200)
         for copied_policy in (
             "--automation-sha",
