@@ -203,17 +203,18 @@ Issue #172 retains caller context for an unsuccessful observation, separately fr
 
 - `DOCKERLENS_NATIVE_NOFILE_FAILURE` has caller_case, caller_role, caller_operation,
   observed_termination and code. Cases/roles/operations are finite owner enums, never resource
-  names, IDs, commands or private payloads. This is the caller's current boundary, not proof of
-  process/source entry or an internal cause. A pure validation failure has unknown termination.
+  names, IDs, commands or private payloads. These fields identify the caller's boundary.
+  Process entry and internal cause require separate evidence. A pure validation failure has
+  unknown termination.
   A failed Observe command may additionally retain `observer_site` from its already
   bounded stderr: `rootuid`, `rootgid`, `reportwait`, `reportfile`, `reportlink`,
   `workererror`, `workerpid`, `workerexe`, `workerargv`, `transcript`, `parentlimits`,
   or `workerlimits`. The fixed observer's failure-only EXIT trap reports the current
   existing check and preserves its original exit status. It adds no runtime command,
   file read, retry or deadline. The closed parser rejects unknown, duplicate, partial,
-  NUL or overflowed detail; absent detail never repairs failure. Only nonzero Observe
-  termination can carry this optional suffix, within the original 256-byte public
-  record bound. All ordinary stdout/stderr limits remain 65550/8192 bytes.
+  NUL or overflowed detail. Only nonzero Observe termination can carry a site or
+  capture reason. All records retain the 256-byte public bound and the ordinary
+  stdout/stderr limits remain 65550/8192 bytes.
 
 If no valid site is available, a completed failed Observe command may instead
 carry one closed `observer_capture` reason: `empty`, `oversize`, `nul`, `non_utf8`,
@@ -221,17 +222,31 @@ carry one closed `observer_capture` reason: `empty`, `oversize`, `nul`, `non_utf
 The legacy byte parser runs first, retaining a valid unique stderr marker even
 with non-UTF8 ordinary noise. Otherwise priority is oversize, NUL, unterminated,
 empty, duplicate marker-looking records, malformed sole marker, non-UTF8 noise,
-then marker absent. A marker only on stdout remains absent. Raw bytes, CLI text,
-paths and IDs are never projected. Successful commands, other operations,
-unknown termination and cleanup carry no observer detail. Actual nested
-HealthRun capture controls use an inert outer command; they do not establish
-native stderr routing, observer progress, effective limits or an OS failure.
+then marker absent. A marker only on stdout remains absent. On failed Observe,
+`observer_site` records a recognized line in bounded nested stderr. The fixture
+trap and an outer writer can produce the same line. `observer_entry=unknown`
+applies even when the capture contains a site because the nested stream cannot
+independently identify its writer or establish observer entry.
+Successful Observe proceeds through the existing exact witness validation and
+emits no failure record. Other operations and cleanup carry no observer detail.
+Raw bytes, CLI text, paths and IDs stay private. The native container has no
+mounted observer receipt channel, and the CLI capture retains no independent
+exec-start receipt. An unresolved live case needs the fixture owner's
+exec-start and observer-entry facts for the same owned invocation, plus its
+bounded stderr delivery disposition. The offline capture controls exercise
+the real harness with an inert outer command.
 
 - `DOCKERLENS_NATIVE_NOFILE_CLEANUP_REFUSAL` has reason ownership_guard, inner_unverified or
-  panic, plus first_observed_termination and code. An ownership-guard refusal enters no inner
-  cleanup and always has unknown termination. Other refusals may retain the first failed command
-  termination already observed during cleanup; this does not identify the refusal's cause,
-  authorize another mutation, or establish removal from a successful lookup.
+  panic, plus first_observed_termination and code. The separate
+  `first_unverified_phase` records the first unsuccessful existing inner check
+  or captured panic. It can name the initial name lookup, name or ID ownership,
+  DELETE, immediate post-delete absence by ID or name, or a later readback by ID
+  or name. Ownership-guard and outer panic records carry `unknown`. The
+  original cleanup sequence and both readback rounds still run under the
+  original limits. First command termination remains independent of this phase.
+  Both fields are failure evidence and established absence still requires the
+  original successful checks. The projector also accepts older records without
+  the new fields.
 
 An optional nofile-only observation stores an already-waited nonzero command exit (1..255),
 signal (1..64), or unknown; no stderr/exception text is retained. It is disabled for every other

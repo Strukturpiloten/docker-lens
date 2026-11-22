@@ -95,7 +95,7 @@ class NofileSourceTests(unittest.TestCase):
                        '"capability_admission":[],"catalogue_admission":false'):
             self.assertIn(needle, source)
         self.assertEqual(source.count('letcapture=acquire('), 1)
-        self.assertEqual(source.count('cleanup(&mutrun)'), 1)
+        self.assertEqual(source.count('cleanup_with_phase(&mutrun)'), 1)
         self.assertNotIn('fncleanup(', source)
         self.assertIn('terminal_cleanup(&mutrun,&owner,disposition)', source)
         self.assertLess(source.index('require_verified_result(result,disposition)'), source.index('target.publish_bounded(&proof,NOFILE_PROOF_MAX_BYTES)'))
@@ -114,7 +114,7 @@ class NofileSourceTests(unittest.TestCase):
         self.assertNotIn('inspect(', guard)
         self.assertNotIn('cleanup(', guard)
         self.assertIn('letattempted=run.attempted.clone();letids=run.ids.clone();', source)
-        guarded_call = 'nofile_cleanup_with(&attempted,&ids,||{entered.set(true);cleanup(&mutrun)})'
+        guarded_call = 'nofile_cleanup_with(&attempted,&ids,||{entered.set(true);let(disposition,phase)=cleanup_with_phase(&mutrun);first_unverified.set(phase);disposition})'
         self.assertEqual(source.count(guarded_call), 1)
         self.assertIn('fnnofile_unknown_create_id_never_invokes_inner_cleanup()', source)
 
@@ -143,7 +143,7 @@ class NofileSourceTests(unittest.TestCase):
 
     def test_guard_disposition_always_reaches_existing_authenticated_terminal_handler(self):
         source = self.compact()
-        guarded_call = source.index('nofile_cleanup_with(&attempted,&ids,||{entered.set(true);cleanup(&mutrun)})')
+        guarded_call = source.index('nofile_cleanup_with(&attempted,&ids,||{entered.set(true);let(disposition,phase)=cleanup_with_phase(&mutrun);first_unverified.set(phase);disposition})')
         terminal = source.index('terminal_cleanup(&mutrun,&owner,disposition)')
         verified = source.index('require_verified_result(result,disposition)')
         publish = source.index('target.publish_bounded(&proof,NOFILE_PROOF_MAX_BYTES)')

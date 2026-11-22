@@ -1473,7 +1473,7 @@ fi
             self.assertIn("DOCKERLENS_NATIVE_ERROR: selection", result.stderr)
             self.assertNotIn("private", result.stdout + result.stderr)
 
-    def test_vfs_launch_argument_is_isolated_to_debian_rootless(self) -> None:
+    def test_guest_daemon_launch_arguments_stay_lane_specific(self) -> None:
         source = (ROOT / "scripts/native-outer-runtime.sh").read_text()
         block = "start=(/usr/local/bin/start-dockerd" + source.split(
             "start=(/usr/local/bin/start-dockerd", 1
@@ -1486,7 +1486,7 @@ fi
         ):
             with self.subTest(lane=lane):
                 result = subprocess.run(
-                    ["bash", "-c", "set -euo pipefail\ndeclare -A context=([lane]=$1 [guest_dir]=/dockerlens-native)\nflags=()\n" + block
+                    ["bash", "-c", "set -euo pipefail\ndeclare -A context=([lane]=$1 [guest_dir]=/dockerlens-native [owner_key]=io.dockerlens.native-run)\nflags=()\n" + block
                      + '\nprintf \'%s\\n\' "${start[@]}"\n', "launch-args", lane],
                     capture_output=True, text=True, timeout=5, check=False,
                 )
@@ -1497,6 +1497,8 @@ fi
                 ]
                 if lane == "debian11-rootless":
                     expected.append("--storage-driver=vfs")
+                if lane == "upstream-rootful":
+                    expected.extend(("--feature", "time-namespaces=false"))
                 self.assertEqual(result.stdout.splitlines(), expected)
 
     def test_vfs_driver_evidence_is_positive_only_for_debian_rootless(self) -> None:

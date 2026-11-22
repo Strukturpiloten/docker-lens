@@ -69,6 +69,14 @@ into success. No extra read, retry, wait, timeout, budget or native qualificatio
 
 ## Actual in-process association
 
+The DockerLens upstream-rootful fixture starts its owned inner Docker daemon with
+`--feature time-namespaces=false`. Docker Engine 29.5 introduced private time
+namespaces by default on supported kernels and provides this daemon feature flag.
+The fixture needs one shared monotonic clock domain for the original owner,
+source reader and measured workers. The locator still checks the held namespace
+identities of the outer init, daemon, discovered leaders and accounted tasks.
+[Docker Engine 29.5 release notes](https://docs.docker.com/engine/release-notes/29/#2950).
+
 `scripts/native_pids_locator.py` composes `LocatorSource` with the existing
 `LinuxSource`. `RuntimeLocator` accepts retained **actual** outer `Process` and
 `Group` objects, a `HeldEndpoint`, an independently selected `DaemonExpectation`,

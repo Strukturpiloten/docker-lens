@@ -409,12 +409,51 @@ fn bind(run: &mut HealthRun, index: usize, id: &str) {
     run.ids[index] = Some(id.to_owned());
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CleanupPhase {
+    LookupName,
+    NameOwnership,
+    IdOwnership,
+    Delete,
+    PostDeleteIdAbsence,
+    PostDeleteNameAbsence,
+    ReadbackIdAbsence,
+    ReadbackNameAbsence,
+}
+impl CleanupPhase {
+    fn name(self) -> &'static str {
+        match self {
+            Self::LookupName => "lookup_name",
+            Self::NameOwnership => "name_ownership",
+            Self::IdOwnership => "id_ownership",
+            Self::Delete => "delete",
+            Self::PostDeleteIdAbsence => "post_delete_id_absence",
+            Self::PostDeleteNameAbsence => "post_delete_name_absence",
+            Self::ReadbackIdAbsence => "readback_id_absence",
+            Self::ReadbackNameAbsence => "readback_name_absence",
+        }
+    }
+}
+
 fn remove_container(run: &mut HealthRun, index: usize) -> bool {
+    remove_container_with_phase(run, index, &Cell::new(CleanupPhase::LookupName))
+}
+
+fn remove_container_with_phase(
+    run: &mut HealthRun,
+    index: usize,
+    phase: &Cell<CleanupPhase>,
+) -> bool {
+    phase.set(CleanupPhase::LookupName);
     let (status, value) = run.inspect(&run.names[index], true);
     if status == 404 {
         return run.ids[index].is_some();
     }
-    if status != 200 || !owned(run, &value, index, run.ids[index].as_deref()) {
+    if status != 200 {
+        return false;
+    }
+    phase.set(CleanupPhase::NameOwnership);
+    if !owned(run, &value, index, run.ids[index].as_deref()) {
         return false;
     }
     let id = value["Id"]
@@ -431,45 +470,76 @@ fn remove_container(run: &mut HealthRun, index: usize) -> bool {
         return false;
     }
     run.ids[index] = Some(id.clone());
+    phase.set(CleanupPhase::IdOwnership);
     let (status, immediate) = run.inspect(&id, true);
     if status != 200 || !owned(run, &immediate, index, Some(&id)) {
         return false;
     }
-    run.api(
-        "DELETE",
-        &format!("/v{}/containers/{id}?force=1", run.api),
-        None,
-        true,
-    )
-    .0 == 204
-        && run.inspect(&id, true).0 == 404
-        && run.inspect(&run.names[index], true).0 == 404
+    phase.set(CleanupPhase::Delete);
+    if run
+        .api(
+            "DELETE",
+            &format!("/v{}/containers/{id}?force=1", run.api),
+            None,
+            true,
+        )
+        .0
+        != 204
+    {
+        return false;
+    }
+    phase.set(CleanupPhase::PostDeleteIdAbsence);
+    if run.inspect(&id, true).0 != 404 {
+        return false;
+    }
+    phase.set(CleanupPhase::PostDeleteNameAbsence);
+    run.inspect(&run.names[index], true).0 == 404
 }
 
 fn cleanup(run: &mut HealthRun) -> CleanupDisposition {
+    cleanup_with_phase(run).0
+}
+
+fn cleanup_with_phase(run: &mut HealthRun) -> (CleanupDisposition, Option<CleanupPhase>) {
+    let phase = Cell::new(CleanupPhase::LookupName);
     let mut verified = true;
+    let mut first_unverified = None;
+    let mut record = |step_verified: bool| {
+        verified &= step_verified;
+        if !step_verified {
+            first_unverified.get_or_insert(phase.get());
+        }
+    };
     for index in 0..run.names.len() {
         if run.attempted[index] {
-            verified &= std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                remove_container(run, index)
-            }))
-            .unwrap_or(false);
+            record(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    remove_container_with_phase(run, index, &phase)
+                }))
+                .unwrap_or(false),
+            );
         }
     }
     for _ in 0..2 {
         for index in 0..run.names.len() {
             if run.attempted[index] {
-                verified &= std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    run.ids[index]
-                        .as_ref()
-                        .is_some_and(|id| run.inspect(id, true).0 == 404)
-                        && run.inspect(&run.names[index], true).0 == 404
-                }))
-                .unwrap_or(false);
+                record(
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        phase.set(CleanupPhase::ReadbackIdAbsence);
+                        run.ids[index].as_ref().is_some_and(|id| {
+                            if run.inspect(id, true).0 != 404 {
+                                return false;
+                            }
+                            phase.set(CleanupPhase::ReadbackNameAbsence);
+                            run.inspect(&run.names[index], true).0 == 404
+                        })
+                    }))
+                    .unwrap_or(false),
+                );
             }
         }
     }
-    cleanup_disposition(verified)
+    (cleanup_disposition(verified), first_unverified)
 }
 
 fn create(run: &mut HealthRun, index: usize) {

@@ -479,20 +479,45 @@ native_outer_create_daemon held'''
 
 
 class LifecycleControls(unittest.TestCase):
-    def create(self, engine, lane):
+    def create(self, engine, lane, owner="io.dockerlens.native-run", guest="/dockerlens-native"):
         body = '''native_outer_engine=$1
 native_outer_directory=/tmp/owned
 native_outer_script_dir=/mock
 exec 3>&1
 native_outer_command() { printf '%s\\n' "$@" >&3; }
 python3() { printf '%064d\\n' 0; }
-declare -A held=( [name]=owned [run]=run [owner_key]=io.dockerlens.native-run [network]=owned-net
- [volume]=owned-data [socket_dir]=/tmp/owned/socket [guest_dir]=/dockerlens-native [lane]="$2"
+declare -A held=( [name]=owned [run]=run [owner_key]="$3" [network]=owned-net
+ [volume]=owned-data [socket_dir]=/tmp/owned/socket [guest_dir]="$4" [lane]="$2"
  [image]="example.invalid/engine:1@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
  [log_path]=/tmp/owned/daemon.log )
 native_outer_create_daemon held
 '''
-        return shell(body, args=(engine, lane))
+        return shell(body, args=(engine, lane, owner, guest))
+
+    def test_only_dockerlens_upstream_rootful_uses_the_shared_pids_clock(self):
+        cases = (
+            ("upstream-rootful", "io.dockerlens.native-run", "/dockerlens-native", True),
+            ("upstream-rootless", "io.dockerlens.native-run", "/dockerlens-native", False),
+            ("debian11-rootful", "io.dockerlens.native-run", "/dockerlens-native", False),
+            ("debian11-rootless", "io.dockerlens.native-run", "/dockerlens-native", False),
+            ("upstream-rootful", "io.boxferry.docker-core-run", "/boxferry-core", False),
+            ("upstream-rootful", "io.boxferry.docker-core-run", "/dockerlens-native", False),
+            ("upstream-rootful", "io.dockerlens.native-run", "/boxferry-core", False),
+        )
+        for engine in ("podman", "docker"):
+            for lane, owner, guest, shared_clock in cases:
+                with self.subTest(engine=engine, lane=lane, owner=owner, guest=guest):
+                    result = self.create(engine, lane, owner, guest)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    arguments = result.stdout.splitlines()
+                    start = arguments.index("/usr/local/bin/start-dockerd")
+                    expected = ["--host=unix://" + guest + "/docker.sock"]
+                    if shared_clock:
+                        expected += ["--feature", "time-namespaces=false"]
+                    if lane == "debian11-rootless":
+                        expected.append("--storage-driver=vfs")
+                    self.assertEqual(arguments[start + 1:-1], expected)
+                    self.assertEqual(arguments[-1], "0" * 64)
 
     def test_both_backends_keep_four_inner_lanes_and_distinct_mount_logger_remove_semantics(self):
         for engine in ("podman", "docker"):

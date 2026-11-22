@@ -57,6 +57,13 @@ ORIGINAL27 = [
 
 
 class NofileWiringTests(unittest.TestCase):
+    @staticmethod
+    def cleanup_phase_source(include_steps=False):
+        source = (ROOT / "src/native_lifecycle_tests.rs").read_text()
+        start = source.index("#[derive(Clone, Copy, Debug, Eq, PartialEq)]\nenum CleanupPhase")
+        end = source.index("fn create(" if include_steps else "fn remove_container(", start)
+        return source[start:end]
+
     def test_actual_default_capture_libtest_preserves_marker_record_and_cleanup_order(self):
         # Execute the three production marker statements under ordinary capturing
         # libtest. Authored transcripts alone miss eprintln/direct-stderr reordering.
@@ -397,7 +404,8 @@ trap cleanup EXIT
             self.assertEqual(result.stderr, b"invalid private nofile proof\n")
 
 
-    def test_actual_observer_program_reports_only_fixed_failing_site_with_inert_commands(self):
+    @staticmethod
+    def run_observer_with_inert_commands(site):
         source = (ROOT / "src/native_nofile_tests.rs").read_text()
         program = source.split('const OBSERVE: &str = r#"', 1)[1].split('"#;', 1)[0]
         # All existing commands are inert shell functions; no host/guest procfs or runtime is read.
@@ -410,13 +418,15 @@ awk(){ if command test "$site" = "$FAIL_SITE";then return 1;fi;printf '2\n'; }
 cmp(){ command test "$FAIL_SITE" != workerargv; }
 cat(){ command test "$FAIL_SITE" != transcript; }
 '''
+        # Only the inert shim needs Bash. Dash rejects its `[` function name.
+        return subprocess.run(["bash", "-c", stubs + program, "PRIVATE_NOFILE_WIRING_CANARY", "inert-worker"],
+                              env={**os.environ, "FAIL_SITE": site}, capture_output=True, timeout=3, check=False)
+
+    def test_actual_observer_program_reports_only_fixed_failing_site_with_inert_commands(self):
         sites = ("rootuid", "rootgid", "reportwait", "reportfile", "reportlink", "workererror",
                  "workerpid", "workerexe", "workerargv", "transcript", "parentlimits", "workerlimits")
         for site in (*sites, "none"):
-            # Only the inert shim needs Bash: its `[` function name is rejected
-            # by Dash. Production PARENT/OBSERVE retain separate sh -n controls.
-            result = subprocess.run(["bash", "-c", stubs + program, "PRIVATE_NOFILE_WIRING_CANARY", "inert-worker"],
-                                    env={**os.environ, "FAIL_SITE": site}, capture_output=True, timeout=3, check=False)
+            result = self.run_observer_with_inert_commands(site)
             with self.subTest(site=site):
                 self.assertEqual(result.returncode, 0 if site == "none" else 1, result.stderr[:1024])
                 self.assertEqual(result.stderr, b"" if site == "none" else
@@ -446,12 +456,12 @@ cat(){ command test "$FAIL_SITE" != transcript; }
         let observation = run.nofile_command_observation.as_ref().unwrap();
         observation.observe_stderr(failed, record.as_bytes());
         let frozen = diagnostics.failure(&run).unwrap();
-        assert!(frozen.ends_with(&format!(" observed_termination=exit code=1 observer_site={}", site.name())));
+        assert!(frozen.ends_with(&format!(" observed_termination=exit code=1 observer_site={} observer_entry=unknown", site.name())));
         assert!(frozen.len() <= 256);
         observation.reset();
         assert!(observation.observer_capture.get().is_none());
         assert!(observation.first_failure.get().is_none());
-        assert!(!diagnostics.failure(&run).unwrap().contains("observer_site="));
+        assert!(diagnostics.failure(&run).unwrap().ends_with("observer_entry=unknown"));
         assert!(frozen.contains("observer_site="));
         observation.observe_stderr(std::process::ExitStatus::from_raw(0), record.as_bytes());
         assert!(observation.observer_capture.get().is_none());
@@ -489,7 +499,7 @@ cat(){ command test "$FAIL_SITE" != transcript; }
         definitions = health[begin:health.index("struct HealthRun {", begin)]
         definitions += nofile[nofile.index("const CASES:"):nofile.index("const REQUESTS:")]
         begin = nofile.index("#[derive(Clone, Copy, Debug, Eq, PartialEq)]\nenum NofileOperation")
-        definitions += nofile[begin:nofile.index("fn number(", begin)]
+        definitions += self.cleanup_phase_source() + nofile[begin:nofile.index("fn number(", begin)]
         functions = "\n".join(item(health, signature) for signature in
             ("fn required(", "fn stream(", "fn capture_room("))
         methods = "\n".join(item(health, signature) for signature in
@@ -521,13 +531,16 @@ fn main() {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run.docker(&["observe".to_owned()], false)));
     let observation = run.nofile_command_observation.as_ref().unwrap();
     assert_eq!(result.is_err(), std::env::var("EXPECT_FAILURE").unwrap() == "1");
+    if let Ok(output) = &result {
+        assert_eq!(*output, std::fs::read(std::env::var_os("EXPECTED_STDOUT").unwrap()).unwrap());
+    }
     let frozen_line = result.as_ref().err().and_then(|_| diagnostics.failure(&run));
     observation.reset();
     // A later cleanup capture cannot supply the work termination.
     observation.observe(std::os::unix::process::ExitStatusExt::from_raw(7 << 8));
     if let Some(line) = frozen_line { println!("{line}"); }
     if std::env::var("CLEANUP").unwrap() == "1" {
-        for reason in [NofileCleanupRefusal::InnerUnverified, NofileCleanupRefusal::Panic, NofileCleanupRefusal::OwnershipGuard] {
+        for reason in [NofileCleanupRefusal::InnerUnverified(Some(CleanupPhase::Delete)), NofileCleanupRefusal::Panic, NofileCleanupRefusal::OwnershipGuard] {
             println!("{}", reason.diagnostic(observation.first_failure.get()));
         }
     }
@@ -547,8 +560,12 @@ fn main() {
                 cwd=ROOT, capture_output=True, timeout=30, check=False)
             self.assertEqual(built.returncode, 0, built.stderr)
             marker = b"DOCKERLENS_NATIVE_NOFILE_OBSERVER: site=workerexe\n"
-            # Explicit independent expectations, including mixed-fault priority.
-            cases = [(b"", b"", "empty"), (marker, b"ordinary CLI error\n", "marker_absent"),
+            trap = self.run_observer_with_inert_commands("workerexe")
+            self.assertEqual((trap.returncode, trap.stdout, trap.stderr), (1, b"", marker))
+            # The fake outer only writes bytes. It can reproduce the real trap's
+            # stderr without ever starting the observer.
+            cases = [(b"", marker, "site"), (b"owned observer transcript\n", b"", "empty"),
+                (marker, b"ordinary CLI error\n", "marker_absent"),
                 (b"", marker + b"x" * 8193, "oversize"), (b"", marker + b"\0\n", "nul"),
                 (b"", b"\xff\n", "non_utf8"), (b"", marker + b"CLI tail", "unterminated"),
                 (b"", b"ordinary CLI error\n", "marker_absent"), (b"", marker * 2, "duplicate_marker"),
@@ -563,7 +580,10 @@ fn main() {
                     with self.subTest(expected=expected, status=status, operation=operation):
                         # Successful overflow still fails the original byte guard.
                         failed = status != 0 or len(stderr) > 8192 or len(stdout) > 65550
+                        expected_stdout = root / "expected-stdout"
+                        expected_stdout.write_bytes(stdout)
                         env = {**os.environ, "INERT_OUTER": str(fake), "ARGV": str(root / "argv"),
+                            "EXPECTED_STDOUT": str(expected_stdout),
                             "NATIVE_PODMAN_USE_SUDO": "0", "NATIVE_OUTER_CONTAINER_ID": "inert-owned-outer",
                             "OUT": base64.b64encode(stdout).decode(), "ERR": base64.b64encode(stderr).decode(),
                             "STATUS": str(status), "OPERATION": operation, "EXPECT_FAILURE": str(int(failed)),
@@ -575,21 +595,162 @@ fn main() {
                         self.assertNotIn(b"PRIVATE_CANARY", result.stdout + result.stderr)
                         self.assertEqual(result.stderr, b"")
                         if status == 1 and operation == "observe" and expected != "stream_guard":
-                            suffix = b"observer_site=workerexe" if expected == "site" else f"observer_capture={expected}".encode()
+                            suffix = (b"observer_site=workerexe observer_entry=unknown" if expected == "site"
+                                      else f"observer_capture={expected} observer_entry=unknown".encode())
                             lines = result.stdout.splitlines()
                             self.assertTrue(lines[0].endswith(suffix), lines)
                             self.assertEqual(len(lines), 4)
-                            for line in lines[1:3]:
-                                self.assertTrue(line.endswith(b"first_observed_termination=exit code=7"), line)
-                            self.assertTrue(lines[3].endswith(b"first_observed_termination=unknown code=none"))
+                            self.assertTrue(lines[1].endswith(b"first_observed_termination=exit code=7 first_unverified_phase=delete"))
+                            self.assertTrue(lines[2].endswith(b"first_observed_termination=exit code=7 first_unverified_phase=unknown"))
+                            self.assertTrue(lines[3].endswith(b"first_observed_termination=unknown code=none first_unverified_phase=unknown"))
                             work = lines[0] + b"\n"
                             cleanup = lines[1] + b"\n"
                             projected, _, _ = self.wrapper(self.failure_transcript(work, cleanup), 101)
                             self.assertIn(work, projected.stderr)
                             self.assertIn(cleanup, projected.stderr)
                             self.assertLess(projected.stderr.index(work), projected.stderr.index(cleanup))
+                        elif failed and operation == "observe":
+                            self.assertIn(b"observer_entry=unknown", result.stdout)
+                            self.assertNotIn(b"observer_site=", result.stdout)
                         else:
                             self.assertNotIn(b"observer_", result.stdout)
+
+    def test_actual_inner_cleanup_latches_first_phase_and_keeps_readbacks(self):
+        lifecycle = (ROOT / "src/native_lifecycle_tests.rs").read_text()
+        disposition = lifecycle[lifecycle.index("fn cleanup_disposition("):lifecycle.index("fn terminal_cleanup(")]
+        simulation = r'''use std::{cell::{Cell, RefCell}, collections::VecDeque, ops::Index};
+
+#[derive(Debug, PartialEq)]
+enum CleanupDisposition { VerifiedAbsent, OuterTeardownRequired }
+#[derive(Clone, Copy)]
+enum Reply { Status(u16), OtherOwner, Panic }
+use Reply::{Status, OtherOwner, Panic};
+
+const ID: &str = "inert-bound-identity";
+struct Value { owned: bool }
+impl Value {
+    fn as_str(&self) -> Option<&str> { Some(ID) }
+}
+impl Index<&str> for Value {
+    type Output = Self;
+    fn index(&self, key: &str) -> &Self {
+        assert_eq!(key, "Id");
+        self
+    }
+}
+fn owned(_: &HealthRun, value: &Value, _: usize, id: Option<&str>) -> bool {
+    assert_eq!(id, Some(ID));
+    value.owned
+}
+fn required(key: &str) -> String {
+    assert_eq!(key, "NATIVE_OUTER_CONTAINER_ID");
+    "inert-outer-identity".into()
+}
+type Step = (&'static str, Reply);
+struct HealthRun {
+    attempted: Vec<bool>, ids: Vec<Option<String>>, names: Vec<String>, api: &'static str,
+    steps: RefCell<VecDeque<Step>>, unexpected_call: Cell<bool>,
+}
+impl HealthRun {
+    fn next(&self, key: &str) -> (u16, Value) {
+        match self.steps.borrow_mut().pop_front() {
+            Some((expected, reply)) if expected == key => match reply {
+                Status(code) => (code, Value { owned: true }),
+                OtherOwner => (200, Value { owned: false }),
+                Panic => panic!("inert transport panic"),
+            },
+            _ => {
+                self.unexpected_call.set(true);
+                panic!("unexpected cleanup call");
+            }
+        }
+    }
+    fn inspect(&self, key: &str, cleanup: bool) -> (u16, Value) {
+        assert!(cleanup);
+        self.next(key)
+    }
+    fn api(&mut self, method: &str, path: &str, input: Option<&()>, cleanup: bool) -> (u16, Value) {
+        assert!(cleanup && input.is_none());
+        assert_eq!(method, "DELETE");
+        assert_eq!(path, format!("/v1.41/containers/{ID}?force=1"));
+        self.next("DELETE")
+    }
+}
+fn check(remove: &[Step], rounds: &[Step], expected: Option<CleanupPhase>) {
+    let mut run = HealthRun {
+        attempted: vec![true], ids: vec![Some(ID.into())], names: vec!["name".into()],
+        api: "1.41", steps: RefCell::new(remove.iter().chain(rounds).copied().collect()),
+        unexpected_call: Cell::new(false),
+    };
+    let (result, phase) = cleanup_with_phase(&mut run);
+    assert_eq!(phase, expected);
+    assert_eq!(result, if expected.is_some() {
+        CleanupDisposition::OuterTeardownRequired
+    } else { CleanupDisposition::VerifiedAbsent });
+    assert!(!run.unexpected_call.get() && run.steps.borrow().is_empty());
+}
+
+fn main() {
+    use CleanupPhase::*;
+    std::panic::set_hook(Box::new(|_| {}));
+    let remove = [("name", Status(200)), (ID, Status(200)), ("DELETE", Status(204)),
+        (ID, Status(404)), ("name", Status(404))];
+    let absent = [(ID, Status(404)), ("name", Status(404)), (ID, Status(404)), ("name", Status(404))];
+    check(&remove, &absent, None);
+    check(&[("name", Status(404))], &absent, None);
+    for (index, reply, phase) in [
+        (0, Status(500), LookupName), (0, Panic, LookupName), (0, OtherOwner, NameOwnership),
+        (1, OtherOwner, IdOwnership), (2, Status(500), Delete),
+        (3, Status(200), PostDeleteIdAbsence), (4, Status(200), PostDeleteNameAbsence),
+    ] {
+        let mut prefix = remove[..=index].to_vec();
+        prefix[index].1 = reply;
+        check(&prefix, &absent, Some(phase));
+    }
+    let id_failure = [(ID, Status(200)), (ID, Status(404)), ("name", Status(404))];
+    let name_failure = [(ID, Status(404)), ("name", Status(200)), (ID, Status(404)), ("name", Status(404))];
+    check(&remove, &id_failure, Some(ReadbackIdAbsence));
+    check(&remove, &name_failure, Some(ReadbackNameAbsence));
+    let mut failed_delete = remove[..3].to_vec();
+    failed_delete[2].1 = Status(500);
+    check(&failed_delete, &id_failure, Some(Delete));
+}
+'''
+        with tempfile.TemporaryDirectory(prefix="dl-nofile-cleanup-") as directory:
+            root = Path(directory)
+            (root / "cleanup.rs").write_text(simulation + disposition + self.cleanup_phase_source(include_steps=True))
+            built = subprocess.run(["rustc", "--edition=2024", str(root / "cleanup.rs"), "-o", str(root / "cleanup")],
+                                   cwd=ROOT, capture_output=True, timeout=30, check=False)
+            self.assertEqual(built.returncode, 0, built.stderr)
+            result = subprocess.run([str(root / "cleanup")], capture_output=True, timeout=3, check=False)
+            self.assertEqual((result.returncode, result.stdout, result.stderr), (0, b"", b""))
+
+    def test_explicit_unknown_and_cleanup_phase_projection_are_closed(self):
+        work = self.failure_line(operation="observe", termination="unknown", code="none").rstrip(b"\n")
+        work += b" observer_entry=unknown\n"
+        cleanup = self.cleanup_line(termination="unknown", code="none").rstrip(b"\n")
+        for phase in (b"lookup_name", b"name_ownership", b"id_ownership", b"delete",
+                      b"post_delete_id_absence", b"post_delete_name_absence",
+                      b"readback_id_absence", b"readback_name_absence", b"unknown"):
+            line = cleanup + b" first_unverified_phase=" + phase + b"\n"
+            result, _, _ = self.wrapper(self.failure_transcript(work, line), 101)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn(work, result.stderr)
+            self.assertIn(line, result.stderr)
+        contradictory = [
+            cleanup + b" first_unverified_phase=" + SECRET + b"\n",
+            cleanup + b" first_unverified_phase=delete first_unverified_phase=readback_id_absence\n",
+            cleanup.replace(b"inner_unverified", b"ownership_guard") + b" first_unverified_phase=delete\n",
+            cleanup.replace(b"inner_unverified", b"panic") + b" first_unverified_phase=id_ownership\n",
+        ]
+        for line in contradictory:
+            result, _, _ = self.wrapper(self.failure_transcript(work, line), 101)
+            self.assertEqual(result.returncode, 1)
+            self.assertNotIn(b"DOCKERLENS_NATIVE_NOFILE_", result.stderr)
+            self.assertNotIn(SECRET, result.stdout + result.stderr)
+        false_entry = self.failure_line(operation="create").rstrip(b"\n") + b" observer_entry=unknown\n"
+        result, _, _ = self.wrapper(self.failure_transcript(false_entry), 101)
+        self.assertNotIn(b"DOCKERLENS_NATIVE_NOFILE_FAILURE:", result.stderr)
 
     def test_observer_suffix_projects_only_for_failed_observe_and_never_cleanup(self):
         original = self.failure_line(operation="observe", code="1")
@@ -619,7 +780,10 @@ fn main() {
             self.assertIn(work, result.stderr)
         original = self.failure_line(operation='observe', code='1').rstrip(b'\n')
         for suffix in (b' observer_capture=PRIVATE_NOFILE_WIRING_CANARY', b' observer_capture=Non_utf8',
-                b' observer_capture=empty observer_site=workerexe', b' observer_capture=empty observer_capture=nul'):
+                b' observer_capture=empty observer_site=workerexe', b' observer_capture=empty observer_capture=nul',
+                b' observer_entry=trap_reported', b' observer_site=workerexe observer_entry=trap_reported',
+                b' observer_capture=marker_absent observer_entry=trap_reported',
+                b' observer_entry=unknown observer_entry=unknown'):
             result, _, _ = self.wrapper(self.failure_transcript(original + suffix + b'\n'), 101)
             self.assertNotIn(b'DOCKERLENS_NATIVE_NOFILE_FAILURE:', result.stderr)
             self.assertNotIn(SECRET, result.stdout + result.stderr)

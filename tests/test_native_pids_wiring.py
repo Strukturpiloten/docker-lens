@@ -7,6 +7,7 @@ import re
 import subprocess
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 
 ROOT = Path(__file__).resolve().parents[1]
 WRAPPER_BYTES = (ROOT / "scripts/run-exact-native-test.sh").read_bytes()
@@ -21,6 +22,9 @@ SETUP_REFUSAL = "DOCKERLENS_NATIVE_PIDS_SETUP_REFUSAL: code="
 IO_DETAIL = "DOCKERLENS_NATIVE_PIDS_IO:"
 STARTUP_REFUSAL = "DOCKERLENS_NATIVE_PIDS_START:"
 BIND_OBSERVATION = "DOCKERLENS_NATIVE_PIDS_BIND:"
+# Keep the high-cardinality matrices bounded. Each launch owns its temporary cargo
+# shim, registries and raw capture.
+PROJECTION_WORKERS = 4
 
 
 class PidsWiringTests(unittest.TestCase):
@@ -626,17 +630,28 @@ exit "$STATUS"
         self.assertEqual(max(len(BIND_OBSERVATION + f" s={site} e={tag}\n") for site, tag in pairs), 72)
 
     def test_every_host_pair_projects_only_with_both_exact_eligible_pairs(self):
-        for code, kind in (("pids-eof", "eof"), ("pids-read", "reset")):
-            general, detail = SETUP_REFUSAL + code, IO_DETAIL + f" phase=bind kind={kind}"
-            for site, tag in self.host_pairs():
-                bind = BIND_OBSERVATION + f" s={site} e={tag}"
-                result, _ = self.wrapper(bind + "\n" + detail + "\n" + general + "\n" + bind + "\n",
-                                         status=101, capture_trace=False)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn(b"(exit 101)", result.stderr)
-                self.assertEqual(result.stderr.count((bind + "\n").encode()), 1, (site, tag, result.stderr))
-                self.assertEqual(result.stderr.count((general + "\n").encode()), 1)
-                self.assertEqual(result.stderr.count((detail + "\n").encode()), 1)
+        def project(case):
+            code, kind, site, tag = case
+            general = SETUP_REFUSAL + code + "\n"
+            detail = IO_DETAIL + f" phase=bind kind={kind}\n"
+            bind = BIND_OBSERVATION + f" s={site} e={tag}\n"
+            result, _ = self.wrapper(bind + detail + general + bind, status=101, capture_trace=False)
+            return result, bind, general, detail
+
+        pairs = self.host_pairs()
+        cases = [(code, kind, site, tag)
+                 for code, kind in (("pids-eof", "eof"), ("pids-read", "reset"))
+                 for site, tag in pairs]
+        with ThreadPoolExecutor(max_workers=PROJECTION_WORKERS) as workers:
+            results = workers.map(project, cases)
+            for case, (result, bind, general, detail) in zip(cases, results, strict=True):
+                code, kind, site, tag = case
+                with self.subTest(code=code, kind=kind, site=site, tag=tag):
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(b"(exit 101)", result.stderr)
+                    self.assertEqual(result.stderr.count(bind.encode()), 1, (site, tag, result.stderr))
+                    self.assertEqual(result.stderr.count(general.encode()), 1)
+                    self.assertEqual(result.stderr.count(detail.encode()), 1)
 
     def type_detail_forms(self):
         tokens = ("o_time", "o_fds", "o_opens", "o_other", "m_syscall", "m_guard", "m_other",
@@ -712,15 +727,23 @@ exit "$STATUS"
         records.extend(record + "\n" for record in self.type_detail_forms())
         records.extend((BIND_OBSERVATION + " s=w_gh_read e=PRIVATE_HOST_CANARY\n",
                         BIND_OBSERVATION + " s=w_gh_read\n"))
-        for record in records:
-            for status, positive in ((0, ""), (0, "test result: ok. 1 passed; 0 failed\n"),
-                    (101, "DOCKERLENS_NATIVE_CHECK: pids_evidence\n")):
-                result, _ = self.wrapper(record + positive, status=status, capture_trace=False)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertNotIn(BIND_OBSERVATION.encode(), result.stdout + result.stderr)
-                self.assertNotIn(b"PRIVATE_HOST_CANARY", result.stdout + result.stderr)
-                self.assertNotIn(b"pids_evidence", result.stdout + result.stderr)
-                self.assertIn((SETUP_REFUSAL + "unclassified\n").encode(), result.stderr)
+        def project(case):
+            record, status, positive = case
+            result, _ = self.wrapper(record + positive, status=status, capture_trace=False)
+            return result
+
+        outcomes = ((0, ""), (0, "test result: ok. 1 passed; 0 failed\n"),
+                    (101, "DOCKERLENS_NATIVE_CHECK: pids_evidence\n"))
+        cases = [(record, status, positive) for record in records for status, positive in outcomes]
+        with ThreadPoolExecutor(max_workers=PROJECTION_WORKERS) as workers:
+            results = workers.map(project, cases)
+            for (record, status, positive), result in zip(cases, results, strict=True):
+                with self.subTest(record=record, status=status, positive=positive):
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertNotIn(BIND_OBSERVATION.encode(), result.stdout + result.stderr)
+                    self.assertNotIn(b"PRIVATE_HOST_CANARY", result.stdout + result.stderr)
+                    self.assertNotIn(b"pids_evidence", result.stdout + result.stderr)
+                    self.assertIn((SETUP_REFUSAL + "unclassified\n").encode(), result.stderr)
 
     def test_bind_catalogue_is_exact_and_separate_from_startup(self):
         import ast

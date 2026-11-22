@@ -221,15 +221,14 @@ impl NofileDiagnostics {
         self.select(run, 4, NofileRole::None, operation);
     }
     fn failure(&self, run: &HealthRun) -> Option<String> {
-        let (case, role, operation) = self.caller.get()?.fields()?;
+        let caller = self.caller.get()?;
+        let (case, role, operation) = caller.fields()?;
         let status = run
             .nofile_command_observation
             .as_ref()
             .and_then(|observation| observation.current_failure.get());
         let (termination, code) = NofileTermination::observed(status).fields();
-        let capture = if self.caller.get()?.operation == NofileOperation::Observe
-            && termination != "unknown"
-        {
+        let capture = if caller.operation == NofileOperation::Observe && termination != "unknown" {
             run.nofile_command_observation
                 .as_ref()
                 .and_then(|observation| observation.observer_capture.get())
@@ -243,8 +242,13 @@ impl NofileDiagnostics {
             }
             None => String::new(),
         };
+        let entry = if caller.operation == NofileOperation::Observe {
+            " observer_entry=unknown"
+        } else {
+            ""
+        };
         Some(format!(
-            "DOCKERLENS_NATIVE_NOFILE_FAILURE: caller_case={case} caller_role={role} caller_operation={operation} observed_termination={termination} code={code}{suffix}"
+            "DOCKERLENS_NATIVE_NOFILE_FAILURE: caller_case={case} caller_role={role} caller_operation={operation} observed_termination={termination} code={code}{suffix}{entry}"
         ))
     }
 }
@@ -252,16 +256,17 @@ impl NofileDiagnostics {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum NofileCleanupRefusal {
     OwnershipGuard,
-    InnerUnverified,
+    InnerUnverified(Option<CleanupPhase>),
     Panic,
 }
 impl NofileCleanupRefusal {
     fn diagnostic(self, status: Option<std::process::ExitStatus>) -> String {
-        let reason = match self {
-            Self::OwnershipGuard => "ownership_guard",
-            Self::InnerUnverified => "inner_unverified",
-            Self::Panic => "panic",
+        let (reason, phase) = match self {
+            Self::OwnershipGuard => ("ownership_guard", None),
+            Self::InnerUnverified(phase) => ("inner_unverified", phase),
+            Self::Panic => ("panic", None),
         };
+        let phase = phase.map_or("unknown", CleanupPhase::name);
         // A rejected guard never entered command capture and cannot inherit work status.
         let (termination, code) = NofileTermination::observed(if self == Self::OwnershipGuard {
             None
@@ -270,7 +275,7 @@ impl NofileCleanupRefusal {
         })
         .fields();
         format!(
-            "DOCKERLENS_NATIVE_NOFILE_CLEANUP_REFUSAL: reason={reason} first_observed_termination={termination} code={code}"
+            "DOCKERLENS_NATIVE_NOFILE_CLEANUP_REFUSAL: reason={reason} first_observed_termination={termination} code={code} first_unverified_phase={phase}"
         )
     }
 }
@@ -1227,10 +1232,13 @@ fn live_nofile_limits_and_effects_match_engine() {
     let attempted = run.attempted.clone();
     let ids = run.ids.clone();
     let entered = Cell::new(false);
+    let first_unverified = Cell::new(None);
     let cleanup_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         nofile_cleanup_with(&attempted, &ids, || {
             entered.set(true);
-            cleanup(&mut run)
+            let (disposition, phase) = cleanup_with_phase(&mut run);
+            first_unverified.set(phase);
+            disposition
         })
     }));
     let cleanup_refusal = match &cleanup_result {
@@ -1238,9 +1246,9 @@ fn live_nofile_limits_and_effects_match_engine() {
         Ok(CleanupDisposition::OuterTeardownRequired) if !entered.get() => {
             Some(NofileCleanupRefusal::OwnershipGuard)
         }
-        Ok(CleanupDisposition::OuterTeardownRequired) => {
-            Some(NofileCleanupRefusal::InnerUnverified)
-        }
+        Ok(CleanupDisposition::OuterTeardownRequired) => Some(
+            NofileCleanupRefusal::InnerUnverified(first_unverified.get()),
+        ),
         Ok(CleanupDisposition::VerifiedAbsent) => None,
     };
     let disposition = cleanup_result.unwrap_or(CleanupDisposition::OuterTeardownRequired);
@@ -1327,7 +1335,11 @@ fn nofile_observed_termination_clears_current_and_retains_first_cleanup_failure(
     observation.reset(); // independent cleanup scope; a rejected ownership guard enters no capture
     assert!(observation.first_failure.get().is_none());
     let guard = NofileCleanupRefusal::OwnershipGuard.diagnostic(Some(failed));
-    assert!(guard.ends_with("first_observed_termination=unknown code=none"));
+    assert!(
+        guard.ends_with(
+            "first_observed_termination=unknown code=none first_unverified_phase=unknown"
+        )
+    );
     observation.observe(std::process::ExitStatus::from_raw(7 << 8));
     observation.begin_capture();
     observation.observe(std::process::ExitStatus::from_raw(0));

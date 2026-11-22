@@ -538,11 +538,13 @@ try:
     for index, line in observations:
         if index == len(lines) - 1 or len(line) > 256:
             raise ValueError()
-        match = re.fullmatch(rb"DOCKERLENS_NATIVE_NOFILE_FAILURE: caller_case=(soft64_hard128|soft128_hard128|soft64_hard_unlimited|both_unlimited|all) caller_role=(oracle|rendered|pair|none) caller_operation=([a-z_]+) observed_termination=(exit|signal|unknown) code=([0-9]+|none)(?: observer_(?:site=([a-z]+)|capture=([a-z0-9_]+)))?", line)
+        match = re.fullmatch(rb"DOCKERLENS_NATIVE_NOFILE_FAILURE: caller_case=(soft64_hard128|soft128_hard128|soft64_hard_unlimited|both_unlimited|all) caller_role=(oracle|rendered|pair|none) caller_operation=([a-z_]+) observed_termination=(exit|signal|unknown) code=([0-9]+|none)(?: observer_(?:site=([a-z]+)|capture=([a-z0-9_]+)))?(?: observer_entry=(unknown))?", line)
         if match is not None:
             if work is not None or cleanup is not None:
                 raise ValueError()
-            case, role, operation, termination, code, observer_site, observer_capture = match.groups()
+            case, role, operation, termination, code, observer_site, observer_capture, observer_entry = match.groups()
+            if observer_entry is not None and operation != b"observe":
+                raise ValueError()
             if observer_site is not None and (operation != b"observe" or termination not in (b"exit", b"signal")
                 or observer_site not in (b"rootuid", b"rootgid", b"reportwait", b"reportfile", b"reportlink", b"workererror",
                                          b"workerpid", b"workerexe", b"workerargv", b"transcript", b"parentlimits", b"workerlimits")):
@@ -572,11 +574,13 @@ try:
                 raise ValueError()
             work = line
         else:
-            match = re.fullmatch(rb"DOCKERLENS_NATIVE_NOFILE_CLEANUP_REFUSAL: reason=(ownership_guard|inner_unverified|panic) first_observed_termination=(exit|signal|unknown) code=([0-9]+|none)", line)
+            match = re.fullmatch(rb"DOCKERLENS_NATIVE_NOFILE_CLEANUP_REFUSAL: reason=(ownership_guard|inner_unverified|panic) first_observed_termination=(exit|signal|unknown) code=([0-9]+|none)(?: first_unverified_phase=(unknown|lookup_name|name_ownership|id_ownership|delete|post_delete_id_absence|post_delete_name_absence|readback_id_absence|readback_name_absence))?", line)
             if match is None or cleanup is not None or len(handoffs) != 1 or not cleanup_indices[0] < handoffs[0] < index:
                 raise ValueError()
-            reason, termination, code = match.groups()
+            reason, termination, code, cleanup_phase = match.groups()
             if reason == b"ownership_guard" and termination != b"unknown":
+                raise ValueError()
+            if cleanup_phase not in (None, b"unknown") and reason != b"inner_unverified":
                 raise ValueError()
             cleanup = line
         if termination == b"unknown":

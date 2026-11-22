@@ -338,6 +338,12 @@ native_outer_create_daemon() {
   local -a flags start
   flags=()
   start=(/usr/local/bin/start-dockerd "--host=unix://${context[guest_dir]}/docker.sock")
+  # PIDs27 uses a reader-domain monotonic deadline for the nested workers.
+  # Docker 29.5+ creates private time namespaces unless the fixture disables it.
+  if [[ ${context[lane]} == upstream-rootful && ${context[owner_key]} == io.dockerlens.native-run &&
+        ${context[guest_dir]} == /dockerlens-native ]]; then
+    start+=(--feature time-namespaces=false)
+  fi
   if [[ ${context[lane]} == debian11-rootless ]]; then
     flags+=(--oom-score-adj=0 --security-opt apparmor=unconfined)
     start+=(--storage-driver=vfs)
