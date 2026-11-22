@@ -67,7 +67,7 @@ jobs:
         with:
           repository: Strukturpiloten/boxferry
           # renovate: datasource=github-digest depName=Strukturpiloten/boxferry currentValue=automation-v1
-          ref: 0d79fa185035f7d52af991b83318fdb65f9706bf
+          ref: b2e07985372159a7c522addbfba8e9b79200c332
           path: _automation
           persist-credentials: false
       - name: Install locked shared tooling
@@ -77,7 +77,7 @@ jobs:
         uses: ./_automation/.github/actions/shared-crate-publish
         with:
           candidate-sha: ${{ inputs.expected_sha }}
-          automation-sha: 0d79fa185035f7d52af991b83318fdb65f9706bf
+          automation-sha: b2e07985372159a7c522addbfba8e9b79200c332
           release-config: ${{ github.workspace }}/source/scripts/release-policy.json
           package: docker-lens
           validation-sha: ${{ needs.validation.outputs.candidate_sha }}
