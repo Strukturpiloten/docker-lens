@@ -235,13 +235,21 @@ class SharedAutomationTests(unittest.TestCase):
                 self.assert_shared_pin_identity(manifest, renovate, proposed)
         release = workflows["release.yml"]
         publish_pin = f"          automation-sha: {revision}\n"
-        for replacement in ("", publish_pin.replace(revision, other), publish_pin * 2):
-            proposed = {
-                **workflows,
-                "release.yml": release.replace(publish_pin, replacement, 1),
-            }
-            with self.subTest(publish_pin=replacement), self.assertRaises(AssertionError):
-                self.assert_shared_pin_identity(manifest, renovate, proposed)
+        portions = release.split(publish_pin)
+        self.assertEqual(len(portions), 3)
+        for index in range(2):
+            for replacement in ("", publish_pin.replace(revision, other), publish_pin * 2):
+                pins = [publish_pin, publish_pin]
+                pins[index] = replacement
+                proposed = {
+                    **workflows,
+                    "release.yml": portions[0] + pins[0] + portions[1] + pins[1] + portions[2],
+                }
+                with (
+                    self.subTest(step=index, publish_pin=replacement),
+                    self.assertRaises(AssertionError),
+                ):
+                    self.assert_shared_pin_identity(manifest, renovate, proposed)
         self.assert_shared_pin_identity(
             {**manifest, "revision": other},
             {
@@ -1009,10 +1017,10 @@ const runnerPins=releaseActions.filter(dep=>dep.datasource==='github-runners');
 const releaseRegex=effective.customManagers.flatMap(manager=>
  manager.managerFilePatterns.some(p=>new RegExp(p.slice(1,-1)).test(releaseFile))?
  (extract(releaseSource,releaseFile,manager)||{deps:[]}).deps:[]);
-assert.equal(checkoutPins.length,3);
-assert.equal(runnerPins.length,2);
+assert.equal(checkoutPins.length,4);
+assert.equal(runnerPins.length,3);
 assert(runnerPins.every(dep=>dep.depName==='ubuntu' && dep.currentValue==='26.04'));
-assert.equal(releaseRegex.length,2);
+assert.equal(releaseRegex.length,4);
 assert(releaseRegex.every(dep=>dep.depName==='Strukturpiloten/boxferry'
  && dep.currentDigest===releasePin && dep.currentValue==='automation-v1'));
 assert(!releaseActions.some(dep=>(dep.packageName||dep.depName)==='Strukturpiloten/boxferry'));

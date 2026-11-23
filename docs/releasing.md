@@ -41,54 +41,55 @@ dependencies and a final current-main recheck. Failed, absent, skipped, cancelle
 or mismatched prerequisites block the gate. Development API results cannot
 substitute for the published baseline.
 
-## Set up crates.io Trusted Publishing
+## Existing crates.io Trusted Publishing
 
-The existing GitHub `release` environment requires TheRealBecks, allows `main`
-and `v*` tags, and permits administrator bypass. This workflow admits only
-`refs/heads/main` and verifies the live reviewer and approval. Environment
-settings also apply to workflow definitions on other eligible refs. Trusted
-Publishing binds the workflow filename and environment. Before activation,
-verify an enforceable control that limits every definition eligible for this
-registration to the reviewed publishing policy, including those reachable
-through tag creation and administrator access. The main workflow's own ref
-check does not restrict other definitions.
+The maintainer adopted [ADR 0024](decisions/0024-protected-crate-publication.md)
+for DockerLens under the existing settings. The owner confirmed crate
+`docker-lens`, GitHub owner `Strukturpiloten`, repository `docker-lens`, workflow
+`release.yml`, environment `release`. The registration is owner-confirmed and
+independently API-unavailable. No settings change or private registry API proof
+is required for this caller.
 
-The [crate owner settings](https://crates.io/crates/docker-lens/settings) hold
-the [Trusted Publisher registration](https://crates.io/docs/trusted-publishing).
-A crate owner must verify or configure crate `docker-lens`, GitHub owner
-`Strukturpiloten`, repository `docker-lens`, workflow `release.yml` and
-environment `release`. A future enabling change would use the shared publisher
-and request OIDC only after the verified personal approval and final recheck.
+The live environment ID is `22952362673`, requiring TheRealBecks (user ID
+`1497405`). It permits administrator bypass and admits main and `v*` tags.
+GitHub review history cannot distinguish ordinary approval from bypass. The
+registry registration has no Git-ref filter; other eligible definitions on tags
+remain outside this main-only caller's guard. The maintainer explicitly accepts
+both limits. Settings remain unchanged.
 
 ## Request validation or maintainer approval
 
 From GitHub's **Release DockerLens** workflow, choose main and supply the full
-SHA and finalized package version. Keep `validation_only=true` for a dry run that
-also checks notes and the crate inventory. Publication is currently unavailable.
-The `validation_only=false` path checks approval evidence after the same
-candidate validation and terminates before registry authentication. Any hosted
-approval exercise needs its own authorization.
+SHA and finalized package version. Keep `validation_only=true` for validation
+and credential-free inventory without requesting protected environment admission.
+For a separately authorized publication choose `validation_only=false`. Only a
+first-attempt dispatch from protected current main can reach the protected job,
+after complete offline, dependency, published API and all four native checks.
 
-In an authorized approval exercise, wait for full validation and for the approval
-job to request review. Give the maintainer the run URL and the version, commit and notes from
-the run summary. In **Review deployments**, the maintainer selects `release`,
-copies the exact **Release approval comment** from the summary and chooses
-**Approve and deploy**.
+Wait for full validation and the approval job's review request. Give the
+maintainer the run URL and the version, commit and notes from the run summary.
+In **Review deployments**, the maintainer selects `release`, copies the exact
+**Release approval comment** from the summary, then chooses **Approve and deploy**.
+The statement binds the run ID, attempt 1, full SHA, version and extracted notes
+SHA-256. Agents must never approve or override the deployment.
 
-GitHub's [review history](https://docs.github.com/en/rest/actions/workflow-runs#get-the-review-history-for-a-workflow-run)
-gives the reviewer, environment ID, state and comment for a run. The workflow
-requires one approved record for `release` from TheRealBecks with the exact
-first-attempt comment. The same schema carries no attempt or bypass marker,
-and GitHub accepts comments for both UI actions. Even a matching history row
-cannot demonstrate which action was taken from that schema alone.
+The job requires exactly one matching approved history record for the verified
+environment from that personal account. Missing, stale, conflicting or ambiguous
+records fail closed. It rechecks protected live main, clean source, version and
+notes after approval, then calls the manifest-pinned shared publisher. OIDC is
+scoped only to this job; the publisher obtains credentials after its own inventory
+and exact-gate checks. A rerun is refused: use a fresh authorized dispatch and
+new human review. If main moves, qualify its new exact SHA first.
 
-Before enabling registry access, establish an authenticated source that
-distinguishes a genuine approval from administrator bypass and binds it to the
-exact run, attempt and environment. The workflow currently rechecks live main,
-version and notes after reading the approval record, then refuses publication.
+The protected publication job has a 45-minute bound, matching the established
+Rust callers. After an interrupted upload, check canonical registry visibility
+and artifact identity before authorizing a fresh dispatch; a timeout is not
+evidence that upload failed.
 
-Once enabled, the shared publisher verifies registry visibility after upload. If the version
-already exists, retain upload evidence or independent artifact provenance before
-associating it with this candidate. Git tags and GitHub release records are
-separate maintainer operations. Hand the published version and verified commit
-back to BoxFerry for registry-dependency verification.
+The shared publisher retains idempotency and waits for canonical registry
+visibility after upload. If the version already exists, retain upload evidence
+or independent artifact provenance before associating it with this candidate.
+Record source activation/integrated qualification separately from the first
+real publication run, human approval and registry evidence. Tags and GitHub
+releases are separate maintainer operations. Hand the published version and
+verified commit back to BoxFerry for registry-dependency verification.

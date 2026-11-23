@@ -16,15 +16,39 @@ environment ID from TheRealBecks, with a statement binding the run, first attemp
 SHA, version and notes digest. It rechecks main, version and notes after reading the
 review. A subsequent attempt requires a new run and review.
 
-The workflow restricts its own dispatch to main. GitHub's environment policy
-applies independently to other eligible workflow definitions and refs. The
-review-history API supplies reviewer, environment, state and comment. GitHub
-allows a comment during approval and bypass, and the history schema has neither
-an approval-method marker nor an attempt field. The statement binds the evidence
-to this attempt. It cannot prove which action admitted the job. Publication stays
-closed and this workflow has no registry credentials. A future enablement will
-require evidence distinguishing genuine personal approval from bypass, and the
-registry and eligible-ref verification in [the release guide](../releasing.md).
+## Maintainer-adopted DockerLens amendment (#242)
+
+The maintainer approved publication under the existing settings for DockerLens
+only. The protected job invokes the immutable shared BoxFerry crate publisher
+selected by `.github/automation.json`, after complete offline, dependency,
+published API and four native Engine checks, credential-free inventory, exact
+personal review evidence and a final source/version/notes recheck. A credential-free admission job verifies first-attempt protected current main
+before expensive validation in both modes. Only the protected publication job
+has `id-token: write`; validate-only remains the default and requests neither
+environment admission nor registry credentials. Retries require a fresh dispatch.
+Preflight and review verify protected current main and the existing environment
+ID `22952362673`, with TheRealBecks (`1497405`) as sole required reviewer.
+
+The owner confirmed the crates.io tuple `docker-lens`, GitHub repository
+`Strukturpiloten/docker-lens`, workflow `release.yml`, environment `release`.
+This registration is owner-confirmed and independently API-unavailable; the
+historical API 403 does not invalidate that confirmation. Existing settings stay
+unchanged. The maintainer accepts these limits:
+
+- GitHub permits administrator bypass. Review history has state, reviewer,
+  environment and comment, but no approval-method marker or attempt field.
+  Exactly one matching approved record and the exact first-attempt statement
+  bind run, SHA, version and notes; they cannot distinguish ordinary approval
+  from bypass. The human must use **Approve and deploy**, never agent approval.
+- The environment also admits `v*` tags, and the registry registration has no
+  Git-ref selector. This caller refuses tag dispatch and reruns. Another eligible
+  workflow definition on a `v*` ref can satisfy the same registration outside
+  this caller's main guard. No global ref or administrator restriction is claimed.
+
+Policy adoption does not establish activation or publication. Record the merged
+caller source and its integrated qualification separately, then the first real
+publication run, human approval and canonical registry visibility as separate
+evidence. No release dispatch or publication is authorized by implementation.
 
 Product, manifest, lockfile and native qualification remain with their existing
 owners. This change adds neither Git tag nor GitHub release creation. The
