@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "previous_main": "2eda79cf3064e2757a961a67b2823de92eacae50",
-  "delta_sha256": "945967a4be208fd73a7a744b0e0bb660bb3fb5e141fe295365cf7cf5180ef0b0",
+  "previous_main": "60fff56e0c1a61fc623ff31dc1b2b44d39c2f48a",
+  "delta_sha256": "007450e50ea35aa559d87a3fe3239bc049cea6948ab8a2974684e55010f81f41",
   "candidate_version": "0.2.0"
 }
