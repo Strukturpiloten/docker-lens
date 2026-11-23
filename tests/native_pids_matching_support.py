@@ -7,7 +7,7 @@ SITES = {
     'read_fd': ('mreadseek', 'mreadsyscall', 'mreadcap'),
     'read': ('mreadopen', 'mreadfs', 'mreadclose', 'mbudgetreads', 'mbudgetbytes'),
     'check': ('mbudgettime',), 'fd': ('mbudgetfds', 'mbudgetopens'),
-    'process': ('mprocpid', 'mprocstartvalue', 'mprocpidfd', 'mprocdir', 'mprocfs', 'mprocstart',
+    'process': ('mprocpid', 'mprocstartvalue', 'mpidfdreserve', 'mprocpidfd', 'mpidfdadopt', 'mprocdir', 'mprocfs', 'mprocstart',
         'mproccgroup', 'mprocwithin', 'mprocroot', 'mprocns', 'mprocstatus', 'mprocidentity',
         'mproccheck', 'mtimeopen', 'mtimematch', 'mtimelive', 'mtimeregister'),
     'check_process': ('mcheckbudget', 'mchecklive', 'mcheckstart', 'mcheckcgroup', 'mcheckstatus',
@@ -23,7 +23,7 @@ SITES = {
     'consume': ('mprivate', 'mambiguous', 'mnomatch'),
 }
 CALLS = {
-    'process': ('self.budget.fd', 'self.open', 'fs_magic', 'start_from_stat', 'self.read', 'cgroup_path',
+    'process': ('self._acquire_pidfd', 'self.open', 'fs_magic', 'start_from_stat', 'self.read', 'cgroup_path',
         'process_status', 'self.fd_mount_id', 'self.check_process', 'super().process'),
     'check_process': ('self.budget.check', 'self.read', 'start_from_stat', 'cgroup_path', 'process_status',
         'self.open', 'self.fd_mount_id', 'super().check_process'),

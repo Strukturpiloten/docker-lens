@@ -238,7 +238,8 @@ def startup_require(site, condition):
 MATCHING_SITES = (
     'mleaseentry', 'mrecord', 'mprocbind', 'mstatussame', 'mscope',
     'mcallback', 'mcallbackpure', 'mselect', 'mfinishstate', 'mfinishroles',
-    'mfinishseen', 'mrollback', 'mprocpid', 'mprocstartvalue', 'mprocpidfd',
+    'mfinishseen', 'mrollback', 'mprocpid', 'mprocstartvalue',
+    'mpidfdreserve', 'mprocpidfd', 'mpidfdadopt',
     'mprocdir', 'mprocfs', 'mprocstart', 'mproccgroup', 'mprocwithin',
     'mprocroot', 'mprocns', 'mprocstatus', 'mprocidentity', 'mproccheck',
     'mcheckbudget', 'mchecklive', 'mcheckstart', 'mcheckcgroup', 'mcheckstatus',
@@ -372,7 +373,7 @@ def integer(value, low=1, high=(1 << 63) - 1):
 
 
 class Budget:
-    """Worst-case reservations precede I/O. Failure never refunds a charge."""
+    """Worst-case reservations precede I/O. Cumulative charges never refund."""
 
     def __init__(self, deadline_ns, clock=time.monotonic_ns):
         self.clock = clock
@@ -639,15 +640,60 @@ class LinuxSource:
             with startup_cleanup(), matching_scope(observer, "mreadclose", cleanup=True):
                 self.close_fd(fd)
 
+    def _acquire_pidfd(self, pid, observer=None):
+        # The single-threaded source can raise Python SIGINT at a bytecode
+        # boundary, including before a successful syscall result is assigned.
+        # Snapshot the mask without changing it, then arrange restoration
+        # before blocking. CPython checks already-pending Python signals on
+        # return from pthread_sigmask, before we reserve or call pidfd_open.
+        with matching_scope(observer, "mpidfdreserve"):
+            previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, ())
+        pidfd = None
+        failed = False
+        try:
+            with matching_scope(observer, "mpidfdreserve"):
+                signal.pthread_sigmask(signal.SIG_BLOCK, (signal.SIGINT,))
+                matching_call(observer, self.budget.fd)
+            with matching_scope(observer, "mprocpidfd"):
+                try:
+                    pidfd = os.pidfd_open(pid, 0)
+                except OSError:
+                    # No descriptor was returned. Keep the cumulative debit
+                    # and reservation peak, but retire the pending live slot.
+                    self.budget.fds -= 1
+                    raise
+            with matching_scope(observer, "mpidfdadopt"):
+                return self.own(pidfd)
+        except BaseException:
+            failed = True
+            # Registration transfers sole custody even if own subsequently
+            # raises. Only a known, still-provisional integer can be closed here.
+            if pidfd is not None and pidfd not in self.owned:
+                try:
+                    os.close(pidfd)
+                except BaseException:
+                    # Close is uncertain. Keep the live charge and never retry
+                    # this integer or register it for a second cleanup attempt.
+                    pass
+                else:
+                    self.budget.fds -= 1
+            raise
+        finally:
+            with matching_scope(observer, "mpidfdadopt", cleanup=True):
+                try:
+                    signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+                except BaseException:
+                    # A delivered cancellation cannot replace the first escape.
+                    if not failed:
+                        raise
+
     def process(self, pid, start, within=None, observer=None):
         with startup_scope("proc_pidfd"):
             with matching_scope(observer, "mprocpid"):
                 integer(pid, high=(1 << 31) - 1)
             with matching_scope(observer, "mprocstartvalue"):
                 integer(start)
-            with matching_scope(observer, "mprocpidfd"):
-                matching_call(observer, self.budget.fd)
-                pidfd = self.own(os.pidfd_open(pid, 0))
+            pidfd = matching_call(observer, self._acquire_pidfd, pid)
         with startup_scope("proc_dir"), matching_scope(observer, "mprocdir"):
             directory = matching_call(observer, self.open, str(pid), self.proc, directory=True)
         with startup_scope("proc_fs"), matching_scope(observer, "mprocfs"):

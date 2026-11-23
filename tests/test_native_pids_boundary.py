@@ -2,11 +2,14 @@
 
 import ctypes
 import ast
+import dis
 import errno
 import hashlib
 import importlib.util
 import json
 import os
+import signal
+import sys
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -19,6 +22,269 @@ SPEC = importlib.util.spec_from_file_location(
 )
 b = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(b)
+
+
+class PidfdCustodyTests(unittest.TestCase):
+    """Only self pidfds, their owned duplicates, and directed local SIGINT."""
+
+    def fixture(self):
+        source = b.LinuxSource.__new__(b.LinuxSource)
+        source.budget = b.Budget(55_000_000_000, clock=lambda: 0)
+        retained = os.pidfd_open(os.getpid(), 0)
+        source.owned = {retained}
+        source.budget.fds = source.budget.opens = source.budget.peak_fds = 1
+        real_close = os.close
+        live = {retained}
+        opened, closed = [], []
+
+        def clear():
+            for fd in live:
+                real_close(fd)
+
+        def duplicate(pid, flags):
+            self.assertEqual((pid, flags), (os.getpid(), 0))
+            fd = os.dup(retained)
+            live.add(fd)
+            opened.append(fd)
+            return fd
+
+        def close(fd):
+            self.assertIn(fd, live)
+            real_close(fd)
+            live.remove(fd)
+            closed.append(fd)
+
+        self.addCleanup(clear)
+        return source, retained, live, opened, closed, duplicate, close
+
+    def test_pidfd_adoption_failure_before_and_after_original_registration(self):
+        for match in (False, True):
+            for inserted in (False, True):
+                with self.subTest(match=match, inserted=inserted):
+                    source, retained, live, opened, closed, duplicate, close = self.fixture()
+                    original = KeyboardInterrupt("PRIVATE_ADOPTION")
+                    observer = b.matching_observation() if match else None
+                    before = signal.pthread_sigmask(signal.SIG_BLOCK, ())
+
+                    def own(fd):
+                        if inserted:
+                            source.owned.add(fd)
+                        raise original
+
+                    with patch.object(b.os, "pidfd_open", side_effect=duplicate), patch.object(
+                        b.os, "close", side_effect=close
+                    ), patch.object(source, "own", side_effect=own):
+                        with self.assertRaises(KeyboardInterrupt) as caught:
+                            source.process(os.getpid(), 1, observer=observer)
+                        self.assertIs(caught.exception, original)
+                        self.assertEqual(b.matching_finish(observer, original), "mpidfdadopt" if match else None)
+                        fd, = opened
+                        self.assertEqual(fd in source.owned, inserted)
+                        self.assertEqual(fd in live, inserted)
+                        if inserted:
+                            os.fstat(fd)
+                        else:
+                            with self.assertRaises(OSError) as missing:
+                                os.fstat(fd)
+                            self.assertEqual(missing.exception.errno, errno.EBADF)
+                        self.assertEqual(closed, [] if inserted else [fd])
+                        self.assertEqual(source.budget.fds, 2 if inserted else 1)
+                        source.close()
+                    self.assertEqual(sorted(closed), sorted([fd, retained]))
+                    self.assertFalse(source.owned or live)
+                    self.assertEqual((source.budget.fds, source.budget.opens, source.budget.peak_fds), (0, 2, 2))
+                    self.assertEqual(signal.pthread_sigmask(signal.SIG_BLOCK, ()), before)
+
+    def test_pidfd_failed_provisional_close_keeps_charge_and_never_closes_reused_number(self):
+        source, retained, live, opened, closed, duplicate, close = self.fixture()
+        original = RuntimeError("PRIVATE_ADOPTION")
+        observer = b.matching_observation()
+        before = signal.pthread_sigmask(signal.SIG_BLOCK, ())
+
+        def uncertain(fd):
+            close(fd)
+            if fd != retained:
+                # The close retired this number before an injected uncertain
+                # error. Reuse it for a separate test-owned descriptor.
+                os.dup2(retained, fd)
+                live.add(fd)
+                raise InterruptedError(errno.EINTR, "PRIVATE_CLOSE")
+
+        with patch.object(b.os, "pidfd_open", side_effect=duplicate), patch.object(
+            b.os, "close", side_effect=uncertain
+        ), patch.object(source, "own", side_effect=original):
+            with self.assertRaises(RuntimeError) as caught:
+                source.process(os.getpid(), 1, observer=observer)
+            self.assertIs(caught.exception, original)
+            self.assertEqual(b.matching_finish(observer, original), "mpidfdadopt")
+            fd, = opened
+            self.assertEqual(source.owned, {retained})
+            self.assertEqual(source.budget.fds, 2)
+            self.assertEqual(closed, [fd])
+            source.close()
+            self.assertEqual(closed, [fd, retained])
+            os.fstat(fd)
+        self.assertFalse(source.owned)
+        self.assertEqual((source.budget.fds, source.budget.opens, source.budget.peak_fds), (1, 2, 2))
+        self.assertEqual(signal.pthread_sigmask(signal.SIG_BLOCK, ()), before)
+
+    def test_pidfd_sigint_is_delivered_after_registration_even_before_store(self):
+        code = b.LinuxSource._acquire_pidfd.__code__
+        # The last store is the successful syscall result. Inject a real
+        # SIGINT at the opcode boundary before CPython assigns that result.
+        before_store = next(instruction.offset for instruction in reversed(tuple(dis.get_instructions(code)))
+                            if instruction.opname == "STORE_FAST" and instruction.argval == "pidfd")
+        for point in ("before_call", "before_store", "before_insertion", "after_insertion"):
+            for match in (False, True):
+                with self.subTest(point=point, match=match):
+                    source, retained, live, opened, closed, duplicate, close = self.fixture()
+                    observer = b.matching_observation() if match else None
+                    interrupt = KeyboardInterrupt("PRIVATE_DEFERRED")
+                    delivery = []
+                    injected = []
+                    previous_trace = sys.gettrace()
+                    previous_mask = signal.pthread_sigmask(signal.SIG_UNBLOCK, (signal.SIGINT,))
+                    unblocked = previous_mask - {signal.SIGINT}
+
+                    def cancel(_signum, _frame):
+                        delivery.append((frozenset(source.owned), signal.pthread_sigmask(signal.SIG_BLOCK, ())))
+                        raise interrupt
+
+                    previous_handler = signal.signal(signal.SIGINT, cancel)
+
+                    def send():
+                        injected.append(None)
+                        signal.raise_signal(signal.SIGINT)
+
+                    def trace(frame, event, _arg):
+                        if frame.f_code is not code:
+                            return None
+                        frame.f_trace_opcodes = True
+                        if event == "opcode" and frame.f_lasti == before_store:
+                            send()
+                        return trace
+
+                    def acquire(pid, flags):
+                        if point == "before_call":
+                            send()
+                        return duplicate(pid, flags)
+
+                    def own(fd):
+                        if point == "before_insertion":
+                            send()
+                        source.owned.add(fd)
+                        if point == "after_insertion":
+                            send()
+                        return fd
+
+                    try:
+                        with patch.object(b.os, "pidfd_open", side_effect=acquire), patch.object(
+                            b.os, "close", side_effect=close
+                        ), patch.object(source, "own", side_effect=own):
+                            if point == "before_store":
+                                sys.settrace(trace)
+                            try:
+                                with self.assertRaises(KeyboardInterrupt) as caught:
+                                    source.process(os.getpid(), 1, observer=observer)
+                            finally:
+                                sys.settrace(previous_trace)
+                            self.assertIs(caught.exception, interrupt)
+                            self.assertEqual(b.matching_finish(observer, interrupt), "mpidfdadopt" if match else None)
+                            fd, = opened
+                            self.assertEqual(injected, [None])
+                            self.assertEqual(delivery, [(frozenset({retained, fd}), unblocked)])
+                            self.assertEqual(signal.pthread_sigmask(signal.SIG_BLOCK, ()), unblocked)
+                            self.assertEqual(closed, [])
+                            source.close()
+                        self.assertEqual(sorted(closed), sorted([retained, fd]))
+                        self.assertFalse(source.owned or live)
+                        self.assertEqual((source.budget.fds, source.budget.opens, source.budget.peak_fds), (0, 2, 2))
+                    finally:
+                        signal.signal(signal.SIGINT, previous_handler)
+                        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+
+    def test_pidfd_mask_install_escape_restores_previous_mask_before_any_charge(self):
+        source, retained, live, opened, closed, duplicate, close = self.fixture()
+        observer = b.matching_observation()
+        masking = signal.pthread_sigmask
+        previous = masking(signal.SIG_BLOCK, ())
+        original = KeyboardInterrupt("PRIVATE_MASK_INSTALL")
+
+        def install(how, mask):
+            result = masking(how, mask)
+            if how == signal.SIG_BLOCK and mask == (signal.SIGINT,):
+                raise original
+            return result
+
+        try:
+            with patch.object(b.signal, "pthread_sigmask", side_effect=install), patch.object(
+                b.os, "pidfd_open", side_effect=duplicate
+            ), patch.object(b.os, "close", side_effect=close):
+                with self.assertRaises(KeyboardInterrupt) as caught:
+                    source.process(os.getpid(), 1, observer=observer)
+                self.assertIs(caught.exception, original)
+                self.assertEqual(b.matching_finish(observer, original), "mpidfdreserve")
+                self.assertEqual(masking(signal.SIG_BLOCK, ()), previous)
+                self.assertFalse(opened or closed)
+                self.assertEqual(source.owned, {retained})
+                self.assertEqual((source.budget.fds, source.budget.opens, source.budget.peak_fds), (1, 1, 1))
+                source.close()
+            self.assertFalse(source.owned or live)
+            self.assertEqual(closed, [retained])
+        finally:
+            masking(signal.SIG_SETMASK, previous)
+
+    def test_pidfd_inherits_blocked_sigint_and_pending_signal_cannot_replace_original_failure(self):
+        for blocked in (False, True):
+            with self.subTest(blocked=blocked):
+                source, retained, live, opened, closed, duplicate, close = self.fixture()
+                observer = b.matching_observation()
+                original = RuntimeError("PRIVATE_ADOPTION")
+                previous = signal.pthread_sigmask(signal.SIG_BLOCK if blocked else signal.SIG_UNBLOCK, (signal.SIGINT,))
+                wanted = (previous | {signal.SIGINT}) if blocked else (previous - {signal.SIGINT})
+                deliveries = []
+
+                def cancel(_signum, _frame):
+                    deliveries.append(frozenset(source.owned))
+                    raise KeyboardInterrupt("PRIVATE_SECONDARY")
+
+                previous_handler = signal.signal(signal.SIGINT, cancel)
+
+                def own(fd):
+                    signal.raise_signal(signal.SIGINT)
+                    if not blocked:
+                        raise original
+                    source.owned.add(fd)
+                    return fd
+
+                try:
+                    with patch.object(b.os, "pidfd_open", side_effect=duplicate), patch.object(
+                        b.os, "close", side_effect=close
+                    ), patch.object(source, "own", side_effect=own):
+                        if blocked:
+                            self.assertEqual(source._acquire_pidfd(os.getpid(), observer), opened[0])
+                            self.assertEqual(closed, [])
+                            self.assertIn(signal.SIGINT, signal.sigpending())
+                            self.assertEqual(signal.sigwait({signal.SIGINT}), signal.SIGINT)
+                            self.assertEqual(deliveries, [])
+                        else:
+                            with self.assertRaises(RuntimeError) as caught:
+                                source._acquire_pidfd(os.getpid(), observer)
+                            self.assertIs(caught.exception, original)
+                            self.assertEqual(b.matching_finish(observer, original), "mpidfdadopt")
+                            self.assertEqual(closed, opened)
+                            self.assertEqual(deliveries, [{retained}])
+                        self.assertEqual(signal.pthread_sigmask(signal.SIG_BLOCK, ()), wanted)
+                        source.close()
+                    self.assertEqual(sorted(closed), sorted([retained, *opened]))
+                    self.assertFalse(source.owned or live)
+                    self.assertEqual((source.budget.fds, source.budget.opens, source.budget.peak_fds), (0, 2, 2))
+                finally:
+                    signal.pthread_sigmask(signal.SIG_BLOCK, (signal.SIGINT,))
+                    if signal.SIGINT in signal.sigpending():
+                        signal.sigwait({signal.SIGINT})
+                    signal.signal(signal.SIGINT, previous_handler)
+                    signal.pthread_sigmask(signal.SIG_SETMASK, previous)
 
 
 class FakeSource:

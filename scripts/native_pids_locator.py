@@ -185,6 +185,23 @@ LOCATE_CATEGORIES = ("BindingFailed", "UnsupportedPeerPidfd", "PeerExited",
                      "UnsupportedEventSemantics", "ConfiguredOuterUnavailable", "BoundaryRefusal", "TopologyRefusal", "unclassified")
 
 
+_PIDFD_ERRNOS = {
+    errno.ESRCH: "PidfdEsrch", errno.EPERM: "PidfdEperm", errno.EACCES: "PidfdEacces",
+    errno.EBADF: "PidfdEbadf", errno.EMFILE: "PidfdEmfile", errno.ENFILE: "PidfdEnfile",
+    errno.ENOMEM: "PidfdEnomem", errno.ENOSYS: "PidfdEnosys", errno.ENODEV: "PidfdEnodev",
+    errno.EINVAL: "PidfdEinval", errno.EINTR: "PidfdEintr",
+}
+
+
+def _pidfd_open_category(error):
+    # Read the base descriptor only for an exact reviewed builtin. No message,
+    # subclass accessor or nested exception participates in the observation.
+    if not any(type(error) is allowed for allowed in boundary._HOST_OSERROR_TYPES):
+        return "unclassified"
+    number = OSError.errno.__get__(error, OSError)
+    return _PIDFD_ERRNOS.get(number, "PidfdOtherOs") if type(number) is int else "unclassified"
+
+
 def _locate_failure(stage, error):
     """Best-effort observation before abort; no values, exception text or retry."""
     try:
@@ -201,6 +218,11 @@ def _locate_failure(stage, error):
             category = "BoundaryRefusal"
         elif type(error) is topology.TopologyRefusal:
             category = "TopologyRefusal"
+        elif stage == "mprocpidfd":
+            try:
+                category = _pidfd_open_category(error)
+            except BaseException:
+                pass  # Keep the original closed stage with no refined category.
         os.write(2, ("DOCKERLENS_NATIVE_PIDS_LOCATE: stage=" + stage
                      + " category=" + category + "\n").encode("ascii"))
     except BaseException:

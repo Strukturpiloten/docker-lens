@@ -202,6 +202,13 @@ jobs:
           config-path: scripts/validation-policy.json
       - name: Install locked shared Python tooling
         uses: ./_automation/.github/actions/shared-python
+      - name: Install repository-pinned Rust for policy fixtures
+        working-directory: source
+        run: |
+          set -euo pipefail
+          rust_channel="$(python3 -c 'import pathlib, tomllib; print(tomllib.loads(pathlib.Path("rust-toolchain.toml").read_text())["toolchain"]["channel"])')"
+          rustup toolchain install "${rust_channel}" --profile minimal --no-self-update
+          rustup run "${rust_channel}" rustc --version
       - name: Set up exact shared CI Node
         if: needs.validation-plan.outputs.profile != 'prose'
         uses: ./source/.github/actions/setup-node

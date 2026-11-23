@@ -19,8 +19,8 @@ Rootless none/v2 refusal is never positive evidence or permission for nofile28.
 
 An escaping `locate_batch` operation records only its finite operation stage and an existing
 closed `LocatorRefusal` category, exact direct `boundary.Refusal` / topology refusal
-class (`BoundaryRefusal` / `TopologyRefusal`), or `unclassified`. Subclasses remain
-unclassified; no exception message, arguments, errno, context or custom property is read. The best-effort single stderr write
+class (`BoundaryRefusal` / `TopologyRefusal`), or `unclassified`. The pidfd syscall site
+also has fixed errno categories described below. Other exception details stay private. The best-effort single stderr write
 precedes the original transfer abort; abort, propagation and failure state remain mandatory.
 It retains no exception text, native identifier, path or payload and performs no new source
 operation. The original 1024-byte root stderr reader and sole post-retirement snapshot can
@@ -34,7 +34,7 @@ recheck and final release as `discwalk`, `disccoverage`, `discrecords`, `discmat
 `discrecheck`, `discrelease`. Its optional in-process callback supplies one finite
 escaping site to the original caller emission; successful discovery emits nothing.
 A release exception superseding work retains the release site and original exception.
-Matching additionally refines `discmatch` through 73 fixed operation/guard sites:
+Matching additionally refines `discmatch` through 75 fixed operation/guard sites:
 lease binding, process acquisition/recheck, time namespaces, namespace ancestry,
 original status/stat/cgroup parsers, private-init matching, selection, purity,
 finish and rollback. The optional lease-local metadata is outside source authority;
@@ -48,7 +48,7 @@ only for identity comparison, so a handled inner failure cannot label a differen
 escape. It is cleared on success/final escape; no exception property, traceback,
 message or serialization is inspected or exported.
 
-The static union retains all 17 existing stages and all 11 categories. Its longest
+The static union retains all 17 existing stages and all 11 legacy categories. Its longest
 producer record is 91 ASCII bytes including LF; the longest projected measurement
 line is 173 bytes including LF. The original record, stderr and helper caps remain
 111, 1024 and 65536 bytes. Authored controls exercise each fixed site, compare the
@@ -56,6 +56,32 @@ actual trusted callback and source/custody reservation ledgers with metadata
 inactive/active, and preserve the original method bodies after strict metadata
 AST erasure. These controls do not identify the cause of a native CI failure or
 replace the complete authored IPC transcript and fresh native qualification.
+
+Pidfd acquisition separates the original budget reservation (`mpidfdreserve`),
+the zero-flag syscall (`mprocpidfd`), and source adoption (`mpidfdadopt`).
+Budget predicate failures retain their narrower existing sites. A direct
+syscall exception from an exact built-in OS error can supply one fixed category
+for ESRCH, EPERM, EACCES, EBADF, EMFILE, ENFILE, ENOMEM, ENOSYS, ENODEV, EINVAL,
+EINTR or another integer errno. Only the base errno descriptor is read.
+Subclasses, unknown exception kinds and missing or noninteger numbers retain
+`unclassified`. The Rust reader and wrapper allow the additional categories
+only at the syscall site. In older evidence `mprocpidfd` covered all three
+operations, so its category cannot retroactively identify the syscall.
+
+An OS error from the pidfd syscall retires its in-flight live reservation.
+The cumulative open debit and reservation peak remain charged. In the
+single-threaded Python source, acquisition blocks SIGINT across open and
+registration, then restores the inherited mask. A pending SIGINT can reach
+Python after registration, when the source ledger already owns the pidfd.
+A known provisional descriptor is closed once on failure before registration.
+Its live reservation is retired after confirmed close. Uncertain closure
+retains the charge, and cleanup never retries that descriptor number. If no
+descriptor number reaches Python, the source has no number it can safely
+close. After registration the source ledger remains the sole cleanup owner.
+The watchdog's original deadline, TERM and KILL behavior remain in force.
+
+The original exception still aborts discovery. A disappearing candidate
+remains a failed complete-role observation, with no further pidfd attempt.
 
 These labels identify an escaping operation, not its native cause. Existing coarse
 `discovery` records remain valid historical observations. The 111-byte record,

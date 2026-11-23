@@ -434,7 +434,8 @@ try:
               b"discwalk", b"disccoverage", b"discrecords", b"discmatch", b"discrecheck", b"discrelease",
               b"mleaseentry", b"mrecord", b"mprocbind", b"mstatussame", b"mscope",
               b"mcallback", b"mcallbackpure", b"mselect", b"mfinishstate", b"mfinishroles",
-              b"mfinishseen", b"mrollback", b"mprocpid", b"mprocstartvalue", b"mprocpidfd",
+              b"mfinishseen", b"mrollback", b"mprocpid", b"mprocstartvalue",
+              b"mpidfdreserve", b"mprocpidfd", b"mpidfdadopt",
               b"mprocdir", b"mprocfs", b"mprocstart", b"mproccgroup", b"mprocwithin",
               b"mprocroot", b"mprocns", b"mprocstatus", b"mprocidentity", b"mproccheck",
               b"mcheckbudget", b"mchecklive", b"mcheckstart", b"mcheckcgroup", b"mcheckstatus",
@@ -453,6 +454,10 @@ try:
             if match is None:
                 sys.exit(0)
             stage, category = match.groups()
+            if stage == b"mprocpidfd":
+                categories += (b"PidfdEsrch", b"PidfdEperm", b"PidfdEacces", b"PidfdEbadf",
+                               b"PidfdEmfile", b"PidfdEnfile", b"PidfdEnomem", b"PidfdEnosys",
+                               b"PidfdEnodev", b"PidfdEinval", b"PidfdEintr", b"PidfdOtherOs")
             if stage not in stages or category not in categories:
                 sys.exit(0)
             projected += (b" source_stage=" + next(value for value in stages if value == stage)
@@ -550,11 +555,11 @@ try:
     for index, line in observations:
         if index == len(lines) - 1 or len(line) > 256:
             raise ValueError()
-        match = re.fullmatch(rb"DOCKERLENS_NATIVE_NOFILE_FAILURE: caller_case=(soft64_hard128|soft128_hard128|soft64_hard_unlimited|both_unlimited|all) caller_role=(oracle|rendered|pair|none) caller_operation=([a-z_]+) observed_termination=(exit|signal|unknown) code=([0-9]+|none)(?: observer_(?:site=([a-z]+)|capture=([a-z0-9_]+)))?(?: observer_entry=(unknown))?", line)
+        match = re.fullmatch(rb"DOCKERLENS_NATIVE_NOFILE_FAILURE: caller_case=(soft64_hard128|soft128_hard128|soft64_hard_unlimited|both_unlimited|all) caller_role=(oracle|rendered|pair|none) caller_operation=([a-z_]+) observed_termination=(exit|signal|unknown) code=([0-9]+|none)(?: observer_(?:site=([a-z]+)|capture=([a-z0-9_]+)))?(?: observer_entry=(unknown))?(?: acquisition_error=([a-z_]+))?", line)
         if match is not None:
             if work is not None or cleanup is not None:
                 raise ValueError()
-            case, role, operation, termination, code, observer_site, observer_capture, observer_entry = match.groups()
+            case, role, operation, termination, code, observer_site, observer_capture, observer_entry, acquisition_error = match.groups()
             if observer_entry is not None and operation != b"observe":
                 raise ValueError()
             if observer_site is not None and (operation != b"observe" or termination not in (b"exit", b"signal")
@@ -584,6 +589,30 @@ try:
                 raise ValueError()
             if operation in (b"witness", b"slot_accounting", b"pair_comparison", b"capacity_comparison", b"kernel_comparison", b"acquisition") and termination != b"unknown":
                 raise ValueError()
+            if acquisition_error is not None:
+                stages = (b"DOCKERLENS_NATIVE_CHECK: nofile_context", b"DOCKERLENS_NATIVE_CHECK: nofile_effects",
+                          b"DOCKERLENS_NATIVE_CHECK: nofile_capture", b"DOCKERLENS_NATIVE_CHECK: nofile_cleanup")
+                if (operation != b"acquisition"
+                        or tuple(raw for raw in lines if any(stage in raw for stage in stages)) != stages
+                        or acquisition_error not in (b"endpoint", b"cancelled", b"deadline", b"io", b"protocol",
+                            b"status", b"version", b"shape", b"selection", b"budget_invalid", b"budget_requests",
+                            b"budget_pending_response", b"budget_response_without_request", b"budget_exhausted",
+                            b"budget_selected_resources", b"budget_expansions", b"budget_bytes", b"budget_elapsed",
+                            b"budget_input", b"budget_invalid_resource_ref", b"budget_incomplete",
+                            b"budget_observation_id_exhausted", b"budget_capture_accounting",
+                            b"budget_missing_api_version", b"budget_resource_conflict")):
+                    raise ValueError()
+                # A completed libtest summary follows the work record and any
+                # cleanup pair. A bounded failure may arrive without a summary.
+                summaries = [(i, raw) for i, raw in enumerate(lines) if raw.startswith(b"test result:")]
+                if len(summaries) > 1:
+                    raise ValueError()
+                if summaries:
+                    terminal, summary = summaries[0]
+                    if (not observations[-1][0] < terminal < len(lines) - 1 or re.fullmatch(
+                            rb"test result: FAILED\. 0 passed; 1 failed; 0 ignored; 0 measured; [0-9]+ filtered out;"
+                            rb"(?: finished in [0-9]+(?:\.[0-9]+)?s)?", summary) is None):
+                        raise ValueError()
             work = line
         else:
             match = re.fullmatch(rb"DOCKERLENS_NATIVE_NOFILE_CLEANUP_REFUSAL: reason=(ownership_guard|inner_unverified|panic) first_observed_termination=(exit|signal|unknown) code=([0-9]+|none)(?: first_unverified_phase=(unknown|lookup_name|name_ownership|id_ownership|delete|post_delete_id_absence|post_delete_name_absence|readback_id_absence|readback_name_absence))?(?: lookup_failure=(before_capture|capture_incomplete|stdout_limit|stderr_limit|both_limits|process|http_frame|http_status|json))?", line)

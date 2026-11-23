@@ -188,6 +188,71 @@ class LocatorTests(unittest.TestCase):
             l._locate_failure("PRIVATE_STAGE_CANARY", RuntimeError())
         write.assert_not_called()
 
+    def test_pidfd_os_categories_are_site_bound_exact_and_value_free(self):
+        expected = (
+            (errno.ESRCH, "PidfdEsrch"), (errno.EPERM, "PidfdEperm"), (errno.EACCES, "PidfdEacces"),
+            (errno.EBADF, "PidfdEbadf"), (errno.EMFILE, "PidfdEmfile"), (errno.ENFILE, "PidfdEnfile"),
+            (errno.ENOMEM, "PidfdEnomem"), (errno.ENOSYS, "PidfdEnosys"), (errno.ENODEV, "PidfdEnodev"),
+            (errno.EINVAL, "PidfdEinval"), (errno.EINTR, "PidfdEintr"), (errno.EIO, "PidfdOtherOs"),
+        )
+
+        accesses = []
+        class PrivateSubclass(ProcessLookupError):
+            @property
+            def errno(self):
+                accesses.append(None)
+                return errno.ESRCH
+
+        def observe(stage, error, category):
+            with patch.object(l.os, "write") as write:
+                l._locate_failure(stage, error)
+            write.assert_called_once_with(
+                2, f"DOCKERLENS_NATIVE_PIDS_LOCATE: stage={stage} category={category}\n".encode())
+
+        for number, token in expected:
+            error = OSError(number, "PRIVATE_PIDFD_CANARY")
+            observe("mprocpidfd", error, token)
+            for stage in ("mpidfdreserve", "mpidfdadopt", "mrollback", "discrelease"):
+                observe(stage, error, "unclassified")
+        for error in (PrivateSubclass(errno.ESRCH, "private"), OSError("private"),
+                      RuntimeError("private"), KeyboardInterrupt(), OSError(True, "private")):
+            observe("mprocpidfd", error, "unclassified")
+        self.assertEqual(accesses, [])
+        with patch.object(l, "_pidfd_open_category", side_effect=RuntimeError("private")):
+            observe("mprocpidfd", OSError(errno.ESRCH, "private"), "unclassified")
+
+    def test_locate_pidfd_failure_drops_partial_roles_and_keeps_cumulative_charge(self):
+        def run(tree):
+            runtime = self.runtime(tree)
+            owned = frozenset(tree.source.owned)
+            budget = tree.source.budget
+            before = budget.fds, budget.opens
+            original = b.os.pidfd_open
+            failure = ProcessLookupError(errno.ESRCH, "PRIVATE_PIDFD_CANARY")
+            pids = []
+
+            def pidfd_open(pid, flags):
+                pids.append(pid)
+                self.assertEqual(flags, 0)
+                if pid == 205:
+                    raise failure
+                return original(pid, flags)
+
+            with patch.object(b.os, "pidfd_open", side_effect=pidfd_open), patch.object(l.os, "write") as write:
+                with self.assertRaises(l.LocatorRefusal):
+                    runtime.locate_batch(tree.ids)
+                write.assert_called_once_with(2, b"DOCKERLENS_NATIVE_PIDS_LOCATE: stage=mprocpidfd category=PidfdEsrch\n")
+                self.assertEqual(pids, [100, 110, 200, 201, 202, 203, 204, 205])
+                self.assertEqual(budget.fds, before[0])
+                self.assertGreater(budget.opens, before[1] + len(pids))
+                self.assertEqual(frozenset(tree.source.owned), owned)
+                self.assertTrue(runtime.failed)
+                self.assertFalse(runtime.bound)
+                with self.assertRaises(l.LocatorRefusal):
+                    runtime.locate_batch(tree.ids)
+                self.assertEqual(len(pids), 8)
+        self.run_tree(True, run)
+
     def test_locate_escape_records_original_stage_before_abort_and_preserves_failure(self):
         # Real source/descriptor traversal with only the existing synthetic kernel facts.
         for stage in ("input", "inspect", "discovery", "membership", "distinctness", "recheck", "freeze", "transfer"):

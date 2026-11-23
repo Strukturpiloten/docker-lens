@@ -4,6 +4,7 @@
 //! Native programs below must run only in the independently owned native lanes.
 
 use super::*;
+use crate::acquisition::{AcquisitionError, LimitError};
 use crate::observation::{Availability, Origin};
 use crate::target::{ContainerToken, EnvironmentAssignment, Ulimit, UlimitValue};
 use std::collections::BTreeMap;
@@ -216,6 +217,7 @@ impl NofileTermination {
 #[derive(Default)]
 struct NofileDiagnostics {
     caller: Cell<Option<NofileCaller>>,
+    acquisition_error: Cell<Option<&'static str>>,
 }
 impl NofileDiagnostics {
     fn select(&self, run: &HealthRun, case: usize, role: NofileRole, operation: NofileOperation) {
@@ -224,6 +226,7 @@ impl NofileDiagnostics {
             role,
             operation,
         }));
+        self.acquisition_error.set(None);
         if let Some(observation) = &run.nofile_command_observation {
             observation.reset();
         }
@@ -263,6 +266,10 @@ impl NofileDiagnostics {
             Some(NofileObserverCapture::Unavailable(reason)) => {
                 format!(" observer_capture={}", reason.name())
             }
+            None if caller.operation == NofileOperation::Acquisition => self
+                .acquisition_error
+                .get()
+                .map_or_else(String::new, |error| format!(" acquisition_error={error}")),
             None => String::new(),
         };
         let entry = if caller.operation == NofileOperation::Observe {
@@ -1294,7 +1301,43 @@ fn exercise(
     }
 }
 
-fn acquisition(run: &HealthRun, outer_backend: SourceOuterBackend) -> Value {
+fn acquisition_error_name(error: AcquisitionError) -> &'static str {
+    match error {
+        AcquisitionError::Endpoint => "endpoint",
+        AcquisitionError::Cancelled => "cancelled",
+        AcquisitionError::Deadline => "deadline",
+        AcquisitionError::Io => "io",
+        AcquisitionError::Protocol => "protocol",
+        AcquisitionError::Status => "status",
+        AcquisitionError::Version => "version",
+        AcquisitionError::Shape => "shape",
+        AcquisitionError::Selection => "selection",
+        AcquisitionError::Budget(limit) => match limit {
+            LimitError::Invalid => "budget_invalid",
+            LimitError::Requests => "budget_requests",
+            LimitError::PendingResponse => "budget_pending_response",
+            LimitError::ResponseWithoutRequest => "budget_response_without_request",
+            LimitError::Exhausted => "budget_exhausted",
+            LimitError::SelectedResources => "budget_selected_resources",
+            LimitError::Expansions => "budget_expansions",
+            LimitError::Bytes => "budget_bytes",
+            LimitError::Elapsed => "budget_elapsed",
+            LimitError::Input => "budget_input",
+            LimitError::InvalidResourceRef => "budget_invalid_resource_ref",
+            LimitError::Incomplete => "budget_incomplete",
+            LimitError::ObservationIdExhausted => "budget_observation_id_exhausted",
+            LimitError::CaptureAccounting => "budget_capture_accounting",
+            LimitError::MissingApiVersion => "budget_missing_api_version",
+            LimitError::ResourceConflict => "budget_resource_conflict",
+        },
+    }
+}
+
+fn acquisition(
+    run: &HealthRun,
+    outer_backend: SourceOuterBackend,
+    diagnostics: &NofileDiagnostics,
+) -> Value {
     let calls = run.calls.get().checked_add(REQUESTS).unwrap();
     let bytes = run.bytes.get().checked_add(BODIES).unwrap();
     assert!(
@@ -1331,7 +1374,12 @@ fn acquisition(run: &HealthRun, outer_backend: SourceOuterBackend) -> Value {
         },
         &AtomicBool::new(false),
     )
-    .unwrap_or_else(|_| panic!("one actual eight-ID nofile acquisition"));
+    .unwrap_or_else(|error| {
+        diagnostics
+            .acquisition_error
+            .set(Some(acquisition_error_name(error)));
+        panic!("one actual eight-ID nofile acquisition")
+    });
     let api = ApiVersion::new(
         NonZeroU16::new(1).unwrap(),
         if run.lane.starts_with("debian11-") {
@@ -1416,6 +1464,169 @@ fn acquisition(run: &HealthRun, outer_backend: SourceOuterBackend) -> Value {
     json!({"route":"explicit_unix_socket","selected_ids":8,"requested_api":format!("{}.{}",api.major,api.minor),"reserved_calls":REQUESTS,"reserved_bytes":BODIES,"actual_requests":capture.exchanges().len(),"actual_response_bytes":bodies,"decoded":"present_effective_exact_nofile_values","daemon_mode_evidence":mode,
         "byte_scope":"decoded_response_bodies_only","separate_transport_bounds":{"response_header_bytes":16384,"chunk_line_bytes":64,"chunk_payload_crlf_bytes":2,"final_trailer_line_bytes":16384,"actual_wire_bytes":"not_measured"},
         "limits":{"max_requests":20,"max_selected_resources":8,"max_expansions":10,"max_response_bytes":131072,"max_total_bytes":BODIES,"max_elapsed_seconds":10}})
+}
+
+#[test]
+fn nofile_acquisition_reports_real_exchange_errors_and_keeps_exact_eight_id_proof() {
+    use std::io::{BufRead, BufReader, ErrorKind};
+    use std::os::unix::fs::DirBuilderExt;
+    use std::os::unix::net::UnixListener;
+
+    let private =
+        std::env::temp_dir().join(format!("dl-nf-acq-{}-{}", std::process::id(), utc_ns()));
+    fs::DirBuilder::new().mode(0o700).create(&private).unwrap();
+    let controls = std::panic::catch_unwind(|| {
+        for (control, error, requests) in [
+            ("id", None, 11),
+            ("name", None, 11),
+            ("missing_endpoint", None, 11),
+            ("same_bridge_twice", Some("shape"), 12),
+            ("version", Some("version"), 1),
+            ("frame", Some("protocol"), 11),
+            ("status", Some("status"), 11),
+            ("response_bytes", Some("budget_bytes"), 11),
+        ] {
+            let socket = private.join(control);
+            let listener = UnixListener::bind(&socket).unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let mut run = offline_run(socket.to_str().unwrap().into());
+            run.deadline = Instant::now() + Duration::from_secs(180);
+            run.api = "1.56".into();
+            run.engine = "29.8.1".into();
+            run.lane = "upstream-rootful".into();
+            run.ids = (1..=8).map(|id| Some(format!("{id:064x}"))).collect();
+            let network_id = "a".repeat(64);
+            let mut bytes = 0;
+            let mut exchanges = Vec::new();
+            let mut reply = |path: String, body: Value| {
+                let body = body.to_string() + "\n";
+                bytes += body.len();
+                exchanges.push((
+                    path,
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+                        body.len()
+                    ),
+                ));
+            };
+            reply(
+                "/version".into(),
+                json!({"Version":"29.8.1","ApiVersion":"1.56",
+                      "MinAPIVersion":if control == "version" { "1.50" } else { "1.44" }}),
+            );
+            if control != "version" {
+                reply("/v1.49/info".into(), json!({"ServerVersion":"29.8.1"}));
+                for (index, (soft, hard)) in [
+                    (64, 128),
+                    (64, 128),
+                    (128, 128),
+                    (128, 128),
+                    (64, -1),
+                    (64, -1),
+                    (-1, -1),
+                    (-1, -1),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let running = index < 4
+                        || matches!(control, "id" | "frame" | "status" | "response_bytes");
+                    let networks = match (control, running) {
+                        ("missing_endpoint", false) => json!({}),
+                        ("name" | "same_bridge_twice", false) | ("name", true) => {
+                            json!({"bridge":{"NetworkID":"","EndpointID":""}})
+                        }
+                        _ => json!({"bridge":{"NetworkID":network_id,"EndpointID":"endpoint"}}),
+                    };
+                    let id = run.ids[index].as_deref().unwrap();
+                    reply(
+                        format!("/v1.49/containers/{id}/json"),
+                        json!({"Id":id,"State":{"Status":if running {"running"} else {"created"},
+                            "Running":running,"Pid":if running {100+index}else{0}},"Mounts":[],
+                            "HostConfig":{"Ulimits":[{"Name":"nofile","Soft":soft,"Hard":hard}]},
+                            "NetworkSettings":{"Networks":networks}}),
+                    );
+                }
+                let bridge = json!({"Id":network_id,"Name":"bridge","Driver":"bridge"});
+                // Both references below resolve to one daemon network. The real
+                // acquire path must refuse that capture even after both 200 replies.
+                if control != "name" {
+                    reply(format!("/v1.49/networks/{network_id}"), bridge.clone());
+                }
+                if matches!(control, "name" | "same_bridge_twice") {
+                    reply("/v1.49/networks/bridge".into(), bridge);
+                }
+                if let Some(raw) = match control {
+                    "frame" => Some("HTTP/1.1 200 OK\r\n\r\n"),
+                    "status" => Some("HTTP/1.1 404 Not Found\r\nContent-Length: 2\r\n\r\n{}"),
+                    "response_bytes" => Some("HTTP/1.1 200 OK\r\nContent-Length: 131073\r\n\r\n"),
+                    _ => None,
+                } {
+                    exchanges.last_mut().unwrap().1 = raw.into();
+                }
+            }
+            assert_eq!(exchanges.len(), requests);
+            let server = std::thread::spawn(move || {
+                let deadline = Instant::now() + Duration::from_secs(3);
+                for (path, reply) in exchanges {
+                    let (mut stream, _) = loop {
+                        match listener.accept() {
+                            Ok(accepted) => break accepted,
+                            Err(e)
+                                if e.kind() == ErrorKind::WouldBlock
+                                    && Instant::now() < deadline =>
+                            {
+                                std::thread::sleep(Duration::from_millis(1))
+                            }
+                            Err(_) => panic!("inert acquisition accept"),
+                        }
+                    };
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(1)))
+                        .unwrap();
+                    let mut reader = BufReader::new(&stream);
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    assert_eq!(line, format!("GET {path} HTTP/1.1\r\n"));
+                    for _ in 0..4 {
+                        line.clear();
+                        reader.read_line(&mut line).unwrap();
+                        if line == "\r\n" {
+                            break;
+                        }
+                    }
+                    assert_eq!(line, "\r\n");
+                    stream.write_all(reply.as_bytes()).unwrap();
+                }
+            });
+            let diagnostics = NofileDiagnostics::default();
+            diagnostics.all(&run, NofileOperation::Acquisition);
+            let acquired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                acquisition(&run, SourceOuterBackend::Docker, &diagnostics)
+            }));
+            assert!(server.join().is_ok(), "inert acquisition trace: {control}");
+            assert_eq!(run.calls.get(), 20);
+            assert_eq!(run.bytes.get(), 524288);
+            let observed = diagnostics.failure(&run).unwrap();
+            let base = "DOCKERLENS_NATIVE_NOFILE_FAILURE: caller_case=all caller_role=none caller_operation=acquisition observed_termination=unknown code=none";
+            if let Some(error) = error {
+                assert!(acquired.is_err(), "inert control must fail: {control}");
+                assert_eq!(observed, format!("{base} acquisition_error={error}"));
+                diagnostics.all(&run, NofileOperation::Acquisition);
+                assert_eq!(diagnostics.failure(&run).as_deref(), Some(base));
+            } else {
+                assert_eq!(observed, base);
+                let proof = acquired.unwrap();
+                assert_eq!(proof["selected_ids"], 8);
+                assert_eq!(proof["requested_api"], "1.49");
+                assert_eq!(proof["actual_requests"], requests);
+                assert_eq!(proof["actual_response_bytes"], bytes);
+                assert_eq!(proof["decoded"], "present_effective_exact_nofile_values");
+            }
+        }
+    });
+    fs::remove_dir_all(private).unwrap();
+    controls.unwrap();
 }
 
 fn nofile_cleanup_with(
@@ -1509,7 +1720,11 @@ fn live_nofile_limits_and_effects_match_engine() {
     let owner = BoundOuterCleanupOwner::bind(&run);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         diagnostics.all(&run, NofileOperation::Context);
-        let _ = writeln!(std::io::stderr(), "DOCKERLENS_NATIVE_CHECK: nofile_context");
+        // Single-thread libtest can leave its test-name prefix unterminated.
+        let _ = writeln!(
+            std::io::stderr(),
+            "\nDOCKERLENS_NATIVE_CHECK: nofile_context"
+        );
         let uid = run.context();
         let image = image_snapshot(&run);
         assert!(
@@ -1608,9 +1823,9 @@ fn live_nofile_limits_and_effects_match_engine() {
             health_status == 200 && health["Version"] == run.engine,
             "post-case daemon health corroborated by finite controls"
         );
-        eprintln!("DOCKERLENS_NATIVE_CHECK: nofile_capture");
+        let _ = writeln!(std::io::stderr(), "DOCKERLENS_NATIVE_CHECK: nofile_capture");
         diagnostics.all(&run, NofileOperation::Acquisition);
-        let acquired = acquisition(&run, outer_backend);
+        let acquired = acquisition(&run, outer_backend, &diagnostics);
         (uid, image, cases, acquired, context_calls, slot_calls)
     }));
     // Freeze the original work context before any cleanup call can change it.

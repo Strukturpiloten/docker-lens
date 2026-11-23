@@ -213,12 +213,14 @@ class NofileSourceTests(unittest.TestCase):
         live = source.split('fnlive_nofile_limits_and_effects_match_engine(){', 1)[1]
         self.assertLess(live.index('letouter_backend=source_outer_backend();'), live.index('ProofTarget::new_for('))
         self.assertEqual(live.count('source_outer_backend()'), 1)
-        self.assertIn('acquisition(&run,outer_backend)', live)
+        self.assertEqual(live.count('acquisition(&run,outer_backend,&diagnostics)'), 1)
         self.assertIn('letfinal_readback_calls=2+outer_backend.snapshot_extra_calls();', live)
         self.assertIn('ordinary_bytes>BODIES+2*outer_backend.snapshot_extra_bytes()', live)
-        acquisition = source.split('fnacquisition(', 1)[1].split('fnnofile_cleanup_with(', 1)[0]
+        acquisition = source.split('fnacquisition(', 1)[1].split('#[test]', 1)[0]
         self.assertIn('.checked_add(2+outer_backend.snapshot_extra_calls())', acquisition)
         self.assertIn('.checked_add(2*ORDINARY_CAPTURE_ENVELOPE+outer_backend.snapshot_extra_bytes())', acquisition)
+        self.assertEqual(acquisition.count('letcapture=acquire('), 1)
+        self.assertLess(acquisition.index('run.bytes.set(bytes);'), acquisition.index('letcapture=acquire('))
         self.assertNotIn('charge_outer_snapshot(', self.raw())
         harness = (ROOT / 'scripts/native-conformance.sh').read_text()
         self.assertEqual(harness.count('native_nofile live_nofile_limits_and_effects_match_engine'), 1)

@@ -447,6 +447,23 @@ fn main() {
             self.assertEqual(result.stderr.count((expected + "\n").encode()), 1)
             self.assertNotEqual(result.returncode, 0)
             self.assertNotIn(source.encode(), result.stdout + result.stderr)
+    def test_pidfd_category_pairs_only_with_a_locate_syscall_escape(self):
+        caller = PREFIX + "pids-eof caller=locate_batch slot=none phase=none"
+        categories = ("PidfdEsrch", "PidfdEperm", "PidfdEacces", "PidfdEbadf", "PidfdEmfile",
+                      "PidfdEnfile", "PidfdEnomem", "PidfdEnosys", "PidfdEnodev", "PidfdEinval",
+                      "PidfdEintr", "PidfdOtherOs")
+        for category in categories:
+            source = f"DOCKERLENS_NATIVE_PIDS_LOCATE: stage=mprocpidfd category={category}"
+            out, _ = self.wrapper(source + "\nDOCKERLENS_NATIVE_CHECK: pids_cleanup\n" + caller, status=101)
+            self.assertNotEqual(out.returncode, 0)
+            self.assertIn(f"{caller} source_stage=mprocpidfd source_category={category}\n".encode(), out.stderr)
+            self.assertNotIn(source.encode(), out.stdout + out.stderr)
+        for stage in ("mpidfdreserve", "mpidfdadopt", "mbudgetfds", "discrelease"):
+            source = f"DOCKERLENS_NATIVE_PIDS_LOCATE: stage={stage} category=PidfdEsrch"
+            out, _ = self.wrapper(source + "\nDOCKERLENS_NATIVE_CHECK: pids_cleanup\n" + caller, status=101)
+            self.assertNotEqual(out.returncode, 0)
+            self.assertNotIn(b"source_category=", out.stdout + out.stderr)
+
     def test_locate_record_unknown_partial_duplicate_mixed_and_success_remain_failed(self):
         source = "DOCKERLENS_NATIVE_PIDS_LOCATE: stage=discovery category=NoMatch"
         caller = PREFIX + "pids-eof caller=locate_batch slot=none phase=none"

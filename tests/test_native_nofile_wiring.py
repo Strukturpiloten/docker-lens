@@ -71,15 +71,19 @@ class NofileWiringTests(unittest.TestCase):
         return source[start:end]
 
     def test_actual_default_capture_libtest_preserves_marker_record_and_cleanup_order(self):
-        # Execute the three production marker statements under ordinary capturing
-        # libtest. Authored transcripts alone miss eprintln/direct-stderr reordering.
+        # Execute the production marker statements through ordinary capturing
+        # libtest and the real wrapper, including the exact ignored-only listing.
         source = (ROOT / "src/native_nofile_tests.rs").read_text()
         markers = {}
-        for name in ("context", "effects", "cleanup"):
-            matches = [line.strip() for line in source.splitlines()
-                       if f'"DOCKERLENS_NATIVE_CHECK: nofile_{name}"' in line]
+        for name in ("context", "effects", "capture", "cleanup", "proof"):
+            matches = re.findall(r'(?:let _ = writeln!\(\s*std::io::stderr\(\),\s*|eprintln!\()'
+                                 rf'"[^"\n]*DOCKERLENS_NATIVE_CHECK: nofile_{name}"\s*,?\s*\);', source)
             self.assertEqual(len(matches), 1)
             markers[name] = matches[0]
+        observer = self.failure_line(operation="observe", code="1").rstrip(b"\n") + b" observer_site=workerexe\n"
+        acquisition = (self.failure_line("all", "none", "acquisition", "unknown", "none").rstrip(b"\n")
+                       + b" acquisition_error=shape\n")
+        refusal = self.cleanup_line(reason="ownership_guard", termination="unknown", code="none")
         with tempfile.TemporaryDirectory(prefix="dl-nofile-libtest-") as directory:
             root = Path(directory)
             fixture = '''use std::io::Write;
@@ -88,49 +92,65 @@ use super::super::super::*;
 #[test] #[ignore]
 fn live_nofile_limits_and_effects_match_engine() {
     let mode = std::env::var("NOFILE_TRANSPORT_MODE").unwrap();
-    let work = mode == "work" || mode == "both";
-    let cleanup = mode == "cleanup" || mode == "both";
+    let acquisition = matches!(mode.as_str(), "acquisition" | "acquisition_handoff");
+    let work = acquisition || matches!(mode.as_str(), "work" | "both");
+    let cleanup = matches!(mode.as_str(), "cleanup" | "both" | "acquisition_handoff");
     let result = std::panic::catch_unwind(|| {
         CONTEXT
         EFFECTS
+        if acquisition || mode == "success" { CAPTURE }
         if work { panic!("PRIVATE_NOFILE_WIRING_CANARY"); }
     });
     CLEANUP
-    if cleanup { let _ = std::io::stderr().write_all(HANDOFF); }
-    if work { let _ = std::io::stderr().write_all(WORK); }
+    if cleanup {
+        let _ = writeln!(std::io::stderr(), "DOCKERLENS_NATIVE_CHECK: lifecycle_cleanup_unverified");
+        let _ = std::io::stderr().write_all(HANDOFF);
+    }
+    if acquisition { let _ = std::io::stderr().write_all(ACQUISITION); }
+    else if work { let _ = std::io::stderr().write_all(WORK); }
     if cleanup { let _ = std::io::stderr().write_all(REFUSAL); }
     if let Err(error) = result { std::panic::resume_unwind(error); }
     assert!(!cleanup, "PRIVATE_NOFILE_WIRING_CANARY");
+    PROOF
 }
 }}}
 '''
             for token, value in (("CONTEXT", markers["context"]), ("EFFECTS", markers["effects"]),
-                                 ("CLEANUP", markers["cleanup"]),
-                                 ("HANDOFF", 'b"' + HANDOFF.decode().replace("\n", "\\n") + '"'),
-                                 ("WORK", 'b"' + (self.failure_line(operation="observe", code="1").rstrip(b"\n") + b" observer_site=workerexe\n").decode().replace("\n", "\\n") + '"'),
-                                 ("REFUSAL", 'b"' + self.cleanup_line(reason="ownership_guard", termination="unknown", code="none").decode().replace("\n", "\\n") + '"')):
+                                 ("CAPTURE", markers["capture"]), ("CLEANUP", markers["cleanup"]),
+                                 ("PROOF", markers["proof"]),
+                                 ("HANDOFF", 'b' + json.dumps(HANDOFF.decode())),
+                                 ("WORK", 'b' + json.dumps(observer.decode())),
+                                 ("ACQUISITION", 'b' + json.dumps(acquisition.decode())),
+                                 ("REFUSAL", 'b' + json.dumps(refusal.decode()))):
                 fixture = fixture.replace(token, value)
             (root / "transport.rs").write_text(fixture)
             built = subprocess.run(["rustc", "--edition=2024", "--test", str(root / "transport.rs"), "-o", str(root / "transport")],
                                    cwd=ROOT, capture_output=True, timeout=30, check=False)
             self.assertEqual(built.returncode, 0, built.stderr)
-            for mode in ("work", "cleanup", "both", "success"):
-                captured = subprocess.run([str(root / "transport"), "--ignored", "--exact", SELECTED],
-                                          env={**os.environ, "NOFILE_TRANSPORT_MODE": mode},
-                                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=5, check=False)
-                self.assertEqual(captured.returncode, 0 if mode == "success" else 101)
-                result, _calls, _dates = self.wrapper(captured.stdout, captured.returncode)
-                self.assertEqual(result.returncode, 0 if mode == "success" else 1, result.stderr)
-                output = result.stdout + result.stderr
-                self.assertEqual(b"DOCKERLENS_NATIVE_NOFILE_FAILURE:" in output, mode in ("work", "both"))
-                self.assertEqual(b" observer_site=workerexe" in output, mode in ("work", "both"))
-                self.assertEqual(b"DOCKERLENS_NATIVE_NOFILE_CLEANUP_REFUSAL:" in output, mode in ("cleanup", "both"))
-                self.assertEqual(HANDOFF.rstrip() in output, mode in ("cleanup", "both"))
-                self.assertNotIn(SECRET, output)
-                if mode == "both":
-                    self.assertLess(output.index(b"DOCKERLENS_NATIVE_NOFILE_FAILURE:"), output.index(b"DOCKERLENS_NATIVE_NOFILE_CLEANUP_REFUSAL:"))
+            for threads in (1, 2):
+                for mode in ("work", "cleanup", "both", "success", "acquisition", "acquisition_handoff"):
+                    with self.subTest(threads=threads, mode=mode):
+                        result, calls, dates = self.wrapper(transport=(root / "transport", threads, mode))
+                        self.assertEqual(result.returncode, 0 if mode == "success" else 1, result.stderr)
+                        self.assertEqual(len(calls), 2)
+                        self.assertIn("--list", calls[0]["argv"])
+                        self.assertEqual(calls[1]["argv"][-4:], ["--", "--ignored", "--exact", SELECTED])
+                        self.assertEqual(dates, ["date"])
+                        output = result.stdout + result.stderr
+                        if mode != "success":
+                            self.assertIn(b"failed (exit 101)", output)
+                        handoff = mode in ("cleanup", "both", "acquisition_handoff")
+                        work = observer if mode in ("work", "both") else acquisition if mode.startswith("acquisition") else None
+                        self.assertEqual(output.count(b"DOCKERLENS_NATIVE_NOFILE_FAILURE:"), int(work is not None))
+                        self.assertEqual(output.count(HANDOFF), int(handoff))
+                        self.assertEqual(output.count(refusal), int(handoff))
+                        if work is not None:
+                            self.assertLessEqual(len(work.rstrip(b"\n")), 256)
+                            self.assertEqual(output.count(work), 1)
+                            if handoff:
+                                self.assertLess(output.index(work), output.index(refusal))
 
-    def wrapper(self, output=SUCCESS, status=0, *, listing=None, list_status=0, name=TEST, cleanup_failure=False):
+    def wrapper(self, output=SUCCESS, status=0, *, listing=None, list_status=0, name=TEST, cleanup_failure=False, transport=None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "cargo").write_text('''#!/usr/bin/python3
@@ -139,6 +159,9 @@ with open(os.environ["TRACE"], "a") as stream:
     stream.write(json.dumps({"argv": sys.argv[1:], "owner": os.environ.get("NATIVE_LIFECYCLE_CLEANUP_OWNER"),
         "deadline": os.environ.get("NATIVE_NOFILE_DEADLINE_EPOCH"),
         "shared": os.environ.get("NATIVE_LIFECYCLE_DEADLINE_EPOCH")}) + "\\n")
+binary = os.environ.get("NOFILE_TRANSPORT_BINARY")
+if binary:
+    os.execv(binary, [binary, *sys.argv[sys.argv.index("--") + 1:]])
 if "--list" in sys.argv:
     sys.stdout.buffer.write(base64.b64decode(os.environ["LISTING"]))
     sys.exit(int(os.environ["LIST_STATUS"]))
@@ -165,6 +188,12 @@ exit 1
                    "LISTING": base64.b64encode(listing).decode(), "LIST_STATUS": str(list_status),
                    "NATIVE_NOFILE_DEADLINE_EPOCH": "1",
                    "NATIVE_LIFECYCLE_CLEANUP_OWNER": "native_conformance_outer_v1"}
+            env.pop("NOFILE_TRANSPORT_BINARY", None)
+            if transport is not None:
+                binary, threads, mode = transport
+                env.pop("RUST_TEST_NOCAPTURE", None)
+                env.update(NOFILE_TRANSPORT_BINARY=str(binary), RUST_TEST_THREADS=str(threads),
+                           NOFILE_TRANSPORT_MODE=mode)
             result = subprocess.run(["bash", str(ROOT / "scripts/run-exact-native-test.sh"), TARGET, name],
                                     env=env, capture_output=True, timeout=10, check=False)
             calls = [json.loads(line) for line in (root / "trace").read_text().splitlines()] if (root / "trace").exists() else []
@@ -1017,6 +1046,98 @@ fn main() {
         result, _calls, _dates = self.wrapper()
         self.assertEqual(result.returncode, 0)
         self.assertNotIn(b"DOCKERLENS_NATIVE_NOFILE_", result.stdout + result.stderr)
+
+    def test_nofile_acquisition_error_projects_only_for_one_reached_failed_capture(self):
+        base = self.failure_line("all", "none", "acquisition", "unknown", "none").rstrip(b"\n")
+        capture = b"DOCKERLENS_NATIVE_CHECK: nofile_capture\n"
+        effects = b"DOCKERLENS_NATIVE_CHECK: nofile_effects\n"
+        context = b"DOCKERLENS_NATIVE_CHECK: nofile_context\n"
+        cleanup_marker = b"DOCKERLENS_NATIVE_CHECK: nofile_cleanup\n"
+        cleanup = self.cleanup_line()
+
+        def transcript(work, cleanup_record=b""):
+            return self.failure_transcript(work, cleanup_record).replace(effects, effects + capture)
+
+        errors = ("endpoint", "cancelled", "deadline", "io", "protocol", "status", "version", "shape",
+                  "selection", "budget_invalid", "budget_requests", "budget_pending_response",
+                  "budget_response_without_request", "budget_exhausted", "budget_selected_resources",
+                  "budget_expansions", "budget_bytes", "budget_elapsed", "budget_input",
+                  "budget_invalid_resource_ref", "budget_incomplete", "budget_observation_id_exhausted",
+                  "budget_capture_accounting", "budget_missing_api_version", "budget_resource_conflict")
+        for category in errors:
+            with self.subTest(category=category):
+                work = base + f" acquisition_error={category}\n".encode()
+                self.assertLessEqual(len(work.rstrip(b"\n")), 256)
+                result, calls, dates = self.wrapper(transcript(work), 101)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(b"failed (exit 101)", result.stderr)
+                self.assertEqual(result.stderr.count(work), 1)
+                self.assertNotIn(SECRET, result.stdout + result.stderr)
+                self.assertEqual(len(calls), 2)
+                self.assertEqual(dates, ["date"])
+
+        work = base + b" acquisition_error=shape\n"
+        result, _, _ = self.wrapper(transcript(work, cleanup), 101)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(b"failed (exit 101)", result.stderr)
+        self.assertLess(result.stderr.index(work), result.stderr.index(cleanup))
+        legacy, _, _ = self.wrapper(self.failure_transcript(base + b"\n"), 101)
+        self.assertIn(base + b"\n", legacy.stderr)
+
+        invalid = (
+            self.failure_transcript(work), transcript(work).replace(capture, capture * 2),
+            transcript(work).replace(capture, capture + b"decorated: " + capture),
+            transcript(work).replace(effects + capture, capture + effects),
+            transcript(work).replace(context + effects, effects + context),
+            transcript(work).replace(context, context * 2),
+            transcript(work).replace(capture, b"").replace(cleanup_marker, cleanup_marker + capture),
+            transcript(work + work), transcript(work).rstrip(b"\n"),
+            transcript(work.replace(b"shape", SECRET)), transcript(work.replace(b"shape", b"future")),
+            transcript(work.replace(b"shape", b"shape\0")),
+            transcript(work.replace(b"shape", b"shape acquisition_error=io")),
+            transcript(work.replace(b"code=none", b"code=none observer_entry=unknown")),
+            transcript(work.replace(b"termination=unknown code=none", b"termination=exit code=1")),
+            transcript(work.replace(b"caller_operation=acquisition", b"caller_operation=daemon_health")),
+            transcript(work).replace(cleanup_marker, b"DOCKERLENS_NATIVE_CHECK: nofile_proof\n" + cleanup_marker),
+            transcript(work) + SUCCESS,
+        )
+        for output in invalid:
+            result, _, _ = self.wrapper(output, 101)
+            self.assertNotIn(b"DOCKERLENS_NATIVE_NOFILE_FAILURE:", result.stdout + result.stderr)
+            self.assertNotIn(SECRET, result.stdout + result.stderr)
+        result, _, _ = self.wrapper(transcript(work), 0)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn(b"acquisition_error=", result.stdout + result.stderr)
+
+    def test_nofile_acquisition_record_and_cleanup_pair_precede_optional_terminal_summary(self):
+        work = (self.failure_line("all", "none", "acquisition", "unknown", "none").rstrip(b"\n")
+                + b" acquisition_error=shape\n")
+        failed = b"test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 100 filtered out; finished in 0.00s\n"
+        cleanup_stage = b"DOCKERLENS_NATIVE_CHECK: nofile_cleanup\n"
+        refusal = self.cleanup_line()
+        for cleanup in (b"", refusal):
+            output = self.failure_transcript(work, cleanup).replace(
+                cleanup_stage, b"DOCKERLENS_NATIVE_CHECK: nofile_capture\n" + cleanup_stage)
+            for status, suffix in ((101, failed), (124, b"")):
+                with self.subTest(cleanup=bool(cleanup), status=status):
+                    result, _, _ = self.wrapper(output + suffix, status)
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn(f"failed (exit {status})".encode(), result.stderr)
+                    self.assertEqual(result.stderr.count(work), 1)
+                    self.assertEqual(result.stderr.count(refusal), int(bool(cleanup)))
+            invalid = [failed + output, output.replace(cleanup_stage, cleanup_stage + failed),
+                       output.replace(work, failed + work), output + failed * 2,
+                       output + failed + SUCCESS, output + SUCCESS, output + failed.rstrip(b"\n"),
+                       output + failed.replace(b"1 failed", b"2 failed"),
+                       output + b"test result: FAILED. " + SECRET + b"\n"]
+            if cleanup:
+                invalid.append(output.replace(refusal, failed + refusal))
+            for case, transcript in enumerate(invalid):
+                with self.subTest(cleanup=bool(cleanup), case=case):
+                    result, _, _ = self.wrapper(transcript, 101)
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn(b"failed (exit 101)", result.stderr)
+                    self.assertNotIn(b"DOCKERLENS_NATIVE_NOFILE_", result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

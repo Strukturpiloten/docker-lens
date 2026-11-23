@@ -1,5 +1,6 @@
 """Independent matching refusals over real production bodies and a virtual kernel."""
 import ast
+import errno
 from contextlib import ExitStack
 from dataclasses import replace
 import hashlib
@@ -15,7 +16,7 @@ from test_native_pids_discovery import SyntheticSource, boundary as b, locator a
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPECTED = '''mleaseentry mrecord mprocbind mstatussame mscope mcallback mcallbackpure mselect
-mfinishstate mfinishroles mfinishseen mrollback mprocpid mprocstartvalue mprocpidfd mprocdir
+mfinishstate mfinishroles mfinishseen mrollback mprocpid mprocstartvalue mpidfdreserve mprocpidfd mpidfdadopt mprocdir
 mprocfs mprocstart mproccgroup mprocwithin mprocroot mprocns mprocstatus mprocidentity
 mproccheck mcheckbudget mchecklive mcheckstart mcheckcgroup mcheckstatus mcheckreopen
 mcheckidentity mcheckclose mtimeopen mtimematch mtimelive mtimeregister mctimeopen
@@ -44,8 +45,8 @@ def trusted_consume(before, daemon_ns):
 class MatchingTests(unittest.TestCase):
     def test_static_union_and_unchanged_record_bounds(self):
         self.assertEqual(list(b.MATCHING_SITES), EXPECTED)
-        self.assertEqual(len(set(EXPECTED)), 73)
-        self.assertEqual(len(l.LOCATE_STAGES), 90)
+        self.assertEqual(len(set(EXPECTED)), 75)
+        self.assertEqual(len(l.LOCATE_STAGES), 92)
         maximum = max(len(f'DOCKERLENS_NATIVE_PIDS_LOCATE: stage={s} category={c}\n'.encode())
             for s in l.LOCATE_STAGES for c in l.LOCATE_CATEGORIES)
         projected = max(len(('DOCKERLENS_NATIVE_PIDS_MEASUREMENT_REFUSAL: code=pids-eof'
@@ -62,7 +63,14 @@ class MatchingTests(unittest.TestCase):
         for record in baseline['methods'].values():
             with self.subTest(path=record['path'], owner=record['owner'], name=record['name']):
                 self.assertEqual(hashlib.sha256(record['source'].encode()).hexdigest(), record['sha256'])
-                original = ast.parse(record['source']).body[0]
+                original_source = record['source']
+                if (record['owner'], record['name']) == ('LinuxSource', 'process'):
+                    # Only the pidfd handoff moved out of the immutable body.
+                    # Its reservation, syscall and adoption now share one guard.
+                    old = "        self.budget.fd()\n        pidfd = self.own(os.pidfd_open(pid, 0))"
+                    self.assertEqual(original_source.count(old), 1)
+                    original_source = original_source.replace(old, "        pidfd = self._acquire_pidfd(pid)")
+                original = ast.parse(original_source).body[0]
                 current = normalized_matching_metadata(method((ROOT / record['path']).read_text(), record['owner'], record['name']))
                 # Only the fixed newly optional parameter may be erased. Existing
                 # read/read_fd metadata plumbing remains part of the frozen body.
@@ -350,7 +358,7 @@ class MatchingTests(unittest.TestCase):
             self.assertEqual(source.owned, set())
 
     def test_process_and_recheck_operation_escapes_retain_actual_exception_and_custody(self):
-        process_sites = ('mprocpid', 'mprocstartvalue', 'mprocpidfd', 'mprocdir', 'mprocfs',
+        process_sites = ('mprocpid', 'mprocstartvalue', 'mpidfdreserve', 'mprocpidfd', 'mpidfdadopt', 'mprocdir', 'mprocfs',
             'mprocstart', 'mproccgroup', 'mprocwithin', 'mprocroot', 'mprocns', 'mprocstatus',
             'mprocidentity', 'mproccheck', 'mtimeopen', 'mtimelive', 'mtimeregister')
         check_sites = ('mcheckbudget', 'mchecklive', 'mcheckstart', 'mcheckcgroup', 'mcheckstatus',
@@ -381,8 +389,12 @@ class MatchingTests(unittest.TestCase):
                         return body.replace(b'Uid: 1000 1000 1000 1000', b'Uid: 1000 0 0 0')
                     return body
                 stack.enter_context(patch.object(source, 'read', read))
-                if site == 'mprocpidfd':
+                if site == 'mpidfdreserve':
+                    stack.enter_context(patch.object(source.budget, 'fd', side_effect=work))
+                elif site == 'mprocpidfd':
                     stack.enter_context(patch.object(b.os, 'pidfd_open', side_effect=work))
+                elif site == 'mpidfdadopt':
+                    stack.enter_context(patch.object(source, 'own', side_effect=work))
                 elif site == 'mprocfs':
                     stack.enter_context(patch.object(b, 'fs_magic', side_effect=lambda fd, observer=None:
                         0 if fixture.objects[fd][0] == 'procdir' else original_magic(fd, observer=observer)))
@@ -435,6 +447,38 @@ class MatchingTests(unittest.TestCase):
             with fixture.environment():
                 source.release_since(fixture.baseline)
                 self.assertEqual(source.owned, fixture.baseline)
+
+    def test_pidfd_failure_retires_only_a_definitely_failed_open_slot(self):
+        for error, live_delta in ((ProcessLookupError(errno.ESRCH, "PRIVATE_PIDFD"), 0),
+                                  (OSError(errno.EMFILE, "PRIVATE_PIDFD"), 0),
+                                  (KeyboardInterrupt(), 1)):
+            fixture = SyntheticSource()
+            source = fixture.source
+            budget = source.budget
+            fds, opens, peak = budget.fds, budget.opens, budget.peak_fds
+            observer = b.matching_observation()
+            with fixture.environment(), patch.object(b.os, 'pidfd_open', side_effect=error) as opened:
+                with self.assertRaises(type(error)) as caught:
+                    source.process(110, 1100, observer=observer)
+            self.assertIs(caught.exception, error)
+            opened.assert_called_once_with(110, 0)
+            self.assertEqual(b.matching_finish(observer, error), 'mprocpidfd')
+            self.assertEqual((budget.fds, budget.opens, budget.peak_fds),
+                             (fds + live_delta, opens + 1, max(peak, fds + 1)))
+            self.assertEqual(source.owned, fixture.baseline)
+
+        fixture = SyntheticSource()
+        source = fixture.source
+        source.budget.fds = 256
+        before = source.budget.opens
+        observer = b.matching_observation()
+        with fixture.environment(), patch.object(b.os, 'pidfd_open') as opened:
+            with self.assertRaises(b.Refusal) as caught:
+                source.process(110, 1100, observer=observer)
+        opened.assert_not_called()
+        self.assertEqual(b.matching_finish(observer, caught.exception), 'mbudgetfds')
+        self.assertEqual((source.budget.fds, source.budget.opens), (257, before + 1))
+        self.assertEqual(source.owned, fixture.baseline)
 
     def test_namespace_ancestry_operations_keep_original_parent_reservations_and_refusals(self):
         sites = ('mnamespaceactive', 'mnamespacedepth', 'mnamespacereserve', 'mnamespaceparent',

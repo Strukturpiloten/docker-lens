@@ -754,7 +754,9 @@ const LOCATE_STAGES: &[&str] = &[
     "mrollback",
     "mprocpid",
     "mprocstartvalue",
+    "mpidfdreserve",
     "mprocpidfd",
+    "mpidfdadopt",
     "mprocdir",
     "mprocfs",
     "mprocstart",
@@ -827,6 +829,20 @@ const LOCATE_CATEGORIES: &[&str] = &[
     "TopologyRefusal",
     "unclassified",
 ];
+const LOCATE_PIDFD_CATEGORIES: &[&str] = &[
+    "PidfdEsrch",
+    "PidfdEperm",
+    "PidfdEacces",
+    "PidfdEbadf",
+    "PidfdEmfile",
+    "PidfdEnfile",
+    "PidfdEnomem",
+    "PidfdEnosys",
+    "PidfdEnodev",
+    "PidfdEinval",
+    "PidfdEintr",
+    "PidfdOtherOs",
+];
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ClosedLocateFailure {
     stage: usize,
@@ -834,10 +850,15 @@ struct ClosedLocateFailure {
 }
 impl ClosedLocateFailure {
     fn parts(self) -> Option<(&'static str, &'static str)> {
-        Some((
-            *LOCATE_STAGES.get(self.stage)?,
-            *LOCATE_CATEGORIES.get(self.category)?,
-        ))
+        let stage = *LOCATE_STAGES.get(self.stage)?;
+        if stage != "mprocpidfd" && self.category >= LOCATE_CATEGORIES.len() {
+            return None;
+        }
+        let category = *LOCATE_CATEGORIES
+            .iter()
+            .chain(LOCATE_PIDFD_CATEGORIES)
+            .nth(self.category)?;
+        Some((stage, category))
     }
 }
 fn root_observation_from_capture(
@@ -865,14 +886,15 @@ fn root_observation_from_capture(
     let body =
         std::str::from_utf8(line.strip_prefix(b"DOCKERLENS_NATIVE_PIDS_LOCATE: stage=")?).ok()?;
     let (stage, category) = body.split_once(" category=")?;
-    Some(CapturedConstructorObservation::Locate(
-        ClosedLocateFailure {
-            stage: LOCATE_STAGES.iter().position(|allowed| *allowed == stage)?,
-            category: LOCATE_CATEGORIES
-                .iter()
-                .position(|allowed| *allowed == category)?,
-        },
-    ))
+    let failure = ClosedLocateFailure {
+        stage: LOCATE_STAGES.iter().position(|allowed| *allowed == stage)?,
+        category: LOCATE_CATEGORIES
+            .iter()
+            .chain(LOCATE_PIDFD_CATEGORIES)
+            .position(|allowed| *allowed == category)?,
+    };
+    failure.parts()?;
+    Some(CapturedConstructorObservation::Locate(failure))
 }
 fn locate_failure_for_eof(
     caller: Option<MeasurementCaller>,
@@ -7902,6 +7924,46 @@ fn pids_measurement_caller_context_is_closed_request_only_and_valid_for_slot() {
 }
 
 #[test]
+fn pids_locate_refined_pidfd_categories_require_the_syscall_stage() {
+    let categories = [
+        "PidfdEsrch",
+        "PidfdEperm",
+        "PidfdEacces",
+        "PidfdEbadf",
+        "PidfdEmfile",
+        "PidfdEnfile",
+        "PidfdEnomem",
+        "PidfdEnosys",
+        "PidfdEnodev",
+        "PidfdEinval",
+        "PidfdEintr",
+        "PidfdOtherOs",
+    ];
+    assert_eq!(LOCATE_PIDFD_CATEGORIES, categories);
+    for category in categories {
+        let line = format!("DOCKERLENS_NATIVE_PIDS_LOCATE: stage=mprocpidfd category={category}\n");
+        let captured = root_observation_from_capture(line.as_bytes(), false).unwrap();
+        let failure =
+            locate_failure_for_eof(Some(MeasurementCaller::LocateBatch), Some(captured)).unwrap();
+        assert_eq!(failure.parts(), Some(("mprocpidfd", category)));
+        let mut output = Vec::new();
+        write_locate_failure(&mut output, failure);
+        assert_eq!(output, line.as_bytes());
+        assert!(line.len() <= 91);
+        for stage in [
+            "mpidfdreserve",
+            "mpidfdadopt",
+            "mbudgetfds",
+            "mrollback",
+            "discrelease",
+        ] {
+            let contradiction = line.replace("mprocpidfd", stage);
+            assert!(root_observation_from_capture(contradiction.as_bytes(), false).is_none());
+        }
+    }
+}
+
+#[test]
 fn pids_locate_capture_is_closed_unique_and_never_a_constructor_observation() {
     assert_eq!(
         LOCATE_STAGES,
@@ -7937,7 +7999,9 @@ fn pids_locate_capture_is_closed_unique_and_never_a_constructor_observation() {
             "mrollback",
             "mprocpid",
             "mprocstartvalue",
+            "mpidfdreserve",
             "mprocpidfd",
+            "mpidfdadopt",
             "mprocdir",
             "mprocfs",
             "mprocstart",

@@ -252,6 +252,22 @@ applies even when the capture contains a site because the nested stream cannot
 independently identify its writer or establish observer entry.
 Successful Observe proceeds through the existing exact witness validation and
 emits no failure record. Other operations and cleanup carry no observer detail.
+
+When the one eight-ID `acquire` returns an error, the `all`/`none`/`acquisition`
+work record includes `acquisition_error`. The value is a fixed name for the
+returned `AcquisitionError`, including the specific `LimitError` under the
+`budget_` prefix. Rust freezes the category with the original work failure
+before cleanup. The wrapper allows it only after the reached nofile capture
+stage, with `observed_termination=unknown code=none`. The producer writes the
+four stage markers directly to stderr in order, starting on a fresh line even
+under single-thread libtest. If a terminal libtest summary is present, the work
+record and any cleanup pair must precede the single complete failed summary.
+A successful acquisition,
+pre-I/O reservation failure or later capture/decoder assertion has no acquisition
+error category. The category does not identify a particular GET, endpoint or
+response. The request sequence, API negotiation, resource identity checks,
+limits and strict proof remain in force.
+
 Raw bytes, CLI text, paths and IDs stay private. The native container has no
 mounted observer receipt channel, and the CLI capture retains no independent
 exec-start receipt. An unresolved live case needs the fixture owner's
