@@ -56,20 +56,28 @@ test /proc/"$child"/exe -ef /bin/sh
 printf '%s\000' /bin/sh -c "$1" "$0-child" | cmp /proc/"$child"/cmdline -"#;
 const COLLECT: &str = r#"set -eu; LC_ALL=C; export LC_ALL
 mode=$1; api=$2; expected_ns=$3; parent_start=$4; daemon_pid=$5; saved_leaf=$6; child_inner=$7; child_start=$8; token=$9
+if [ "$mode" = baseline ]; then
+  trap 'status=$?; trap - 0; if [ "$status" -ne 0 ]; then printf "DOCKERLENS_NATIVE_MEMORY_GUEST: site=%s\n" "$site" >&2 || :; fi; exit "$status"' 0
+fi
+site=identity
 test "$(id -u)" = 0; test "$(id -g)" = 0
 safe() { case "$1" in *[!A-Za-z0-9_./:@+-]*|*//*|*/../*|*/./*|*/..|*/.) return 1;; esac; test "${#1}" -le 256; }
 num() { awk 'NR!=1 || NF!=1 || $1 !~ /^(0|[1-9][0-9]*)$/ || length($1)>20 {exit 1} {v=$1} END{if(NR!=1)exit 1;print v}' "$1"; }
 start() { awk 'NF>64 || $2!="(sh)" || $22 !~ /^[1-9][0-9]*$/ {exit 1} {print $22}' "$1/stat"; }
 record() { awk -F: '$1=="0" && $2=="" {p=$3;n++} END{if(n!=1)exit 1;print p}' "$1/cgroup"; }
+site=mount
 mounts=$(awk 'NF>64{exit 1}{for(i=7;i<=NF;i++)if($i=="-" && $(i+1)=="cgroup2"){print $1,$3,$4,$5;n++}}END{if(n!=1)exit 1}' /proc/self/mountinfo)
 set -- $mounts; test "$#" = 4; mount_id=$1; device=$2; root=$3; mount=$4
 test "$root" = /; safe "$mount"; test "$(readlink -f "$mount")" = "$mount"
+site=namespaces
 reader_pidns=$(readlink /proc/self/ns/pid); reader_cgroupns=$(readlink /proc/self/ns/cgroup)
 outer_cgroupns=$(readlink /proc/1/ns/cgroup); test "$reader_cgroupns" = "$outer_cgroupns"
+site=outer
 outer_start=$(awk 'NF<=64 && $22 ~ /^[1-9][0-9]*$/ {print $22;ok=1}END{if(!ok)exit 1}' /proc/1/stat)
 outer_membership=$(record /proc/1); safe "$outer_membership"
 printf 'memory-source-v1\nreader %s %s\nmount 2 %s %s / %s\nkernel %s\n' "$reader_pidns" "$reader_cgroupns" "$mount_id" "$device" "$mount" "$(uname -r)"
 printf 'outer / %s ' "$outer_start"; stat -c '%d %i' "$mount" | tr '\n' ' '; printf '%s %s\n' "$outer_membership" "$outer_cgroupns"
+site=swap
 awk '$1=="SwapTotal:"{if(NF!=3 || $3!="kB" || $2!~/^(0|[1-9][0-9]*)$/)exit 1;print "swap",$2;n++}END{if(n!=1)exit 1}' /proc/meminfo
 if [ "$mode" = baseline ]; then
   leaf=/; printf 'process baseline\nmembers baseline\n'
@@ -118,11 +126,16 @@ path=$leaf; count=0
 while :; do
   count=$((count+1)); test "$count" -le 8
   dir=$mount$path; if [ "$path" = / ]; then dir=$mount; fi
+  site=node_open
   test "$(readlink -f "$dir")" = "$dir"; test ! -L "$dir"
   exec 3<"$dir"; held=/proc/$$/fd/3; identity=$(stat -L -c '%d %i' "$held")
+  site=node_type
   test "$(cat "$held/cgroup.type")" = domain
+  site=node_values
   IFS= read -r limit <"$held/memory.max"; usage=$(num "$held/memory.current"); group=$(num "$held/memory.oom.group")
-  counters=$(awk 'NF!=2 || $2!~/^(0|[1-9][0-9]*)$/ || length($2)>20 || seen[$1]++{exit 1} $1=="oom"{o=$2;n++} $1=="oom_kill"{k=$2;n++} $1=="max"{m=$2;n++} $1!~/^(low|high|max|oom|oom_kill|oom_group_kill)$/{exit 1}END{if(n!=3)exit 1;print o,k,m}' "$held/memory.events.local")
+  site=node_events
+  counters=$(awk 'NF!=2 || $2!~/^(0|[1-9][0-9]*)$/ || length($2)>20 || seen[$1]++{exit 1} $1=="oom"{o=$2;n++} $1=="oom_kill"{k=$2;n++} $1=="max"{m=$2;n++} $1!~/^(low|high|max|oom|oom_kill|oom_group_kill|sock_throttled)$/{exit 1}END{if(n!=3)exit 1;print o,k,m}' "$held/memory.events.local")
+  site=node_readback
   test "$(stat -c '%d %i' "$dir")" = "$identity"
   printf 'node %s %s %s %s %s %s v2_events_local\n' "$path" "$identity" "$limit" "$usage" "$counters" "$group"
   exec 3<&-
@@ -131,6 +144,7 @@ done
 if [ "$mode" != baseline ]; then
   test "$(readlink "$parent/ns/pid")" = "$expected_ns"; test "$(start "$parent")" = "$parent_start"; test "$(record "$parent")" = "$leaf"
 fi
+site=clock
 printf 'clock '; DOCKER_API_VERSION="$api" docker -H unix:///dockerlens-native/docker.sock info --format '{{.SystemTime}}'"#;
 const PROJECTION: &str = r#"{"id":{{json .Id}},"name":{{json .Name}},"image":{{json .Image}},"config_image":{{json .Config.Image}},"owner":{{json (index .Config.Labels "io.dockerlens.native-run")}},"cmd":{{json .Config.Cmd}},"entrypoint":{{json .Config.Entrypoint}},"user":{{json .Config.User}},"init":{{json .HostConfig.Init}},"memory":{{json .HostConfig.Memory}},"memory_swap":{{json .HostConfig.MemorySwap}},"running":{{json .State.Running}},"pid":{{json .State.Pid}},"started_at":{{json .State.StartedAt}},"finished_at":{{json .State.FinishedAt}},"oom":{{json .State.OOMKilled}},"exit":{{json .State.ExitCode}},"status":{{json .State.Status}},"restarts":{{json .RestartCount}},"error":{{json .State.Error}},"restarting":{{json .State.Restarting}},"paused":{{json .State.Paused}},"dead":{{json .State.Dead}},"privileged":{{json .HostConfig.Privileged}},"cap_add":{{json .HostConfig.CapAdd}},"cap_drop":{{json .HostConfig.CapDrop}},"mounts":{{json .Mounts}}}"#;
 const EVENT: &str = r#"{"type":{{json .Type}},"action":{{json .Action}},"id":{{json .Actor.ID}},"owner":{{json (index .Actor.Attributes "io.dockerlens.native-run")}},"time_nano":{{json .TimeNano}}}"#;
@@ -389,6 +403,9 @@ fn observe(run: &HealthRun, meter: &SmallMeter, mode: &str, identity: [&str; 7])
     });
     let end = utc_ns();
     let elapsed = u64::try_from(monotonic.elapsed().as_nanos()).unwrap();
+    if mode == "baseline" {
+        MemoryContextTrace::select(MemoryContextOperation::BaselineReport);
+    }
     let report = packet(&bytes);
     let parsed = parse_sample(&report, mode);
     bracket(parsed["clock"].as_u64().unwrap(), begin, end, elapsed);
@@ -751,6 +768,111 @@ fn memory_supervisor_wait_is_not_interrupted_by_its_release_signal() {
 }
 
 #[test]
+fn memory_context_retains_the_waited_baseline_failure_before_cleanup() {
+    let run = HealthRun {
+        nofile_command_observation: None,
+        run: String::new(),
+        lane: String::new(),
+        candidate: String::new(),
+        api: "1.41".into(),
+        engine: String::new(),
+        mode: DaemonMode::Rootful,
+        socket: String::new(),
+        outer: String::new(),
+        base: String::new(),
+        derived_tag: String::new(),
+        derived_id: None,
+        image_attempted: false,
+        names: vec![],
+        ids: vec![],
+        attempted: vec![],
+        absence_lookup: HealthAbsenceLookup::Disabled,
+        deadline: Instant::now() + Duration::from_secs(20),
+        calls: Cell::new(0),
+        bytes: Cell::new(0),
+        facts: None,
+        cleaned: true,
+        cleanup_delegated: false,
+    };
+    let command = |stderr: &str, exit: &str, cleanup| {
+        let mut process = Command::new("sh");
+        process.args([
+            "-c",
+            r#"printf '%s' "$1" >&2; exit "$2""#,
+            "memory-control",
+            stderr,
+            exit,
+        ]);
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run.capture(&mut process, None, cleanup)
+        }))
+    };
+    let trace = |expected: &str| {
+        let actual = MemoryContextTrace::take().unwrap().failure_line();
+        assert!(actual.ends_with(expected));
+        assert!(!actual.contains("private-canary"));
+    };
+
+    assert!(command("", "7", false).is_err());
+    assert!(MemoryContextTrace::take().is_none());
+    MemoryContextTrace::begin();
+    assert!(command("", "0", false).is_ok());
+    trace("operation=version_get result=success termination=exit code=0 site=none");
+
+    let marker = "DOCKERLENS_NATIVE_MEMORY_GUEST: site=node_events\n";
+    for (step, error, exit, expected) in [
+        (
+            MemoryContextOperation::Baseline,
+            format!("private-canary\n{marker}"),
+            "7",
+            "operation=baseline result=nonzero termination=exit code=7 site=node_events",
+        ),
+        (
+            MemoryContextOperation::Baseline,
+            marker.repeat(2),
+            "7",
+            "operation=baseline result=nonzero termination=exit code=7 site=none",
+        ),
+        (
+            MemoryContextOperation::Baseline,
+            marker.trim_end().into(),
+            "7",
+            "operation=baseline result=nonzero termination=exit code=7 site=none",
+        ),
+        (
+            MemoryContextOperation::Baseline,
+            "native outer command refused\n".into(),
+            "2",
+            "operation=baseline result=nonzero termination=exit code=2 site=bridge_refused",
+        ),
+        (
+            MemoryContextOperation::Baseline,
+            format!("{}{marker}", "x".repeat(8193)),
+            "7",
+            "operation=baseline result=stream_limit termination=exit code=7 site=none",
+        ),
+        (
+            MemoryContextOperation::VersionCli,
+            marker.into(),
+            "7",
+            "operation=version_cli result=nonzero termination=exit code=7 site=none",
+        ),
+    ] {
+        MemoryContextTrace::begin();
+        MemoryContextTrace::select(step);
+        assert!(command(&error, exit, false).is_err());
+        assert!(command("private-canary", "9", true).is_err());
+        trace(expected);
+        assert!(MemoryContextTrace::take().is_none());
+    }
+
+    MemoryContextTrace::begin();
+    assert!(command("", "0", false).is_ok());
+    MemoryContextTrace::select(MemoryContextOperation::Facts);
+    trace("operation=facts result=unobserved termination=unknown code=none site=none");
+}
+
+#[test]
 #[ignore = "requires exact isolated lane, actual live memory pressure and child victim evidence"]
 fn live_memory_limits_and_effects_match_engine() {
     let backend = source_outer_backend();
@@ -773,8 +895,15 @@ fn live_memory_limits_and_effects_match_engine() {
     let mut uncertain = vec![false; 6];
     let mut borrowed = Value::Null;
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        eprintln!("DOCKERLENS_NATIVE_CHECK: memory_context");
+        // Single-thread libtest leaves its in-progress label without a newline.
+        // Frame this direct marker independently on the merged output stream.
+        let _ = writeln!(
+            std::io::stderr(),
+            "\nDOCKERLENS_NATIVE_CHECK: memory_context"
+        );
+        MemoryContextTrace::begin();
         let uid = run.context();
+        MemoryContextTrace::select(MemoryContextOperation::BorrowedImage);
         let image = image_snapshot(&run);
         borrowed = image.clone();
         assert!(
@@ -784,6 +913,7 @@ fn live_memory_limits_and_effects_match_engine() {
                 && matches!(image["config"]["User"].as_str(), Some("" | "0" | "0:0")),
             "borrowed image has no wrapper or altered UID"
         );
+        MemoryContextTrace::select(MemoryContextOperation::OuterSnapshot);
         let (outer_projection, raw_outer) = outer_context_observation(&run, false);
         assert!(
             outer_projection == owner.snapshot
@@ -797,6 +927,7 @@ fn live_memory_limits_and_effects_match_engine() {
             "authenticated private outer namespace root"
         );
         let outer_source = json!({"id":required("NATIVE_OUTER_CONTAINER_ID"),"pid":raw_outer["State"]["Pid"],"started_at":raw_outer["State"]["StartedAt"],"cgroupns":"private","pid_mode":raw_outer["HostConfig"]["PidMode"],"restarts":0});
+        MemoryContextTrace::select(MemoryContextOperation::Reserve);
         let facts = run.facts.as_mut().unwrap();
         let scope = facts.capabilities[0].scope.clone();
         facts.capabilities = [
@@ -833,6 +964,7 @@ fn live_memory_limits_and_effects_match_engine() {
                 && 36 * (8192 + 2048) <= CLEANUP_BYTES,
             "all memory barriers, small reads, final snapshots and cleanup reserved before mutation"
         );
+        MemoryContextTrace::select(MemoryContextOperation::Baseline);
         let (baseline_packet, baseline) = observe(
             &run,
             &meter,
@@ -842,6 +974,7 @@ fn live_memory_limits_and_effects_match_engine() {
         let mut records = Vec::new();
         let mut common = None;
         let mut unbounded = None;
+        let _ = MemoryContextTrace::take();
         eprintln!("DOCKERLENS_NATIVE_CHECK: memory_effects");
         for index in 0..6 {
             let before = run.calls.get();
@@ -1110,11 +1243,16 @@ fn live_memory_limits_and_effects_match_engine() {
             context_calls,
         )
     }));
+    if let Some(trace) = MemoryContextTrace::take()
+        && result.is_err()
+    {
+        let _ = writeln!(std::io::stderr(), "{}", trace.failure_line());
+    }
     let work_elapsed = started.elapsed();
     let before_calls = run.calls.get();
     let before_bytes = run.bytes.get();
     let cleanup_started = Instant::now();
-    eprintln!("DOCKERLENS_NATIVE_CHECK: memory_cleanup");
+    let _ = writeln!(std::io::stderr(), "DOCKERLENS_NATIVE_CHECK: memory_cleanup");
     let disposition = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         cleanup_memory(&mut run, &borrowed, &uncertain)
     }))

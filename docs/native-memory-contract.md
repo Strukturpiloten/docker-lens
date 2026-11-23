@@ -96,6 +96,12 @@ victim increment. Exit0, partial records or a printed success marker are insuffi
 All observed strict ancestors retain identities/limits and unchanged local
 pressure/victim counters. Hierarchical memory.events is never substituted for
 memory.events.local; a leaf OOM may legitimately propagate hierarchical events.
+The collector recognizes the optional `sock_throttled` row, which counts network
+socket throttling in that cgroup. It applies the same canonical decimal,
+20-digit limit and duplicate-key checks as for other known rows. Unknown rows
+still fail. Only `max`, `oom` and `oom_kill` are retained and compared for
+pressure and victim evidence. [Kernel cgroup v2 documentation](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files)
+
 Counter resets, a wrong scope, extra victim or changing ancestry fails. These are
 sampled observations, not an atomic or whole-host resource attestation.
 
@@ -144,6 +150,23 @@ exact deadline,46-second reserve, 300-call/2 MiB ordinary and 100-call/2 MiB cle
 400-call/4 MiB aggregate and 1800-second lane ceiling remain unchanged. Context
 acquisition keeps its separate 16-request/2 MiB/15-second bound. Native actual fit,
 including the whole 30-call lane, remains unmeasured.
+
+## Bounded failure attribution before the first effect
+
+On context failure the exact memory child freezes one closed operation and
+already-observed command outcome before its separate cleanup. The operation
+identifies each shared context command, acquisition and facts validation, the
+borrowed image and outer readbacks, reservation, baseline command or baseline
+report validation. A waited status can identify zero exit, nonzero exit or
+signal. Stream limits and a command result that was never observed have their
+own outcome. When both streams fit their limits, a baseline exit of 2 with the
+exact bridge refusal message can supply the `bridge_refused` hint. A guest
+stage hint requires a failed baseline command and exactly one occurrence of the
+guest marker family in stderr, on a complete line naming a known stage. Both
+hints describe observed bytes. The writer's identity and guest entry remain
+unverified. No raw command output, environment, paths, evidence values or
+cleanup outcome are projected in that work record.
+The parser and resource predicates remain fail-closed.
 
 ## Private custody, readers and qualification
 

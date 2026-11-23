@@ -1112,6 +1112,59 @@ fn refusal(error: &str) -> bool {
             || error.ends_with(&format!(": {REFUSAL}: unknown")))
 }
 
+fn cli_start_refusal_matches(api: &str, id: &str, error: &str, output: &str) -> bool {
+    let (daemon, summary) = output
+        .split_once('\n')
+        .map_or((output, None), |(daemon, summary)| (daemon, Some(summary)));
+    daemon == format!("Error response from daemon: {error}")
+        && summary.is_none_or(|summary| {
+            summary == format!("Error: failed to start containers: {id}")
+                // The pinned Docker 29 CLI omits the legacy Error: prefix.
+                || (api == "1.56" && summary == format!("failed to start containers: {id}"))
+        })
+}
+
+#[test]
+fn nofile_start_refusal_requires_exact_inspected_message_and_full_id() {
+    let id = "a".repeat(64);
+    let other_id = "b".repeat(64);
+    let error =
+        format!("failed to create shim task: OCI runtime create failed: {REFUSAL}: unknown");
+    let daemon = format!("Error response from daemon: {error}");
+    let wrong = format!("Error response from daemon: other runtime context: {REFUSAL}: unknown");
+    let modern = format!("{daemon}\nfailed to start containers: {id}");
+    let legacy = format!("{daemon}\nError: failed to start containers: {id}");
+    assert!(refusal(&error));
+
+    for api in ["1.41", "1.56"] {
+        assert!(cli_start_refusal_matches(api, &id, &error, &daemon));
+        assert!(cli_start_refusal_matches(api, &id, &error, &legacy));
+        assert_eq!(
+            cli_start_refusal_matches(api, &id, &error, &modern),
+            api == "1.56"
+        );
+        for output in [
+            wrong.clone(),
+            format!("{wrong}\nError: failed to start containers: {id}"),
+            format!("{wrong}\nfailed to start containers: {id}"),
+            format!("{daemon}\nfailed to start containers: {other_id}"),
+            format!("{daemon}\nError: failed to start containers: {other_id}"),
+            format!("{daemon}\nfailed to start containers: {}", &id[..12]),
+            format!("{daemon}\nfailed to start containers: {id}, {other_id}"),
+            format!("{daemon}\nError: failed to start container: {id}"),
+            format!("{daemon}\r\nfailed to start containers: {id}"),
+            format!("{modern}\n"),
+            format!("{modern}\nother diagnostic"),
+            format!("warning\n{modern}"),
+            id.clone(), // Successful START stdout even when using the same full ID.
+            serde_json::to_string(&json!({"message":error})).unwrap(), // Direct API body.
+        ] {
+            assert!(!cli_start_refusal_matches(api, &id, &error, &output));
+        }
+    }
+    assert!(!cli_start_refusal_matches("1.55", &id, &error, &modern));
+}
+
 fn exercise(
     run: &HealthRun,
     index: usize,
@@ -1210,12 +1263,12 @@ fn exercise(
         if index.is_multiple_of(2) {
             let output = reported.as_str().unwrap();
             assert!(
-                output
-                    == format!(
-                        "Error response from daemon: {error}\nError: failed to start containers: {}",
-                        run.ids[index].as_ref().unwrap()
-                    )
-                    || output == format!("Error response from daemon: {error}"),
+                cli_start_refusal_matches(
+                    &run.api,
+                    run.ids[index].as_ref().unwrap(),
+                    error,
+                    output
+                ),
                 "exact private CLI refusal corroborates inspected error"
             );
         } else {

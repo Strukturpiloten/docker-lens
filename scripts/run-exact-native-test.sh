@@ -219,12 +219,13 @@ else
 fi
 # Reject foreign families before any parser rereads the private capture, so
 # detail cannot outlive a rejected owner handoff. Keep ordinary measurement and
-# Locate checks at line start; cleanup, nofile and exact-family cross-checks
-# recognize tokens anywhere.
+# Locate and foreign memory records at line start; cleanup, nofile and the
+# PIDs cross-checks recognize tokens anywhere.
 foreign_family=0
-if { (( !exact_nofile )) && grep -q 'DOCKERLENS_NATIVE_NOFILE_' <<<"$result"; } ||
+if { (( !exact_memory )) && grep -q '^DOCKERLENS_NATIVE_MEMORY_' <<<"$result"; } ||
+   { (( !exact_nofile )) && grep -q 'DOCKERLENS_NATIVE_NOFILE_' <<<"$result"; } ||
    { (( !exact_pids )) && grep -Eq '^DOCKERLENS_NATIVE_PIDS_(MEASUREMENT_REFUSAL|LOCATE)|DOCKERLENS_NATIVE_PIDS_CLEANUP_REFUSAL' <<<"$result"; } ||
-   { (( exact_nofile )) && grep -q 'DOCKERLENS_NATIVE_PIDS_' <<<"$result"; }; then
+   { (( exact_nofile || exact_memory )) && grep -q 'DOCKERLENS_NATIVE_PIDS_' <<<"$result"; }; then
   foreign_family=1
   result=
   if (( run_status == 0 )); then run_status=1; fi
@@ -618,6 +619,76 @@ except (OSError, ValueError):
     if (( run_status == 0 )); then run_status=1; fi
   fi
 fi
+# Keep memory context failure separate from subsequent cleanup and its status.
+memory_context_failure=
+if (( exact_memory && !raw_capture_invalid && !foreign_family )) && grep -Fq 'DOCKERLENS_NATIVE_MEMORY_' <<<"$result"; then
+  if (( original_run_status == 0 )) || grep -q '^test result: ok\.' <<<"$result"; then
+    result=
+    if (( run_status == 0 )); then run_status=1; fi
+  else
+    memory_context_failure=$(python3 -I -c '
+import re, sys
+lines = sys.stdin.buffer.read(1048577).split(b"\n")
+records = [(i, line) for i, line in enumerate(lines) if b"DOCKERLENS_NATIVE_MEMORY_" in line]
+context = [i for i, line in enumerate(lines) if line == b"DOCKERLENS_NATIVE_CHECK: memory_context"]
+cleanup = [i for i, line in enumerate(lines) if line == b"DOCKERLENS_NATIVE_CHECK: memory_cleanup"]
+if not (len(records) == len(context) == len(cleanup) == 1 and context[0] < records[0][0] < cleanup[0]):
+    sys.exit(0)
+index, line = records[0]
+if any(marker in lines for marker in (b"DOCKERLENS_NATIVE_CHECK: memory_effects",
+                                     b"DOCKERLENS_NATIVE_CHECK: memory_proof")) or len(line) > 256:
+    sys.exit(0)
+# A terminal libtest result follows cleanup and any teardown markers. It may
+# be absent when the original command times out during cleanup.
+summaries = [(i, raw) for i, raw in enumerate(lines) if raw.startswith(b"test result:")]
+if len(summaries) > 1:
+    sys.exit(0)
+terminal = len(lines)
+if summaries:
+    terminal, summary = summaries[0]
+    if (terminal <= cleanup[0] or re.fullmatch(
+            rb"test result: FAILED\. 0 passed; 1 failed; 0 ignored; 0 measured; [0-9]+ filtered out;"
+            rb"(?: finished in [0-9]+(?:\.[0-9]+)?s)?", summary) is None):
+        sys.exit(0)
+last = cleanup[0]
+for marker in (
+    b"DOCKERLENS_NATIVE_CHECK: lifecycle_cleanup_unverified",
+    b"DOCKERLENS_NATIVE_LIFECYCLE_CLEANUP: owner=native_conformance_outer_v1 scope=outer_container_and_data_volume state=required",
+):
+    positions = [i for i, raw in enumerate(lines) if raw == marker]
+    if len(positions) > 1 or positions and not last < positions[0] < terminal:
+        sys.exit(0)
+    if positions:
+        last = positions[0]
+match = re.fullmatch(
+    rb"DOCKERLENS_NATIVE_MEMORY_CONTEXT_FAILURE: operation=(version_get|version_cli|info_get|security_cli|daemon_uid|package|base_image|acquire|facts|borrowed_image|outer_snapshot|reserve|baseline|baseline_report)"
+    rb" result=(unobserved|success|nonzero|stream_limit) termination=(exit|signal|unknown) code=(none|0|[1-9][0-9]{0,2})"
+    rb" site=(none|bridge_refused|identity|mount|namespaces|outer|swap|node_open|node_type|node_values|node_events|node_readback|clock)",
+    line,
+)
+if match is None:
+    sys.exit(0)
+operation, result, termination, code, site = match.groups()
+if termination == b"unknown":
+    valid = code == b"none" and result == b"unobserved"
+elif code == b"none":
+    valid = False
+elif termination == b"signal":
+    valid = 1 <= int(code) <= 64 and result in (b"nonzero", b"stream_limit")
+else:
+    valid = int(code) <= 255 and (result == b"stream_limit"
+        or result == (b"success" if code == b"0" else b"nonzero"))
+if operation in (b"acquire", b"facts", b"reserve", b"baseline_report") and result != b"unobserved":
+    valid = False
+if site != b"none" and (operation != b"baseline" or result != b"nonzero"):
+    valid = False
+if site == b"bridge_refused" and (termination != b"exit" or code != b"2"):
+    valid = False
+if valid:
+    sys.stdout.buffer.write(line + b"\n")
+' <<<"$result" 2>/dev/null) || memory_context_failure=
+  fi
+fi
 # PIDs cleanup is a separate failure after the original owner handoff.
 pids_cleanup_refusal=
 if (( exact_pids && !raw_capture_invalid && !foreign_family )); then
@@ -1009,6 +1080,7 @@ if (( run_status != 0 )); then
   if [[ -n $pids_measurement_refusal ]]; then echo "$pids_measurement_refusal" >&2; fi
   if [[ -n $pids_cleanup_refusal ]]; then echo "$pids_cleanup_refusal" >&2; fi
   if [[ -n $nofile_failure_context ]]; then printf '%s\n' "$nofile_failure_context" >&2; fi
+  if [[ -n $memory_context_failure ]]; then printf '%s\n' "$memory_context_failure" >&2; fi
   if [[ -n $port_causal_marker && $port_causal_marker != "$marker" ]]; then echo "$port_causal_marker" >&2; fi
   if [[ -n $marker ]]; then echo "$marker" >&2; fi
   if [[ -n $lifecycle_causal_marker && $lifecycle_causal_marker != "$marker" ]]; then echo "$lifecycle_causal_marker" >&2; fi

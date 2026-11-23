@@ -78,6 +78,13 @@ Each unlimited request has three distinct possible source dispositions:
   created/PID0/zero-start-time facts and stable never-started terminal state.
   Both roles must agree. Generic EPERM, nonzero, timeout, ENFILE, ENOSPC,
   malformed framing/body, unknown errors or create refusal cannot qualify.
+  The pinned Docker 29 CLI retains the daemon-error line and uses
+  `failed to start containers: <full ID>` without the legacy summary prefix.
+  On the reviewed 1.56 path this exact second line corroborates the same
+  inspected error and full ID. The Debian summary carries `Error: ` and the
+  direct API uses the exact inspected message in the JSON body.
+  [Docker CLI 29.8.1 START](https://github.com/docker/cli/blob/v29.8.1/cli/command/container/start.go)
+  [Docker CLI 20.10.5 START](https://github.com/docker/cli/blob/v20.10.5/cli/command/container/start.go)
 - A successful start with finite kernel normalization. Record the actual
   finite values distinctly; never rename them exact unlimited.
 - A successful start with exact intended unlimited state. Soft64/unlimited
@@ -292,7 +299,8 @@ Later cleanup captures cannot replace its first failed command observation. A cl
 failure emits no invented work record; if both failures exist, work is emitted first and both
 remain independent. Emission follows the original terminal handler and cannot replace the
 original panic/nonzero result. Fully successful execution emits neither record. Expected
-unlimited START refusals retain their original CLI/API framing and exact acceptance contract.
+unlimited START refusals retain their original CLI/API framing and require exact
+corroboration with the inspected error and owned request.
 
 The existing exact-selector wrapper validates complete original private capture bytes and
 finite cross-field combinations. Caller records require the existing context/effects/cleanup

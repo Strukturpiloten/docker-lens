@@ -25,13 +25,17 @@ ORIGINAL29=previous.ORIGINAL27+[("native_nofile","live_nofile_limits_and_effects
 class MemoryWiringTests(unittest.TestCase):
     tail=previous.NofileWiringTests.tail
 
-    def wrapper(self,output=SUCCESS,status=0,*,listing=None,name=TEST):
+    def wrapper(self,output=SUCCESS,status=0,*,listing=None,name=TEST,target=TARGET,transport=None):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
             (root/"cargo").write_text('''#!/usr/bin/python3
 import base64,json,os,sys
 with open(os.environ["TRACE"],"a") as out:
     out.write(json.dumps({"argv":sys.argv[1:],"deadline":os.environ.get("NATIVE_MEMORY_DEADLINE_EPOCH"),"shared":os.environ.get("NATIVE_LIFECYCLE_DEADLINE_EPOCH"),"owner":os.environ.get("NATIVE_LIFECYCLE_CLEANUP_OWNER")})+"\\n")
+if os.environ.get("MEMORY_TRANSPORT_BINARY"):
+    args=sys.argv[sys.argv.index("--")+1:]
+    binary=os.environ["MEMORY_TRANSPORT_BINARY"]
+    os.execv(binary,[binary,*args])
 if "--list" in sys.argv:sys.stdout.buffer.write(base64.b64decode(os.environ["LISTING"]))
 else:sys.stdout.buffer.write(open(os.environ["OUTPUT"],"rb").read());sys.exit(int(os.environ["STATUS"]))
 ''')
@@ -40,7 +44,12 @@ else:sys.stdout.buffer.write(open(os.environ["OUTPUT"],"rb").read());sys.exit(in
             (root/"output").write_bytes(output)
             env={**os.environ,"PATH":str(root)+os.pathsep+os.environ["PATH"],"TMPDIR":directory,"TRACE":str(root/"trace"),"DATES":str(root/"dates"),"OUTPUT":str(root/"output"),"STATUS":str(status),
                  "LISTING":base64.b64encode((SELECTED+": test\n").encode() if listing is None else listing).decode(),"NATIVE_LIFECYCLE_CLEANUP_OWNER":"native_conformance_outer_v1"}
-            result=subprocess.run(["bash",str(ROOT/"scripts/run-exact-native-test.sh"),TARGET,name],env=env,capture_output=True,timeout=10,check=False)
+            env.pop("MEMORY_TRANSPORT_BINARY", None)
+            if transport is not None:
+                binary, threads, handoff = transport
+                env.update({"MEMORY_TRANSPORT_BINARY": str(binary), "RUST_TEST_THREADS": str(threads),
+                            "MEMORY_TRANSPORT_HANDOFF": handoff})
+            result=subprocess.run(["bash",str(ROOT/"scripts/run-exact-native-test.sh"),target,name],env=env,capture_output=True,timeout=10,check=False)
             calls=[json.loads(line) for line in (root/"trace").read_text().splitlines()] if (root/"trace").exists() else []
             dates=(root/"dates").read_text().splitlines() if (root/"dates").exists() else []
             self.assertNotIn(SECRET,result.stdout+result.stderr)
@@ -128,7 +137,204 @@ else:sys.stdout.buffer.write(open(os.environ["OUTPUT"],"rb").read());sys.exit(in
                 result = subprocess.run(argv, env={"TEST_UID": uid, "TEST_GID": gid},
                                         capture_output=True, timeout=3, check=False)
                 self.assertEqual((result.returncode, result.stdout, result.stderr),
-                                 (0 if expected else 1, expected, b""))
+                                 (0, expected, b"") if expected else
+                                 (1, b"", b"DOCKERLENS_NATIVE_MEMORY_GUEST: site=identity\n"))
+
+    def test_real_libtest_frames_context_with_one_or_two_threads_and_optional_handoff(self):
+        import tomllib
+        source = (ROOT / "src/native_memory_tests.rs").read_text()
+        writes = re.findall(r'let _ = writeln!\(\s*std::io::stderr\(\),\s*"[^"]*DOCKERLENS_NATIVE_CHECK: memory_context"\s*,?\s*\);', source)
+        self.assertEqual(len(writes), 1)
+        record = b"DOCKERLENS_NATIVE_MEMORY_CONTEXT_FAILURE: operation=baseline result=nonzero termination=exit code=1 site=node_events"
+        fixture = r'''use std::io::Write;
+mod native_health_metadata_tests { pub mod lifecycle { pub mod memory {
+    use super::super::super::*;
+    #[test] #[ignore]
+    fn live_memory_limits_and_effects_match_engine() {
+        let failure = std::panic::catch_unwind(|| {
+            CONTEXT_WRITE
+            panic!("PRIVATE_MEMORY_WIRING_CANARY");
+        });
+        writeln!(std::io::stderr(), "DOCKERLENS_NATIVE_MEMORY_CONTEXT_FAILURE: operation=baseline result=nonzero termination=exit code=1 site=node_events").unwrap();
+        writeln!(std::io::stderr(), "DOCKERLENS_NATIVE_CHECK: memory_cleanup").unwrap();
+        if std::env::var("MEMORY_TRANSPORT_HANDOFF").unwrap() == "required" {
+            writeln!(std::io::stderr(), "DOCKERLENS_NATIVE_CHECK: lifecycle_cleanup_unverified").unwrap();
+            writeln!(std::io::stderr(), "DOCKERLENS_NATIVE_LIFECYCLE_CLEANUP: owner=native_conformance_outer_v1 scope=outer_container_and_data_volume state=required").unwrap();
+        }
+        std::panic::resume_unwind(failure.unwrap_err());
+    }
+}}}
+'''
+        channel = tomllib.loads((ROOT / "rust-toolchain.toml").read_text())["toolchain"]["channel"]
+        with tempfile.TemporaryDirectory(prefix="dl-memory-transport-") as directory:
+            root = Path(directory)
+            rust = root / "transport.rs"
+            binary = root / "transport"
+            rust.write_text(fixture.replace("CONTEXT_WRITE", writes[0]))
+            built = subprocess.run(["rustup", "run", channel, "rustc", "--edition=2024", "--test", str(rust), "-o", str(binary)],
+                                   cwd=ROOT, capture_output=True, timeout=30, check=False)
+            self.assertEqual(built.returncode, 0, built.stderr)
+            for threads in (1, 2):
+                for handoff in ("absent", "required"):
+                    with self.subTest(threads=threads, handoff=handoff):
+                        result, calls, dates = self.wrapper(transport=(binary, threads, handoff))
+                        self.assertEqual(result.returncode, 1)
+                        self.assertIn(f"required native test {TARGET}::{TEST} failed (exit 101)".encode(), result.stderr)
+                        self.assertIn(record, result.stderr)
+                        self.assertIn(b"DOCKERLENS_NATIVE_CHECK: memory_context", result.stderr)
+                        self.assertEqual(HANDOFF.rstrip() in result.stderr, handoff == "required")
+                        self.assertEqual(b"lifecycle_cleanup_unverified" in result.stderr, handoff == "required")
+                        self.assertEqual(len(calls), 2)
+                        self.assertIn("--list", calls[0]["argv"])
+                        self.assertEqual(calls[1]["argv"][-4:], ["--", "--ignored", "--exact", SELECTED])
+                        self.assertEqual(dates, ["date"])
+
+    def test_context_failure_projection_binds_operation_status_and_pre_cleanup_order(self):
+        context = b"DOCKERLENS_NATIVE_CHECK: memory_context\n"
+        cleanup = b"DOCKERLENS_NATIVE_CHECK: memory_cleanup\n"
+        prefix = b"DOCKERLENS_NATIVE_MEMORY_CONTEXT_FAILURE: "
+        baseline = prefix + b"operation=baseline result=nonzero termination=exit code=1 site=node_events\n"
+        terminal = SUCCESS.replace(b"ok. 1 passed; 0 failed", b"FAILED. 0 passed; 1 failed")
+        for line in (
+            baseline,
+            baseline.replace(b"nonzero termination=exit code=1 site=node_events",
+                             b"stream_limit termination=exit code=0 site=none"),
+            prefix + b"operation=version_cli result=nonzero termination=signal code=15 site=none\n",
+            prefix + b"operation=package result=success termination=exit code=0 site=none\n",
+            prefix + b"operation=acquire result=unobserved termination=unknown code=none site=none\n",
+        ):
+            result, _, _ = self.wrapper(context + line + cleanup + HANDOFF + terminal, 101)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn(line.rstrip(), result.stderr)
+            self.assertIn(HANDOFF.rstrip(), result.stderr)
+        for wrong in (
+            baseline + baseline,
+            baseline.rstrip() + b" " + SECRET + b"\n",
+            baseline.replace(b"baseline", b"info_get"),
+            baseline.replace(b"code=1", b"code=0"),
+            baseline.replace(b"site=node_events", b"site=bridge_refused"),
+            baseline.replace(b"code=1", b"code=01"),
+            baseline.replace(b"site=node_events", b"site=unknown_value"),
+            baseline + b"DOCKERLENS_NATIVE_CHECK: memory_effects\n",
+            baseline + b"DOCKERLENS_NATIVE_MEMORY_GUEST: site=node_events\n",
+            baseline + b"DOCKERLENS_NATIVE_NOFILE_FAILURE: operation=foreign\n",
+        ):
+            result, _, _ = self.wrapper(context + wrong + cleanup + terminal, 101)
+            self.assertEqual(result.returncode, 1)
+            self.assertNotIn(prefix, result.stderr)
+        for mixed in (context + cleanup + baseline + terminal, baseline + cleanup + terminal,
+                      context + baseline + terminal, context + baseline + cleanup + SUCCESS):
+            result, _, _ = self.wrapper(mixed, 101)
+            self.assertNotIn(prefix, result.stderr)
+        result, _, _ = self.wrapper(context + baseline + cleanup + SUCCESS, 0)
+        self.assertEqual(result.returncode, 1)
+        self.assertNotIn(prefix, result.stderr)
+
+    def test_context_failure_rejects_impossible_summary_proof_and_cleanup_order(self):
+        context = b"DOCKERLENS_NATIVE_CHECK: memory_context\n"
+        record = b"DOCKERLENS_NATIVE_MEMORY_CONTEXT_FAILURE: operation=baseline result=nonzero termination=exit code=1 site=node_events\n"
+        cleanup = b"DOCKERLENS_NATIVE_CHECK: memory_cleanup\n"
+        unverified = b"DOCKERLENS_NATIVE_CHECK: lifecycle_cleanup_unverified\n"
+        failed = SUCCESS.replace(b"ok. 1 passed; 0 failed", b"FAILED. 0 passed; 1 failed")
+        coherent = context + record + cleanup + unverified + HANDOFF + failed
+        impossible = (
+            failed + context + record + cleanup,
+            context + failed + record + cleanup,
+            context + record + failed + cleanup,
+            context + record + cleanup + b"DOCKERLENS_NATIVE_CHECK: memory_proof\n" + failed,
+            context + record + HANDOFF + cleanup + failed,
+            context + record + unverified + cleanup + failed,
+            context + record + cleanup + HANDOFF + unverified + failed,
+            context + record + cleanup + failed + HANDOFF,
+            coherent + failed,
+            coherent.replace(HANDOFF, HANDOFF + HANDOFF),
+            coherent.replace(unverified, unverified + unverified),
+            coherent.replace(b"FAILED. 0 passed; 1 failed", b"FAILED. 0 passed; 0 failed"),
+        )
+        for index, output in enumerate(impossible):
+            with self.subTest(index=index):
+                result, _, _ = self.wrapper(output, 101)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(b"failed (exit 101)", result.stderr)
+                self.assertNotIn(record.rstrip(), result.stderr)
+                self.assertEqual(HANDOFF.rstrip() in result.stderr, HANDOFF in output)
+
+    def test_context_failure_keeps_optional_cleanup_and_summary_free_timeout(self):
+        context = b"DOCKERLENS_NATIVE_CHECK: memory_context\n"
+        record = b"DOCKERLENS_NATIVE_MEMORY_CONTEXT_FAILURE: operation=baseline result=nonzero termination=exit code=1 site=node_events\n"
+        cleanup = b"DOCKERLENS_NATIVE_CHECK: memory_cleanup\n"
+        unverified = b"DOCKERLENS_NATIVE_CHECK: lifecycle_cleanup_unverified\n"
+        failed = SUCCESS.replace(b"ok. 1 passed; 0 failed", b"FAILED. 0 passed; 1 failed")
+        for status in (101, 124, 143):
+            for teardown in (b"", unverified, HANDOFF, unverified + HANDOFF):
+                for summary in (b"", failed, failed.rstrip() + b" finished in 0.01s\n"):
+                    with self.subTest(status=status, teardown=teardown, summary=summary):
+                        result, _, _ = self.wrapper(context + record + cleanup + teardown + summary, status)
+                        self.assertEqual(result.returncode, 1)
+                        self.assertIn(f"failed (exit {status})".encode(), result.stderr)
+                        self.assertIn(record.rstrip(), result.stderr)
+                        self.assertEqual(HANDOFF.rstrip() in result.stderr, bool(HANDOFF in teardown))
+
+    def test_other_selectors_keep_private_mentions_but_refuse_memory_records(self):
+        record = b"DOCKERLENS_NATIVE_MEMORY_CONTEXT_FAILURE: operation=baseline result=nonzero termination=exit code=1 site=node_events\n"
+        selectors = (
+            ("native_target", "live_target_render_matches_engine", "native_target_tests::live_target_render_matches_engine"),
+            ("native_capture", "live_engine_capture_decodes", "live_engine_capture_decodes"),
+            ("native_pids", "live_pids_limits_and_effects_match_engine", "native_health_metadata_tests::lifecycle::pids::live_pids_limits_and_effects_match_engine"),
+            ("native_nofile", "live_nofile_limits_and_effects_match_engine", "native_health_metadata_tests::lifecycle::nofile::live_nofile_limits_and_effects_match_engine"),
+        )
+        for target, name, selected in selectors:
+            for note in (b"note: documentation names DOCKERLENS_NATIVE_MEMORY_EXAMPLE\n",
+                         b"note: documentation names DOCKERLENS_NATIVE_MEMORY_CONTEXT_FAILURE\n"):
+                with self.subTest(target=target, note=note):
+                    result, _, _ = self.wrapper(note + SECRET + b"\n" + SUCCESS, target=target, name=name,
+                                                listing=(selected + ": test\n").encode())
+                    self.assertEqual(result.returncode, 0, result.stderr)
+            for line in (record, b"DOCKERLENS_NATIVE_MEMORY_UNKNOWN: " + SECRET + b"\n"):
+                result, _, _ = self.wrapper(line + SUCCESS, target=target, name=name,
+                                            listing=(selected + ": test\n").encode())
+                self.assertEqual(result.returncode, 1)
+                self.assertNotIn(b"DOCKERLENS_NATIVE_MEMORY_", result.stdout + result.stderr)
+
+    def test_local_memory_event_parser_accepts_only_valid_known_counters(self):
+        source = (ROOT / "src/native_memory_tests.rs").read_text()
+        parser, = re.findall(r'^  (counters=\$\(awk .* "\$held/memory\.events\.local"\))$', source, re.M)
+        older = b"low 1\nhigh 2\nmax 3\noom 5\noom_kill 7\noom_group_kill 0\n"
+        optional = b"sock_throttled 11\n"
+        with tempfile.TemporaryDirectory(prefix="dl-memory-events-") as directory:
+            fixture = Path(directory) / "memory.events.local"
+            command = ["sh", "-ec", f'held=$1\n{parser}\nprintf "%s\\n" "$counters"',
+                       "memory-counter-control", directory]
+            # Execute the exact collector assignment under its fail-fast shell.
+            # A refused AWK process cannot publish a tuple through this boundary.
+            for label, rows in (
+                ("older", older),
+                ("optional_after_required", older + optional),
+                ("optional_before_required", optional + older),
+                ("optional_zero", older + b"sock_throttled 0\n"),
+                ("optional_twenty_digits", older + b"sock_throttled 18446744073709551615\n"),
+            ):
+                with self.subTest(layout=label):
+                    fixture.write_bytes(rows)
+                    result = subprocess.run(command, capture_output=True, timeout=3, check=False)
+                    self.assertEqual((result.returncode, result.stdout, result.stderr),
+                                     (0, b"5 7 3\n", b""))
+            invalid = {
+                "duplicate_optional": older + optional + optional,
+                "duplicate_required": older + b"oom 5\n" + optional,
+                "unknown": older + optional + b"sock_throttled_future 0\n",
+                "missing_oom": older.replace(b"oom 5\n", b"") + optional,
+                "missing_kill": older.replace(b"oom_kill 7\n", b"") + optional,
+                "missing_max": older.replace(b"max 3\n", b"") + optional,
+            }
+            for value in (b"", b"-1", b"+1", b"01", b"1e1", b"no", b"1 2", b"1" * 21):
+                invalid[f"malformed_{value!r}"] = older + b"sock_throttled " + value + b"\n"
+            for label, rows in invalid.items():
+                with self.subTest(layout=label):
+                    fixture.write_bytes(rows)
+                    result = subprocess.run(command, capture_output=True, timeout=3, check=False)
+                    self.assertEqual((result.returncode, result.stdout, result.stderr),
+                                     (1, b"", b""))
 
     def test_source_wires_counter_read_and_event_before_final_parent_release(self):
         source=(ROOT/"src/native_memory_tests.rs").read_text();compact=re.sub(r'\s+','',source)

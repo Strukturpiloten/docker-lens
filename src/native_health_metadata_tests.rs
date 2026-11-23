@@ -534,6 +534,163 @@ impl NofileCommandObservation {
     }
 }
 
+#[derive(Clone, Copy)]
+enum MemoryContextOperation {
+    VersionGet,
+    VersionCli,
+    InfoGet,
+    SecurityCli,
+    DaemonUid,
+    Package,
+    BaseImage,
+    Acquire,
+    Facts,
+    BorrowedImage,
+    OuterSnapshot,
+    Reserve,
+    Baseline,
+    BaselineReport,
+}
+
+impl MemoryContextOperation {
+    fn name(self) -> &'static str {
+        match self {
+            Self::VersionGet => "version_get",
+            Self::VersionCli => "version_cli",
+            Self::InfoGet => "info_get",
+            Self::SecurityCli => "security_cli",
+            Self::DaemonUid => "daemon_uid",
+            Self::Package => "package",
+            Self::BaseImage => "base_image",
+            Self::Acquire => "acquire",
+            Self::Facts => "facts",
+            Self::BorrowedImage => "borrowed_image",
+            Self::OuterSnapshot => "outer_snapshot",
+            Self::Reserve => "reserve",
+            Self::Baseline => "baseline",
+            Self::BaselineReport => "baseline_report",
+        }
+    }
+}
+
+// The exact memory test arms this on its own test thread and takes it before
+// any effect or cleanup. Other tests and worker threads start unarmed.
+std::thread_local! {
+    static MEMORY_CONTEXT: Cell<Option<MemoryContextTrace>> = const { Cell::new(None) };
+}
+
+#[derive(Clone, Copy)]
+struct MemoryContextTrace {
+    operation: MemoryContextOperation,
+    status: Option<std::process::ExitStatus>,
+    limited: bool,
+    site: &'static str,
+}
+
+impl MemoryContextTrace {
+    fn begin() {
+        MEMORY_CONTEXT.set(Some(Self::new(MemoryContextOperation::VersionGet)));
+    }
+
+    fn new(operation: MemoryContextOperation) -> Self {
+        Self {
+            operation,
+            status: None,
+            limited: false,
+            site: "none",
+        }
+    }
+
+    fn select(operation: MemoryContextOperation) {
+        MEMORY_CONTEXT.with(|state| {
+            if state.get().is_some() {
+                state.set(Some(Self::new(operation)));
+            }
+        });
+    }
+
+    fn observe(status: std::process::ExitStatus, limited: bool, error: &[u8]) {
+        MEMORY_CONTEXT.with(|state| {
+            if let Some(mut trace) = state.get() {
+                trace.status = Some(status);
+                trace.limited = limited;
+                if matches!(trace.operation, MemoryContextOperation::Baseline)
+                    && !status.success()
+                    && !limited
+                {
+                    trace.site =
+                        if status.code() == Some(2) && error == b"native outer command refused\n" {
+                            "bridge_refused"
+                        } else {
+                            Self::guest_site(error).unwrap_or("none")
+                        };
+                }
+                state.set(Some(trace));
+            }
+        });
+    }
+
+    fn guest_site(error: &[u8]) -> Option<&'static str> {
+        if !error.ends_with(b"\n") || error.contains(&0) {
+            return None;
+        }
+        const FAMILY: &[u8] = b"DOCKERLENS_NATIVE_MEMORY_GUEST";
+        if error
+            .windows(FAMILY.len())
+            .filter(|bytes| *bytes == FAMILY)
+            .count()
+            != 1
+        {
+            return None;
+        }
+        let site = error
+            .split(|byte| *byte == b'\n')
+            .find(|line| line.starts_with(FAMILY))?
+            .strip_prefix(b"DOCKERLENS_NATIVE_MEMORY_GUEST: site=")?;
+        [
+            "identity",
+            "mount",
+            "namespaces",
+            "outer",
+            "swap",
+            "node_open",
+            "node_type",
+            "node_values",
+            "node_events",
+            "node_readback",
+            "clock",
+        ]
+        .into_iter()
+        .find(|name| site == name.as_bytes())
+    }
+
+    fn take() -> Option<Self> {
+        MEMORY_CONTEXT.take()
+    }
+
+    fn failure_line(self) -> String {
+        use std::os::unix::process::ExitStatusExt;
+        let result = match self.status {
+            _ if self.limited => "stream_limit",
+            Some(status) if status.success() => "success",
+            Some(_) => "nonzero",
+            None => "unobserved",
+        };
+        let (termination, code) = if let Some(code) = self.status.and_then(|status| status.code()) {
+            ("exit", code.to_string())
+        } else if let Some(signal) = self.status.and_then(|status| status.signal()) {
+            ("signal", signal.to_string())
+        } else {
+            ("unknown", "none".to_owned())
+        };
+        format!(
+            "DOCKERLENS_NATIVE_MEMORY_CONTEXT_FAILURE: operation={} result={result} termination={termination} code={code} site={}",
+            self.operation.name(),
+            self.site
+        )
+    }
+}
+
 struct HealthRun {
     nofile_command_observation: Option<NofileCommandObservation>,
     run: String,
@@ -768,6 +925,9 @@ impl HealthRun {
                 (false, false) => NofileLookupFailure::CaptureIncomplete,
             };
             observation.active_lookup.set(Some(stage));
+        }
+        if !cleanup {
+            MemoryContextTrace::observe(status, overflow || error_overflow, &error);
         }
         assert!(
             !overflow && !error_overflow && self.bytes.get() <= MAX_BYTES,
@@ -1278,6 +1438,7 @@ impl HealthRun {
 impl HealthRun {
     fn context(&mut self) -> u32 {
         eprintln!("DOCKERLENS_NATIVE_CHECK: health_metadata_context");
+        MemoryContextTrace::select(MemoryContextOperation::VersionGet);
         let (status, version) = self.api("GET", "/version", None, false);
         assert_eq!(status, 200);
         let engine = version["Version"]
@@ -1294,6 +1455,7 @@ impl HealthRun {
             "exact observed Engine"
         );
         assert_eq!(version["ApiVersion"], self.api);
+        MemoryContextTrace::select(MemoryContextOperation::VersionCli);
         let cli = self.docker(
             &[
                 "version".to_owned(),
@@ -1306,6 +1468,7 @@ impl HealthRun {
             cli.as_slice(),
             format!("{engine}|{}\n", self.api).as_bytes()
         );
+        MemoryContextTrace::select(MemoryContextOperation::InfoGet);
         let (status, info) = self.api("GET", &format!("/v{}/info", self.api), None, false);
         assert_eq!(status, 200);
         let rootless = info["Rootless"] == true
@@ -1317,6 +1480,7 @@ impl HealthRun {
                 })
             });
         assert_eq!(rootless, self.mode == DaemonMode::Rootless);
+        MemoryContextTrace::select(MemoryContextOperation::SecurityCli);
         let security = self.docker(
             &[
                 "info".to_owned(),
@@ -1333,6 +1497,7 @@ impl HealthRun {
                 .any(|option| option == "name=rootless" || option.starts_with("name=rootless,")),
             rootless
         );
+        MemoryContextTrace::select(MemoryContextOperation::DaemonUid);
         let uid = self.outer(&["sh".to_owned(), "-ec".to_owned(),
             "count=0; uid=; for status in /proc/[0-9]*/status; do [ -f \"$status\" ] || continue; IFS= read -r comm < \"${status%/status}/comm\" || continue; [ \"$comm\" = dockerd ] || continue; count=$((count+1)); while read -r key real effective saved filesystem; do if [ \"$key\" = Uid: ]; then uid=$effective; break; fi; done < \"$status\"; done; printf '%s:%s\\n' \"$count\" \"$uid\"".to_owned()], false);
         let uid = std::str::from_utf8(&uid)
@@ -1345,6 +1510,7 @@ impl HealthRun {
             "independent effective daemon mode"
         );
         if self.lane.starts_with("debian11-") {
+            MemoryContextTrace::select(MemoryContextOperation::Package);
             let package = self.outer(
                 &[
                     "dpkg-query".to_owned(),
@@ -1358,6 +1524,7 @@ impl HealthRun {
         }
         // Engine zero means inherit. Independently establish that this pinned
         // base has no inherited health/default positive period before zero cases.
+        MemoryContextTrace::select(MemoryContextOperation::BaseImage);
         let (status, base_image) = self.api(
             "GET",
             &format!("/v{}/images/{}/json", self.api, self.base),
@@ -1370,6 +1537,7 @@ impl HealthRun {
             "inspected pinned image ID"
         );
         assert_eq!(image_start_period(&base_image), Some(0));
+        MemoryContextTrace::select(MemoryContextOperation::Acquire);
         let elapsed = self
             .remaining()
             .checked_sub(Duration::from_secs(46))
@@ -1398,6 +1566,7 @@ impl HealthRun {
                 .all(|exchange| exchange.status().code() == 200),
             "complete actual capture"
         );
+        MemoryContextTrace::select(MemoryContextOperation::Facts);
         let decoded =
             decode_capture(&capture).unwrap_or_else(|_| panic!("actual native capture decode"));
         let mut facts = decoded.version.daemon;
@@ -2041,6 +2210,57 @@ fn live_health_metadata_matches_engine() {
     );
     target.publish(&run.proof(&cases));
     eprintln!("DOCKERLENS_NATIVE_CHECK: health_metadata_evidence");
+}
+
+#[test]
+fn memory_guest_site_rejects_every_second_family_occurrence() {
+    for error in [
+        b"DOCKERLENS_NATIVE_MEMORY_GUEST: site=node_events\nnotice: DOCKERLENS_NATIVE_MEMORY_GUEST: site=clock\n".as_slice(),
+        b"notice: DOCKERLENS_NATIVE_MEMORY_GUEST: site=clock\nDOCKERLENS_NATIVE_MEMORY_GUEST: site=node_events\n",
+        b"DOCKERLENS_NATIVE_MEMORY_GUEST: site=node_events\nDOCKERLENS_NATIVE_MEMORY_GUEST: site=node_events\n",
+        b"DOCKERLENS_NATIVE_MEMORY_GUEST: site=node_events DOCKERLENS_NATIVE_MEMORY_GUEST: site=clock\n",
+        b"notice: DOCKERLENS_NATIVE_MEMORY_GUEST DOCKERLENS_NATIVE_MEMORY_GUEST\nDOCKERLENS_NATIVE_MEMORY_GUEST: site=node_events\n",
+    ] {
+        assert_eq!(MemoryContextTrace::guest_site(error), None);
+    }
+}
+
+#[test]
+fn memory_guest_site_requires_a_complete_exact_line_and_known_site() {
+    assert_eq!(
+        MemoryContextTrace::guest_site(
+            b"notice: \xff\nDOCKERLENS_NATIVE_MEMORY_GUEST: site=node_events\nmore noise\n"
+        ),
+        Some("node_events")
+    );
+    assert_eq!(
+        MemoryContextTrace::guest_site(b"DOCKERLENS_NATIVE_MEMORY_GUEST: site=clock\n"),
+        Some("clock")
+    );
+    for error in [
+        b"ordinary stderr\n".as_slice(),
+        b"notice: DOCKERLENS_NATIVE_MEMORY_GUEST: site=clock\n",
+        b"DOCKERLENS_NATIVE_MEMORY_GUEST: site=node_events\ntruncated",
+        b"DOCKERLENS_NATIVE_MEMORY_GUEST: site=node_events",
+        b"DOCKERLENS_NATIVE_MEMORY_GUEST: site=\n",
+        b"DOCKERLENS_NATIVE_MEMORY_GUEST: site=node_events\r\n",
+        b"DOCKERLENS_NATIVE_MEMORY_GUEST: site=node_events extra\n",
+        b"DOCKERLENS_NATIVE_MEMORY_GUEST: site=bridge_refused\n",
+        b"DOCKERLENS_NATIVE_MEMORY_GUEST: site=node_events\nnoise\0\n",
+    ] {
+        assert_eq!(MemoryContextTrace::guest_site(error), None);
+    }
+}
+
+#[test]
+fn memory_guest_site_checks_the_entire_retained_stderr() {
+    let line = b"\nDOCKERLENS_NATIVE_MEMORY_GUEST: site=node_events\n";
+    let mut error = vec![b'x'; 8192 - line.len()];
+    error.extend_from_slice(line);
+    assert_eq!(MemoryContextTrace::guest_site(&error), Some("node_events"));
+    let embedded = b"notice: DOCKERLENS_NATIVE_MEMORY_GUEST\n";
+    error[..embedded.len()].copy_from_slice(embedded);
+    assert_eq!(MemoryContextTrace::guest_site(&error), None);
 }
 
 #[test]
