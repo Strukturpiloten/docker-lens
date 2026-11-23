@@ -302,6 +302,39 @@ reply EOF and successful supervised exit. Root finalization likewise requires
 closed held source descriptors, final acknowledgment, EOF and supervised exit.
 Early setup failures retain spawned-child ownership rather than detaching it.
 
+The producer retains the first unverified cleanup check while continuing the
+same bounded removal and absence operations. After the existing teardown
+handoff it emits one fixed cleanup refusal with measurement state, operation,
+and outcome. An earlier measurement refusal or panic retains its own
+diagnostic. A caught panic in a later operation cannot replace the first
+cleanup failure. The exact PIDs invocation sends libtest output and direct
+owner writes to the same bounded private capture in order. The wrapper
+requires the ordered cleanup and handoff markers and a failed invocation to
+project the closed record. Duplicates, invalid combinations, and records on a
+successful invocation cannot supply cleanup context.
+
+Worker wait still requires exact zero plus a newline. For a successful CLI
+invocation the refusal distinguishes a canonical nonzero exit line, an empty
+reply, and malformed bytes. A CLI command panic is a separate outcome.
+Controller Close distinguishes refusal before a valid acknowledgment,
+failure while waiting for output EOF, and failure while observing child exit
+or checking its captured diagnostics. An EOF before acknowledgment conveys
+only the observed reply boundary. Guest custody, guest cleanup, and natural
+child termination require separate observations. The record carries no raw
+wait status, command output, or container identifiers.
+
+A full six-worker pass debits four parent calls per stop and exit verification,
+five per normal removal, four across the two ID/name readback rounds, and one
+for controller Close, for 79 altogether. The 78 command captures each reserve
+room for 8,192 stdout and 2,048 stderr bytes before launch and then debit the
+captured lengths. Their maximum combined charge is 798,720 bytes. Close uses
+the controller's existing 64-KiB reservation. On hosted Docker the later final
+outer snapshot and process check add three parent calls and at most 75,776
+bytes. This path fits the 100-call and 2-MiB cleanup reserves. All cleanup work
+shares the 46-second window. The command timer clips to eight seconds before
+its one-second kill grace, and Close uses the original deadline with its
+two-second margin.
+
 Case 27 retains the outer daemon for the following prepared case 28. Only the
 original lane EXIT finalizer and fresh aggregate can establish eventual outer
 and data-volume removal. An `outer_teardown_owner` string is descriptive context,

@@ -194,6 +194,11 @@ run_status=0
 # The native test reserves its own cleanup and reporting margin before this time.
 run_deadline_epoch=$(( $(date +%s) + 180 ))
 run_exact_native() {
+  if (( exact_pids )); then
+    # Keep libtest markers, panic hooks and direct owner writes in order in the
+    # same bounded private capture. Libtest otherwise buffers only some writes.
+    export RUST_TEST_NOCAPTURE=1
+  fi
   NATIVE_NETWORK_TEST_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_HEALTH_METADATA_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_STOP_SIGNAL_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_LIFECYCLE_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_RUNTIME_FILESYSTEM_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_TMPFS_EFFECT_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_HEALTH_START_INTERVAL_BOUNDARY_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_LIFECYCLE_DEFAULT_EFFECT_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_HOSTNAME_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_COMMAND_CLEAR_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_SHM_SIZE_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_SUPPLEMENTARY_GROUPS_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_KERNEL_SETTINGS_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_PIDS_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_NOFILE_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_DEVICE_MAPPING_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_MEMORY_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_CAPABILITIES_DEADLINE_EPOCH=$run_deadline_epoch NATIVE_LOGGING_DEADLINE_EPOCH=$run_deadline_epoch timeout 180 cargo test --locked "${cargo_target[@]}" -- --ignored --exact "$selected" 2>&1
 }
 raw_capture_invalid=0
@@ -212,8 +217,20 @@ if (( exact_pids || exact_nofile || exact_device_mapping || exact_memory || exac
 else
   result=$(run_exact_native) || run_status=$?
 fi
+# Reject foreign families before any parser rereads the private capture, so
+# detail cannot outlive a rejected owner handoff. Keep ordinary measurement and
+# Locate checks at line start; cleanup, nofile and exact-family cross-checks
+# recognize tokens anywhere.
+foreign_family=0
+if { (( !exact_nofile )) && grep -q 'DOCKERLENS_NATIVE_NOFILE_' <<<"$result"; } ||
+   { (( !exact_pids )) && grep -Eq '^DOCKERLENS_NATIVE_PIDS_(MEASUREMENT_REFUSAL|LOCATE)|DOCKERLENS_NATIVE_PIDS_CLEANUP_REFUSAL' <<<"$result"; } ||
+   { (( exact_nofile )) && grep -q 'DOCKERLENS_NATIVE_PIDS_' <<<"$result"; }; then
+  foreign_family=1
+  result=
+  if (( run_status == 0 )); then run_status=1; fi
+fi
 pids_setup_refusal=
-if (( exact_pids && !raw_capture_invalid )); then
+if (( exact_pids && !raw_capture_invalid && !foreign_family )); then
   # Validate the original file, not a Bash-normalized string. Only one distinct
   # valid general/detail record may project; identical duplicates deduplicate.
   # Either prefix, even malformed/unpaired, contradicts evidence or success.
@@ -335,7 +352,7 @@ fi
 # Measurement refusals are distinct from constructor/setup observations. Read
 # original bytes only for the exact PIDs test; never reflect supplied text.
 pids_measurement_refusal=
-if (( exact_pids && !raw_capture_invalid )); then
+if (( exact_pids && !raw_capture_invalid && !foreign_family )); then
   measurement_projection_status=0
   pids_measurement_refusal=$(python3 -I -c '
 import hashlib, os, re, stat, sys
@@ -364,7 +381,7 @@ try:
     if not observations:
         sys.exit(0)
     other = (b"DOCKERLENS_NATIVE_PIDS_SETUP_REFUSAL:", b"DOCKERLENS_NATIVE_PIDS_IO:",
-             b"DOCKERLENS_NATIVE_PIDS_START:", b"DOCKERLENS_NATIVE_PIDS_BIND:", b"DOCKERLENS_NATIVE_NOFILE_")
+             b"DOCKERLENS_NATIVE_PIDS_START:", b"DOCKERLENS_NATIVE_PIDS_BIND:")
     if any(line.startswith(other) for line in lines):
         sys.exit(4)
     descriptor = os.open(sys.argv[1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -498,15 +515,11 @@ except (OSError, ValueError):
     pids_setup_refusal=
     pids_measurement_refusal=
   fi
-elif (( !exact_pids )) && grep -Eq '^DOCKERLENS_NATIVE_PIDS_(MEASUREMENT_REFUSAL|LOCATE)' <<<"$result"; then
-  # A foreign selected test cannot supply PIDs measurement evidence.
-  result=
-  if (( run_status == 0 )); then run_status=1; fi
 fi
 
 # Failure-only nofile caller context; read the existing private capture, never native data.
 nofile_failure_context=
-if (( exact_nofile && !raw_capture_invalid )); then
+if (( exact_nofile && !raw_capture_invalid && !foreign_family )); then
   nofile_projection_status=0
   nofile_failure_context=$(python3 -I -c '
 import os, re, stat, sys
@@ -526,8 +539,6 @@ try:
         sys.exit(0)
     if sys.argv[2] == "0" or any(line.startswith(b"test result: ok.") or line == b"DOCKERLENS_NATIVE_CHECK: nofile_proof" for line in lines):
         sys.exit(3)
-    if any(line.startswith(b"DOCKERLENS_NATIVE_PIDS_") for line in lines):
-        raise ValueError()
     cleanup_indices = [index for index, line in enumerate(lines) if line == b"DOCKERLENS_NATIVE_CHECK: nofile_cleanup"]
     if len(cleanup_indices) != 1 or b"DOCKERLENS_NATIVE_CHECK: nofile_context" not in lines[:cleanup_indices[0]]:
         raise ValueError()
@@ -574,13 +585,15 @@ try:
                 raise ValueError()
             work = line
         else:
-            match = re.fullmatch(rb"DOCKERLENS_NATIVE_NOFILE_CLEANUP_REFUSAL: reason=(ownership_guard|inner_unverified|panic) first_observed_termination=(exit|signal|unknown) code=([0-9]+|none)(?: first_unverified_phase=(unknown|lookup_name|name_ownership|id_ownership|delete|post_delete_id_absence|post_delete_name_absence|readback_id_absence|readback_name_absence))?", line)
+            match = re.fullmatch(rb"DOCKERLENS_NATIVE_NOFILE_CLEANUP_REFUSAL: reason=(ownership_guard|inner_unverified|panic) first_observed_termination=(exit|signal|unknown) code=([0-9]+|none)(?: first_unverified_phase=(unknown|lookup_name|name_ownership|id_ownership|delete|post_delete_id_absence|post_delete_name_absence|readback_id_absence|readback_name_absence))?(?: lookup_failure=(before_capture|capture_incomplete|stdout_limit|stderr_limit|both_limits|process|http_frame|http_status|json))?", line)
             if match is None or cleanup is not None or len(handoffs) != 1 or not cleanup_indices[0] < handoffs[0] < index:
                 raise ValueError()
-            reason, termination, code, cleanup_phase = match.groups()
+            reason, termination, code, cleanup_phase, lookup_failure = match.groups()
             if reason == b"ownership_guard" and termination != b"unknown":
                 raise ValueError()
             if cleanup_phase not in (None, b"unknown") and reason != b"inner_unverified":
+                raise ValueError()
+            if lookup_failure is not None and (reason != b"inner_unverified" or cleanup_phase != b"lookup_name"):
                 raise ValueError()
             cleanup = line
         if termination == b"unknown":
@@ -604,11 +617,95 @@ except (OSError, ValueError):
     result=
     if (( run_status == 0 )); then run_status=1; fi
   fi
-elif (( !exact_nofile )) && grep -q "DOCKERLENS_NATIVE_NOFILE_" <<<"$result"; then
-  pids_setup_refusal=
-  pids_measurement_refusal=
-  result=
-  if (( run_status == 0 )); then run_status=1; fi
+fi
+# PIDs cleanup is a separate failure after the original owner handoff.
+pids_cleanup_refusal=
+if (( exact_pids && !raw_capture_invalid && !foreign_family )); then
+  cleanup_projection_status=0
+  pids_cleanup_refusal=$(python3 -I -c '
+import os, re, stat, sys
+try:
+    descriptor = os.open(sys.argv[1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, "rb") as capture:
+        info = os.fstat(capture.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o600
+                or info.st_size > 1048576):
+            raise ValueError()
+        data = capture.read(1048577)
+    if len(data) != info.st_size or b"\0" in data:
+        raise ValueError()
+    lines = data.split(b"\n")
+    family = b"DOCKERLENS_NATIVE_PIDS_CLEANUP_REFUSAL"
+    observations = [(index, line) for index, line in enumerate(lines) if family in line]
+    if not observations:
+        sys.exit(0)
+    if sys.argv[2] == "0" or any(line.startswith(b"test result: ok.") or
+                                 line == b"DOCKERLENS_NATIVE_CHECK: pids_evidence" for line in lines):
+        sys.exit(3)
+    if len(observations) != 1:
+        sys.exit(0)
+    index, line = observations[0]
+    if index == len(lines) - 1 or len(line) > 128:
+        sys.exit(0)
+    match = re.fullmatch(family + rb": measurement=(complete|incomplete) operation=([a-z_]+) outcome=([a-z_]+)", line)
+    if match is None:
+        sys.exit(0)
+    context = b"DOCKERLENS_NATIVE_CHECK: pids_context"
+    cleanup = b"DOCKERLENS_NATIVE_CHECK: pids_cleanup"
+    unverified = b"DOCKERLENS_NATIVE_CHECK: lifecycle_cleanup_unverified"
+    handoff = b"DOCKERLENS_NATIVE_LIFECYCLE_CLEANUP: owner=native_conformance_outer_v1 scope=outer_container_and_data_volume state=required"
+    markers = (context, cleanup, unverified, handoff)
+    if (any(lines.count(marker) != 1 for marker in markers)
+            or not lines.index(context) < lines.index(cleanup) < lines.index(unverified) < lines.index(handoff) < index):
+        sys.exit(0)
+    foreign = (b"DOCKERLENS_NATIVE_PIDS_SETUP_REFUSAL", b"DOCKERLENS_NATIVE_PIDS_IO:",
+               b"DOCKERLENS_NATIVE_PIDS_START:", b"DOCKERLENS_NATIVE_PIDS_BIND:")
+    if any(line.startswith(foreign) for line in lines):
+        sys.exit(0)
+    measurement, operation, outcome = match.groups()
+    # The measurement parser already validates LocateBatch EOF pairing. A
+    # locator fault cannot accompany completed measurement or an unpaired EOF.
+    if any(raw.startswith(b"DOCKERLENS_NATIVE_PIDS_LOCATE") for raw in lines):
+        paired = "DOCKERLENS_NATIVE_PIDS_MEASUREMENT_REFUSAL: code=pids-eof caller=locate_batch slot=none phase=none source_stage="
+        if measurement == b"complete" or not sys.argv[3].startswith(paired):
+            sys.exit(0)
+    refusals = [i for i, raw in enumerate(lines) if raw.startswith(b"DOCKERLENS_NATIVE_PIDS_MEASUREMENT_REFUSAL")]
+    if refusals and (measurement == b"complete" or any(i < index for i in refusals)):
+        sys.exit(0)
+    if any(raw.startswith(b"test result:") for raw in lines[:index]):
+        sys.exit(0)
+    allowed = {b"bind_ids": (b"unbound",)}
+    for phase in (b"lookup_name", b"name_ownership", b"id_ownership", b"delete",
+                  b"post_delete_id_absence", b"post_delete_name_absence",
+                  b"readback_id_absence", b"readback_name_absence"):
+        allowed[phase] = (b"rejected", b"panic")
+    if measurement == b"complete":
+        allowed.update({
+            b"stop_ownership": (b"rejected", b"panic"),
+            b"stop": (b"invalid_reply", b"panic"),
+            b"wait": (b"empty", b"nonzero", b"malformed", b"panic"),
+            b"stopped_state": (b"rejected", b"panic"),
+            b"close_ack": (b"missing", b"eof", b"deadline", b"budget", b"write", b"read",
+                           b"invalid", b"sequence", b"unknown"),
+            b"close_stream": (b"deadline", b"trailing", b"read"),
+            b"close_child": (b"deadline", b"wait", b"diagnostic_unavailable", b"budget", b"signal",
+                             b"nonzero", b"unknown", b"diagnostic_overflow", b"diagnostic_present"),
+        })
+    if outcome not in allowed.get(operation, ()):
+        sys.exit(0)
+    fixed_operation = next(key for key in allowed if key == operation)
+    fixed_outcome = next(value for value in allowed[fixed_operation] if value == outcome)
+    fixed_measurement = b"complete" if measurement == b"complete" else b"incomplete"
+    sys.stdout.buffer.write(family + b": measurement=" + fixed_measurement
+                            + b" operation=" + fixed_operation + b" outcome=" + fixed_outcome + b"\n")
+except (OSError, ValueError):
+    pass
+' "$capture_directory/run.raw" "$original_run_status" "$pids_measurement_refusal" 2>/dev/null) || cleanup_projection_status=$?
+  if (( cleanup_projection_status == 3 )); then
+    result=
+    if (( run_status == 0 )); then run_status=1; fi
+  fi
 fi
 # Only libtest's numeric summary is safe to print. Test and compiler output can
 # contain protected native values, socket payloads, or authored secrets.
@@ -832,9 +929,12 @@ case $target in
     if [[ $target == native_memory ]]; then lifecycle_source=native_memory_tests; fi
     if [[ $target == native_capabilities ]]; then lifecycle_source=native_capabilities_tests; fi
     if [[ $target == native_logging ]]; then lifecycle_source=native_logging_tests; fi
-    panic_site=$(awk '/^thread .* panicked at / { print; exit }' <<<"$result" | sed -nE \
+    panic_site=$(awk -v cleanup="$pids_cleanup_refusal" '
+      cleanup != "" && cleanup !~ / outcome=panic$/ && /^DOCKERLENS_NATIVE_CHECK: pids_cleanup$/ { exit }
+      /^thread .* panicked at / { print; exit }
+    ' <<<"$result" | sed -nE \
       "s/^thread '${selected}'( \([0-9]{1,10}\))? panicked at src\/(${lifecycle_source}|native_lifecycle_tests|native_health_metadata_tests)\.rs:([1-9][0-9]{0,5}):([1-9][0-9]{0,3}):$/DOCKERLENS_NATIVE_PANIC: source=\2 line=\3 column=\4/p")
-    if [[ -z $panic_site ]]; then panic_site="DOCKERLENS_NATIVE_PANIC: source=$lifecycle_source location=unavailable"; fi
+    if [[ -z $panic_site && ( -z $pids_cleanup_refusal || $pids_cleanup_refusal == *' outcome=panic' ) ]]; then panic_site="DOCKERLENS_NATIVE_PANIC: source=$lifecycle_source location=unavailable"; fi
     ;;
   native_stop_signal)
     # Select the first panic of any thread before projecting an allowed site;
@@ -907,6 +1007,7 @@ if (( run_status != 0 )); then
   echo "required native test $target::$test_name failed (exit $run_status)" >&2
   if [[ -n $pids_setup_refusal ]]; then echo "$pids_setup_refusal" >&2; fi
   if [[ -n $pids_measurement_refusal ]]; then echo "$pids_measurement_refusal" >&2; fi
+  if [[ -n $pids_cleanup_refusal ]]; then echo "$pids_cleanup_refusal" >&2; fi
   if [[ -n $nofile_failure_context ]]; then printf '%s\n' "$nofile_failure_context" >&2; fi
   if [[ -n $port_causal_marker && $port_causal_marker != "$marker" ]]; then echo "$port_causal_marker" >&2; fi
   if [[ -n $marker ]]; then echo "$marker" >&2; fi

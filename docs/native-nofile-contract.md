@@ -48,6 +48,15 @@ soft/hard. CLI requests explicitly supply both limits; rendered requests
 independently contain one `HostConfig.Ulimits` entry with `Name: nofile`, finite
 integers and signed `-1` for authored unlimited. Full request equality precedes
 rendered submission. Neither role is generated from the other's serialization.
+Each route stores the same two repository-owned actor strings once, in the
+fixture-only `DOCKERLENS_NOFILE_PARENT` and `DOCKERLENS_NOFILE_WORKER` assignments.
+Docker inspect duplicates the short bootstrap and fixture name in `Args` and
+`Config.Cmd`. The bootstrap execs the parent shell as PID 1 with the original
+name and worker program arguments. Configured readback checks both command
+representations, both exact actor strings and every borrowed image assignment.
+The producer refuses shadowed fixture keys and duplicate assignments before
+create or on configured readback. Test-local environment capability evidence
+permits only this inert render and grants no new admission.
 
 Only the unchanged harness-pinned BusyBox 1.37.0 is borrowed. Eight distinct
 names/IDs carry exact run labels and pinned image identity. No derived image,
@@ -86,9 +95,16 @@ environment but never explain an otherwise unknown unlimited failure.
 
 Actual PID1 independently reads its own and its child's procfs limits/status
 before and after the experiment. A background fork explicitly execs `/bin/awk`;
-PID1 retains `$!` and later waits, preventing tail-exec ambiguity. Parent and
-independent root observer check the live executable inode and the exact binary
-NUL-delimited argv, including the separately passed program and unique token.
+PID1 retains `$!` and later waits, preventing tail-exec ambiguity. BusyBox awk
+tokenizes inline source in place, changing the program bytes visible in
+`/proc/<pid>/cmdline`. PID1 writes the exact supplied source to one private
+regular file with mode 0400 in its freshly created directory and starts awk
+with `-f`. The parent and independent root observer check the live executable
+inode, the exact binary NUL-delimited argv including the file path and token,
+and the exact contents of the regular nonsymlink program file. The program
+file is setup input. The worker closes its program stream before the first
+barrier, and the existing descriptor checks still account for only the 256
+numbered streams and three control-file inodes.
 The worker independently reads `/proc/self/limits` and status. All eight
 PID/PPID/soft/hard samples must agree: parent PID1/PPID0; original distinct
 worker PID>1/PPID1. Root exec only corroborates those live actors.
@@ -129,8 +145,8 @@ and exceeds both finite thresholds without retention. The original worker's
 descriptor inventory must return exactly to its measured baseline. A failed
 input may have a cached entry without a descriptor; `close=0` alone is never
 treated as proof that the failed input had opened. Successful operations are
-not assumed to clear ERRNO. No native internal program is executed by the
-source-only Python tests; shell checks use `sh -n` only.
+not assumed to clear ERRNO. The source-only Python tests check shell syntax
+and exercise the bootstrap and comparison commands with inert inputs.
 
 ## One acquisition, original budgets and cleanup
 
@@ -247,6 +263,14 @@ the real harness with an inert outer command.
   Both fields are failure evidence and established absence still requires the
   original successful checks. The projector also accepts older records without
   the new fields.
+  When the first unverified phase is `lookup_name`, the optional
+  `lookup_failure` identifies where that same GET stopped. Its closed values
+  cover pre-capture and incomplete capture, either or both stream limits, a
+  failed waited process, a bad HTTP frame, an unexpected parsed HTTP status,
+  and JSON decode refusal. The observer uses existing capture and parser
+  results and discards the state on valid 200 or 404 responses. Later reads
+  cannot replace the first failure. No response sizes, status bodies or
+  identifiers reach the wrapper's public record.
 
 An optional nofile-only observation stores an already-waited nonzero command exit (1..255),
 signal (1..64), or unknown; no stderr/exception text is retained. It is disabled for every other

@@ -143,7 +143,8 @@ import json, os, sys
 from pathlib import Path
 with open(os.environ["TRACE"], "a") as stream:
     stream.write(json.dumps({"argv":sys.argv[1:], "deadline":os.environ.get("NATIVE_PIDS_DEADLINE_EPOCH"),
-                            "owner":os.environ.get("NATIVE_LIFECYCLE_CLEANUP_OWNER")}) + "\\n")
+                            "owner":os.environ.get("NATIVE_LIFECYCLE_CLEANUP_OWNER"),
+                            "nocapture":os.environ.get("RUST_TEST_NOCAPTURE")}) + "\\n")
 if "--list" in sys.argv:
     sys.stdout.buffer.write(Path(os.environ["LISTING_PATH"]).read_bytes())
 else:
@@ -187,6 +188,7 @@ exit "$STATUS"
         self.assertIn("--exact", trace[1]["argv"])
         self.assertRegex(trace[1]["deadline"], r"^[1-9][0-9]+$")
         self.assertEqual(trace[1]["owner"], "native_conformance_outer_v1")
+        self.assertEqual(trace[1]["nocapture"], "1")
         for output, status, listing in [(success, 0, ""), (success, 0, (SELECTED + ": test\n") * 2),
                 (success.replace("1 passed", "0 passed"), 0, None), (success + "\n" + HANDOFF, 0, None),
                 ("DOCKERLENS_NATIVE_CHECK: pids_context\nPRIVATE_PIDS_CANARY\n" + success, 1, None)]:
@@ -220,6 +222,151 @@ exit "$STATUS"
                 self.assertIn(b"DOCKERLENS_NATIVE_CHECK: pids_context\n", result.stderr)
                 self.assertNotIn(b"PRIVATE_PIDS_CANARY", result.stdout + result.stderr)
                 self.assertLessEqual(len(line), 64)
+
+    def cleanup_output(self, record, *, during=(), after=(), handoff=HANDOFF):
+        return "\n".join([
+            "DOCKERLENS_NATIVE_CHECK: pids_context",
+            "DOCKERLENS_NATIVE_CHECK: pids_cleanup",
+            *during,
+            "DOCKERLENS_NATIVE_CHECK: lifecycle_cleanup_unverified",
+            handoff,
+            record,
+            *after,
+        ])
+
+    def test_cleanup_refusal_projects_the_first_operation_independently(self):
+        prefix = "DOCKERLENS_NATIVE_PIDS_CLEANUP_REFUSAL: "
+        later_panic = f"thread '{SELECTED}' panicked at src/native_health_metadata_tests.rs:728:9:"
+        measurement = "DOCKERLENS_NATIVE_PIDS_MEASUREMENT_REFUSAL: code=pids-eof"
+        for observed, other in [
+            ("measurement=complete operation=wait outcome=nonzero", ()),
+            ("measurement=incomplete operation=delete outcome=rejected", (measurement,)),
+        ]:
+            with self.subTest(observed=observed):
+                record = prefix + observed
+                output = self.cleanup_output(record, during=(later_panic, "PRIVATE_PIDS_CANARY"), after=other)
+                result, _ = self.wrapper(output, status=101)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(b"failed (exit 101)", result.stderr)
+                self.assertIn(HANDOFF.encode(), result.stderr)
+                self.assertEqual(result.stderr.count(record.encode()), 1)
+                self.assertNotIn(b"DOCKERLENS_NATIVE_PANIC:", result.stderr)
+                self.assertNotIn(b"PRIVATE_PIDS_CANARY", result.stdout + result.stderr)
+                for line in other:
+                    self.assertIn(line.encode(), result.stderr)
+
+        command_failure = prefix + "measurement=complete operation=wait outcome=panic"
+        result, _ = self.wrapper(self.cleanup_output(command_failure, during=(later_panic,)), status=101)
+        self.assertIn(b"source=native_health_metadata_tests line=728 column=9", result.stderr)
+        self.assertIn(command_failure.encode(), result.stderr)
+
+        record = prefix + "measurement=incomplete operation=delete outcome=rejected"
+        output = self.cleanup_output(record).replace(
+            "DOCKERLENS_NATIVE_CHECK: pids_cleanup", later_panic + "\nDOCKERLENS_NATIVE_CHECK: pids_cleanup"
+        )
+        result, _ = self.wrapper(output, status=101)
+        self.assertIn(b"source=native_health_metadata_tests line=728 column=9", result.stderr)
+        self.assertIn(record.encode(), result.stderr)
+
+    def test_cleanup_refusal_rejects_conflicts_and_invalid_operation_outcomes(self):
+        prefix = "DOCKERLENS_NATIVE_PIDS_CLEANUP_REFUSAL: "
+        wait = prefix + "measurement=complete operation=wait outcome=nonzero"
+        measurement = "DOCKERLENS_NATIVE_PIDS_MEASUREMENT_REFUSAL: code=pids-eof"
+        positive = "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 100 filtered out;"
+        cases = [
+            (self.cleanup_output(wait, after=(wait,)), {}),
+            (self.cleanup_output(wait, after=(wait.replace("nonzero", "empty"),)), {}),
+            (self.cleanup_output(wait, handoff=""), {}),
+            (self.cleanup_output(wait, during=(HANDOFF,)), {}),
+            (self.cleanup_output(wait).replace("pids_cleanup", "pids_context"), {}),
+            (self.cleanup_output(wait).replace(HANDOFF + "\n" + wait, wait + "\n" + HANDOFF), {}),
+            (self.cleanup_output(wait), {"terminate_output": False}),
+            (self.cleanup_output(wait.replace("complete", "incomplete")), {}),
+            (self.cleanup_output(wait.replace("nonzero", "137")), {}),
+            (self.cleanup_output(wait.replace("wait", "close_stream")), {}),
+            (self.cleanup_output(wait.replace("nonzero", "nonzero private=PRIVATE_PIDS_CANARY")), {}),
+            (self.cleanup_output(wait, after=(measurement,)), {}),
+            (self.cleanup_output(wait, after=(positive,)), {}),
+            (self.cleanup_output(wait, after=("DOCKERLENS_NATIVE_CHECK: pids_evidence",)), {}),
+            (self.cleanup_output(wait, during=("DOCKERLENS_NATIVE_PIDS_SETUP_REFUSAL: code=pids-clock",)), {}),
+            (self.cleanup_output(wait, after=(positive,)), {"status": 0}),
+            (self.cleanup_output(wait), {"test_name": "other_pids_test"}),
+        ]
+        for raw, options in cases:
+            with self.subTest(raw=raw, options=options):
+                status = options.get("status", 101)
+                kwargs = {key: value for key, value in options.items() if key != "status"}
+                result, _ = self.wrapper(raw, status=status, **kwargs)
+                self.assertEqual(result.returncode, 1)
+                self.assertNotIn(prefix.encode(), result.stdout + result.stderr)
+                self.assertNotIn(b"PRIVATE_PIDS_CANARY", result.stdout + result.stderr)
+
+        a_bad_cleanup = wait.replace("complete", "incomplete")
+        result, _ = self.wrapper(self.cleanup_output(a_bad_cleanup, after=(measurement,)), status=101)
+        self.assertIn(measurement.encode(), result.stderr)
+        self.assertNotIn(prefix.encode(), result.stderr)
+
+    def test_ordinary_selector_preserves_legacy_foreign_family_scopes(self):
+        success = "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 100 filtered out;"
+        for family in ("MEASUREMENT_REFUSAL", "LOCATE", "CLEANUP_REFUSAL"):
+            for embedded in (False, True):
+                with self.subTest(family=family, embedded=embedded):
+                    note = ("private note " if embedded else "") + "DOCKERLENS_NATIVE_PIDS_" + family + ": PRIVATE_PIDS_CANARY"
+                    result, trace = self.wrapper(note + "\n" + success, target="native_capture",
+                                                 test_name="live_engine_capture_decodes")
+                    passes = embedded and family != "CLEANUP_REFUSAL"
+                    self.assertEqual(result.returncode, 0 if passes else 1, result.stderr)
+                    self.assertEqual(b"required native test passed:" in result.stdout, passes)
+                    self.assertEqual([row["nocapture"] for row in trace], [None, None])
+                    self.assertNotIn(b"PRIVATE_PIDS_CANARY", result.stdout + result.stderr)
+
+    def test_cleanup_rejects_foreign_nofile_before_any_projection(self):
+        record = "DOCKERLENS_NATIVE_PIDS_CLEANUP_REFUSAL: measurement=complete operation=wait outcome=nonzero"
+        foreign = "DOCKERLENS_NATIVE_NOFILE_FAILURE: PRIVATE_PIDS_CANARY"
+        for token in (foreign, "embedded " + foreign):
+            with self.subTest(token=token):
+                result, _ = self.wrapper(self.cleanup_output(record, after=(token,)), status=101)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(b"failed (exit 101)", result.stderr)
+                self.assertNotIn(record.encode(), result.stderr)
+                self.assertNotIn(HANDOFF.encode(), result.stderr)
+                self.assertNotIn(b"PRIVATE_PIDS_CANARY", result.stdout + result.stderr)
+
+    def test_cleanup_locate_reuses_measurement_pairing(self):
+        prefix = "DOCKERLENS_NATIVE_PIDS_CLEANUP_REFUSAL: "
+        complete = prefix + "measurement=complete operation=wait outcome=nonzero"
+        incomplete = prefix + "measurement=incomplete operation=delete outcome=rejected"
+        locate = "DOCKERLENS_NATIVE_PIDS_LOCATE: stage=discovery category=NoMatch"
+        eof = "DOCKERLENS_NATIVE_PIDS_MEASUREMENT_REFUSAL: code=pids-eof caller=locate_batch slot=none phase=none"
+        for record, following, projects in (
+            (complete, (), False), (complete, (eof,), False),
+            (incomplete, (), False), (incomplete, (eof,), True),
+            (incomplete, (eof.replace("locate_batch", "seal_measurements"),), False),
+            (incomplete, (eof, eof), False),
+        ):
+            with self.subTest(record=record, following=following):
+                result, _ = self.wrapper(self.cleanup_output(record, during=(locate,), after=following), status=101)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(b"failed (exit 101)", result.stderr)
+                self.assertIn(HANDOFF.encode(), result.stderr)
+                self.assertEqual(record.encode() in result.stderr, projects)
+                if projects:
+                    self.assertIn((eof + " source_stage=discovery source_category=NoMatch").encode(), result.stderr)
+                self.assertNotIn(locate.encode(), result.stdout + result.stderr)
+
+    def test_cleanup_refusal_projects_closed_wait_and_close_outcomes(self):
+        prefix = "DOCKERLENS_NATIVE_PIDS_CLEANUP_REFUSAL: measurement=complete "
+        for operation, outcome in [
+            ("wait", "empty"), ("wait", "malformed"), ("close_ack", "eof"),
+            ("close_ack", "invalid"), ("close_ack", "sequence"), ("close_stream", "trailing"),
+            ("close_child", "nonzero"), ("close_child", "signal"), ("close_child", "unknown"),
+            ("close_child", "diagnostic_present"), ("close_child", "diagnostic_overflow"),
+        ]:
+            with self.subTest(operation=operation, outcome=outcome):
+                record = f"{prefix}operation={operation} outcome={outcome}"
+                result, _ = self.wrapper(self.cleanup_output(record), status=101)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(record.encode(), result.stderr)
 
     def test_constructor_refusal_projection_is_failure_only_and_exact_test_only(self):
         line = SETUP_REFUSAL + "pids-outer"

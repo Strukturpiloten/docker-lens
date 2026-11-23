@@ -5,7 +5,7 @@
 
 use super::*;
 use crate::observation::{Availability, Origin};
-use crate::target::{ContainerToken, Ulimit, UlimitValue};
+use crate::target::{ContainerToken, EnvironmentAssignment, Ulimit, UlimitValue};
 use std::collections::BTreeMap;
 
 const CONTRACT: &str = "nofile-v1";
@@ -18,10 +18,22 @@ const CASES: [(&str, i64, i64); 4] = [
     ("soft64_hard_unlimited", 64, -1),
     ("both_unlimited", -1, -1),
 ];
+const NOFILE_CAPABILITIES: [Capability; 6] = [
+    Capability::StandaloneContainer,
+    Capability::Command,
+    Capability::ContainerLabels,
+    Capability::EnvironmentAssignment,
+    Capability::Ulimits,
+    Capability::UlimitNofile,
+];
 const REQUESTS: usize = 20;
 const BODIES: usize = 512 * 1024;
 const ORDINARY_CAPTURE_ENVELOPE: usize = 65_550 + 8192;
 const REFUSAL: &str = "error setting rlimit type 7: operation not permitted";
+const PARENT_ENV: &str = "DOCKERLENS_NOFILE_PARENT";
+const WORKER_ENV: &str = "DOCKERLENS_NOFILE_WORKER";
+const BOOTSTRAP: &str =
+    r#"exec /bin/sh -c "${DOCKERLENS_NOFILE_PARENT:?}" "$0" "${DOCKERLENS_NOFILE_WORKER:?}""#;
 
 // Independently authored POSIX-awk program. No oracle implementation is copied.
 // ERRNO is captured immediately: even close() may subsequently overwrite it.
@@ -41,20 +53,28 @@ for(i=1;i<=256;i++){f="/tmp/dl-nf/f" i;if((getline v < f)!=1||v!=token " " i||cl
 print "reuse",256;sample("self_post");gate("done");exit 87
 }"#;
 
+// BusyBox awk tokenizes inline source in argv in place. Bind an immutable
+// argument vector and compare the file-backed program independently.
 const PARENT: &str = r#"test "$$" = 1 || exit 71
 set -eu;LC_ALL=C;export LC_ALL;umask 077;d=/tmp/dl-nf
 test ! -e "$d";test ! -L "$d";mkdir "$d";mkfifo "$d/gate";: >"$d/report";: >"$d/error"
 for i in $(seq 1 256);do printf '%s %s\n' "$0-child" "$i" >"$d/f$i";done
+printf '%s' "$1" >"$d/worker.awk";chmod 0400 "$d/worker.awk"
 exec 3<>"$d/gate"
 s(){ printf '%s ' "$1";awk '/^Max open files /{printf "%s %s ",$4,$5}' /proc/"$2"/limits;awk '/^Pid:/{printf "%s ",$2}/^PPid:/{print $2}' /proc/"$2"/status;}
 f(){ for p in /proc/$c/fd/*;do printf 'fd %s %s %s ' "$1" "${p##*/}" "$(readlink "$p")";stat -L -c '%d %i' "$p";done;}
 w(){ for i in $(seq 1 80);do if grep -qx "phase $1" "$d/report";then return;fi;sleep 0.025;done;exit 72;}
-b(){ test "/proc/$c/exe" -ef /bin/awk;printf '%s\000' /bin/awk -v "token=$0-child" "$1" | cmp "/proc/$c/cmdline" -;}
+b(){
+test "/proc/$c/exe" -ef /bin/awk
+test -f "$d/worker.awk";test ! -L "$d/worker.awk"
+printf '%s' "$1" | cmp "$d/worker.awk" -
+printf '%s\000' /bin/awk -v "token=$0-child" -f "$d/worker.awk" | cmp "/proc/$c/cmdline" -
+}
 {
 printf 'nr_open ';cat /proc/sys/fs/nr_open
 stat -c 'own %n %d %i' "$d"/f* "$d/gate" "$d/report" "$d/error"
 s parent_pre 1
-(exec /bin/awk -v "token=$0-child" "$1" 3>&- <"$d/gate" >"$d/report" 2>"$d/error") &
+(exec /bin/awk -v "token=$0-child" -f "$d/worker.awk" 3>&- <"$d/gate" >"$d/report" 2>"$d/error") &
 c=$!;w base;b "$1";s bound_pre "$c";f base;f base_repeat
 printf '%s base\n' "$0-child" >&3;w held;f saturated;f saturated_repeat
 printf '%s held\n' "$0-child" >&3;w done;f restored;s bound_post "$c";s parent_post 1;b "$1"
@@ -68,7 +88,10 @@ test "$(id -u)" = 0;site=rootgid;test "$(id -g)" = 0;d=/tmp/dl-nf;site=reportwai
 for i in $(seq 1 100);do if [ -f "$d/parent" ];then break;fi;sleep 0.05;done
 site=reportfile;test -f "$d/parent";site=reportlink;test ! -L "$d/parent";site=workererror;test ! -s "$d/error"
 site=workerpid;c=$(awk '$1=="bound_pre"{print $4}' "$d/parent");test -n "$c"
-site=workerexe;test "/proc/$c/exe" -ef /bin/awk;site=workerargv;printf '%s\000' /bin/awk -v "token=$0-child" "$1" | cmp "/proc/$c/cmdline" -
+site=workerexe;test "/proc/$c/exe" -ef /bin/awk;site=workerargv
+test -f "$d/worker.awk";test ! -L "$d/worker.awk"
+printf '%s' "$1" | cmp "$d/worker.awk" -
+printf '%s\000' /bin/awk -v "token=$0-child" -f "$d/worker.awk" | cmp "/proc/$c/cmdline" -
 site=transcript;cat "$d/parent" "$d/report"
 s(){ printf '%s ' "$1";awk '/^Max open files /{printf "%s %s ",$4,$5}' /proc/"$2"/limits;awk '/^Pid:/{printf "%s ",$2}/^PPid:/{print $2}' /proc/"$2"/status;}
 site=parentlimits;s root_parent 1;site=workerlimits;s root_worker "$c""#;
@@ -525,6 +548,213 @@ fn witness(bytes: &[u8], expected: (i64, i64)) -> Value {
         "exec_binding":"retained_background_pid_exact_nul_argv_exe_inode_and_proc"})
 }
 
+fn environment_bindings(value: &Value) -> Option<BTreeMap<&str, &str>> {
+    let mut bindings = BTreeMap::new();
+    for entry in value.as_array()? {
+        let (key, value) = entry.as_str()?.split_once('=')?;
+        if key.is_empty() || bindings.insert(key, value).is_some() {
+            return None;
+        }
+    }
+    Some(bindings)
+}
+
+fn fixture_environment(image_env: &Value) -> Option<BTreeMap<&str, &str>> {
+    let mut expected = if image_env.is_null() {
+        BTreeMap::new()
+    } else {
+        environment_bindings(image_env)?
+    };
+    if expected.insert(PARENT_ENV, PARENT).is_some()
+        || expected.insert(WORKER_ENV, WORKER).is_some()
+    {
+        return None;
+    }
+    Some(expected)
+}
+
+#[test]
+fn nofile_fixture_environment_preserves_values_and_refuses_shadowing() {
+    let base = json!(["PATH=/bin:/usr/bin", "EMPTY=", "VALUE=left=right"]);
+    let expected = fixture_environment(&base).unwrap();
+    assert_eq!(expected.len(), 5);
+    let configured = json!([
+        format!("{WORKER_ENV}={WORKER}"),
+        "EMPTY=",
+        "VALUE=left=right",
+        format!("{PARENT_ENV}={PARENT}"),
+        "PATH=/bin:/usr/bin",
+    ]);
+    assert_eq!(environment_bindings(&configured).as_ref(), Some(&expected));
+    for key in [PARENT_ENV, WORKER_ENV] {
+        assert!(fixture_environment(&json!([format!("{key}=overshadow")])).is_none());
+    }
+    assert!(fixture_environment(&json!(["PATH=a", "PATH=b"])).is_none());
+    assert!(
+        environment_bindings(&json!([
+            format!("{PARENT_ENV}={PARENT}"),
+            format!("{PARENT_ENV}={PARENT}")
+        ]))
+        .is_none()
+    );
+    assert!(environment_bindings(&json!([PARENT_ENV])).is_none());
+    assert!(
+        environment_bindings(&json!([
+            format!("{PARENT_ENV}=wrong"),
+            format!("{WORKER_ENV}={WORKER}"),
+            "PATH=/bin:/usr/bin",
+            "EMPTY=",
+            "VALUE=left=right"
+        ]))
+        .as_ref()
+            != Some(&expected)
+    );
+}
+
+fn offline_run(socket: String) -> HealthRun {
+    HealthRun {
+        nofile_command_observation: Some(NofileCommandObservation::default()),
+        run: String::new(),
+        lane: String::new(),
+        candidate: String::new(),
+        api: "1.41".into(),
+        engine: String::new(),
+        mode: DaemonMode::Rootful,
+        socket,
+        outer: String::new(),
+        base: String::new(),
+        derived_tag: String::new(),
+        derived_id: None,
+        image_attempted: false,
+        names: vec!["inert-held-name".into()],
+        ids: vec![Some("a".repeat(64))],
+        attempted: vec![true],
+        absence_lookup: HealthAbsenceLookup::Disabled,
+        deadline: Instant::now() + Duration::from_secs(30),
+        calls: Cell::new(0),
+        bytes: Cell::new(0),
+        facts: None,
+        cleaned: true,
+        cleanup_delegated: false,
+    }
+}
+
+#[test]
+fn nofile_cleanup_lookup_observes_actual_capture_and_http_parser() {
+    use std::io::{BufRead, BufReader};
+    use std::os::unix::fs::DirBuilderExt;
+    use std::os::unix::net::UnixListener;
+
+    let private = std::env::temp_dir().join(format!("dl-nf-{}-{}", std::process::id(), utc_ns()));
+    fs::DirBuilder::new().mode(0o700).create(&private).unwrap();
+    let socket = private.join("lookup.sock");
+    let mut run = offline_run(socket.to_str().unwrap().into());
+    let run_controls = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        for (code, body, failure) in [
+            (
+                200,
+                format!("{{\"padding\":\"{}\"}}\n", "x".repeat(8173)),
+                None,
+            ),
+            (
+                200,
+                format!("{{\"padding\":\"{}\"}}\n", "x".repeat(8174)),
+                Some(NofileLookupFailure::StdoutLimit),
+            ),
+            (500, "{}\n".into(), Some(NofileLookupFailure::HttpStatus)),
+            (200, "!\n".into(), Some(NofileLookupFailure::Json)),
+            (404, "{}\n".into(), None),
+        ] {
+            let listener = UnixListener::bind(&socket).unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let server = std::thread::spawn(move || {
+                let deadline = Instant::now() + Duration::from_secs(2);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error)
+                            if error.kind() == std::io::ErrorKind::WouldBlock
+                                && Instant::now() < deadline =>
+                        {
+                            std::thread::sleep(Duration::from_millis(5))
+                        }
+                        Err(_) => panic!("private inert lookup accept"),
+                    }
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut line = String::new();
+                let mut reader = BufReader::new(&stream);
+                reader.read_line(&mut line).unwrap();
+                assert_eq!(
+                    line,
+                    "GET /v1.41/containers/inert-held-name/json HTTP/1.1\r\n"
+                );
+                for _ in 0..16 {
+                    line.clear();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" {
+                        write!(stream, "HTTP/1.1 {code} Inert\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+                        return;
+                    }
+                }
+                panic!("bounded inert lookup request");
+            });
+            let phase = Cell::new(CleanupPhase::Delete);
+            let before_bytes = run.bytes.get();
+            let lookup = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                remove_container_with_phase(&mut run, 0, &phase)
+            }));
+            server.join().unwrap();
+            fs::remove_file(&socket).unwrap();
+            let observed = run
+                .nofile_command_observation
+                .as_ref()
+                .unwrap()
+                .active_lookup
+                .take();
+            assert_eq!(observed, failure);
+            if matches!(code, 200)
+                && matches!(failure, None | Some(NofileLookupFailure::StdoutLimit))
+            {
+                assert_eq!(run.bytes.get() - before_bytes, 8192);
+            }
+            if code == 404 {
+                assert!(lookup.unwrap());
+            } else if matches!(
+                failure,
+                Some(NofileLookupFailure::StdoutLimit | NofileLookupFailure::Json)
+            ) {
+                assert!(lookup.is_err());
+            } else {
+                assert!(!lookup.unwrap());
+            }
+            let expected_phase = if code == 200 && failure.is_none() {
+                CleanupPhase::NameOwnership // Parsed synthetic body has no ownership fields.
+            } else {
+                CleanupPhase::LookupName
+            };
+            assert_eq!(phase.get(), expected_phase);
+        }
+        let phase = Cell::new(CleanupPhase::Delete);
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                remove_container_with_phase(&mut run, 0, &phase)
+            }))
+            .is_err()
+        );
+        let observation = run.nofile_command_observation.as_ref().unwrap();
+        assert_eq!(
+            observation.active_lookup.get(),
+            Some(NofileLookupFailure::Process)
+        );
+        assert_eq!(run.calls.get(), 6);
+    }));
+    fs::remove_dir_all(private).unwrap();
+    run_controls.unwrap();
+}
+
 fn authored(run: &HealthRun, index: usize) -> Value {
     let (_, soft, hard) = CASES[index / 2];
     let value = |n: i64| {
@@ -538,13 +768,18 @@ fn authored(run: &HealthRun, index: usize) -> Value {
         reference: ResourceRef::new(1),
         identity: TargetIdentity::new(run.names[index].as_bytes().to_vec()).unwrap(),
         image: ImageReference::new(run.base.as_bytes().to_vec()).unwrap(),
-        environment: vec![],
+        environment: vec![
+            EnvironmentAssignment::new(PARENT_ENV.as_bytes().to_vec(), PARENT.as_bytes().to_vec())
+                .unwrap(),
+            EnvironmentAssignment::new(WORKER_ENV.as_bytes().to_vec(), WORKER.as_bytes().to_vec())
+                .unwrap(),
+        ],
         ports: vec![],
         mounts: vec![],
         networks: vec![],
         entrypoint: ImageCommand::Inherit,
         command: ImageCommand::Exec(
-            ["sh", "-c", PARENT, run.names[index].as_str(), WORKER]
+            ["sh", "-c", BOOTSTRAP, run.names[index].as_str()]
                 .map(|t| Argument::new(t.as_bytes().to_vec()).unwrap())
                 .into(),
         ),
@@ -572,7 +807,8 @@ fn authored(run: &HealthRun, index: usize) -> Value {
         .unwrap();
     let request: Value =
         serde_json::from_slice(DockerApiRenderer.render(&graph).unwrap().bytes()).unwrap();
-    let body = json!({"Image":run.base,"Cmd":["sh","-c",PARENT,run.names[index],WORKER],"Labels":{(OWNER):run.run},
+    let body = json!({"Image":run.base,"Cmd":["sh","-c",BOOTSTRAP,run.names[index]],"Labels":{(OWNER):run.run},
+        "Env":[format!("{PARENT_ENV}={PARENT}"),format!("{WORKER_ENV}={WORKER}")],
         "HostConfig":{"Ulimits":[{"Name":"nofile","Soft":soft,"Hard":hard}]}});
     assert!(
         request
@@ -580,6 +816,131 @@ fn authored(run: &HealthRun, index: usize) -> Value {
         "complete independent literal nofile rendered request"
     );
     request
+}
+
+fn oracle_create_arguments(run: &HealthRun, index: usize) -> [String; 16] {
+    let (_, soft, hard) = CASES[index / 2];
+    [
+        "create".into(),
+        "--name".into(),
+        run.names[index].clone(),
+        "--label".into(),
+        format!("{OWNER}={}", run.run),
+        "--ulimit".into(),
+        format!("nofile={soft}:{hard}"),
+        "--env".into(),
+        format!("{PARENT_ENV}={PARENT}"),
+        "--env".into(),
+        format!("{WORKER_ENV}={WORKER}"),
+        run.base.clone(),
+        "sh".into(),
+        "-c".into(),
+        BOOTSTRAP.into(),
+        run.names[index].clone(),
+    ]
+}
+
+#[test]
+fn nofile_fixture_create_modes_match_exact_argv_and_rendered_wires() {
+    use crate::version::{EngineRelease, ObservationId};
+
+    let mut run = offline_run(String::new());
+    run.base = include_str!("../scripts/native-conformance.sh")
+        .lines()
+        .find_map(|line| line.strip_prefix("FIXTURE_IMAGE='")?.strip_suffix('\''))
+        .expect("pinned borrowed fixture image")
+        .to_owned();
+    run.run = "Ab12Cd34".to_owned();
+    let bootstrap =
+        r#"exec /bin/sh -c "${DOCKERLENS_NOFILE_PARENT:?}" "$0" "${DOCKERLENS_NOFILE_WORKER:?}""#;
+    let parent_env = format!("DOCKERLENS_NOFILE_PARENT={PARENT}");
+    let worker_env = format!("DOCKERLENS_NOFILE_WORKER={WORKER}");
+    let cases = [
+        ("soft64_hard128", 64, 128),
+        ("soft128_hard128", 128, 128),
+        ("soft64_hard_unlimited", 64, -1),
+        ("both_unlimited", -1, -1),
+    ];
+    run.names = cases
+        .iter()
+        .flat_map(|(name, _, _)| {
+            ["oracle", "rendered"].map(|role| format!("dl-nf-Ab12Cd34-{name}-{role}"))
+        })
+        .collect();
+    for (minor, release, mode) in [
+        (41, "20.10.5+dfsg1", DaemonMode::Rootful),
+        (41, "20.10.5+dfsg1", DaemonMode::Rootless),
+        (56, "29.8.1", DaemonMode::Rootful),
+        (56, "29.8.1", DaemonMode::Rootless),
+    ] {
+        run.api = format!("1.{minor}");
+        run.mode = mode;
+        let observation_id = ObservationId::fresh().unwrap();
+        let release = EngineRelease::new(release.into()).unwrap();
+        let api_version = ApiVersion::new(NonZeroU16::new(1).unwrap(), minor);
+        let scope = CapabilityScope {
+            observation_id,
+            release: release.clone(),
+            api_version,
+            mode,
+        };
+        run.facts = Some(DaemonFacts {
+            observation_id,
+            release: Some(release),
+            api_version: Some(api_version),
+            minimum_api_version: None,
+            mode,
+            capabilities: NOFILE_CAPABILITIES
+                .map(|capability| CapabilityFact {
+                    capability,
+                    state: CapabilityState::Available,
+                    provenance: FactProvenance::NativeConformance,
+                    scope: Some(scope.clone()),
+                })
+                .into(),
+        });
+        for (case, (case_name, soft, hard)) in cases.into_iter().enumerate() {
+            let oracle_name = format!("dl-nf-Ab12Cd34-{case_name}-oracle");
+            let rendered_name = format!("dl-nf-Ab12Cd34-{case_name}-rendered");
+            let expected_argv = [
+                "create",
+                "--name",
+                &oracle_name,
+                "--label",
+                "io.dockerlens.native-run=Ab12Cd34",
+                "--ulimit",
+                &format!("nofile={soft}:{hard}"),
+                "--env",
+                &parent_env,
+                "--env",
+                &worker_env,
+                &run.base,
+                "sh",
+                "-c",
+                bootstrap,
+                &oracle_name,
+            ]
+            .map(str::to_owned);
+            assert_eq!(oracle_create_arguments(&run, 2 * case), expected_argv);
+            let expected = json!({
+                "method": "POST",
+                "path": format!("/v1.{minor}/containers/create?name={rendered_name}"),
+                "body": {
+                    "Image": run.base,
+                    "Env": [&parent_env, &worker_env],
+                    "Cmd": ["sh", "-c", bootstrap, &rendered_name],
+                    "Labels": {"io.dockerlens.native-run": "Ab12Cd34"},
+                    "HostConfig": {"Ulimits": [{"Name": "nofile", "Soft": soft, "Hard": hard}]},
+                },
+            });
+            let request = authored(&run, 2 * case + 1);
+            assert_eq!(
+                serde_json::to_vec(&request).unwrap(),
+                serde_json::to_vec(&expected).unwrap()
+            );
+            assert!(serde_json::to_vec(&request["body"]).unwrap().len() <= 4096);
+        }
+    }
 }
 
 fn create_nofile(run: &mut HealthRun, index: usize, diagnostics: &NofileDiagnostics) {
@@ -591,25 +952,7 @@ fn create_nofile(run: &mut HealthRun, index: usize, diagnostics: &NofileDiagnost
     run.attempted[index] = true;
     diagnostics.slot(run, index, NofileOperation::Create);
     if index.is_multiple_of(2) {
-        let (_, soft, hard) = CASES[index / 2];
-        let bytes = docker(
-            run,
-            &[
-                "create".into(),
-                "--name".into(),
-                run.names[index].clone(),
-                "--label".into(),
-                format!("{OWNER}={}", run.run),
-                "--ulimit".into(),
-                format!("nofile={soft}:{hard}"),
-                run.base.clone(),
-                "sh".into(),
-                "-c".into(),
-                PARENT.into(),
-                run.names[index].clone(),
-                WORKER.into(),
-            ],
-        );
+        let bytes = docker(run, &oracle_create_arguments(run, index));
         let id = std::str::from_utf8(&bytes)
             .ok()
             .and_then(|s| s.strip_suffix('\n'))
@@ -653,11 +996,16 @@ fn configured(
     let id = run.ids[index].as_ref().unwrap();
     let (status, value) = run.inspect(id, false);
     let (_, soft, hard) = CASES[index / 2];
+    let expected_env = fixture_environment(&image["config"]["Env"])
+        .unwrap_or_else(|| panic!("closed unshadowed borrowed nofile environment"));
     assert!(
         status == 200
             && owned(run, &value, index, Some(id))
             && value["Image"] == image["id"]
-            && value["Config"]["Cmd"] == json!(["sh", "-c", PARENT, run.names[index], WORKER])
+            && value["Config"]["Cmd"] == json!(["sh", "-c", BOOTSTRAP, run.names[index]])
+            && value["Path"] == "sh"
+            && value["Args"] == json!(["-c", BOOTSTRAP, run.names[index]])
+            && environment_bindings(&value["Config"]["Env"]).as_ref() == Some(&expected_env)
             && (value["Config"]["Entrypoint"].is_null()
                 || value["Config"]["Entrypoint"] == json!([]))
             && value["HostConfig"]["Ulimits"] == json!([{"Name":"nofile","Soft":soft,"Hard":hard}]),
@@ -1115,23 +1463,21 @@ fn live_nofile_limits_and_effects_match_engine() {
             image["config"]["Volumes"].is_null() || image["config"]["Volumes"] == json!({}),
             "no borrowed automatic volumes"
         );
+        assert!(
+            fixture_environment(&image["config"]["Env"]).is_some(),
+            "closed unshadowed borrowed nofile environment before create"
+        );
         let facts = run.facts.as_mut().unwrap();
         let scope = facts.capabilities[0].scope.clone();
-        facts.capabilities = [
-            Capability::StandaloneContainer,
-            Capability::Command,
-            Capability::ContainerLabels,
-            Capability::Ulimits,
-            Capability::UlimitNofile,
-        ]
-        .into_iter()
-        .map(|capability| CapabilityFact {
-            capability,
-            state: CapabilityState::Available,
-            provenance: FactProvenance::NativeConformance,
-            scope: scope.clone(),
-        })
-        .collect();
+        facts.capabilities = NOFILE_CAPABILITIES
+            .into_iter()
+            .map(|capability| CapabilityFact {
+                capability,
+                state: CapabilityState::Available,
+                provenance: FactProvenance::NativeConformance,
+                scope: scope.clone(),
+            })
+            .collect();
         let context_calls = run.calls.get();
         assert!(
             context_calls
@@ -1260,11 +1606,17 @@ fn live_nofile_limits_and_effects_match_engine() {
         let _ = writeln!(std::io::stderr(), "{line}");
     }
     if let Some(refusal) = cleanup_refusal {
-        let status = run
-            .nofile_command_observation
-            .as_ref()
-            .and_then(|observation| observation.first_failure.get());
-        let _ = writeln!(std::io::stderr(), "{}", refusal.diagnostic(status));
+        let observation = run.nofile_command_observation.as_ref();
+        let status = observation.and_then(|observation| observation.first_failure.get());
+        let mut line = refusal.diagnostic(status);
+        if refusal == NofileCleanupRefusal::InnerUnverified(Some(CleanupPhase::LookupName))
+            && let Some(failure) =
+                observation.and_then(|observation| observation.first_lookup_failure.get())
+        {
+            line.push_str(" lookup_failure=");
+            line.push_str(failure.name());
+        }
+        let _ = writeln!(std::io::stderr(), "{line}");
     }
     let (uid, image, cases, acquired, context_calls, slot_calls) =
         require_verified_result(result, disposition);

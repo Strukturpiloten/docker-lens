@@ -58,6 +58,12 @@ ORIGINAL27 = [
 
 class NofileWiringTests(unittest.TestCase):
     @staticmethod
+    def cases_source(source):
+        start = source.index("const CASES:")
+        end = source.index("\n];", start) + len("\n];")
+        return source[start:end] + "\n"
+
+    @staticmethod
     def cleanup_phase_source(include_steps=False):
         source = (ROOT / "src/native_lifecycle_tests.rs").read_text()
         start = source.index("#[derive(Clone, Copy, Debug, Eq, PartialEq)]\nenum CleanupPhase")
@@ -165,6 +171,18 @@ exit 1
             dates = (root / "dates").read_text().splitlines() if (root / "dates").exists() else []
             self.assertNotIn(SECRET, result.stdout + result.stderr)
             return result, calls, dates
+
+    def test_cleanup_rejects_foreign_pids_before_any_projection(self):
+        work, cleanup = self.failure_line(), self.cleanup_line()
+        foreign = b"DOCKERLENS_NATIVE_PIDS_CLEANUP_REFUSAL: " + SECRET + b"\n"
+        for token in (foreign, b"embedded " + foreign):
+            with self.subTest(token=token):
+                result, _calls, _dates = self.wrapper(self.failure_transcript(work, cleanup) + token, 101)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(b"failed (exit 101)", result.stderr)
+                self.assertNotIn(b"DOCKERLENS_NATIVE_NOFILE_", result.stderr)
+                self.assertNotIn(HANDOFF.rstrip(), result.stderr)
+                self.assertNotIn(SECRET, result.stdout + result.stderr)
 
     def test_only_exact_ignored_test_runs_with_original_once_only_deadline(self):
         result, calls, dates = self.wrapper()
@@ -437,7 +455,7 @@ cat(){ command test "$FAIL_SITE" != transcript; }
         nofile = (ROOT / "src/native_nofile_tests.rs").read_text()
         begin = health.index("#[derive(Clone, Copy, Debug, Eq, PartialEq)]\nenum NofileObserverSite")
         definitions = health[begin:health.index("struct HealthRun {", begin)]
-        cases = nofile[nofile.index("const CASES:"):nofile.index("const REQUESTS:")]
+        cases = self.cases_source(nofile)
         begin = nofile.index("#[derive(Clone, Copy, Debug, Eq, PartialEq)]\nenum NofileOperation")
         definitions += cases + nofile[begin:nofile.index("#[derive(Clone, Copy, Debug, Eq, PartialEq)]\nenum NofileCleanupRefusal", begin)]
         controls = r'''fn main() {
@@ -497,7 +515,7 @@ cat(){ command test "$FAIL_SITE" != transcript; }
             return source[start:end]
         begin = health.index("#[derive(Clone, Copy, Debug, Eq, PartialEq)]\nenum NofileObserverSite")
         definitions = health[begin:health.index("struct HealthRun {", begin)]
-        definitions += nofile[nofile.index("const CASES:"):nofile.index("const REQUESTS:")]
+        definitions += self.cases_source(nofile)
         begin = nofile.index("#[derive(Clone, Copy, Debug, Eq, PartialEq)]\nenum NofileOperation")
         definitions += self.cleanup_phase_source() + nofile[begin:nofile.index("fn number(", begin)]
         functions = "\n".join(item(health, signature) for signature in
@@ -647,15 +665,33 @@ fn required(key: &str) -> String {
     "inert-outer-identity".into()
 }
 type Step = (&'static str, Reply);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NofileLookupFailure { BeforeCapture, HttpStatus, LaterStatus }
+#[derive(Default)]
+struct LookupObservation {
+    active_lookup: Cell<Option<NofileLookupFailure>>,
+    first_lookup_failure: Cell<Option<NofileLookupFailure>>,
+}
 struct HealthRun {
     attempted: Vec<bool>, ids: Vec<Option<String>>, names: Vec<String>, api: &'static str,
     steps: RefCell<VecDeque<Step>>, unexpected_call: Cell<bool>,
+    nofile_command_observation: Option<LookupObservation>,
 }
 impl HealthRun {
     fn next(&self, key: &str) -> (u16, Value) {
         match self.steps.borrow_mut().pop_front() {
             Some((expected, reply)) if expected == key => match reply {
-                Status(code) => (code, Value { owned: true }),
+                Status(code) => {
+                    let observation = self.nofile_command_observation.as_ref().unwrap();
+                    if observation.active_lookup.get().is_some() {
+                        observation.active_lookup.set(Some(if code == 503 {
+                            NofileLookupFailure::LaterStatus
+                        } else {
+                            NofileLookupFailure::HttpStatus
+                        }));
+                    }
+                    (code, Value { owned: true })
+                }
                 OtherOwner => (200, Value { owned: false }),
                 Panic => panic!("inert transport panic"),
             },
@@ -681,12 +717,43 @@ fn check(remove: &[Step], rounds: &[Step], expected: Option<CleanupPhase>) {
         attempted: vec![true], ids: vec![Some(ID.into())], names: vec!["name".into()],
         api: "1.41", steps: RefCell::new(remove.iter().chain(rounds).copied().collect()),
         unexpected_call: Cell::new(false),
+        nofile_command_observation: Some(LookupObservation::default()),
     };
     let (result, phase) = cleanup_with_phase(&mut run);
     assert_eq!(phase, expected);
     assert_eq!(result, if expected.is_some() {
         CleanupDisposition::OuterTeardownRequired
     } else { CleanupDisposition::VerifiedAbsent });
+    let observation = run.nofile_command_observation.as_ref().unwrap();
+    assert_eq!(observation.active_lookup.get(), None);
+    let expected_failure = if phase == Some(CleanupPhase::LookupName) {
+        Some(match remove[0].1 {
+            Reply::Status(500) => NofileLookupFailure::HttpStatus,
+            Reply::Panic => NofileLookupFailure::BeforeCapture,
+            _ => unreachable!(),
+        })
+    } else { None };
+    assert_eq!(observation.first_lookup_failure.get(), expected_failure);
+    assert!(!run.unexpected_call.get() && run.steps.borrow().is_empty());
+}
+
+fn check_later_lookup_does_not_replace_first(first: Reply, expected: Option<NofileLookupFailure>) {
+    const NEXT: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let rounds = [(ID, Reply::Status(404)), ("name", Reply::Status(404)),
+        (NEXT, Reply::Status(404)), ("next", Reply::Status(404))];
+    let mut run = HealthRun {
+        attempted: vec![true, true], ids: vec![Some(ID.into()), Some(NEXT.into())],
+        names: vec!["name".into(), "next".into()], api: "1.41",
+        steps: RefCell::new([("name", first), ("next", Reply::Status(503))].into_iter()
+            .chain(rounds).chain(rounds).collect()),
+        unexpected_call: Cell::new(false),
+        nofile_command_observation: Some(LookupObservation::default()),
+    };
+    let (result, _) = cleanup_with_phase(&mut run);
+    assert_eq!(result, CleanupDisposition::OuterTeardownRequired);
+    let observer = run.nofile_command_observation.as_ref().unwrap();
+    assert_eq!(observer.first_lookup_failure.get(), expected);
+    assert_eq!(observer.active_lookup.get(), None);
     assert!(!run.unexpected_call.get() && run.steps.borrow().is_empty());
 }
 
@@ -714,6 +781,8 @@ fn main() {
     let mut failed_delete = remove[..3].to_vec();
     failed_delete[2].1 = Status(500);
     check(&failed_delete, &id_failure, Some(Delete));
+    check_later_lookup_does_not_replace_first(Status(500), Some(NofileLookupFailure::HttpStatus));
+    check_later_lookup_does_not_replace_first(OtherOwner, None);
 }
 '''
         with tempfile.TemporaryDirectory(prefix="dl-nofile-cleanup-") as directory:
@@ -737,11 +806,22 @@ fn main() {
             self.assertEqual(result.returncode, 1)
             self.assertIn(work, result.stderr)
             self.assertIn(line, result.stderr)
+        lookup = cleanup + b" first_unverified_phase=lookup_name"
+        for outcome in (b"before_capture", b"capture_incomplete", b"stdout_limit", b"stderr_limit",
+                        b"both_limits", b"process", b"http_frame", b"http_status", b"json"):
+            line = lookup + b" lookup_failure=" + outcome + b"\n"
+            result, _, _ = self.wrapper(self.failure_transcript(work, line), 101)
+            self.assertIn(line, result.stderr)
+            self.assertLess(result.stderr.index(work), result.stderr.index(line))
         contradictory = [
             cleanup + b" first_unverified_phase=" + SECRET + b"\n",
             cleanup + b" first_unverified_phase=delete first_unverified_phase=readback_id_absence\n",
             cleanup.replace(b"inner_unverified", b"ownership_guard") + b" first_unverified_phase=delete\n",
             cleanup.replace(b"inner_unverified", b"panic") + b" first_unverified_phase=id_ownership\n",
+            lookup + b" lookup_failure=" + SECRET + b"\n",
+            lookup + b" lookup_failure=stdout_limit lookup_failure=process\n",
+            lookup.replace(b"lookup_name", b"id_ownership") + b" lookup_failure=process\n",
+            cleanup + b" lookup_failure=process\n",
         ]
         for line in contradictory:
             result, _, _ = self.wrapper(self.failure_transcript(work, line), 101)

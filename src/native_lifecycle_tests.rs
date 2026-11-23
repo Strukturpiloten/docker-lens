@@ -445,7 +445,17 @@ fn remove_container_with_phase(
     phase: &Cell<CleanupPhase>,
 ) -> bool {
     phase.set(CleanupPhase::LookupName);
+    if let Some(observation) = &run.nofile_command_observation {
+        observation
+            .active_lookup
+            .set(Some(NofileLookupFailure::BeforeCapture));
+    }
     let (status, value) = run.inspect(&run.names[index], true);
+    if matches!(status, 200 | 404)
+        && let Some(observation) = &run.nofile_command_observation
+    {
+        observation.active_lookup.set(None);
+    }
     if status == 404 {
         return run.ids[index].is_some();
     }
@@ -504,7 +514,16 @@ fn cleanup_with_phase(run: &mut HealthRun) -> (CleanupDisposition, Option<Cleanu
     let phase = Cell::new(CleanupPhase::LookupName);
     let mut verified = true;
     let mut first_unverified = None;
-    let mut record = |step_verified: bool| {
+    let mut record = |run: &HealthRun, step_verified: bool| {
+        if let Some(observation) = &run.nofile_command_observation {
+            let failure = observation.active_lookup.take();
+            if !step_verified
+                && first_unverified.is_none()
+                && phase.get() == CleanupPhase::LookupName
+            {
+                observation.first_lookup_failure.set(failure);
+            }
+        }
         verified &= step_verified;
         if !step_verified {
             first_unverified.get_or_insert(phase.get());
@@ -512,30 +531,28 @@ fn cleanup_with_phase(run: &mut HealthRun) -> (CleanupDisposition, Option<Cleanu
     };
     for index in 0..run.names.len() {
         if run.attempted[index] {
-            record(
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    remove_container_with_phase(run, index, &phase)
-                }))
-                .unwrap_or(false),
-            );
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                remove_container_with_phase(run, index, &phase)
+            }))
+            .unwrap_or(false);
+            record(run, result);
         }
     }
     for _ in 0..2 {
         for index in 0..run.names.len() {
             if run.attempted[index] {
-                record(
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        phase.set(CleanupPhase::ReadbackIdAbsence);
-                        run.ids[index].as_ref().is_some_and(|id| {
-                            if run.inspect(id, true).0 != 404 {
-                                return false;
-                            }
-                            phase.set(CleanupPhase::ReadbackNameAbsence);
-                            run.inspect(&run.names[index], true).0 == 404
-                        })
-                    }))
-                    .unwrap_or(false),
-                );
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    phase.set(CleanupPhase::ReadbackIdAbsence);
+                    run.ids[index].as_ref().is_some_and(|id| {
+                        if run.inspect(id, true).0 != 404 {
+                            return false;
+                        }
+                        phase.set(CleanupPhase::ReadbackNameAbsence);
+                        run.inspect(&run.names[index], true).0 == 404
+                    })
+                }))
+                .unwrap_or(false);
+                record(run, result);
             }
         }
     }

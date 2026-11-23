@@ -1,9 +1,10 @@
-"""Source-only finite actor controls; native programs are NEVER executed here."""
+"""Source and inert byte-binding controls, without running native actors."""
 
 import json
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,26 +18,46 @@ class NofileSourceTests(unittest.TestCase):
         return re.sub(r"\s+", "", self.raw())
 
     def program(self, name):
-        return re.search(r'const ' + name + r': &str = r#"(.*?)"#;', self.raw(), re.S)[1]
+        return re.search(r'const ' + name + r': &str =\s*r#"(.*?)"#;', self.raw(), re.S)[1]
 
     def test_shell_syntax_only_and_complete_literal_request_fits_existing_input_bound(self):
-        for name in ("PARENT", "OBSERVE"):
+        for name in ("PARENT", "OBSERVE", "BOOTSTRAP"):
             result = subprocess.run(["sh", "-n"], input=self.program(name), text=True,
                                     capture_output=True, timeout=5, check=False)
             self.assertEqual(result.returncode, 0, name + ": " + result.stderr)
         # Independent literal body, including the longest current fixture role.
-        body = {"Image": "x" * 256, "Cmd": ["sh", "-c", self.program("PARENT"),
-                "dl-nf-Ab12Cd34-soft64_hard_unlimited-rendered", self.program("WORKER")],
+        body = {"Image": "x" * 256, "Cmd": ["sh", "-c", self.program("BOOTSTRAP"),
+                "dl-nf-Ab12Cd34-soft64_hard_unlimited-rendered"],
+                "Env": ["DOCKERLENS_NOFILE_PARENT=" + self.program("PARENT"),
+                        "DOCKERLENS_NOFILE_WORKER=" + self.program("WORKER")],
                 "Labels": {"io.dockerlens.native-run": "Ab12Cd34"},
                 "HostConfig": {"Ulimits": [{"Name": "nofile", "Soft": 64, "Hard": -1}]}}
         self.assertLessEqual(len(json.dumps(body).encode()), 4096)
 
+    def test_bootstrap_preserves_original_shell_arguments_and_refuses_missing_actors(self):
+        token = "dl-nofile-bootstrap"
+        # Execute only the bootstrap with an inert program. The canary exercises
+        # multiline quoting without interpreting the worker argument as shell.
+        worker = 'public canary="literal"\n$(exit 95)'
+        env = {"DOCKERLENS_NOFILE_PARENT": 'printf "%s\\0" "$0" "$1"',
+               "DOCKERLENS_NOFILE_WORKER": worker}
+        command = ["sh", "-c", self.program("BOOTSTRAP"), token]
+        result = subprocess.run(command, env=env, capture_output=True, timeout=3, check=False)
+        self.assertEqual((result.returncode, result.stdout, result.stderr),
+                         (0, (token + "\0" + worker + "\0").encode(), b""))
+        for missing in env:
+            result = subprocess.run(command, env={k: v for k, v in env.items() if k != missing},
+                                    capture_output=True, timeout=3, check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(result.stdout, b"")
+
     def test_actual_retained_worker_has_binary_exec_binding_and_three_live_barriers(self):
         parent, worker, observer = (self.program(n) for n in ("PARENT", "WORKER", "OBSERVE"))
-        self.assertIn('(exec /bin/awk -v "token=$0-child" "$1" 3>&-', parent)
+        self.assertIn('(exec /bin/awk -v "token=$0-child" -f "$d/worker.awk" 3>&-', parent)
+        self.assertIn('printf \'%s\' "$1" >"$d/worker.awk";chmod 0400 "$d/worker.awk"', parent)
         self.assertIn('c=$!', parent)
         self.assertIn('wait "$c"', parent)
-        exact = 'printf \'%s\\000\' /bin/awk -v "token=$0-child" "$1" | cmp "/proc/$c/cmdline" -'
+        exact = 'printf \'%s\\000\' /bin/awk -v "token=$0-child" -f "$d/worker.awk" | cmp "/proc/$c/cmdline" -'
         for script in (parent, observer):
             self.assertIn(exact, script)
             self.assertIn('test "/proc/$c/exe" -ef /bin/awk', script)
@@ -49,6 +70,39 @@ class NofileSourceTests(unittest.TestCase):
             self.assertIn('f ' + phase, parent)
         self.assertLess(parent.index('f saturated_repeat'), parent.index("printf '%s held"))
         self.assertIn('fflush();if((getline g)!=1||g!=token " " tag)exit', worker)
+
+    def test_binding_accepts_exact_file_and_argv_and_rejects_each_substitution(self):
+        parent = self.program("PARENT").split("b(){\n", 1)[1].split("\n}", 1)[0]
+        observer = self.program("OBSERVE").split("site=workerargv\n", 1)[1].split("site=transcript", 1)[0]
+        program = 'function sample(){return 0} BEGIN{exit sample()}'
+        token = "dl-nofile-control"
+        prefix = b"/bin/awk\0-v\0token=dl-nofile-control-child\0"
+        inline_rewritten = prefix + program.replace("(", "\0", 1).encode() + b"\0"
+        with tempfile.TemporaryDirectory(prefix="dl-nofile-binding-") as directory:
+            root = Path(directory)
+            proc = root / "proc/2"
+            proc.mkdir(parents=True)
+            (proc / "exe").symlink_to("/bin/awk")
+            cmdline = proc / "cmdline"
+            script = root / "worker.awk"
+            expected = prefix + b"-f\0" + str(script).encode() + b"\0"
+            copied_script = root / "same-bytes"
+            copied_script.write_text(program)
+            for actor, binding in (("parent", parent), ("observer", observer)):
+                for case in ("exact", "inline_rewritten", "altered_program", "symlink"):
+                    with self.subTest(actor=actor, case=case):
+                        cmdline.write_bytes(inline_rewritten if case == "inline_rewritten" else expected)
+                        if case == "symlink":
+                            script.symlink_to(copied_script)
+                        else:
+                            script.write_text(program + "\n" if case == "altered_program" else program)
+                        # The actual comparison commands see ordinary scratch files
+                        # in place of procfs and no measured worker is started.
+                        command = 'd=$2;c=2\n' + binding.replace('/proc/$c/', '$d/proc/$c/')
+                        result = subprocess.run(["sh", "-ec", command, token, program, directory],
+                                                capture_output=True, timeout=3, check=False)
+                        self.assertEqual(result.returncode, 0 if case == "exact" else 1, result.stderr)
+                        script.unlink()
 
     def test_failure_is_immediate_numeric_emfile_and_reuse_reopens_failed_input(self):
         worker = self.program("WORKER")

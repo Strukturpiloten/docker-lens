@@ -2198,27 +2198,48 @@ impl WorkerControl {
         Ok(())
     }
 
-    fn close(&mut self, run: &HealthRun) -> PidsResult<()> {
-        let response = self.request(run, "Close", json!({}))?;
-        closed(&response, &["version", "sequence", "op", "status"])?;
-        if response["status"] != "closed" {
-            return Err("pids-controller-status");
+    fn close(&mut self, run: &HealthRun) -> Result<(), PidsCleanupFailure> {
+        let fail = PidsCleanupOperation::CloseAck;
+        let response = self.request(run, "Close", json!({})).map_err(|error| {
+            fail.failed(match error {
+                "pids-controller-eof" => "eof",
+                "pids-controller-deadline" => "deadline",
+                "pids-budget" | "pids-controller-capture" => "budget",
+                "pids-controller" | "pids-controller-write" => "write",
+                "pids-controller-read" => "read",
+                "pids-controller-frame" | "pids-json" => "invalid",
+                "pids-controller-sequence" => "sequence",
+                _ => "unknown",
+            })
+        })?;
+        if closed(&response, &["version", "sequence", "op", "status"]).is_err()
+            || response["status"] != "closed"
+        {
+            return Err(fail.failed("invalid"));
         }
+        self.finish_close(run)
+    }
+
+    fn finish_close(&mut self, run: &HealthRun) -> Result<(), PidsCleanupFailure> {
+        use std::os::unix::process::ExitStatusExt;
+
+        let stream = PidsCleanupOperation::CloseStream;
         let mut extra = [0; 1];
         loop {
-            self.active(run)?;
+            self.active(run).map_err(|_| stream.failed("deadline"))?;
             match rustix::io::read(&self.output, &mut extra[..]) {
                 Ok(0) => break,
-                Ok(_) => return Err("pids-controller-trailing"),
+                Ok(_) => return Err(stream.failed("trailing")),
                 Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => {
                     std::thread::sleep(Duration::from_millis(1))
                 }
-                Err(_) => return Err("pids-controller-read"),
+                Err(_) => return Err(stream.failed("read")),
             }
         }
+        let child = PidsCleanupOperation::CloseChild;
         let status = loop {
-            self.active(run)?;
-            if let Some(status) = self.child.try_wait().map_err(|_| "pids-controller-exit")? {
+            self.active(run).map_err(|_| child.failed("deadline"))?;
+            if let Some(status) = self.child.try_wait().map_err(|_| child.failed("wait"))? {
                 break status;
             }
             std::thread::sleep(Duration::from_millis(1));
@@ -2226,12 +2247,26 @@ impl WorkerControl {
         let (error, overflow) = self
             .stderr
             .take()
-            .ok_or("pids-controller-stderr")?
+            .ok_or_else(|| child.failed("diagnostic_unavailable"))?
             .join()
-            .map_err(|_| "pids-controller-stderr")?;
-        self.charge(error.len())?;
-        if !status.success() || overflow || !error.is_empty() {
-            return Err("pids-controller-exit");
+            .map_err(|_| child.failed("diagnostic_unavailable"))?;
+        self.charge(error.len())
+            .map_err(|_| child.failed("budget"))?;
+        if !status.success() {
+            let outcome = if status.signal().is_some() {
+                "signal"
+            } else if status.code().is_some() {
+                "nonzero"
+            } else {
+                "unknown"
+            };
+            return Err(child.failed(outcome));
+        }
+        if overflow {
+            return Err(child.failed("diagnostic_overflow"));
+        }
+        if !error.is_empty() {
+            return Err(child.failed("diagnostic_present"));
         }
         self.finished = true;
         Ok(())
@@ -4316,102 +4351,221 @@ impl NativeProducer {
     }
 }
 
-impl NativeProducer {
-    fn stop_completed(&self, index: usize) -> PidsResult<()> {
-        let id = self.run.ids[index]
-            .as_deref()
-            .filter(|id| identifier(id))
-            .ok_or("pids-cleanup-id")?;
-        let (status, value) = self.run.inspect(id, true);
-        if status != 200
-            || !owned(&self.run, &value, index, Some(id))
-            || value["Config"]["Labels"][LABEL] != self.run.run
-            || value["Config"]["Labels"][SLOT_LABEL] != SLOTS[index]
-        {
-            return Err("pids-cleanup-ownership");
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PidsCleanupOperation {
+    BindIds,
+    StopOwnership,
+    Stop,
+    Wait,
+    StoppedState,
+    Remove(CleanupPhase),
+    CloseAck,
+    CloseStream,
+    CloseChild,
+}
+
+impl PidsCleanupOperation {
+    fn name(self) -> &'static str {
+        match self {
+            Self::BindIds => "bind_ids",
+            Self::StopOwnership => "stop_ownership",
+            Self::Stop => "stop",
+            Self::Wait => "wait",
+            Self::StoppedState => "stopped_state",
+            Self::Remove(phase) => phase.name(),
+            Self::CloseAck => "close_ack",
+            Self::CloseStream => "close_stream",
+            Self::CloseChild => "close_child",
         }
-        let prefix = vec![
-            "env".into(),
-            format!("DOCKER_API_VERSION={}", self.run.api),
-            "docker".into(),
-            "-H".into(),
-            "unix:///dockerlens-native/docker.sock".into(),
-        ];
-        let mut stop = prefix.clone();
-        stop.extend(["stop".into(), "--time".into(), "2".into(), id.to_owned()]);
-        let stopped = self.run.outer(&stop, true);
-        if stopped != format!("{id}\n").as_bytes() {
-            return Err("pids-cleanup-stop");
-        }
-        let mut wait = prefix;
-        wait.extend(["wait".into(), id.to_owned()]);
-        if self.run.outer(&wait, true) != b"0\n" {
-            return Err("pids-cleanup-worker-exit");
-        }
-        let (status, value) = self.run.inspect(id, true);
-        if status != 200
-            || !owned(&self.run, &value, index, Some(id))
-            || value["State"]["Running"] != false
-            || value["State"]["ExitCode"] != 0
-            || value["State"]["OOMKilled"] != false
-            || value["RestartCount"] != 0
-        {
-            return Err("pids-cleanup-worker-exit");
-        }
-        Ok(())
     }
 
-    fn cleanup_inner(&mut self, completed: bool) -> CleanupDisposition {
-        if self.run.attempted.len() != 6
-            || self.run.ids.len() != 6
-            || self
-                .run
-                .attempted
-                .iter()
-                .zip(&self.run.ids)
-                .any(|(attempted, id)| *attempted && !id.as_deref().is_some_and(identifier))
+    fn failed(self, outcome: &'static str) -> PidsCleanupFailure {
+        PidsCleanupFailure {
+            operation: self,
+            outcome,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PidsCleanupFailure {
+    operation: PidsCleanupOperation,
+    outcome: &'static str,
+}
+
+impl PidsCleanupFailure {
+    fn record(self, completed: bool, mut stderr: impl Write) {
+        let measurement = if completed { "complete" } else { "incomplete" };
+        // Only authored literals leave the private cleanup result. A failed write
+        // cannot replace the original refusal or the requested owner handoff.
+        let _ = writeln!(
+            stderr,
+            "DOCKERLENS_NATIVE_PIDS_CLEANUP_REFUSAL: measurement={measurement} operation={} outcome={}",
+            self.operation.name(),
+            self.outcome,
+        );
+    }
+}
+
+fn require_worker_zero(reply: &[u8]) -> Result<(), PidsCleanupFailure> {
+    if reply == b"0\n" {
+        return Ok(());
+    }
+    let outcome = match reply {
+        [] => "empty",
+        [b'1'..=b'9', .., b'\n']
+            if reply.len() <= 4
+                && std::str::from_utf8(&reply[..reply.len() - 1]).is_ok_and(|status| {
+                    status.bytes().all(|byte| byte.is_ascii_digit()) && status.parse::<u8>().is_ok()
+                }) =>
         {
-            // Unknown create replies authorize only the already-bound lane
-            // finalizer, never a new name lookup or a blind inner mutation.
-            return CleanupDisposition::OuterTeardownRequired;
+            "nonzero"
         }
-        let mut verified = true;
+        _ => "malformed",
+    };
+    Err(PidsCleanupOperation::Wait.failed(outcome))
+}
+
+fn stop_completed(
+    run: &HealthRun,
+    index: usize,
+    phase: &Cell<PidsCleanupOperation>,
+    inspect: &impl Fn(&HealthRun, &str) -> (u16, Value),
+    outer: &impl Fn(&HealthRun, &[String]) -> Vec<u8>,
+) -> Result<(), PidsCleanupFailure> {
+    phase.set(PidsCleanupOperation::BindIds);
+    let id = run.ids[index]
+        .as_deref()
+        .filter(|id| identifier(id))
+        .ok_or_else(|| phase.get().failed("unbound"))?;
+    phase.set(PidsCleanupOperation::StopOwnership);
+    let (status, value) = inspect(run, id);
+    if status != 200
+        || !owned(run, &value, index, Some(id))
+        || value["Config"]["Labels"][LABEL] != run.run
+        || value["Config"]["Labels"][SLOT_LABEL] != SLOTS[index]
+    {
+        return Err(phase.get().failed("rejected"));
+    }
+    let prefix = vec![
+        "env".into(),
+        format!("DOCKER_API_VERSION={}", run.api),
+        "docker".into(),
+        "-H".into(),
+        "unix:///dockerlens-native/docker.sock".into(),
+    ];
+    let mut stop = prefix.clone();
+    stop.extend(["stop".into(), "--time".into(), "2".into(), id.to_owned()]);
+    phase.set(PidsCleanupOperation::Stop);
+    let stopped = outer(run, &stop);
+    if stopped != format!("{id}\n").as_bytes() {
+        return Err(phase.get().failed("invalid_reply"));
+    }
+    let mut wait = prefix;
+    wait.extend(["wait".into(), id.to_owned()]);
+    phase.set(PidsCleanupOperation::Wait);
+    require_worker_zero(&outer(run, &wait))?;
+    phase.set(PidsCleanupOperation::StoppedState);
+    let (status, value) = inspect(run, id);
+    if status != 200
+        || !owned(run, &value, index, Some(id))
+        || value["State"]["Running"] != false
+        || value["State"]["ExitCode"] != 0
+        || value["State"]["OOMKilled"] != false
+        || value["RestartCount"] != 0
+    {
+        return Err(phase.get().failed("rejected"));
+    }
+    Ok(())
+}
+
+fn cleanup_pids_inner(
+    run: &mut HealthRun,
+    completed: bool,
+    inspect: impl Fn(&HealthRun, &str) -> (u16, Value),
+    outer: impl Fn(&HealthRun, &[String]) -> Vec<u8>,
+    remove: impl Fn(&mut HealthRun, usize, &Cell<CleanupPhase>) -> bool,
+    controller: impl FnOnce(&HealthRun, bool) -> Result<(), PidsCleanupFailure>,
+) -> Result<(), PidsCleanupFailure> {
+    if run.attempted.len() != SLOTS.len()
+        || run.ids.len() != SLOTS.len()
+        || run
+            .attempted
+            .iter()
+            .zip(&run.ids)
+            .any(|(attempted, id)| *attempted && !id.as_deref().is_some_and(identifier))
+    {
+        // Unknown create replies authorize only the already-bound lane
+        // finalizer, never a new name lookup or a blind inner mutation.
+        return Err(PidsCleanupOperation::BindIds.failed("unbound"));
+    }
+    let mut first_failure = Ok(());
+    let mut record = |result| first_failure = first_failure.and(result);
+    let stop_phase = Cell::new(PidsCleanupOperation::BindIds);
+    let remove_phase = Cell::new(CleanupPhase::LookupName);
+    let removal_result = |result| match result {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(PidsCleanupOperation::Remove(remove_phase.get()).failed("rejected")),
+        Err(_) => Err(PidsCleanupOperation::Remove(remove_phase.get()).failed("panic")),
+    };
+    for index in 0..SLOTS.len() {
+        if run.attempted[index] && completed {
+            record(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    stop_completed(run, index, &stop_phase, &inspect, &outer)
+                }))
+                .unwrap_or_else(|_| Err(stop_phase.get().failed("panic"))),
+            );
+        }
+        if run.attempted[index] {
+            record(removal_result(std::panic::catch_unwind(
+                std::panic::AssertUnwindSafe(|| remove(run, index, &remove_phase)),
+            )));
+        }
+    }
+    for _ in 0..2 {
         for index in 0..SLOTS.len() {
-            if self.run.attempted[index] && completed {
-                verified &= std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    self.stop_completed(index)
-                }))
-                .is_ok_and(|result| result.is_ok());
-            }
-            if self.run.attempted[index] {
-                verified &= std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    remove_container(&mut self.run, index)
-                }))
-                .unwrap_or(false);
-            }
-        }
-        for _ in 0..2 {
-            for index in 0..SLOTS.len() {
-                if self.run.attempted[index] {
-                    verified &= std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        self.run.ids[index]
+            if run.attempted[index] {
+                record(removal_result(std::panic::catch_unwind(
+                    std::panic::AssertUnwindSafe(|| {
+                        remove_phase.set(CleanupPhase::ReadbackIdAbsence);
+                        if !run.ids[index]
                             .as_ref()
-                            .is_some_and(|id| self.run.inspect(id, true).0 == 404)
-                            && self.run.inspect(&self.run.names[index], true).0 == 404
-                    }))
-                    .unwrap_or(false);
-                }
+                            .is_some_and(|id| inspect(run, id).0 == 404)
+                        {
+                            return false;
+                        }
+                        remove_phase.set(CleanupPhase::ReadbackNameAbsence);
+                        inspect(run, &run.names[index]).0 == 404
+                    }),
+                )));
             }
         }
-        if completed && verified {
-            verified &= self
-                .controller
-                .as_mut()
-                .is_some_and(|controller| controller.close(&self.run).is_ok());
-        } else {
-            drop(self.controller.take());
-        }
-        cleanup_disposition(verified)
+    }
+    let controller_result = controller(run, completed && first_failure.is_ok());
+    first_failure.and(controller_result)
+}
+
+impl NativeProducer {
+    fn cleanup_inner(&mut self, completed: bool) -> Result<(), PidsCleanupFailure> {
+        cleanup_pids_inner(
+            &mut self.run,
+            completed,
+            |run, key| run.inspect(key, true),
+            |run, args| run.outer(args, true),
+            remove_container_with_phase,
+            |run, close| {
+                if close {
+                    self.controller
+                        .as_mut()
+                        .ok_or_else(|| PidsCleanupOperation::CloseAck.failed("missing"))?
+                        .close(run)
+                } else {
+                    drop(self.controller.take());
+                    Ok(())
+                }
+            },
+        )
     }
 
     fn finish(&mut self, measured: Value) -> PidsResult<Value> {
@@ -4464,6 +4618,329 @@ impl NativeProducer {
     }
 }
 
+fn pids_cleanup_test_run() -> HealthRun {
+    HealthRun {
+        nofile_command_observation: None,
+        run: "Ab12Cd34".into(),
+        lane: "upstream-rootful".into(),
+        candidate: String::new(),
+        api: "1.56".into(),
+        engine: String::new(),
+        mode: DaemonMode::Rootful,
+        socket: String::new(),
+        outer: String::new(),
+        base: "owned-fixture".into(),
+        derived_tag: String::new(),
+        derived_id: None,
+        image_attempted: false,
+        names: SLOTS.map(str::to_owned).into(),
+        ids: (b'a'..=b'f')
+            .map(|digit| Some(char::from(digit).to_string().repeat(64)))
+            .collect(),
+        attempted: vec![true; SLOTS.len()],
+        absence_lookup: HealthAbsenceLookup::Disabled,
+        deadline: Instant::now() + Duration::from_secs(6),
+        calls: Cell::new(78),
+        bytes: Cell::new(0),
+        facts: None,
+        cleaned: true,
+        cleanup_delegated: false,
+    }
+}
+
+#[test]
+fn pids_worker_wait_requires_exact_zero_and_classifies_existing_bytes() {
+    assert_eq!(require_worker_zero(b"0\n"), Ok(()));
+    for (raw, expected) in [
+        (b"137\n".as_slice(), "nonzero"),
+        (b"1\n", "nonzero"),
+        (b"255\n", "nonzero"),
+        (b"", "empty"),
+        (b"0", "malformed"),
+        (b"1", "malformed"),
+        (b"00\n", "malformed"),
+        (b"01\n", "malformed"),
+        (b"-1\n", "malformed"),
+        (b"256\n", "malformed"),
+        (b"1\n2\n", "malformed"),
+        (b"1\r\n", "malformed"),
+        (b"1\0\n", "malformed"),
+        (b"1\xff\n", "malformed"),
+    ] {
+        assert_eq!(
+            require_worker_zero(raw),
+            Err(PidsCleanupOperation::Wait.failed(expected))
+        );
+    }
+}
+
+fn pids_cleanup_inert_trace(
+    completed: bool,
+    fail: bool,
+) -> (Result<(), PidsCleanupFailure>, Vec<String>) {
+    use std::cell::RefCell;
+
+    let mut run = pids_cleanup_test_run();
+    let deleted = Cell::new([false; SLOTS.len()]);
+    let trace = RefCell::new(Vec::new());
+    let result = cleanup_pids_inner(
+        &mut run,
+        completed,
+        |run, key| {
+            let id = run.ids.iter().position(|id| id.as_deref() == Some(key));
+            let index = id.unwrap_or_else(|| SLOTS.iter().position(|slot| *slot == key).unwrap());
+            let slot = SLOTS[index];
+            trace.borrow_mut().push(format!(
+                "{} {slot}",
+                if id.is_some() { "id" } else { "name" }
+            ));
+            if deleted.get()[index] {
+                (404, Value::Null)
+            } else {
+                (
+                    200,
+                    json!({"Id":key,"Name":format!("/{slot}"),
+                    "Config":{"Image":run.base,"Labels":{(OWNER):run.run,(LABEL):run.run,(SLOT_LABEL):slot}},
+                    "State":{"Running":false,"ExitCode":0,"OOMKilled":false},"RestartCount":0}),
+                )
+            }
+        },
+        |run, args| {
+            let id = args.last().unwrap();
+            let index = run
+                .ids
+                .iter()
+                .position(|key| key.as_ref() == Some(id))
+                .unwrap();
+            assert_eq!(
+                &args[..5],
+                [
+                    "env",
+                    "DOCKER_API_VERSION=1.56",
+                    "docker",
+                    "-H",
+                    "unix:///dockerlens-native/docker.sock"
+                ]
+            );
+            let action = args[5].as_str();
+            trace
+                .borrow_mut()
+                .push(format!("{action} {}", SLOTS[index]));
+            match action {
+                "stop" => {
+                    assert_eq!(&args[6..8], ["--time", "2"]);
+                    format!("{id}\n").into_bytes()
+                }
+                "wait" if fail && index == 0 => b"137\n".to_vec(),
+                "wait" => b"0\n".to_vec(),
+                _ => panic!("unexpected cleanup argv"),
+            }
+        },
+        |_, index, phase| {
+            trace.borrow_mut().push(format!("remove {}", SLOTS[index]));
+            let mut state = deleted.get();
+            state[index] = true;
+            deleted.set(state);
+            phase.set(CleanupPhase::PostDeleteIdAbsence);
+            if fail && index == 1 {
+                panic!("PRIVATE_PIDS_CANARY");
+            }
+            completed || !fail || index != 0
+        },
+        |_, close| {
+            trace
+                .borrow_mut()
+                .push(if close { "close" } else { "drop" }.into());
+            Ok(())
+        },
+    );
+    if let Err(failure) = result {
+        let owner = BoundOuterCleanupOwner {
+            snapshot: Value::Null,
+        };
+        terminal_cleanup(&mut run, &owner, CleanupDisposition::OuterTeardownRequired);
+        failure.record(completed, std::io::stderr().lock());
+    }
+    (result, trace.into_inner())
+}
+
+#[test]
+fn pids_cleanup_wait_refusal_survives_later_panic() {
+    eprintln!("DOCKERLENS_NATIVE_CHECK: pids_context");
+    eprintln!("DOCKERLENS_NATIVE_CHECK: pids_cleanup");
+    let (failure, mut trace) = pids_cleanup_inert_trace(true, true);
+    assert_eq!(failure, Err(PidsCleanupOperation::Wait.failed("nonzero")));
+    assert_eq!(trace.pop().as_deref(), Some("drop"));
+    assert_eq!(
+        &trace[..5],
+        [
+            "id cli16",
+            "stop cli16",
+            "wait cli16",
+            "remove cli16",
+            "id cli64"
+        ]
+    );
+    assert!(trace.iter().any(|step| step == "remove rendered_unlimited"));
+    let readbacks = SLOTS
+        .iter()
+        .flat_map(|slot| [format!("id {slot}"), format!("name {slot}")])
+        .collect::<Vec<_>>();
+    for round in trace[trace.len() - 24..].as_chunks::<12>().0 {
+        assert_eq!(round, readbacks.as_slice());
+    }
+    assert_eq!(
+        trace
+            .iter()
+            .filter(|step| step.starts_with("remove "))
+            .count(),
+        6
+    );
+}
+
+#[test]
+fn pids_cleanup_measurement_refusal_stays_independent() {
+    eprintln!("DOCKERLENS_NATIVE_CHECK: pids_context");
+    eprintln!("DOCKERLENS_NATIVE_CHECK: pids_cleanup");
+    let (failure, trace) = pids_cleanup_inert_trace(false, true);
+    eprintln!("{}", pids_measurement_refusal_diagnostic("pids-eof"));
+    assert_eq!(
+        failure,
+        Err(PidsCleanupOperation::Remove(CleanupPhase::PostDeleteIdAbsence).failed("rejected"))
+    );
+    assert_eq!(trace.last().map(String::as_str), Some("drop"));
+    assert_eq!(
+        trace
+            .iter()
+            .filter(|step| step.starts_with("remove "))
+            .count(),
+        6
+    );
+    assert_eq!(trace.len(), 31);
+    assert!(
+        trace
+            .iter()
+            .all(|step| !step.starts_with("stop ") && !step.starts_with("wait "))
+    );
+}
+
+#[test]
+fn pids_cleanup_positive_trace_reaches_close_last() {
+    let (result, trace) = pids_cleanup_inert_trace(true, false);
+    assert_eq!(result, Ok(()));
+    assert_eq!(trace.last().map(String::as_str), Some("close"));
+    assert_eq!(trace.len(), 55);
+}
+
+fn pids_inert_controller(run: &HealthRun, reply: &str, ending: &str) -> WorkerControl {
+    let mut child = Command::new("sh")
+        .args([
+            "-c",
+            r#"IFS= read -r request && [ "$request" = '{"op":"Close","sequence":45,"version":1}' ] || exit 2
+               if IFS= read -r extra || [ -n "$extra" ]; then exit 2; fi
+               if [ "$1" != "" ]; then printf '%s\n' "$1"; fi
+               case "$2" in
+                   signal) kill -TERM "$$" ;;
+                   diagnostic) printf 'private\n' >&2 ;;
+                   overflow) printf '%1025s' 'private' >&2 ;;
+                   *) exit "$2" ;;
+               esac"#,
+            "sh",
+            reply,
+            ending,
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let error = child.stderr.take().unwrap();
+    let controller = WorkerControl {
+        input: child.stdin.take(),
+        output: child.stdout.take().unwrap(),
+        child,
+        stderr: Some(std::thread::spawn(move || stream(error, 1024))),
+        captured: 0,
+        sequence: 44,
+        sealed: true,
+        finished: false,
+        terminal: run.deadline,
+    };
+    rustix::io::ioctl_fionbio(controller.input.as_ref().unwrap(), true).unwrap();
+    rustix::io::ioctl_fionbio(&controller.output, true).unwrap();
+    controller
+}
+
+const INERT_CLOSE_ACK: &str = r#"{"op":"Close","sequence":45,"status":"closed","version":1}"#;
+
+#[test]
+fn pids_controller_cleanup_requires_close_reply_eof_and_zero_exit() {
+    use PidsCleanupOperation::{CloseAck, CloseChild};
+
+    for (reply, ending, expected) in [
+        (INERT_CLOSE_ACK, "0", None),
+        ("", "77", Some(CloseAck.failed("eof"))),
+        ("{", "0", Some(CloseAck.failed("invalid"))),
+        (
+            r#"{"op":"Close","sequence":45,"status":"refused","version":1}"#,
+            "0",
+            Some(CloseAck.failed("invalid")),
+        ),
+        (
+            r#"{"op":"Close","sequence":44,"status":"closed","version":1}"#,
+            "0",
+            Some(CloseAck.failed("sequence")),
+        ),
+        (INERT_CLOSE_ACK, "1", Some(CloseChild.failed("nonzero"))),
+        (INERT_CLOSE_ACK, "signal", Some(CloseChild.failed("signal"))),
+        (
+            INERT_CLOSE_ACK,
+            "diagnostic",
+            Some(CloseChild.failed("diagnostic_present")),
+        ),
+        (
+            INERT_CLOSE_ACK,
+            "overflow",
+            Some(CloseChild.failed("diagnostic_overflow")),
+        ),
+    ] {
+        let run = pids_cleanup_test_run();
+        let mut controller = pids_inert_controller(&run, reply, ending);
+        assert_eq!(controller.close(&run).err(), expected);
+        assert_eq!(controller.finished, expected.is_none());
+        assert!(controller.input.is_none());
+        assert_eq!(run.calls.get(), 79);
+        assert_eq!(run.bytes.get(), 0);
+    }
+}
+
+#[test]
+fn pids_controller_cleanup_rejects_a_post_ack_stream_byte() {
+    let run = pids_cleanup_test_run();
+    let mut controller = pids_inert_controller(&run, INERT_CLOSE_ACK, "0");
+    let ack = controller.request(&run, "Close", json!({})).unwrap();
+    assert_eq!(
+        ack,
+        json!({"op":"Close","sequence":45,"status":"closed","version":1})
+    );
+    // Supply a separate inert pipe after the real request has consumed the ACK.
+    // This makes the trailing-byte boundary deterministic under any scheduling.
+    let mut tail = Command::new("sh")
+        .args(["-c", "printf x"])
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    assert!(tail.wait().unwrap().success());
+    controller.output = tail.stdout.take().unwrap();
+    rustix::io::ioctl_fionbio(&controller.output, true).unwrap();
+    assert_eq!(
+        controller.finish_close(&run),
+        Err(PidsCleanupOperation::CloseStream.failed("trailing"))
+    );
+    assert!(!controller.finished);
+    assert_eq!(run.calls.get(), 79);
+}
+
 #[test]
 #[ignore = "requires exact disposable native harness"]
 fn live_pids_limits_and_effects_match_engine() {
@@ -4473,10 +4950,16 @@ fn live_pids_limits_and_effects_match_engine() {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| producer.measure()));
     let completed = result.as_ref().is_ok_and(|result| result.is_ok());
     eprintln!("DOCKERLENS_NATIVE_CHECK: pids_cleanup");
-    let disposition = producer.cleanup_inner(completed);
-    // Disarm the legacy Drop exactly once, preserving the original failing
-    // result and requesting only the already-bound lane owner on uncertainty.
-    terminal_cleanup(&mut producer.run, &producer.cleanup_owner, disposition);
+    let cleanup = producer.cleanup_inner(completed);
+    // Disarm the legacy Drop once and request only the already-bound owner.
+    terminal_cleanup(
+        &mut producer.run,
+        &producer.cleanup_owner,
+        cleanup_disposition(cleanup.is_ok()),
+    );
+    if let Err(failure) = cleanup {
+        failure.record(completed, std::io::stderr().lock());
+    }
     let measured = match result {
         Err(error) => {
             std::panic::resume_unwind(error);
@@ -4495,7 +4978,7 @@ fn live_pids_limits_and_effects_match_engine() {
         }
         Ok(Ok(value)) => value,
     };
-    if disposition != CleanupDisposition::VerifiedAbsent {
+    if cleanup.is_err() {
         panic!("private native PIDs cleanup unverified");
     }
     let proof = producer

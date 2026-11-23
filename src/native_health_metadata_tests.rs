@@ -453,11 +453,42 @@ impl NofileObserverCapture {
         Self::Unavailable(reason)
     }
 }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NofileLookupFailure {
+    BeforeCapture,
+    CaptureIncomplete,
+    StdoutLimit,
+    StderrLimit,
+    BothLimits,
+    Process,
+    HttpFrame,
+    HttpStatus,
+    Json,
+}
+
+impl NofileLookupFailure {
+    fn name(self) -> &'static str {
+        match self {
+            Self::BeforeCapture => "before_capture",
+            Self::CaptureIncomplete => "capture_incomplete",
+            Self::StdoutLimit => "stdout_limit",
+            Self::StderrLimit => "stderr_limit",
+            Self::BothLimits => "both_limits",
+            Self::Process => "process",
+            Self::HttpFrame => "http_frame",
+            Self::HttpStatus => "http_status",
+            Self::Json => "json",
+        }
+    }
+}
+
 #[derive(Default)]
 struct NofileCommandObservation {
     current_failure: Cell<Option<std::process::ExitStatus>>,
     observer_capture: Cell<Option<NofileObserverCapture>>,
     first_failure: Cell<Option<std::process::ExitStatus>>,
+    active_lookup: Cell<Option<NofileLookupFailure>>,
+    first_lookup_failure: Cell<Option<NofileLookupFailure>>,
 }
 
 impl NofileCommandObservation {
@@ -465,6 +496,8 @@ impl NofileCommandObservation {
         self.observer_capture.set(None);
         self.current_failure.set(None);
         self.first_failure.set(None);
+        self.active_lookup.set(None);
+        self.first_lookup_failure.set(None);
     }
     fn begin_capture(&self) {
         self.observer_capture.set(None);
@@ -681,6 +714,15 @@ impl HealthRun {
             capture_room(self.calls.get(), self.bytes.get(), cleanup),
             "reserved native command/byte budget"
         );
+        let lookup = self
+            .nofile_command_observation
+            .as_ref()
+            .filter(|observation| cleanup && observation.active_lookup.get().is_some());
+        if let Some(observation) = lookup {
+            observation
+                .active_lookup
+                .set(Some(NofileLookupFailure::CaptureIncomplete));
+        }
         self.calls.set(self.calls.get() + 1);
         command.stdout(Stdio::piped()).stderr(Stdio::piped());
         if input.is_some() {
@@ -718,12 +760,28 @@ impl HealthRun {
         if let Some(observation) = &self.nofile_command_observation {
             observation.observe_stderr_overflow(status, error_overflow || error.len() > 8192);
         }
+        if let Some(observation) = lookup {
+            let stage = match (overflow, error_overflow) {
+                (true, true) => NofileLookupFailure::BothLimits,
+                (true, false) => NofileLookupFailure::StdoutLimit,
+                (false, true) => NofileLookupFailure::StderrLimit,
+                (false, false) => NofileLookupFailure::CaptureIncomplete,
+            };
+            observation.active_lookup.set(Some(stage));
+        }
         assert!(
             !overflow && !error_overflow && self.bytes.get() <= MAX_BYTES,
             "private stream budget"
         );
         if let Some(observation) = &self.nofile_command_observation {
             observation.observe_stderr(status, &error);
+        }
+        if let Some(observation) = lookup
+            && !status.success()
+        {
+            observation
+                .active_lookup
+                .set(Some(NofileLookupFailure::Process));
         }
         assert!(
             status.success(),
@@ -856,6 +914,15 @@ impl HealthRun {
             &format!("http://localhost{path}"),
         ]);
         let output = self.capture(&mut command, input.as_deref(), cleanup);
+        let lookup = self
+            .nofile_command_observation
+            .as_ref()
+            .filter(|observation| cleanup && observation.active_lookup.get().is_some());
+        if let Some(observation) = lookup {
+            observation
+                .active_lookup
+                .set(Some(NofileLookupFailure::HttpFrame));
+        }
         let at = output
             .iter()
             .rposition(|byte| *byte == b'\n')
@@ -865,11 +932,21 @@ impl HealthRun {
             .and_then(|text| text.parse().ok())
             .unwrap_or_else(|| panic!("closed HTTP status"));
         let value = if status == 200 || status == 201 {
+            if let Some(observation) = lookup {
+                observation
+                    .active_lookup
+                    .set(Some(NofileLookupFailure::Json));
+            }
             serde_json::from_slice(&output[..at])
                 .unwrap_or_else(|_| panic!("bounded private native JSON"))
         } else {
             Value::Null
         };
+        if let Some(observation) = lookup {
+            observation
+                .active_lookup
+                .set(Some(NofileLookupFailure::HttpStatus));
+        }
         (status, value)
     }
 
