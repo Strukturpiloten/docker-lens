@@ -56,6 +56,9 @@ child status, not evidence that the kernel killed PID1.
 Canonical PIDs27 already requires cgroup2. This slice implements only that source
 contract; it introduces no cgroup-v1 portability framework or PIDs machinery.
 A fixed root read-only actor executes inside the exact authenticated owned outer.
+It selects numeric UID 0 through the existing outer bridge and requires actual
+effective UID and GID 0 before reading procfs. The bridge accepts a UID only.
+The memory collector uses this route for the baseline and every live sample.
 It correlates the workload's completed readiness observation with bounded outer
 proc reads, actual memory-controller membership, PID namespaces and start ticks.
 The live memory leaf and each immediate visible ancestor are read through held

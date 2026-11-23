@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import unittest
 import test_native_nofile_wiring as previous
+import test_native_outer_bridge as outer_bridge
 from test_native_memory_proof import LANES, rebind
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -91,6 +92,43 @@ else:sys.stdout.buffer.write(open(os.environ["OUTPUT"],"rb").read());sys.exit(in
         for failure in sequence:
             result,events,_=self.tail("upstream-rootless","docker",failure=failure,evidence=True)
             self.assertNotEqual(result.returncode,0);self.assertEqual([e["event"] for e in events],sequence[:sequence.index(failure)+1]+["teardown"])
+
+    def test_baseline_collector_uses_the_real_outer_bridge_uid_route(self):
+        source = (ROOT / "src/native_memory_tests.rs").read_text()
+        observe = source.split("fn observe(", 1)[1].split("fn event_clock(", 1)[0]
+        user = re.search(r'command.args\(\[\s*"exec",\s*"--user",\s*"([^"]+)"', observe)[1]
+        collector = re.search(r'const COLLECT: &str = r#"(.*?)"#;', source, re.S)[1]
+        bridge = outer_bridge.BridgeTests()
+        bridge.setUp()
+        self.addCleanup(bridge.doCleanups)
+        identity = ["-", "0", "0", "/", "0", "0", "baseline"]
+        for engine, api in (("docker", "1.41"), ("podman", "1.56")):
+            argv = [outer_bridge.ID, "sh", "-c", collector, "dl-memory-observe", "baseline", api, *identity]
+            with self.subTest(engine=engine):
+                result = bridge.invoke("exec", "--user", user, *argv, engine=engine)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout), ["exec", "--user", "0", *argv])
+                calls = bridge.calls()
+                for rejected in ("0:0", "root", "1000:0"):
+                    refused = bridge.invoke("exec", "--user", rejected, *argv, engine=engine)
+                    self.assertEqual((refused.returncode, refused.stdout, refused.stderr),
+                                     (2, b"", b"native outer command refused\n"))
+                self.assertEqual(bridge.calls(), calls)
+
+    def test_collector_still_requires_effective_uid_and_gid_zero(self):
+        source = (ROOT / "src/native_memory_tests.rs").read_text()
+        collector = re.search(r'const COLLECT: &str = r#"(.*?)"#;', source, re.S)[1]
+        # Run the real identity preamble and stop before it touches procfs.
+        checks = collector.split("\nsafe()", 1)[0]
+        actor = 'id(){ case "$1" in -u) printf "%s\\n" "$TEST_UID";; -g) printf "%s\\n" "$TEST_GID";; esac; }\n'
+        argv = ["sh", "-c", actor + checks + '\nprintf "accepted\\n"', "dl-memory-observe",
+                "baseline", "1.41", "-", "0", "0", "/", "0", "0", "baseline"]
+        for uid, gid, expected in (("0", "0", b"accepted\n"), ("1", "0", b""), ("0", "1", b""), ("0", "", b"")):
+            with self.subTest(uid=uid, gid=gid):
+                result = subprocess.run(argv, env={"TEST_UID": uid, "TEST_GID": gid},
+                                        capture_output=True, timeout=3, check=False)
+                self.assertEqual((result.returncode, result.stdout, result.stderr),
+                                 (0 if expected else 1, expected, b""))
 
     def test_source_wires_counter_read_and_event_before_final_parent_release(self):
         source=(ROOT/"src/native_memory_tests.rs").read_text();compact=re.sub(r'\s+','',source)

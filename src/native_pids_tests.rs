@@ -4455,7 +4455,9 @@ fn stop_completed(
         "unix:///dockerlens-native/docker.sock".into(),
     ];
     let mut stop = prefix.clone();
-    stop.extend(["stop".into(), "--time".into(), "2".into(), id.to_owned()]);
+    // Both reviewed CLI versions accept -t. On 29.8.1, --time adds a
+    // deprecation warning to stdout before the exact ID.
+    stop.extend(["stop".into(), "-t".into(), "2".into(), id.to_owned()]);
     phase.set(PidsCleanupOperation::Stop);
     let stopped = outer(run, &stop);
     if stopped != format!("{id}\n").as_bytes() {
@@ -4674,6 +4676,83 @@ fn pids_worker_wait_requires_exact_zero_and_classifies_existing_bytes() {
     }
 }
 
+#[test]
+fn pids_stop_requires_exact_owned_id_line_before_wait_on_both_apis() {
+    use PidsCleanupOperation::Stop;
+
+    for api in ["1.41", "1.56"] {
+        let mut run = pids_cleanup_test_run();
+        run.api = api.to_owned();
+        let id = run.ids[0].as_deref().unwrap();
+        let exact = format!("{id}\n");
+        for (reply, expected) in [
+            (exact.clone(), Ok(())),
+            (String::new(), Err(Stop.failed("invalid_reply"))),
+            (
+                format!("Flag --time has been deprecated, use --timeout instead\n{exact}"),
+                Err(Stop.failed("invalid_reply")),
+            ),
+            (
+                format!("notice\n{exact}"),
+                Err(Stop.failed("invalid_reply")),
+            ),
+            (
+                format!("{exact}notice\n"),
+                Err(Stop.failed("invalid_reply")),
+            ),
+            (format!("{exact}{exact}"), Err(Stop.failed("invalid_reply"))),
+            (
+                format!("{}\n", "b".repeat(64)),
+                Err(Stop.failed("invalid_reply")),
+            ),
+            (
+                format!("{}\n", &id[..12]),
+                Err(Stop.failed("invalid_reply")),
+            ),
+            (format!("{id}\r\n"), Err(Stop.failed("invalid_reply"))),
+            (id.to_owned(), Err(Stop.failed("invalid_reply"))),
+        ] {
+            let inspections = Cell::new(0);
+            let commands = Cell::new(0);
+            let phase = Cell::new(PidsCleanupOperation::BindIds);
+            let result = stop_completed(
+                &run,
+                0,
+                &phase,
+                &|_, key| {
+                    assert_eq!(key, id);
+                    inspections.set(inspections.get() + 1);
+                    (
+                        200,
+                        json!({"Id":id,"Name":format!("/{}",run.names[0]),
+                            "Config":{"Image":run.base,"Labels":{(OWNER):run.run,(LABEL):run.run,(SLOT_LABEL):SLOTS[0]}},
+                            "State":{"Running":false,"ExitCode":0,"OOMKilled":false},"RestartCount":0}),
+                    )
+                },
+                &|_, args| {
+                    commands.set(commands.get() + 1);
+                    assert_eq!(args[1], format!("DOCKER_API_VERSION={api}"));
+                    match commands.get() {
+                        1 => {
+                            assert_eq!(&args[5..], ["stop", "-t", "2", id]);
+                            reply.as_bytes().to_vec()
+                        }
+                        2 => {
+                            assert_eq!(&args[5..], ["wait", id]);
+                            b"0\n".to_vec()
+                        }
+                        _ => panic!("unexpected PIDs cleanup command"),
+                    }
+                },
+            );
+            assert_eq!(result, expected);
+            let expected_calls = if expected.is_ok() { 2 } else { 1 };
+            assert_eq!(commands.get(), expected_calls);
+            assert_eq!(inspections.get(), expected_calls);
+        }
+    }
+}
+
 fn pids_cleanup_inert_trace(
     completed: bool,
     fail: bool,
@@ -4728,7 +4807,7 @@ fn pids_cleanup_inert_trace(
                 .push(format!("{action} {}", SLOTS[index]));
             match action {
                 "stop" => {
-                    assert_eq!(&args[6..8], ["--time", "2"]);
+                    assert_eq!(&args[6..8], ["-t", "2"]);
                     format!("{id}\n").into_bytes()
                 }
                 "wait" if fail && index == 0 => b"137\n".to_vec(),

@@ -313,6 +313,16 @@ requires the ordered cleanup and handoff markers and a failed invocation to
 project the closed record. Duplicates, invalid combinations, and records on a
 successful invocation cannot supply cleanup context.
 
+The stop command uses `docker stop -t 2` with the exact owned full ID and
+requires one stdout line containing that ID. In amd64 probes of the four
+pinned images, both CLI versions sent the same Engine `stop?t=2` request
+with `-t`. With the deprecated `--time` spelling, Docker CLI 29.8.1
+prepended a warning to stdout even on a successful Engine reply. The
+short flag avoids that warning while keeping the strict stdout check.
+The hosted failure recorded only that the original reply was invalid.
+[Docker CLI 29.8.1 stop](https://github.com/docker/cli/blob/v29.8.1/cli/command/container/stop.go)
+[Docker CLI 20.10.5 stop](https://github.com/docker/cli/blob/v20.10.5/cli/command/container/stop.go)
+
 Worker wait still requires exact zero plus a newline. For a successful CLI
 invocation the refusal distinguishes a canonical nonzero exit line, an empty
 reply, and malformed bytes. A CLI command panic is a separate outcome.

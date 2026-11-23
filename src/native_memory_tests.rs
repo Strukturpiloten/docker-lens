@@ -365,10 +365,11 @@ fn observe(run: &HealthRun, meter: &SmallMeter, mode: &str, identity: [&str; 7])
         };
         let mut command = run.timer(false, elevated);
         command.args(crate::native_outer_test_command::prefix());
+        // The outer bridge accepts only a numeric UID. COLLECT verifies both IDs.
         command.args([
             "exec",
             "--user",
-            "0:0",
+            "0",
             &required("NATIVE_OUTER_CONTAINER_ID"),
             "sh",
             "-c",
