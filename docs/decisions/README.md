@@ -1,5 +1,10 @@
 # Architecture decisions
 
+- [0056: Nofile case-bridge proof schema 2](0056-nofile-case-bridge-proof-schema-2.md)
+  isolates the two unlimited pairs on owned bridges, retains the finite default,
+  versions only the private packet and eleven-expansion fixture schedule, and
+  preserves public identity rejection, original global caps and non-admission.
+
 - [0053: Fixed path flags for the mediated prerequisite](0053-mediated-disconnected-path-flags.md)
   forward-ports the approved issue 158 paired path flags, superseding only ADR 0051's
   flag-free declaration. Legacy callers stay unchanged; parser/kernel interpretation
@@ -40,7 +45,8 @@
 - [0045: Canonical nofile28 source integration](0045-canonical-nofile-source-integration.md)
   appends one private nofile child after mandatory PIDs27/reader, retaining
   original ownership/deadlines/EXIT cleanup and unchanged public admission;
-  exact-candidate native qualification remains pending.
+  ADR0056 amends its current private fixture schedule; exact-candidate native
+  qualification remains pending.
 
 - [0042: Finite sudo ancestor UID shape](0042-sudo-monitor-uid-shape.md)
   admits only the exact positive-peer/root-effective/saved/filesystem shape for

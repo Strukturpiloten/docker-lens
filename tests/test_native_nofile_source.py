@@ -32,6 +32,9 @@ class NofileSourceTests(unittest.TestCase):
                         "DOCKERLENS_NOFILE_WORKER=" + self.program("WORKER")],
                 "Labels": {"io.dockerlens.native-run": "Ab12Cd34"},
                 "HostConfig": {"Ulimits": [{"Name": "nofile", "Soft": 64, "Hard": -1}]}}
+        network = "dl-nf-Ab12Cd34-net-soft64_hard_unlimited"
+        body["HostConfig"]["NetworkMode"] = network
+        body["NetworkingConfig"] = {"EndpointsConfig": {network: {}}}
         self.assertLessEqual(len(json.dumps(body).encode()), 4096)
 
     def test_bootstrap_preserves_original_shell_arguments_and_refuses_missing_actors(self):
@@ -142,15 +145,16 @@ class NofileSourceTests(unittest.TestCase):
         source = self.compact()
         for needle in ('run.ids=vec![None;8]', 'run.attempted=vec![false;8]',
                        'BoundOuterCleanupOwner::bind(&run)', 'checked_add(REQUESTS)', 'checked_add(BODIES)',
-                       'max_selected_resources:8', 'max_expansions:10', 'max_response_bytes:131072',
+                       'max_selected_resources:8', 'max_expansions:11', 'max_response_bytes:131072',
                        'Duration::from_secs(46)', 'Duration::from_secs(180)', 'Duration::from_secs(134)',
-                       'cleanup_calls==8*9', 'slot_calls.iter().sum::<usize>()',
+                       'container_cleanup_calls.get()==8*9', 'network_cleanup_calls==12', 'network_setup_calls==6',
+                       'cleanup_calls<=CLEANUP_CALLS', 'slot_calls.iter().sum::<usize>()',
                        '"byte_scope":"decoded_response_bodies_only"', '"actual_wire_bytes":"not_measured"',
                        '"capability_admission":[],"catalogue_admission":false'):
             self.assertIn(needle, source)
-        self.assertEqual(source.count('letcapture=acquire('), 1)
+        self.assertEqual(source.count('letcapture=acquire_with_shape_detail('), 1)
         self.assertEqual(source.count('cleanup_with_phase(&mutrun)'), 1)
-        self.assertNotIn('fncleanup(', source)
+        self.assertNotRegex(self.raw(), r'(?m)^fn cleanup\(')
         self.assertIn('terminal_cleanup(&mutrun,&owner,disposition)', source)
         self.assertLess(source.index('require_verified_result(result,disposition)'), source.index('target.publish_bounded(&proof,NOFILE_PROOF_MAX_BYTES)'))
         self.assertIn('constNOFILE_PROOF_MAX_BYTES:usize=512*1024', source)
@@ -162,14 +166,22 @@ class NofileSourceTests(unittest.TestCase):
         source = self.compact()
         guard = source.split('fnnofile_cleanup_with(', 1)[1].split('#[test]', 1)[0]
         condition = ('attempted.len()!=8||ids.len()!=8||attempted.iter().zip(ids).any(|(attempted,id)|'
-                     '*attempted&&!id.as_deref().is_some_and(identifier))')
+                     '{if*attempted{!id.as_deref().is_some_and(identifier)}else{id.is_some()}})'
+                     '||ids.iter().flatten().collect::<BTreeSet<_>>().len()!=ids.iter().flatten().count()')
         self.assertIn(condition, guard)
         self.assertLess(guard.index('returnCleanupDisposition::OuterTeardownRequired;'), guard.index('inner()'))
         self.assertNotIn('inspect(', guard)
         self.assertNotIn('cleanup(', guard)
         self.assertIn('letattempted=run.attempted.clone();letids=run.ids.clone();', source)
-        guarded_call = 'nofile_cleanup_with(&attempted,&ids,||{entered.set(true);let(disposition,phase)=cleanup_with_phase(&mutrun);first_unverified.set(phase);disposition})'
-        self.assertEqual(source.count(guarded_call), 1)
+        live = source.split('fnlive_nofile_limits_and_effects_match_engine(){', 1)[1].split('#[test]', 1)[0]
+        self.assertEqual(live.count('nofile_cleanup_with(&attempted,&ids,||{'), 1)
+        callback = live.split('nofile_cleanup_with(&attempted,&ids,||{', 1)[1].split('})', 1)[0]
+        self.assertLess(callback.index('entered.set(true)'), callback.index('cleanup_with_phase(&mutrun)'))
+        self.assertLess(callback.index('cleanup_with_phase(&mutrun)'),
+                        callback.index('networks.cleanup(&run,disposition==CleanupDisposition::VerifiedAbsent)'))
+        self.assertIn('first_unverified.set(phase)', callback)
+        self.assertLess(live.index('if!networks.bound(&run){returnCleanupDisposition::OuterTeardownRequired;'),
+                        live.index('nofile_cleanup_with(&attempted,&ids,||{'))
         self.assertIn('fnnofile_unknown_create_id_never_invokes_inner_cleanup()', source)
 
         # Independent expected callback control. Exact source predicate and its
@@ -177,8 +189,10 @@ class NofileSourceTests(unittest.TestCase):
         # the actual helper when main compiles/runs the new module.
         def expected_control(attempted, ids, callback):
             if (len(attempted) != 8 or len(ids) != 8
-                    or any(tried and (type(bound) is not str or re.fullmatch(r'[0-9a-f]{64}', bound) is None)
-                           for tried, bound in zip(attempted, ids))):
+                    or any((type(bound) is not str or re.fullmatch(r'[0-9a-f]{64}', bound) is None)
+                           if tried else bound is not None for tried, bound in zip(attempted, ids))
+                    or len([bound for bound in ids if bound is not None])
+                       != len({bound for bound in ids if bound is not None})):
                 return 'outer_teardown_required'
             return callback()
 
@@ -194,10 +208,16 @@ class NofileSourceTests(unittest.TestCase):
         self.assertEqual(expected_control([True] * 8, canonical, lambda: calls.append('cleanup') or 'verified_absent'),
                          'verified_absent')
         self.assertEqual(calls, ['cleanup'])
+        for attempted, ids in (([True] * 8, canonical[:7] + [canonical[0]]),
+                               ([False] + [True] * 7, canonical)):
+            calls = []
+            self.assertEqual(expected_control(attempted, ids, lambda: calls.append('cleanup')),
+                             'outer_teardown_required')
+            self.assertEqual(calls, [])
 
     def test_guard_disposition_always_reaches_existing_authenticated_terminal_handler(self):
         source = self.compact()
-        guarded_call = source.index('nofile_cleanup_with(&attempted,&ids,||{entered.set(true);let(disposition,phase)=cleanup_with_phase(&mutrun);first_unverified.set(phase);disposition})')
+        guarded_call = source.index('nofile_cleanup_with(&attempted,&ids,||{entered.set(true);')
         terminal = source.index('terminal_cleanup(&mutrun,&owner,disposition)')
         verified = source.index('require_verified_result(result,disposition)')
         publish = source.index('target.publish_bounded(&proof,NOFILE_PROOF_MAX_BYTES)')
@@ -213,18 +233,48 @@ class NofileSourceTests(unittest.TestCase):
         live = source.split('fnlive_nofile_limits_and_effects_match_engine(){', 1)[1]
         self.assertLess(live.index('letouter_backend=source_outer_backend();'), live.index('ProofTarget::new_for('))
         self.assertEqual(live.count('source_outer_backend()'), 1)
-        self.assertEqual(live.count('acquisition(&run,outer_backend,&diagnostics)'), 1)
+        self.assertEqual(live.count('acquisition(&run,outer_backend,&diagnostics,Some(&networks))'), 1)
         self.assertIn('letfinal_readback_calls=2+outer_backend.snapshot_extra_calls();', live)
         self.assertIn('ordinary_bytes>BODIES+2*outer_backend.snapshot_extra_bytes()', live)
         acquisition = source.split('fnacquisition(', 1)[1].split('#[test]', 1)[0]
         self.assertIn('.checked_add(2+outer_backend.snapshot_extra_calls())', acquisition)
         self.assertIn('.checked_add(2*ORDINARY_CAPTURE_ENVELOPE+outer_backend.snapshot_extra_bytes())', acquisition)
-        self.assertEqual(acquisition.count('letcapture=acquire('), 1)
-        self.assertLess(acquisition.index('run.bytes.set(bytes);'), acquisition.index('letcapture=acquire('))
+        self.assertEqual(acquisition.count('letcapture=acquire_with_shape_detail('), 1)
+        self.assertLess(acquisition.index('run.bytes.set(bytes);'), acquisition.index('letcapture=acquire_with_shape_detail('))
         self.assertNotIn('charge_outer_snapshot(', self.raw())
         harness = (ROOT / 'scripts/native-conformance.sh').read_text()
         self.assertEqual(harness.count('native_nofile live_nofile_limits_and_effects_match_engine'), 1)
         self.assertIn('read_nofile_proof', (ROOT / 'scripts/native-evidence.py').read_text())
+
+    def test_current_packet_uses_measured_three_network_capture_and_scoped_setup_cleanup(self):
+        source = self.compact()
+        for measured in ('"schema_version":2', '"actual_requests":capture.exchanges().len()',
+                         '"actual_expansions":capture.bounds().expansions',
+                         '"actual_elapsed_ns":actual_elapsed.as_nanos()',
+                         'n.setup_calls', 'n.setup_bytes', 'n.cleanup_calls', 'n.cleanup_bytes',
+                         'run.calls.get()-calls', 'run.bytes.get()-bytes'):
+            self.assertIn(measured, source)
+        for required in ('NetworkSource::External', 'NetworkDriver::Bridge',
+                         'body["HostConfig"]["NetworkMode"]=json!(name)',
+                         'body["NetworkingConfig"]=json!({"EndpointsConfig":{(name):{}}})',
+                         'networks:ifindex<4{vec![]}', 'decoded.networks.len()<=3',
+                         'decoded.volumes.is_empty()', 'capture.network_name_fallbacks()',
+                         'capture.bounds().expansions==8+n', 'capture.bounds().request_count==10+n',
+                         '"endpoint_map_availability":availability_name(availability)',
+                         'binding["network_id_availability"]=json!(availability_name(endpoint.availability))',
+                         '"active_membership_availability":availability_name(observed.active_endpoints.availability)',
+                         '"active_unselected_count":unselected', 'group==0||unselected==0'):
+            self.assertIn(required, source)
+        scope = source.split('fnnetwork_scope(', 1)[1].split('structNofileNetwork', 1)[0]
+        for binding in ('run.run.clone()', 'run.lane.clone()', 'run.candidate.clone()',
+                        'run.api.clone()', 'run.socket.clone()', 'run.outer.clone()'):
+            self.assertIn(binding, scope)
+        health = re.sub(r'\s+', '', (ROOT / 'src/native_health_metadata_tests.rs').read_text())
+        ordinary = health.split('fnapi(', 1)[1].split('fnnofile_network_api(', 1)[0]
+        self.assertIn('self.request_allowed_with_body(method,path,body)', ordinary)
+        bridge = health.split('fnnofile_network_api(', 1)[1].split('fnapi_response(', 1)[0]
+        self.assertIn('request.matches(self,cleanup)', bridge)
+        self.assertIn('self.api_response(method,path,body,cleanup)', bridge)
 
 
     def test_status_observation_is_disabled_elsewhere_and_cleared_before_capture_failures(self):

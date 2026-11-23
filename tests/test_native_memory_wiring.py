@@ -10,7 +10,7 @@ import tempfile
 import unittest
 import test_native_nofile_wiring as previous
 import test_native_outer_bridge as outer_bridge
-from test_native_memory_proof import LANES, rebind
+from test_native_memory_proof import LANES, ns, packet, reader, rebind
 
 ROOT=Path(__file__).resolve().parents[1]
 TARGET="native_memory"
@@ -140,6 +140,139 @@ else:sys.stdout.buffer.write(open(os.environ["OUTPUT"],"rb").read());sys.exit(in
                                  (0, expected, b"") if expected else
                                  (1, b"", b"DOCKERLENS_NATIVE_MEMORY_GUEST: site=identity\n"))
 
+    def run_collector_tree(self, mode="baseline", *, node="/", kind=b"domain\n", fault=None):
+        source = (ROOT / "src/native_memory_tests.rs").read_text()
+        collector = re.search(r'const COLLECT: &str = r#"(.*?)"#;', source, re.S)[1]
+        with tempfile.TemporaryDirectory(prefix="dl-memory-tree-") as directory:
+            base = Path(directory)
+            proc, mount = base / "proc", base / "cgroup"
+            for pid, comm, start, pidns, cgroupns, membership, status in (
+                ("1", "init", 100, 20, 21, "/init.scope", ""),
+                ("101", "sh", 1000, 30, 31, "/group/workload", "NSpid:\t101 51 1\nPPid:\t1\n"),
+                ("202", "sh", 2000, 30, 31, "/group/workload", "NSpid:\t202 52 2\nPPid:\t101\n"),
+                ("self", "", 0, 20, 21, "", ""),
+            ):
+                process = proc / pid
+                (process / "ns").mkdir(parents=True)
+                (process / "ns/pid").symlink_to(f"pid:[{pidns}]")
+                (process / "ns/cgroup").symlink_to(f"cgroup:[{cgroupns}]")
+                (process / "stat").write_text(f"{pid} ({comm}) S " + "0 " * 18 + f"{start}\n")
+                (process / "status").write_text(status)
+                (process / "cgroup").write_text(f"0::{membership}\n")
+            for path, limit in (("/", 4294967296), ("/group", 1073741824), ("/group/workload", 67108864)):
+                directory = mount / path.removeprefix("/")
+                directory.mkdir(exist_ok=True)
+                if not (path == "/" and fault == "hierarchy_root"):
+                    (directory / "memory.max").write_text(f"{limit}\n")
+                    (directory / "memory.current").write_text("4096\n")
+                    (directory / "memory.oom.group").write_text("0\n")
+                    (directory / "memory.events.local").write_text("low 0\nhigh 0\nmax 3\noom 4\noom_kill 5\n")
+                if path != node:
+                    (directory / "cgroup.type").write_bytes(b"domain\n")
+            target = mount / node.removeprefix("/") / "cgroup.type"
+            if fault == "directory":
+                target.mkdir()
+            elif fault == "symlink":
+                target.symlink_to(mount / "group/cgroup.type")
+            elif fault == "dangling":
+                target.symlink_to("absent")
+            elif kind is not None:
+                target.write_bytes(kind)
+            (mount / "group/workload/cgroup.procs").write_text("202\n101\n")
+            dev = mount.stat().st_dev
+            mount_root = "/delegated/subtree" if fault == "mount_root" else "/"
+            (proc / "self/mountinfo").write_text(
+                f"34 25 {os.major(dev)}:{os.minor(dev)} {mount_root} {mount} rw - cgroup2 cgroup rw\n"
+            )
+            (proc / "meminfo").write_text("SwapTotal: 0 kB\n")
+            # Redirect only the proc inputs. Keep the real held-FD lookup,
+            # commands, identities, path walk, limits and status handling.
+            collector = re.sub(r"/proc/(?!\$\$/fd/)", f"{proc}/", collector)
+            shims = r'''id() { printf '0\n'; }
+docker() {
+  test "$DOCKER_API_VERSION" = 1.41
+  test "$#" = 5; test "$1" = -H; test "$2" = unix:///dockerlens-native/docker.sock
+  test "$3" = info; test "$4" = --format; test "$5" = '{{.SystemTime}}'
+  printf '2026-09-01T10:00:00.000000000Z\n'
+}
+'''
+            if fault == "read":
+                shims += r'''
+cat() { printf 'domain\n'; printf 'PRIVATE_MEMORY_WIRING_CANARY\n' >&2; return 1; }
+od() { printf ' 64 6f 6d 61 69 6e 0a\n'; printf 'PRIVATE_MEMORY_WIRING_CANARY\n' >&2; return 1; }
+'''
+            return subprocess.run(
+                ["sh", "-c", shims + collector, "dl-memory-observe", mode, "1.41",
+                 "pid:[30]", "1000", "51", "/", "2", "2000", "inert"],
+                capture_output=True, timeout=3, check=False,
+            )
+
+    @staticmethod
+    def collected_sample(raw, mode):
+        return reader.sample({"report": packet(raw.decode()),
+                              "clock_bracket": [ns(0) - 1000000, ns(0) + 1000000, 2000000]}, mode)
+
+    def test_collector_reads_namespace_root_leaf_and_immediate_ancestors(self):
+        baseline = self.run_collector_tree()
+        self.assertEqual((baseline.returncode, baseline.stderr), (0, b""))
+        root = self.collected_sample(baseline.stdout, "baseline")
+        self.assertEqual((root["leaf"], root["outer"][4]), ("/", "/init.scope"))
+        self.assertEqual([node["path"] for node in root["nodes"]], ["/"])
+        live = self.run_collector_tree("pre")
+        self.assertEqual((live.returncode, live.stderr), (0, b""))
+        sample = self.collected_sample(live.stdout, "pre")
+        self.assertEqual(sample["members"], ["101", "202"])
+        self.assertEqual(
+            [(row["path"], row["limit"], row["oom"], row["kill"], row["maximum"], row["scope"])
+             for row in sample["nodes"]],
+            [(path, limit, 4, 5, 3, "v2_events_local") for path, limit in
+             (("/group/workload", 67108864), ("/group", 1073741824), ("/", 4294967296))],
+        )
+
+    def test_collector_classifies_root_type_failures_without_a_proof(self):
+        cases = (
+            ("hierarchy_root", None, "node_type_unavailable"),
+            (None, None, "node_type_unavailable"),
+            ("mount_root", b"domain\n", "mount"),
+            ("directory", None, "node_type_object"),
+            ("symlink", None, "node_type_object"),
+            ("dangling", None, "node_type_object"),
+            ("read", b"domain\n", "node_type_read"),
+            (None, b"domain threaded\n", "node_type_domain_threaded"),
+            (None, b"domain invalid\n", "node_type_domain_invalid"),
+            (None, b"threaded\n", "node_type_threaded"),
+            (None, b"domain (invalid)\n", "node_type_other"),
+            (None, b"", "node_type_other"),
+            (None, b"domain", "node_type_other"),
+            (None, b"domain\0\n", "node_type_other"),
+            (None, b"domain\n\n", "node_type_other"),
+            (None, b"domain threaded\nx", "node_type_other"),
+        )
+        for fault, kind, site in cases:
+            with self.subTest(fault=fault, kind=kind):
+                result = self.run_collector_tree(kind=kind, fault=fault)
+                self.assertEqual((result.returncode, result.stderr), (
+                    1, f"DOCKERLENS_NATIVE_MEMORY_GUEST: site={site}\n".encode(),
+                ))
+                self.assertNotIn(b"\nnode ", result.stdout)
+                self.assertNotIn(b"\nclock ", result.stdout)
+                with self.assertRaises(ValueError):
+                    self.collected_sample(result.stdout, "baseline")
+
+    def test_collector_cannot_skip_unverified_leaf_ancestor_or_visible_root(self):
+        for path, completed in (("/group/workload", []),
+                                ("/group", [b"/group/workload"]),
+                                ("/", [b"/group/workload", b"/group"])):
+            for kind in (None, b"threaded\n", b"domain threaded\n", b"domain invalid\n"):
+                with self.subTest(path=path, kind=kind):
+                    result = self.run_collector_tree("pre", node=path, kind=kind)
+                    self.assertEqual((result.returncode, result.stderr), (1, b""))
+                    rows = [line.split(b" ")[1] for line in result.stdout.splitlines() if line.startswith(b"node ")]
+                    self.assertEqual(rows, completed)
+                    self.assertNotIn(b"\nclock ", result.stdout)
+                    with self.assertRaises(ValueError):
+                        self.collected_sample(result.stdout, "pre")
+
     def test_real_libtest_frames_context_with_one_or_two_threads_and_optional_handoff(self):
         import tomllib
         source = (ROOT / "src/native_memory_tests.rs").read_text()
@@ -197,6 +330,11 @@ mod native_health_metadata_tests { pub mod lifecycle { pub mod memory {
         terminal = SUCCESS.replace(b"ok. 1 passed; 0 failed", b"FAILED. 0 passed; 1 failed")
         for line in (
             baseline,
+            *(baseline.replace(b"node_events", site) for site in (
+                b"node_type", b"node_type_unavailable", b"node_type_object", b"node_type_read",
+                b"node_type_domain_threaded", b"node_type_domain_invalid", b"node_type_threaded",
+                b"node_type_other",
+            )),
             baseline.replace(b"nonzero termination=exit code=1 site=node_events",
                              b"stream_limit termination=exit code=0 site=none"),
             prefix + b"operation=version_cli result=nonzero termination=signal code=15 site=none\n",
@@ -215,6 +353,8 @@ mod native_health_metadata_tests { pub mod lifecycle { pub mod memory {
             baseline.replace(b"site=node_events", b"site=bridge_refused"),
             baseline.replace(b"code=1", b"code=01"),
             baseline.replace(b"site=node_events", b"site=unknown_value"),
+            baseline.replace(b"site=node_events", b"site=node_type_unknown"),
+            baseline.replace(b"site=node_events", b"site=node_type_read role=leaf"),
             baseline + b"DOCKERLENS_NATIVE_CHECK: memory_effects\n",
             baseline + b"DOCKERLENS_NATIVE_MEMORY_GUEST: site=node_events\n",
             baseline + b"DOCKERLENS_NATIVE_NOFILE_FAILURE: operation=foreign\n",

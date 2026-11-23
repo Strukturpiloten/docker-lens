@@ -655,6 +655,13 @@ impl MemoryContextTrace {
             "swap",
             "node_open",
             "node_type",
+            "node_type_unavailable",
+            "node_type_object",
+            "node_type_read",
+            "node_type_domain_threaded",
+            "node_type_domain_invalid",
+            "node_type_threaded",
+            "node_type_other",
             "node_values",
             "node_events",
             "node_readback",
@@ -1041,6 +1048,31 @@ impl HealthRun {
             self.request_allowed_with_body(method, path, body),
             "allowlisted exact native request"
         );
+        self.api_response(method, path, body, cleanup)
+    }
+
+    // Only the nofile owner can construct this closed, scope-bound admission.
+    // Other fixture families retain their original allowlist without networks.
+    fn nofile_network_api(
+        &self,
+        request: &lifecycle::nofile::NetworkRequest,
+        cleanup: bool,
+    ) -> (u16, Value) {
+        assert!(
+            request.matches(self, cleanup),
+            "bound nofile network request scope"
+        );
+        let (method, path, body) = request.parts();
+        self.api_response(method, path, body, cleanup)
+    }
+
+    fn api_response(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+        cleanup: bool,
+    ) -> (u16, Value) {
         let input = body.map(|body| {
             serde_json::to_vec(body).unwrap_or_else(|_| panic!("private request encoding"))
         });

@@ -129,8 +129,22 @@ while :; do
   site=node_open
   test "$(readlink -f "$dir")" = "$dir"; test ! -L "$dir"
   exec 3<"$dir"; held=/proc/$$/fd/3; identity=$(stat -L -c '%d %i' "$held")
-  site=node_type
-  test "$(cat "$held/cgroup.type")" = domain
+  type_file=$held/cgroup.type
+  site=node_type_unavailable
+  test -e "$type_file" || test -L "$type_file"
+  site=node_type_object
+  test -f "$type_file"; test ! -L "$type_file"
+  site=node_type_read
+  # Read at most the longest ABI record plus one byte, preserving LF and NUL.
+  type_bytes=$(od -An -N 17 -v -t x1 "$type_file" 2>/dev/null)
+  set -- $type_bytes
+  case "$*" in
+    '64 6f 6d 61 69 6e 0a') :;; # domain
+    '64 6f 6d 61 69 6e 20 74 68 72 65 61 64 65 64 0a') site=node_type_domain_threaded; exit 1;;
+    '64 6f 6d 61 69 6e 20 69 6e 76 61 6c 69 64 0a') site=node_type_domain_invalid; exit 1;;
+    '74 68 72 65 61 64 65 64 0a') site=node_type_threaded; exit 1;;
+    *) site=node_type_other; exit 1;;
+  esac
   site=node_values
   IFS= read -r limit <"$held/memory.max"; usage=$(num "$held/memory.current"); group=$(num "$held/memory.oom.group")
   site=node_events
@@ -753,6 +767,62 @@ fn cleanup_memory(run: &mut HealthRun, image: &Value, uncertain: &[bool]) -> Cle
     cleanup_disposition(verified)
 }
 
+fn memory_outer_is_private(
+    backend: SourceOuterBackend,
+    projection: &Value,
+    owner_snapshot: &Value,
+    raw: &Value,
+) -> bool {
+    projection == owner_snapshot
+        && backend.private_cgroup_namespace(raw).is_some()
+        && matches!(raw["HostConfig"]["PidMode"].as_str(), Some("" | "private"))
+        && raw["State"]["Pid"].as_u64().is_some_and(|pid| pid > 0)
+        && raw["RestartCount"] == 0
+}
+
+#[test]
+fn memory_outer_snapshot_keeps_existing_identity_and_private_pid_requirements() {
+    let original = json!({"bound": true});
+    for (backend, config, crossed) in [
+        (
+            SourceOuterBackend::Docker,
+            json!({"CgroupnsMode": "private", "PidMode": ""}),
+            SourceOuterBackend::Podman,
+        ),
+        (
+            SourceOuterBackend::Podman,
+            json!({"CgroupMode": "private", "PidMode": "private"}),
+            SourceOuterBackend::Docker,
+        ),
+    ] {
+        let raw = json!({"HostConfig": config, "State": {"Pid": 17}, "RestartCount": 0});
+        assert!(memory_outer_is_private(backend, &original, &original, &raw));
+        assert!(!memory_outer_is_private(
+            crossed, &original, &original, &raw
+        ));
+        assert!(!memory_outer_is_private(
+            backend,
+            &original,
+            &json!({}),
+            &raw
+        ));
+        for (pointer, invalid) in [
+            ("/HostConfig/PidMode", json!("host")),
+            ("/HostConfig/PidMode", Value::Null),
+            ("/State/Pid", json!(0)),
+            ("/State/Pid", json!("17")),
+            ("/RestartCount", json!(1)),
+            ("/RestartCount", Value::Null),
+        ] {
+            let mut changed = raw.clone();
+            *changed.pointer_mut(pointer).unwrap() = invalid;
+            assert!(!memory_outer_is_private(
+                backend, &original, &original, &changed
+            ));
+        }
+    }
+}
+
 #[test]
 fn memory_supervisor_wait_is_not_interrupted_by_its_release_signal() {
     assert!(
@@ -818,6 +888,25 @@ fn memory_context_retains_the_waited_baseline_failure_before_cleanup() {
     MemoryContextTrace::begin();
     assert!(command("", "0", false).is_ok());
     trace("operation=version_get result=success termination=exit code=0 site=none");
+
+    for site in [
+        "node_type",
+        "node_type_unavailable",
+        "node_type_object",
+        "node_type_read",
+        "node_type_domain_threaded",
+        "node_type_domain_invalid",
+        "node_type_threaded",
+        "node_type_other",
+    ] {
+        MemoryContextTrace::begin();
+        MemoryContextTrace::select(MemoryContextOperation::Baseline);
+        let hint = format!("DOCKERLENS_NATIVE_MEMORY_GUEST: site={site}\n");
+        assert!(command(&hint, "1", false).is_err());
+        trace(&format!(
+            "operation=baseline result=nonzero termination=exit code=1 site={site}"
+        ));
+    }
 
     let marker = "DOCKERLENS_NATIVE_MEMORY_GUEST: site=node_events\n";
     for (step, error, exit, expected) in [
@@ -916,14 +1005,7 @@ fn live_memory_limits_and_effects_match_engine() {
         MemoryContextTrace::select(MemoryContextOperation::OuterSnapshot);
         let (outer_projection, raw_outer) = outer_context_observation(&run, false);
         assert!(
-            outer_projection == owner.snapshot
-                && raw_outer["HostConfig"]["CgroupnsMode"] == "private"
-                && matches!(
-                    raw_outer["HostConfig"]["PidMode"].as_str(),
-                    Some("" | "private")
-                )
-                && raw_outer["State"]["Pid"].as_u64().is_some_and(|p| p > 0)
-                && raw_outer["RestartCount"] == 0,
+            memory_outer_is_private(backend, &outer_projection, &owner.snapshot, &raw_outer),
             "authenticated private outer namespace root"
         );
         let outer_source = json!({"id":required("NATIVE_OUTER_CONTAINER_ID"),"pid":raw_outer["State"]["Pid"],"started_at":raw_outer["State"]["StartedAt"],"cgroupns":"private","pid_mode":raw_outer["HostConfig"]["PidMode"],"restarts":0});

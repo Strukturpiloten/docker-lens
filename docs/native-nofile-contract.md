@@ -1,5 +1,12 @@
 # Diagonal nofile source-only contract
 
+The current packet is **private schema 2** under
+[ADR 0056](decisions/0056-nofile-case-bridge-proof-schema-2.md). Its fixed filename
+and contract/status remain `nofile-v1.json` / `nofile-v1`; current readers reject
+schema 1. Two owned unlimited-case bridges isolate independently variable outcomes,
+while all four finite fixtures retain the original default bridge. Historical
+schema-1 evidence is preserved and cannot qualify this revised source.
+
 Current memory30 under [ADR 0048](decisions/0048-inner-memory-native-source-proof.md)
 follows complete PIDs27/read, nofile28/read and device29/read.
 [ADR 0049](decisions/0049-named-capabilities-native-source-proof.md) appends
@@ -29,8 +36,9 @@ weakened to run nofile. Original lane EXIT cleanup remains mandatory. Source
 wiring and synthetic controls do not prove native execution or qualification;
 independent review, complete final-source gates and fresh exact-candidate
 four-lane32-call evidence remain pending. No raw admission, catalogue,
-19-argument emitter ABI, product API, version, private packet schema, runtime
-operation, software pin or budget is changed.
+19-argument emitter ABI, product API/version or software pin is changed. The
+explicitly versioned fixture adds two bridge lifecycles and changes the
+inspect-expansion cap from ten to eleven; every original global cap remains.
 
 The existing `Ulimits`/`UlimitNofile` capability groups require finite **and**
 unlimited source shapes. Finite success with negative unlimited outcomes must
@@ -98,6 +106,44 @@ EPERM; the source never assumes that authored unlimited will start. Finite
 effects plus a final matching daemon-version read corroborate a functioning
 environment but never explain an otherwise unknown unlimited failure.
 
+## Three independently bound networks
+
+The finite cases omit network configuration in both independent routes and retain
+the borrowed default `bridge`. Each unlimited case uses one distinct owned bridge,
+named `dl-nf-{run_id}-net-{case}`, shared only by that case's CLI/rendered pair.
+Authenticate its creation-bound canonical ID, exact name, bridge driver and run
+label. The independently authored complete rendered body includes the existing
+typed first-attachment network fields; it is never rewritten after request equality.
+
+Keep three configured audiences distinct from observed capture results. Retain
+whole endpoint-map availability for every selected root. If it has no accessible
+entries, endpoint name/ID/ID availability/lookup are all null; no peer's exchange
+is attributed to it. Only actual entries support a network request. Capture
+summaries contain precisely those supported exchanges, in configured group order.
+The borrowed default's canonical ID is null unless observed; both owned IDs still
+come from authenticated setup. Present endpoint IDs must match the expected
+network and ID-bound GET. Missing/null/empty/recognized-redacted endpoint IDs retain their
+availability and require the matching name-bound GET; a related reply cannot
+manufacture an endpoint ID. Mixed ID/name requests resolving to one native network
+still refuse, including equal response bodies. All eight roots remain selected.
+
+Optional active membership need not exist or enumerate every running fixture.
+Unavailable is not observed-empty. Observed selected members must belong to that
+network's audience in fixture-slot order; a bounded unselected count accounts for
+the remaining entries without exposing identities. Positive foreign membership
+on an owned bridge refuses. Default-bridge peers are counted, not adopted.
+Membership supplies neither ownership nor deletion authority and adds no GET.
+
+Each bridge's measured setup deltas cover fresh-name absence, CREATE and bound
+ID/name/driver/label inspection: three captures, six total. Its cleanup follows
+verified container absence and covers bound identity, exact-ID DELETE and two full
+ID/name absence rounds: six captures, twelve total. Individual call/byte deltas
+must reconcile with phase totals. Unknown/partial creation identity, crossed
+ownership or uncertain teardown retains failure and authenticated outer disposal;
+no name-based ID recovery is authorized. The default is never deleted or declared
+absent. Different unlimited cases may independently start, normalize or specifically
+refuse; both roles within each case retain their original outcome agreement.
+
 ## Genuine inherited worker and live descriptor witnesses
 
 Actual PID1 independently reads its own and its child's procfs limits/status
@@ -160,13 +206,23 @@ and exercise the bootstrap and comparison commands with inert inputs.
 A successful proof has all eight known canonical created IDs, including any
 never-started IDs. One actual aggregate explicit-socket acquisition reserves20
 request units and512KiB response bodies **before I/O** in the existing ledger.
-Limits are eight selected IDs, ten expansions,128KiB per body,512KiB aggregate
+Limits are eight selected IDs, eleven expansions,128KiB per body,512KiB aggregate
 bodies and at most `min(10s, original remaining time minus46s)`. Actual selected
 roots, unique decoded IDs, Engine, observation identity, requested APIs and
 present/effective nofile entries must match independently configured values.
 Decoded retention does not imply kernel unlimited support. Rootless requires
 positive decoding; rootful decoded Unknown remains separate and is backed by
 the independently observed daemon context/UID, never silently promoted.
+For N distinct supported captured networks (0..3), require 10+N actual GETs and
+8+N actual inspect expansions. The fully referenced case has thirteen/eleven;
+missing whole maps add no key, and configured NetworkMode cannot create one.
+Record actual request/body counts and acquisition elapsed nanoseconds separately
+from reservations and caps; ceilings and formulas are not measurements.
+As a necessary consistency check, the reader requires at least 73×(8+N) response
+body bytes: one compact `{"Id":"<64 hex>"}` object per inspected container/network.
+This bound is neither a measurement nor the exact minimum of a full capture.
+The producer still sums the actual bodies from every exchange, including daemon
+responses, under the unchanged512KiB ceiling.
 
 Body accounting is not wire accounting. Headers remain separately bounded at
 16KiB, chunk-size lines64 bytes, payload CRLF2 bytes and final trailer line16KiB;
@@ -179,17 +235,20 @@ The immutable180-second deadline,134-second work cutoff,46-second cleanup
 reserve,400 calls/4 MiB captured-output-plus-reserved-body envelope and100-call/
 2 MiB cleanup reserve stay unchanged. Closed accounting is derived by outcome:
 context8 upstream/9 Debian plus the independently selected Docker snapshot's
-one extra call; each live slot8 captures, each precisely refused
+one extra call; network setup6; each live slot8 captures, each precisely refused
 known-ID start7; daemon-health1; aggregate acquisition20 reserved units; final
 unchanged image/outer readbacks2 plus one extra call for selected Docker.
-Thus ordinary units are91..95 upstream or92..96 Debian on Podman, and93..97
-upstream or94..98 Debian on Docker. Ordinary bytes must fit2 MiB and include the
+Thus ordinary units are97..101 upstream or98..102 Debian on Podman, and99..103
+upstream or100..104 Debian on Docker. Ordinary bytes must fit2 MiB and include the
 existing two Docker image-observation reservations of65536 bytes each, in
 addition to the512KiB decoded-body acquisition reservation. These conservative
 ledger charges are not measured raw-wire bytes. All eight ordinary exact-ID
-cleanup paths consume72 captures: five per removal and four across two complete
-ID/name absence rounds per slot. Cleanup bytes are at most72×10240=737280,
-within the original reserve. Timings and byte counts must pass, not just formulas.
+cleanup paths retain72 captures: five per removal and four across two complete
+ID/name absence rounds per slot. Two owned bridges add twelve captures, total84.
+Container cleanup bytes are at most72×10240=737280 and network cleanup bytes at
+most12×10240=122880, total860160, within the unchanged100-call/2-MiB reserve.
+Actual component totals must reconcile. Timings and byte counts must pass, not
+just formulas. The proof's `cleanup.networks` covers only the two owned bridges.
 
 The producer binds the closed `SourceOuterBackend` once before proof/fixture
 owners or native I/O. Its enum and `source_outer_backend()` belong to the shared
@@ -204,7 +263,7 @@ missing, unknown or non-string selections refuse, and no packet/context member
 can select its own cost. `native_source_accounting.outer_snapshot_cost` and
 `native_shm_size_proof`'s pure `exact`/`integer` are shared dependencies supplied
 by the 24–26 recovery. Inner rootful/rootless mode, lane and proof self-context
-are never substitutes. No backend field is added to the private v1 packet.
+are never substitutes. No backend field is added to the private packet.
 
 The fully bound path runs exactly one inherited lifecycle cleanup attempt.
 Before entering it, the nofile-only guard validates bounded immutable snapshots
@@ -264,9 +323,16 @@ under single-thread libtest. If a terminal libtest summary is present, the work
 record and any cleanup pair must precede the single complete failed summary.
 A successful acquisition,
 pre-I/O reservation failure or later capture/decoder assertion has no acquisition
-error category. The category does not identify a particular GET, endpoint or
-response. The request sequence, API negotiation, resource identity checks,
-limits and strict proof remain in force.
+error category. A Shape refusal from the same acquisition can add
+`acquisition_shape` for container identity or related-resource parsing,
+network or volume request construction, inspect identity, network ID shape,
+or a repeated resolved network ID. `duplicate_network_id` means both
+network replies passed their requested identity checks and resolved to the
+same full lowercase hexadecimal ID. A repeated noncanonical ID has its own
+label. These labels describe only the existing checks, and identify no raw
+endpoint, ID or response. An unobserved Shape retains only `acquisition_error`.
+The request sequence, API negotiation, resource identity checks, limits and
+strict proof remain in force.
 
 Raw bytes, CLI text, paths and IDs stay private. The native container has no
 mounted observer receipt channel, and the CLI capture retains no independent
@@ -325,20 +391,24 @@ records/mixed families are withheld, and any family prefix contradicts success. 
 private-suffixed, NUL/ANSI, unknown, foreign, stale or truncated records never project. Records
 convey no OOM attribution, kernel cause, verified absence, capability or catalogue admission.
 
-Only existing I/O/status/results are observed. No command, source read, probe, retry, wait,
-clock, collector, IPC, privilege, cap, budget or deadline renewal is added. The original eight-slot
-ownership guard, effects, accounting, cleanup authority, successful nofile-v1 proof/readers and
-all 32 canonical invocations remain unchanged. No dependency/pin/manifest or Renovate extraction,
+The failure diagnostic observes only existing I/O/status/results and adds no probe,
+retry, collector, privilege or deadline renewal. Separately, schema 2's two bridge
+lifecycles and eleven-expansion schedule above have explicit measured accounting.
+The original eight-slot ownership guard, effects, cleanup authority, strict
+readers and all32 canonical invocations remain required. No dependency/pin/manifest or Renovate extraction,
 manager/grouping/approval change is required. Final complete gates and fresh exact-candidate
 native execution, output/time fit and whole-lane cleanup remain required.
 
 ## Private protocol, sizing and integration seam
 
-The fixed direct child is `nofile-v1.json`. Twelve independent harness facts,
+The fixed direct child is `nofile-v1.json`, now requiring private schema2 while
+retaining the same contract/status label. Schema1 is stale for the revised source;
+there is no current-run fallback. Twelve independent harness facts,
 not proof self-context, bind candidate/run/lane/Engine/APIs/mode/package/fixture/
 daemon UID/outer identity and private capture directory. The closed reader
 validates all ordered cases, typed outcomes/ranges, full actual manifests,
-pair agreement, errno, limits, reuse, accounting, cleanup and empty/false
+pair agreement, errno, limits, reuse, three-network topology/availability,
+measured setup/cleanup/acquisition accounting and empty/false
 admission. Duplicate keys, missing/extra fields, Boolean-as-integer, stale
 context and incomplete families refuse the entire proof. Success prints nothing;
 refusal emits only a fixed private-value-free message. Raw errors, paths,

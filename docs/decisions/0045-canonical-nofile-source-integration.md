@@ -2,6 +2,14 @@
 
 Status: accepted test-only source integration; final-source and native qualification pending.
 
+Current private fixture amendment: [ADR 0056](0056-nofile-case-bridge-proof-schema-2.md)
+requires schema 2 under the same `nofile-v1.json` filename/contract and external
+reader/emitter interfaces. It adds two owned unlimited-case bridges, eleven total
+inspect expansions and measured setup/cleanup accounting under the original global
+limits. This supersedes only the original fixture/proof schedule below; all eight
+containers, witnesses, immediate readers, public non-admission and outer owner
+requirements remain. Historical schema-1 source evidence is unchanged.
+
 ## Context
 
 The recovered nofile producer, private reader and custody/accounting controls

@@ -555,11 +555,11 @@ try:
     for index, line in observations:
         if index == len(lines) - 1 or len(line) > 256:
             raise ValueError()
-        match = re.fullmatch(rb"DOCKERLENS_NATIVE_NOFILE_FAILURE: caller_case=(soft64_hard128|soft128_hard128|soft64_hard_unlimited|both_unlimited|all) caller_role=(oracle|rendered|pair|none) caller_operation=([a-z_]+) observed_termination=(exit|signal|unknown) code=([0-9]+|none)(?: observer_(?:site=([a-z]+)|capture=([a-z0-9_]+)))?(?: observer_entry=(unknown))?(?: acquisition_error=([a-z_]+))?", line)
+        match = re.fullmatch(rb"DOCKERLENS_NATIVE_NOFILE_FAILURE: caller_case=(soft64_hard128|soft128_hard128|soft64_hard_unlimited|both_unlimited|all) caller_role=(oracle|rendered|pair|none) caller_operation=([a-z_]+) observed_termination=(exit|signal|unknown) code=([0-9]+|none)(?: observer_(?:site=([a-z]+)|capture=([a-z0-9_]+)))?(?: observer_entry=(unknown))?(?: acquisition_error=([a-z_]+)(?: acquisition_shape=([a-z_]+))?)?", line)
         if match is not None:
             if work is not None or cleanup is not None:
                 raise ValueError()
-            case, role, operation, termination, code, observer_site, observer_capture, observer_entry, acquisition_error = match.groups()
+            case, role, operation, termination, code, observer_site, observer_capture, observer_entry, acquisition_error, acquisition_shape = match.groups()
             if observer_entry is not None and operation != b"observe":
                 raise ValueError()
             if observer_site is not None and (operation != b"observe" or termination not in (b"exit", b"signal")
@@ -588,6 +588,10 @@ try:
             else:
                 raise ValueError()
             if operation in (b"witness", b"slot_accounting", b"pair_comparison", b"capacity_comparison", b"kernel_comparison", b"acquisition") and termination != b"unknown":
+                raise ValueError()
+            if acquisition_shape is not None and (acquisition_error != b"shape" or acquisition_shape not in (
+                    b"container_identity", b"container_related", b"network_request", b"network_identity", b"network_id",
+                    b"duplicate_network_id", b"duplicate_noncanonical_network_id", b"volume_request", b"volume_identity")):
                 raise ValueError()
             if acquisition_error is not None:
                 stages = (b"DOCKERLENS_NATIVE_CHECK: nofile_context", b"DOCKERLENS_NATIVE_CHECK: nofile_effects",
@@ -692,7 +696,8 @@ for marker in (
 match = re.fullmatch(
     rb"DOCKERLENS_NATIVE_MEMORY_CONTEXT_FAILURE: operation=(version_get|version_cli|info_get|security_cli|daemon_uid|package|base_image|acquire|facts|borrowed_image|outer_snapshot|reserve|baseline|baseline_report)"
     rb" result=(unobserved|success|nonzero|stream_limit) termination=(exit|signal|unknown) code=(none|0|[1-9][0-9]{0,2})"
-    rb" site=(none|bridge_refused|identity|mount|namespaces|outer|swap|node_open|node_type|node_values|node_events|node_readback|clock)",
+    rb" site=(none|bridge_refused|identity|mount|namespaces|outer|swap|node_open|node_values|node_events|node_readback|clock"
+    rb"|node_type(?:_(?:unavailable|object|read|domain_threaded|domain_invalid|threaded|other))?)",
     line,
 )
 if match is None:

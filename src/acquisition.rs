@@ -1139,6 +1139,42 @@ fn inspected_network_id(body: &[u8]) -> Result<NativeId, AcquisitionError> {
         .ok_or(AcquisitionError::Shape)
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum AcquisitionShape {
+    ContainerIdentity,
+    ContainerRelated,
+    NetworkRequest,
+    NetworkIdentity,
+    NetworkId,
+    DuplicateNetworkId,
+    DuplicateNoncanonicalNetworkId,
+    VolumeRequest,
+    VolumeIdentity,
+}
+
+fn observe_shape(
+    error: AcquisitionError,
+    detail: &mut Option<AcquisitionShape>,
+    shape: AcquisitionShape,
+) -> AcquisitionError {
+    if error == AcquisitionError::Shape {
+        *detail = Some(shape);
+    }
+    error
+}
+
+#[cfg(test)]
+pub(crate) fn acquire_with_shape_detail(
+    endpoint: &Endpoint,
+    selector: Selector,
+    limits: Limits,
+    cancelled: &AtomicBool,
+) -> Result<Capture, (AcquisitionError, Option<AcquisitionShape>)> {
+    let mut detail = None;
+    acquire_inner(endpoint, selector, limits, cancelled, &mut detail)
+        .map_err(|error| (error, detail))
+}
+
 /// Read a bounded inventory from one explicitly supplied Unix socket.
 ///
 /// The caller can cancel between I/O polls. Each completed exchange is protected
@@ -1149,6 +1185,16 @@ pub fn acquire(
     selector: Selector,
     limits: Limits,
     cancelled: &AtomicBool,
+) -> Result<Capture, AcquisitionError> {
+    acquire_inner(endpoint, selector, limits, cancelled, &mut None)
+}
+
+fn acquire_inner(
+    endpoint: &Endpoint,
+    selector: Selector,
+    limits: Limits,
+    cancelled: &AtomicBool,
+    detail: &mut Option<AcquisitionShape>,
 ) -> Result<Capture, AcquisitionError> {
     validate_selector(&selector, limits)?;
     let mut budget = Budget::new(limits)?;
@@ -1217,7 +1263,7 @@ pub fn acquire(
     let mut next_reference = 1_u64;
     let mut selected_roots = Vec::with_capacity(budget.counts().selected_resources);
     let mut network_name_fallbacks = HashSet::new();
-    let mut inspected_network_ids = HashSet::new();
+    let mut inspected_network_ids = HashMap::new();
     for id in containers {
         let reference = ResourceRef::new(next_reference);
         selected_roots.push(SelectedRoot {
@@ -1236,8 +1282,10 @@ pub fn acquire(
             Some(api),
             cancelled,
         )?;
-        inspect_identity(body.as_bytes(), "Id", &id)?;
-        let related = related_ids(body.as_bytes())?;
+        inspect_identity(body.as_bytes(), "Id", &id)
+            .map_err(|error| observe_shape(error, detail, AcquisitionShape::ContainerIdentity))?;
+        let related = related_ids(body.as_bytes())
+            .map_err(|error| observe_shape(error, detail, AcquisitionShape::ContainerRelated))?;
         let mut new_networks = HashMap::new();
         for (id, by_name) in related.networks {
             if let Some(previous) = networks.get_mut(&id) {
@@ -1294,10 +1342,31 @@ pub fn acquire(
             Some(reference),
             Some(api),
             cancelled,
-        )?;
-        inspect_identity(body.as_bytes(), if by_name { "Name" } else { "Id" }, &id)?;
-        if !inspected_network_ids.insert(inspected_network_id(body.as_bytes())?) {
-            return Err(AcquisitionError::Shape);
+        )
+        .map_err(|error| observe_shape(error, detail, AcquisitionShape::NetworkRequest))?;
+        inspect_identity(body.as_bytes(), if by_name { "Name" } else { "Id" }, &id)
+            .map_err(|error| observe_shape(error, detail, AcquisitionShape::NetworkIdentity))?;
+        let native_id = inspected_network_id(body.as_bytes())
+            .map_err(|error| observe_shape(error, detail, AcquisitionShape::NetworkId))?;
+        match inspected_network_ids.entry(native_id) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(());
+            }
+            std::collections::hash_map::Entry::Occupied(entry) => {
+                let id = entry.key().as_str();
+                *detail = Some(
+                    if id.len() == 64
+                        && id
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                    {
+                        AcquisitionShape::DuplicateNetworkId
+                    } else {
+                        AcquisitionShape::DuplicateNoncanonicalNetworkId
+                    },
+                );
+                return Err(AcquisitionError::Shape);
+            }
         }
     }
     for id in volumes {
@@ -1319,8 +1388,10 @@ pub fn acquire(
             Some(reference),
             Some(api),
             cancelled,
-        )?;
-        inspect_identity(body.as_bytes(), "Name", &id)?;
+        )
+        .map_err(|error| observe_shape(error, detail, AcquisitionShape::VolumeRequest))?;
+        inspect_identity(body.as_bytes(), "Name", &id)
+            .map_err(|error| observe_shape(error, detail, AcquisitionShape::VolumeIdentity))?;
     }
     remaining(budget.started, budget.limits.max_elapsed, cancelled)?;
     let capture = budget

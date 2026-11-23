@@ -23,7 +23,7 @@ from test_native_shm_size_proof import fixture as shm_size_fixture
 from test_native_supplementary_groups_proof import fixture as supplementary_groups_fixture
 from test_native_kernel_settings_proof import fixture as kernel_settings_fixture
 from test_native_pids_proof import materialize_pids_proof
-from test_native_nofile_proof import fixture as nofile_fixture
+from test_native_nofile_proof import fixture as nofile_fixture, bind_context as bind_nofile_context
 from test_native_device_mapping_proof import fixture as device_mapping_fixture
 from test_native_memory_proof import fixture as memory_fixture, bind_context as bind_memory_context
 from test_native_capabilities_proof import fixture as capabilities_fixture, bind_context as bind_capabilities_context
@@ -535,11 +535,7 @@ class NativeEvidenceTests(unittest.TestCase):
                 family_path.chmod(0o600)
         if not nofile_missing:
             payload = nofile_fixture(lane, outer_backend=outer_backend if outer_backend in ("podman", "docker") else "podman")
-            payload["context"].update(external["context"])
-            for case in payload["cases"]:
-                for item in case["containers"]:
-                    item["owner"] = RUN_ID
-                    item["name"] = f"dl-nf-{RUN_ID}-{case['case']}-{item['role']}"
+            payload = bind_nofile_context(payload, external["context"])
             nofile_path = root / "nofile-v1.json"
             nofile_path.write_text(json.dumps(payload if nofile is None else nofile), encoding="utf-8")
             nofile_path.chmod(0o600)

@@ -4,9 +4,14 @@
 //! Native programs below must run only in the independently owned native lanes.
 
 use super::*;
-use crate::acquisition::{AcquisitionError, LimitError};
+use crate::acquisition::{
+    AcquisitionError, AcquisitionShape, LimitError, acquire_with_shape_detail,
+};
 use crate::observation::{Availability, Origin};
-use crate::target::{ContainerToken, EnvironmentAssignment, Ulimit, UlimitValue};
+use crate::target::{
+    ContainerToken, EnvironmentAssignment, NetworkAttachmentIntent, NetworkDriver, NetworkIntent,
+    NetworkRole, NetworkSource, Ulimit, UlimitValue,
+};
 use std::collections::BTreeMap;
 
 const CONTRACT: &str = "nofile-v1";
@@ -19,13 +24,15 @@ const CASES: [(&str, i64, i64); 4] = [
     ("soft64_hard_unlimited", 64, -1),
     ("both_unlimited", -1, -1),
 ];
-const NOFILE_CAPABILITIES: [Capability; 6] = [
+const NOFILE_CAPABILITIES: [Capability; 8] = [
     Capability::StandaloneContainer,
     Capability::Command,
     Capability::ContainerLabels,
     Capability::EnvironmentAssignment,
     Capability::Ulimits,
     Capability::UlimitNofile,
+    Capability::BridgeNetwork,
+    Capability::NetworkExternalReference,
 ];
 const REQUESTS: usize = 20;
 const BODIES: usize = 512 * 1024;
@@ -35,6 +42,338 @@ const PARENT_ENV: &str = "DOCKERLENS_NOFILE_PARENT";
 const WORKER_ENV: &str = "DOCKERLENS_NOFILE_WORKER";
 const BOOTSTRAP: &str =
     r#"exec /bin/sh -c "${DOCKERLENS_NOFILE_PARENT:?}" "$0" "${DOCKERLENS_NOFILE_WORKER:?}""#;
+
+fn case_network_name(run: &HealthRun, index: usize) -> String {
+    if index < 4 {
+        "bridge".into()
+    } else {
+        format!("dl-nf-{}-net-{}", run.run, CASES[index / 2].0)
+    }
+}
+
+// Constructed only by the private ledger after checking its immutable scope
+// and the closed operation's state. Native bytes never enter Debug output.
+pub(in crate::native_health_metadata_tests) struct NetworkRequest {
+    scope: [String; 6],
+    method: &'static str,
+    path: String,
+    body: Option<Value>,
+    cleanup: bool,
+}
+
+impl NetworkRequest {
+    pub(in crate::native_health_metadata_tests) fn matches(
+        &self,
+        run: &HealthRun,
+        cleanup: bool,
+    ) -> bool {
+        self.scope == network_scope(run) && self.cleanup == cleanup
+    }
+
+    pub(in crate::native_health_metadata_tests) fn parts(&self) -> (&str, &str, Option<&Value>) {
+        (self.method, &self.path, self.body.as_ref())
+    }
+}
+
+fn network_scope(run: &HealthRun) -> [String; 6] {
+    [
+        run.run.clone(),
+        run.lane.clone(),
+        run.candidate.clone(),
+        run.api.clone(),
+        run.socket.clone(),
+        run.outer.clone(),
+    ]
+}
+
+struct NofileNetwork {
+    name: String,
+    id: Option<String>,
+    attempted: bool,
+    authenticated: bool,
+    deleted: bool,
+    setup_calls: usize,
+    setup_bytes: usize,
+    cleanup_calls: usize,
+    cleanup_bytes: usize,
+}
+
+struct NofileNetworks {
+    scope: [String; 6],
+    outer_id: String,
+    owned: [NofileNetwork; 2],
+    cleanup_attempted: bool,
+}
+
+#[derive(Clone, Copy)]
+enum NetworkAction {
+    FreshName,
+    Create,
+    InspectId,
+    Delete,
+    AbsentId,
+    AbsentName,
+}
+
+impl NofileNetworks {
+    fn new(run: &HealthRun, owner: &BoundOuterCleanupOwner) -> Self {
+        assert!(
+            run.run.len() == 8 && run.run.bytes().all(|b| b.is_ascii_alphanumeric()),
+            "closed nofile network owner token"
+        );
+        let outer_id = owner.snapshot["id"]
+            .as_str()
+            .filter(|id| identifier(id))
+            .unwrap_or_else(|| {
+                panic!("authenticated canonical outer ID for nofile network custody")
+            });
+        assert!(
+            owner.snapshot["name"] == run.outer && owner.snapshot["owner"] == run.run,
+            "authenticated outer snapshot matches nofile network scope"
+        );
+        Self {
+            scope: network_scope(run),
+            outer_id: outer_id.into(),
+            cleanup_attempted: false,
+            owned: std::array::from_fn(|index| NofileNetwork {
+                name: case_network_name(run, 4 + 2 * index),
+                id: None,
+                attempted: false,
+                authenticated: false,
+                deleted: false,
+                setup_calls: 0,
+                setup_bytes: 0,
+                cleanup_calls: 0,
+                cleanup_bytes: 0,
+            }),
+        }
+    }
+
+    fn scope_matches(&self, run: &HealthRun) -> bool {
+        self.scope == network_scope(run)
+            && self
+                .owned
+                .iter()
+                .enumerate()
+                .all(|(i, n)| n.name == case_network_name(run, 4 + 2 * i))
+    }
+
+    fn bound(&self, run: &HealthRun) -> bool {
+        self.scope_matches(run)
+            && self.owned.iter().enumerate().all(|(i, n)| {
+                if !n.attempted {
+                    return n.id.is_none() && !n.authenticated && !n.deleted;
+                }
+                n.authenticated
+                    && n.id.as_deref().is_some_and(|id| {
+                        identifier(id)
+                            && id != self.outer_id
+                            && !run.ids.iter().flatten().any(|other| other == id)
+                            && !self
+                                .owned
+                                .iter()
+                                .enumerate()
+                                .any(|(j, other)| j != i && other.id.as_deref() == Some(id))
+                    })
+            })
+    }
+
+    fn request(
+        &self,
+        run: &HealthRun,
+        index: usize,
+        action: NetworkAction,
+        cleanup: bool,
+    ) -> NetworkRequest {
+        assert!(
+            self.scope_matches(run),
+            "original nofile network custody scope"
+        );
+        let n = &self.owned[index];
+        let prefix = format!("/v{}/networks", run.api);
+        let id = || {
+            n.id.as_deref()
+                .filter(|id| identifier(id))
+                .unwrap_or_else(|| panic!("bound canonical nofile network ID"))
+        };
+        let (method, path, body) = match action {
+            NetworkAction::FreshName => {
+                assert!(
+                    !cleanup && !n.attempted && n.id.is_none(),
+                    "fresh network ledger"
+                );
+                ("GET", format!("{prefix}/{}", n.name), None)
+            }
+            NetworkAction::Create => {
+                assert!(
+                    !cleanup && n.attempted && n.id.is_none() && !n.authenticated,
+                    "one network create"
+                );
+                (
+                    "POST",
+                    format!("{prefix}/create"),
+                    Some(json!({"Name":n.name,"Driver":"bridge","Labels":{OWNER:run.run}})),
+                )
+            }
+            NetworkAction::InspectId => {
+                assert!(n.attempted && !n.deleted, "live network ledger");
+                ("GET", format!("{prefix}/{}", id()), None)
+            }
+            NetworkAction::Delete => {
+                assert!(
+                    cleanup && n.authenticated && !n.deleted,
+                    "owned network deletion only"
+                );
+                ("DELETE", format!("{prefix}/{}", id()), None)
+            }
+            NetworkAction::AbsentId | NetworkAction::AbsentName => {
+                assert!(
+                    cleanup && n.authenticated && n.deleted,
+                    "deleted owned network absence"
+                );
+                let key = if matches!(action, NetworkAction::AbsentId) {
+                    id()
+                } else {
+                    &n.name
+                };
+                ("GET", format!("{prefix}/{key}"), None)
+            }
+        };
+        NetworkRequest {
+            scope: self.scope.clone(),
+            method,
+            path,
+            body,
+            cleanup,
+        }
+    }
+
+    fn authenticate(&self, run: &HealthRun, index: usize, body: &Value) -> bool {
+        self.scope_matches(run)
+            && self.owned[index].id.as_deref().is_some_and(|id| {
+                identifier(id)
+                    && body["Id"] == id
+                    && body["Name"] == self.owned[index].name
+                    && body["Driver"] == "bridge"
+                    && body["Labels"][OWNER] == run.run
+            })
+    }
+
+    fn create(&mut self, run: &HealthRun, index: usize) {
+        let calls = run.calls.get();
+        let bytes = run.bytes.get();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let fresh = self.request(run, index, NetworkAction::FreshName, false);
+            assert!(
+                run.nofile_network_api(&fresh, false).0 == 404,
+                "fresh owned nofile bridge name"
+            );
+            self.owned[index].attempted = true; // before any possibly uncertain mutation
+            let create = self.request(run, index, NetworkAction::Create, false);
+            let (status, value) = run.nofile_network_api(&create, false);
+            assert!(status == 201, "owned bridge create response");
+            let id = value["Id"]
+                .as_str()
+                .filter(|id| identifier(id))
+                .unwrap_or_else(|| panic!("canonical nofile bridge create ID"));
+            assert!(
+                id != self.outer_id
+                    && !self.owned.iter().any(|n| n.id.as_deref() == Some(id))
+                    && !run.ids.iter().flatten().any(|other| other == id),
+                "distinct owned bridge ID"
+            );
+            self.owned[index].id = Some(id.into());
+            let inspect = self.request(run, index, NetworkAction::InspectId, false);
+            let (status, value) = run.nofile_network_api(&inspect, false);
+            assert!(
+                status == 200 && self.authenticate(run, index, &value),
+                "bound bridge identity and owner before fixtures"
+            );
+            self.owned[index].authenticated = true;
+        }));
+        self.owned[index].setup_calls = run.calls.get() - calls;
+        self.owned[index].setup_bytes = run.bytes.get() - bytes;
+        if let Err(error) = result {
+            std::panic::resume_unwind(error);
+        }
+        assert!(
+            self.owned[index].setup_calls == 3,
+            "actual nofile bridge setup calls"
+        );
+    }
+
+    fn cleanup(&mut self, run: &HealthRun, containers_absent: bool) -> bool {
+        if !containers_absent || !self.bound(run) || self.cleanup_attempted {
+            return false;
+        }
+        self.cleanup_attempted = true;
+        let mut verified = true;
+        for index in 0..2 {
+            if !self.owned[index].attempted {
+                continue;
+            }
+            let calls = run.calls.get();
+            let bytes = run.bytes.get();
+            let removed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let request = self.request(run, index, NetworkAction::InspectId, true);
+                let (status, body) = run.nofile_network_api(&request, true);
+                assert!(
+                    status == 200 && self.authenticate(run, index, &body),
+                    "owned network cleanup identity"
+                );
+                let request = self.request(run, index, NetworkAction::Delete, true);
+                assert!(
+                    run.nofile_network_api(&request, true).0 == 204,
+                    "exact owned network deletion"
+                );
+                self.owned[index].deleted = true;
+            }))
+            .is_ok();
+            self.owned[index].cleanup_calls += run.calls.get() - calls;
+            self.owned[index].cleanup_bytes += run.bytes.get() - bytes;
+            verified &= removed;
+        }
+        for _ in 0..2 {
+            for index in 0..2 {
+                if !self.owned[index].attempted {
+                    continue;
+                }
+                let calls = run.calls.get();
+                let bytes = run.bytes.get();
+                let absent = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    for action in [NetworkAction::AbsentId, NetworkAction::AbsentName] {
+                        let request = self.request(run, index, action, true);
+                        assert!(
+                            run.nofile_network_api(&request, true).0 == 404,
+                            "owned network absence round"
+                        );
+                    }
+                }))
+                .is_ok();
+                self.owned[index].cleanup_calls += run.calls.get() - calls;
+                self.owned[index].cleanup_bytes += run.bytes.get() - bytes;
+                verified &= absent;
+            }
+        }
+        verified
+    }
+
+    fn topology(&self, run: &HealthRun, acquired: &Value) -> Value {
+        assert!(
+            self.bound(run) && self.owned.iter().all(|n| n.attempted && n.deleted),
+            "complete nofile network custody"
+        );
+        let default_id = acquired["networks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["name"] == "bridge")
+            .map(|n| n["id"].clone())
+            .unwrap_or(Value::Null);
+        json!({"default":{"id":default_id,"name":"bridge","driver":"bridge","ownership":"not_owned","container_indices":[0,1,2,3]},
+            "owned":self.owned.iter().enumerate().map(|(i,n)| json!({"case":CASES[i+2].0,"id":n.id,"name":n.name,"owner":run.run,"driver":"bridge","container_indices":[4+2*i,5+2*i],"setup_calls":n.setup_calls,"setup_bytes":n.setup_bytes,"cleanup_calls":n.cleanup_calls,"cleanup_bytes":n.cleanup_bytes,"cleanup":"absent","absence_rounds":2})).collect::<Vec<_>>()})
+    }
+}
 
 // Independently authored POSIX-awk program. No oracle implementation is copied.
 // ERRNO is captured immediately: even close() may subsequently overwrite it.
@@ -218,6 +557,7 @@ impl NofileTermination {
 struct NofileDiagnostics {
     caller: Cell<Option<NofileCaller>>,
     acquisition_error: Cell<Option<&'static str>>,
+    acquisition_shape: Cell<Option<&'static str>>,
 }
 impl NofileDiagnostics {
     fn select(&self, run: &HealthRun, case: usize, role: NofileRole, operation: NofileOperation) {
@@ -227,6 +567,7 @@ impl NofileDiagnostics {
             operation,
         }));
         self.acquisition_error.set(None);
+        self.acquisition_shape.set(None);
         if let Some(observation) = &run.nofile_command_observation {
             observation.reset();
         }
@@ -269,7 +610,10 @@ impl NofileDiagnostics {
             None if caller.operation == NofileOperation::Acquisition => self
                 .acquisition_error
                 .get()
-                .map_or_else(String::new, |error| format!(" acquisition_error={error}")),
+                .map_or_else(String::new, |error| match self.acquisition_shape.get() {
+                    Some(shape) => format!(" acquisition_error={error} acquisition_shape={shape}"),
+                    None => format!(" acquisition_error={error}"),
+                }),
             None => String::new(),
         };
         let entry = if caller.operation == NofileOperation::Observe {
@@ -783,7 +1127,16 @@ fn authored(run: &HealthRun, index: usize) -> Value {
         ],
         ports: vec![],
         mounts: vec![],
-        networks: vec![],
+        networks: if index < 4 {
+            vec![]
+        } else {
+            vec![NetworkAttachmentIntent {
+                network: ResourceRef::new(2),
+                aliases: vec![],
+                ipv4_address: None,
+                ipv6_address: None,
+            }]
+        },
         entrypoint: ImageCommand::Inherit,
         command: ImageCommand::Exec(
             ["sh", "-c", BOOTSTRAP, run.names[index].as_str()]
@@ -805,18 +1158,49 @@ fn authored(run: &HealthRun, index: usize) -> Value {
             ..ContainerSettings::default()
         },
     };
-    let intent = TargetIntent::new(vec![TargetResource::Container(Box::new(container))]).unwrap();
+    let mut resources = Vec::new();
+    if index >= 4 {
+        resources.push(TargetResource::Network(NetworkIntent {
+            reference: ResourceRef::new(2),
+            identity: TargetIdentity::new(case_network_name(run, index).into_bytes()).unwrap(),
+            role: NetworkRole::Declared,
+            source: NetworkSource::External {
+                expected_driver: NetworkDriver::Bridge,
+                expected_internal: None,
+            },
+        }));
+    }
+    resources.push(TargetResource::Container(Box::new(container)));
+    let intent = TargetIntent::new(resources).unwrap();
     let graph = DockerPlanner
         .plan(
             &intent,
             &ValidatedCapabilities::new(run.facts.as_ref().unwrap()).unwrap(),
         )
         .unwrap();
-    let request: Value =
-        serde_json::from_slice(DockerApiRenderer.render(&graph).unwrap().bytes()).unwrap();
-    let body = json!({"Image":run.base,"Cmd":["sh","-c",BOOTSTRAP,run.names[index]],"Labels":{(OWNER):run.run},
+    let artifact = DockerApiRenderer.render(&graph).unwrap();
+    let prerequisites = artifact.network_prerequisites();
+    assert!(
+        if index < 4 {
+            prerequisites.is_empty()
+        } else {
+            prerequisites.len() == 1
+                && prerequisites[0].reference == ResourceRef::new(2)
+                && prerequisites[0].identity() == case_network_name(run, index).as_bytes()
+                && prerequisites[0].expected_driver == NetworkDriver::Bridge
+                && prerequisites[0].expected_internal.is_none()
+        },
+        "exact owned-bridge prerequisite, no invented default requirement"
+    );
+    let request: Value = serde_json::from_slice(artifact.bytes()).unwrap();
+    let mut body = json!({"Image":run.base,"Cmd":["sh","-c",BOOTSTRAP,run.names[index]],"Labels":{(OWNER):run.run},
         "Env":[format!("{PARENT_ENV}={PARENT}"),format!("{WORKER_ENV}={WORKER}")],
         "HostConfig":{"Ulimits":[{"Name":"nofile","Soft":soft,"Hard":hard}]}});
+    if index >= 4 {
+        let name = case_network_name(run, index);
+        body["HostConfig"]["NetworkMode"] = json!(name);
+        body["NetworkingConfig"] = json!({"EndpointsConfig":{(name):{}}});
+    }
     assert!(
         request
             == json!({"method":"POST","path":format!("/v{}/containers/create?name={}",run.api,run.names[index]),"body":body}),
@@ -825,9 +1209,9 @@ fn authored(run: &HealthRun, index: usize) -> Value {
     request
 }
 
-fn oracle_create_arguments(run: &HealthRun, index: usize) -> [String; 16] {
+fn oracle_create_arguments(run: &HealthRun, index: usize) -> Vec<String> {
     let (_, soft, hard) = CASES[index / 2];
-    [
+    let mut args = vec![
         "create".into(),
         "--name".into(),
         run.names[index].clone(),
@@ -844,7 +1228,11 @@ fn oracle_create_arguments(run: &HealthRun, index: usize) -> [String; 16] {
         "-c".into(),
         BOOTSTRAP.into(),
         run.names[index].clone(),
-    ]
+    ];
+    if index >= 4 {
+        args.splice(11..11, ["--network".into(), case_network_name(run, index)]);
+    }
+    args
 }
 
 #[test]
@@ -909,7 +1297,7 @@ fn nofile_fixture_create_modes_match_exact_argv_and_rendered_wires() {
         for (case, (case_name, soft, hard)) in cases.into_iter().enumerate() {
             let oracle_name = format!("dl-nf-Ab12Cd34-{case_name}-oracle");
             let rendered_name = format!("dl-nf-Ab12Cd34-{case_name}-rendered");
-            let expected_argv = [
+            let mut expected_argv = [
                 "create",
                 "--name",
                 &oracle_name,
@@ -927,9 +1315,19 @@ fn nofile_fixture_create_modes_match_exact_argv_and_rendered_wires() {
                 bootstrap,
                 &oracle_name,
             ]
-            .map(str::to_owned);
+            .map(str::to_owned)
+            .to_vec();
+            if case >= 2 {
+                expected_argv.splice(
+                    11..11,
+                    [
+                        "--network".into(),
+                        format!("dl-nf-Ab12Cd34-net-{case_name}"),
+                    ],
+                );
+            }
             assert_eq!(oracle_create_arguments(&run, 2 * case), expected_argv);
-            let expected = json!({
+            let mut expected = json!({
                 "method": "POST",
                 "path": format!("/v1.{minor}/containers/create?name={rendered_name}"),
                 "body": {
@@ -940,6 +1338,11 @@ fn nofile_fixture_create_modes_match_exact_argv_and_rendered_wires() {
                     "HostConfig": {"Ulimits": [{"Name": "nofile", "Soft": soft, "Hard": hard}]},
                 },
             });
+            if case >= 2 {
+                let name = format!("dl-nf-Ab12Cd34-net-{case_name}");
+                expected["body"]["HostConfig"]["NetworkMode"] = json!(name);
+                expected["body"]["NetworkingConfig"] = json!({"EndpointsConfig":{(name):{}}});
+            }
             let request = authored(&run, 2 * case + 1);
             assert_eq!(
                 serde_json::to_vec(&request).unwrap(),
@@ -950,7 +1353,16 @@ fn nofile_fixture_create_modes_match_exact_argv_and_rendered_wires() {
     }
 }
 
-fn create_nofile(run: &mut HealthRun, index: usize, diagnostics: &NofileDiagnostics) {
+fn create_nofile(
+    run: &mut HealthRun,
+    index: usize,
+    diagnostics: &NofileDiagnostics,
+    networks: &NofileNetworks,
+) {
+    assert!(
+        networks.bound(run) && networks.owned.iter().all(|n| n.attempted),
+        "both case bridges authenticated before any container action"
+    );
     diagnostics.slot(run, index, NofileOperation::FreshName);
     assert!(
         run.inspect(&run.names[index], false).0 == 404,
@@ -1033,6 +1445,12 @@ fn configured(
             && value["Mounts"].as_array().is_some_and(Vec::is_empty),
         "no caps, host mounts, restarts or unstable fixture"
     );
+    if index >= 4 {
+        assert!(
+            value["HostConfig"]["NetworkMode"] == case_network_name(run, index),
+            "configured owned case bridge route"
+        );
+    }
     value
 }
 
@@ -1333,10 +1751,238 @@ fn acquisition_error_name(error: AcquisitionError) -> &'static str {
     }
 }
 
+fn acquisition_shape_name(detail: AcquisitionShape) -> &'static str {
+    match detail {
+        AcquisitionShape::ContainerIdentity => "container_identity",
+        AcquisitionShape::ContainerRelated => "container_related",
+        AcquisitionShape::NetworkRequest => "network_request",
+        AcquisitionShape::NetworkIdentity => "network_identity",
+        AcquisitionShape::NetworkId => "network_id",
+        AcquisitionShape::DuplicateNetworkId => "duplicate_network_id",
+        AcquisitionShape::DuplicateNoncanonicalNetworkId => "duplicate_noncanonical_network_id",
+        AcquisitionShape::VolumeRequest => "volume_request",
+        AcquisitionShape::VolumeIdentity => "volume_identity",
+    }
+}
+
+fn availability_name(availability: Availability) -> &'static str {
+    match availability {
+        Availability::Missing => "missing",
+        Availability::Null => "null",
+        Availability::Empty => "empty",
+        Availability::Present => "present",
+        Availability::Redacted => "redacted",
+    }
+}
+
+fn captured_topology(
+    run: &HealthRun,
+    networks: &NofileNetworks,
+    capture: &crate::evidence::Capture,
+    decoded: &crate::decoder::DecodedInventory,
+) -> (Vec<Value>, Vec<Value>) {
+    use crate::acquisition::ReadRequest;
+    assert!(
+        networks.bound(run)
+            && networks.owned.iter().all(|n| n.attempted)
+            && decoded.networks.len() <= 3
+            && decoded.volumes.is_empty(),
+        "at most three distinct captured case networks, no volume expansion"
+    );
+    let mut summaries = Vec::new();
+    let mut bindings = vec![Value::Null; 8];
+    for (index, binding) in bindings.iter_mut().enumerate() {
+        let container_id = run.ids[index].as_deref().unwrap();
+        let container = decoded
+            .containers
+            .iter()
+            .find(|c| {
+                c.id.value()
+                    .is_some_and(|v| v.as_bytes() == container_id.as_bytes())
+            })
+            .unwrap_or_else(|| panic!("captured network audience root"));
+        let name = case_network_name(run, index);
+        if let Some(mode) = container.network_mode.value() {
+            assert!(
+                if index < 4 {
+                    matches!(
+                        mode.kind,
+                        crate::decoder::NetworkModeKind::Default
+                            | crate::decoder::NetworkModeKind::Bridge
+                    )
+                } else {
+                    mode.native_value.as_bytes() == name.as_bytes()
+                },
+                "nonconflicting captured configured network route"
+            );
+        }
+        let availability = container.networks.availability;
+        let attachments = container.networks.value();
+        *binding = json!({"container_id":container_id,"endpoint_map_availability":availability_name(availability),
+            "name":Value::Null,"network_id":Value::Null,"network_id_availability":Value::Null,"lookup":Value::Null});
+        let Some(attachment) = attachments.and_then(|a| a.first()) else {
+            assert!(
+                matches!(
+                    availability,
+                    Availability::Missing
+                        | Availability::Null
+                        | Availability::Empty
+                        | Availability::Redacted
+                ),
+                "only observed unavailable or empty maps omit endpoint evidence"
+            );
+            continue;
+        };
+        assert!(
+            availability == Availability::Present
+                && attachments.unwrap().len() == 1
+                && attachment.name.as_bytes() == name.as_bytes(),
+            "one positively observed intended case network attachment"
+        );
+        let endpoint = &attachment.network_id;
+        let value = endpoint
+            .value()
+            .map(|v| std::str::from_utf8(v.as_bytes()).unwrap());
+        let lookup = if endpoint.availability == Availability::Present {
+            "id"
+        } else {
+            assert!(
+                matches!(
+                    (endpoint.availability, value),
+                    (
+                        Availability::Missing | Availability::Null | Availability::Redacted,
+                        None
+                    ) | (Availability::Empty, Some(""))
+                ),
+                "actual unavailable endpoint network identity"
+            );
+            "name"
+        };
+        binding["name"] = json!(name);
+        binding["network_id"] = json!(value);
+        binding["network_id_availability"] = json!(availability_name(endpoint.availability));
+        binding["lookup"] = json!(lookup);
+    }
+    for group in 0..3 {
+        let indices: Vec<usize> = match group {
+            0 => (0..4).collect(),
+            1 => vec![4, 5],
+            _ => vec![6, 7],
+        };
+        let name = case_network_name(run, indices[0]);
+        let observed = decoded.networks.iter().find(|n| {
+            n.name
+                .value()
+                .is_some_and(|v| v.as_bytes() == name.as_bytes())
+        });
+        let supported = indices
+            .iter()
+            .any(|&index| !bindings[index]["lookup"].is_null());
+        if !supported {
+            assert!(
+                observed.is_none(),
+                "no fabricated exchange for an unreferenced case network"
+            );
+            continue;
+        }
+        let observed = observed.unwrap_or_else(|| panic!("captured referenced case network name"));
+        let id = observed
+            .id
+            .value()
+            .and_then(|v| std::str::from_utf8(v.as_bytes()).ok())
+            .filter(|id| identifier(id))
+            .unwrap_or_else(|| panic!("captured canonical network ID"));
+        assert!(
+            observed
+                .driver
+                .value()
+                .is_some_and(|v| v.as_bytes() == b"bridge"),
+            "captured bridge driver"
+        );
+        let exchange = capture
+            .exchanges()
+            .iter()
+            .find(|e| e.resource() == Some(observed.reference))
+            .unwrap_or_else(|| panic!("captured network exchange reference"));
+        let ReadRequest::InspectNetwork(requested) = exchange.request() else {
+            panic!("network inspect request")
+        };
+        let by_name = capture
+            .network_name_fallbacks()
+            .contains(&observed.reference);
+        assert!(
+            requested.as_str() == if by_name { &name } else { id },
+            "actual network request identity binding"
+        );
+        let raw: Value = serde_json::from_slice(exchange.body().as_bytes()).unwrap();
+        if group > 0 {
+            assert!(
+                networks.owned[group - 1].id.as_deref() == Some(id)
+                    && networks.authenticate(run, group - 1, &raw),
+                "captured owned bridge identity and custody"
+            );
+        } else {
+            assert!(
+                id != networks.outer_id
+                    && !run.ids.iter().flatten().any(|other| other == id)
+                    && !networks.owned.iter().any(|n| n.id.as_deref() == Some(id)),
+                "default bridge is never owned"
+            );
+        }
+        let lookup = if by_name { "name" } else { "id" };
+        for &index in &indices {
+            let binding = &bindings[index];
+            if binding["lookup"].is_null() {
+                continue;
+            }
+            assert!(
+                binding["lookup"] == lookup && (by_name || binding["network_id"] == id),
+                "each observed endpoint binds its own actual ID/name exchange"
+            );
+        }
+        let mut selected = BTreeSet::new();
+        let unselected = observed.active_endpoints.value().map(|members| {
+            let mut unselected = 0;
+            for member in members {
+                let member_id = member.container_id.value().unwrap().as_bytes();
+                if let Some(index) = run.ids.iter().position(|other| {
+                    other
+                        .as_deref()
+                        .is_some_and(|id| id.as_bytes() == member_id)
+                }) {
+                    assert!(
+                        indices.contains(&index),
+                        "captured selected membership belongs to case network"
+                    );
+                    selected.insert(index);
+                } else {
+                    unselected += 1;
+                }
+            }
+            assert!(
+                group == 0 || unselected == 0,
+                "owned bridge refuses observed foreign membership"
+            );
+            unselected
+        });
+        summaries.push(json!({"id":id,"name":name,"driver":"bridge","ownership":if group==0{"not_owned"}else{"owned"},
+            "owner":if group==0{Value::Null}else{json!(run.run)},"container_indices":indices,"lookup":lookup,
+            "active_membership_availability":availability_name(observed.active_endpoints.availability),
+            "active_selected_ids":selected.into_iter().map(|i|run.ids[i].clone().unwrap()).collect::<Vec<_>>(),
+            "active_unselected_count":unselected}));
+    }
+    assert!(
+        summaries.len() == decoded.networks.len(),
+        "no unsupported or fabricated captured network"
+    );
+    (summaries, bindings)
+}
+
 fn acquisition(
     run: &HealthRun,
     outer_backend: SourceOuterBackend,
     diagnostics: &NofileDiagnostics,
+    networks: Option<&NofileNetworks>,
 ) -> Value {
     let calls = run.calls.get().checked_add(REQUESTS).unwrap();
     let bytes = run.bytes.get().checked_add(BODIES).unwrap();
@@ -1361,25 +2007,30 @@ fn acquisition(
         .iter()
         .map(|id| NativeId::new(id.as_ref().unwrap().clone()).unwrap())
         .collect();
-    let capture = acquire(
+    let acquisition_started = Instant::now();
+    let capture = acquire_with_shape_detail(
         &Endpoint::unix_socket(PathBuf::from(&run.socket)),
         Selector::ContainerIds(selected),
         Limits {
             max_requests: REQUESTS,
             max_selected_resources: 8,
-            max_expansions: 10,
+            max_expansions: 11,
             max_response_bytes: 131072,
             max_total_bytes: BODIES,
             max_elapsed: elapsed.min(Duration::from_secs(10)),
         },
         &AtomicBool::new(false),
     )
-    .unwrap_or_else(|error| {
+    .unwrap_or_else(|(error, detail)| {
         diagnostics
             .acquisition_error
             .set(Some(acquisition_error_name(error)));
+        diagnostics
+            .acquisition_shape
+            .set(detail.map(acquisition_shape_name));
         panic!("one actual eight-ID nofile acquisition")
     });
+    let actual_elapsed = acquisition_started.elapsed();
     let api = ApiVersion::new(
         NonZeroU16::new(1).unwrap(),
         if run.lane.starts_with("debian11-") {
@@ -1416,6 +2067,19 @@ fn acquisition(
         (DaemonMode::Rootful, DaemonMode::Unknown) => "unknown_with_independent_rootful_context",
         _ => panic!("nonconflicting actual nofile mode"),
     };
+    let (network_records, container_networks) = networks
+        .map(|networks| {
+            let topology = captured_topology(run, networks, &capture, &decoded);
+            let n = topology.0.len();
+            assert!(
+                n <= 3
+                    && capture.bounds().expansions == 8 + n
+                    && capture.bounds().request_count == 10 + n,
+                "actual case bridge acquisition counts derive only from observed references"
+            );
+            topology
+        })
+        .unwrap_or_default();
     let mut seen = BTreeSet::new();
     for container in &decoded.containers {
         let id = container.id.value().unwrap().as_bytes();
@@ -1458,12 +2122,15 @@ fn acquisition(
         .map(|e| e.body().as_bytes().len())
         .sum();
     assert!(
-        capture.exchanges().len() <= REQUESTS && bodies <= BODIES,
+        capture.exchanges().len() <= REQUESTS
+            && bodies <= BODIES
+            && capture.bounds().bytes_read == bodies
+            && actual_elapsed <= Duration::from_secs(10),
         "bounded nofile response bodies"
     );
-    json!({"route":"explicit_unix_socket","selected_ids":8,"requested_api":format!("{}.{}",api.major,api.minor),"reserved_calls":REQUESTS,"reserved_bytes":BODIES,"actual_requests":capture.exchanges().len(),"actual_response_bytes":bodies,"decoded":"present_effective_exact_nofile_values","daemon_mode_evidence":mode,
+    json!({"route":"explicit_unix_socket","selected_ids":8,"requested_api":format!("{}.{}",api.major,api.minor),"reserved_calls":REQUESTS,"reserved_bytes":BODIES,"actual_requests":capture.exchanges().len(),"actual_response_bytes":bodies,"actual_expansions":capture.bounds().expansions,"actual_elapsed_ns":actual_elapsed.as_nanos(),"networks":network_records,"container_networks":container_networks,"decoded":"present_effective_exact_nofile_values","daemon_mode_evidence":mode,
         "byte_scope":"decoded_response_bodies_only","separate_transport_bounds":{"response_header_bytes":16384,"chunk_line_bytes":64,"chunk_payload_crlf_bytes":2,"final_trailer_line_bytes":16384,"actual_wire_bytes":"not_measured"},
-        "limits":{"max_requests":20,"max_selected_resources":8,"max_expansions":10,"max_response_bytes":131072,"max_total_bytes":BODIES,"max_elapsed_seconds":10}})
+        "limits":{"max_requests":20,"max_selected_resources":8,"max_expansions":11,"max_response_bytes":131072,"max_total_bytes":BODIES,"max_elapsed_seconds":10}})
 }
 
 #[test]
@@ -1480,7 +2147,48 @@ fn nofile_acquisition_reports_real_exchange_errors_and_keeps_exact_eight_id_proo
             ("id", None, 11),
             ("name", None, 11),
             ("missing_endpoint", None, 11),
-            ("same_bridge_twice", Some("shape"), 12),
+            ("distinct_networks", None, 12),
+            (
+                "same_bridge_twice",
+                Some("shape acquisition_shape=duplicate_network_id"),
+                12,
+            ),
+            (
+                "same_noncanonical_id",
+                Some("shape acquisition_shape=duplicate_noncanonical_network_id"),
+                12,
+            ),
+            (
+                "container_identity",
+                Some("shape acquisition_shape=container_identity"),
+                3,
+            ),
+            (
+                "container_related",
+                Some("shape acquisition_shape=container_related"),
+                3,
+            ),
+            (
+                "network_request",
+                Some("shape acquisition_shape=network_request"),
+                10,
+            ),
+            (
+                "network_identity",
+                Some("shape acquisition_shape=network_identity"),
+                12,
+            ),
+            ("network_id", Some("shape acquisition_shape=network_id"), 12),
+            (
+                "volume_request",
+                Some("shape acquisition_shape=volume_request"),
+                10,
+            ),
+            (
+                "volume_identity",
+                Some("shape acquisition_shape=volume_identity"),
+                11,
+            ),
             ("version", Some("version"), 1),
             ("frame", Some("protocol"), 11),
             ("status", Some("status"), 11),
@@ -1532,29 +2240,78 @@ fn nofile_acquisition_reports_real_exchange_errors_and_keeps_exact_eight_id_proo
                     let running = index < 4
                         || matches!(control, "id" | "frame" | "status" | "response_bytes");
                     let networks = match (control, running) {
+                        ("container_related", _) => json!([]),
+                        ("network_request", _) => json!({"bridge":{"NetworkID":"x".repeat(1025)}}),
+                        ("volume_request" | "volume_identity", _) => json!({}),
+                        ("same_noncanonical_id", _) if index < 4 => {
+                            json!({"a-net":{"NetworkID":""}})
+                        }
+                        ("same_noncanonical_id", _) => json!({"b-net":{"NetworkID":""}}),
+                        ("distinct_networks", true) => json!({"other":{"NetworkID":network_id}}),
                         ("missing_endpoint", false) => json!({}),
-                        ("name" | "same_bridge_twice", false) | ("name", true) => {
+                        (
+                            "name" | "same_bridge_twice" | "distinct_networks" | "network_identity"
+                            | "network_id",
+                            false,
+                        )
+                        | ("name", true) => {
                             json!({"bridge":{"NetworkID":"","EndpointID":""}})
                         }
                         _ => json!({"bridge":{"NetworkID":network_id,"EndpointID":"endpoint"}}),
                     };
                     let id = run.ids[index].as_deref().unwrap();
+                    let mounts = match control {
+                        "volume_request" => json!([{"Type":"volume","Name":"x".repeat(1025)}]),
+                        "volume_identity" => json!([{"Type":"volume","Name":"expected"}]),
+                        _ => json!([]),
+                    };
                     reply(
                         format!("/v1.49/containers/{id}/json"),
-                        json!({"Id":id,"State":{"Status":if running {"running"} else {"created"},
-                            "Running":running,"Pid":if running {100+index}else{0}},"Mounts":[],
+                        json!({"Id":if control=="container_identity" { "wrong" } else { id },
+                            "State":{"Status":if running {"running"} else {"created"},
+                            "Running":running,"Pid":if running {100+index}else{0}},"Mounts":mounts,
                             "HostConfig":{"Ulimits":[{"Name":"nofile","Soft":soft,"Hard":hard}]},
                             "NetworkSettings":{"Networks":networks}}),
                     );
+                    if matches!(control, "container_identity" | "container_related") {
+                        break;
+                    }
                 }
                 let bridge = json!({"Id":network_id,"Name":"bridge","Driver":"bridge"});
-                // Both references below resolve to one daemon network. The real
-                // acquire path must refuse that capture even after both 200 replies.
-                if control != "name" {
-                    reply(format!("/v1.49/networks/{network_id}"), bridge.clone());
-                }
-                if matches!(control, "name" | "same_bridge_twice") {
-                    reply("/v1.49/networks/bridge".into(), bridge);
+                match control {
+                    "container_identity" | "container_related" | "network_request"
+                    | "volume_request" => {}
+                    "volume_identity" => {
+                        reply("/v1.49/volumes/expected".into(), json!({"Name":"wrong"}));
+                    }
+                    "same_noncanonical_id" => {
+                        for name in ["a-net", "b-net"] {
+                            reply(
+                                format!("/v1.49/networks/{name}"),
+                                json!({"Id":"not-a-full-id","Name":name,"Driver":"bridge"}),
+                            );
+                        }
+                    }
+                    "name" => reply("/v1.49/networks/bridge".into(), bridge),
+                    _ => {
+                        let mut direct = bridge.clone();
+                        if control == "distinct_networks" {
+                            direct["Name"] = json!("other");
+                        }
+                        reply(format!("/v1.49/networks/{network_id}"), direct);
+                        let by_name = match control {
+                            "same_bridge_twice" => Some(bridge),
+                            "distinct_networks" => {
+                                Some(json!({"Id":"b".repeat(64),"Name":"bridge","Driver":"bridge"}))
+                            }
+                            "network_identity" => Some(json!({"Id":network_id,"Name":"wrong"})),
+                            "network_id" => Some(json!({"Name":"bridge"})),
+                            _ => None,
+                        };
+                        if let Some(body) = by_name {
+                            reply("/v1.49/networks/bridge".into(), body);
+                        }
+                    }
                 }
                 if let Some(raw) = match control {
                     "frame" => Some("HTTP/1.1 200 OK\r\n\r\n"),
@@ -1602,7 +2359,7 @@ fn nofile_acquisition_reports_real_exchange_errors_and_keeps_exact_eight_id_proo
             let diagnostics = NofileDiagnostics::default();
             diagnostics.all(&run, NofileOperation::Acquisition);
             let acquired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                acquisition(&run, SourceOuterBackend::Docker, &diagnostics)
+                acquisition(&run, SourceOuterBackend::Docker, &diagnostics, None)
             }));
             assert!(server.join().is_ok(), "inert acquisition trace: {control}");
             assert_eq!(run.calls.get(), 20);
@@ -1639,10 +2396,14 @@ fn nofile_cleanup_with(
     // Refuse the entire inner attempt before any read/name recovery/mutation.
     if attempted.len() != 8
         || ids.len() != 8
-        || attempted
-            .iter()
-            .zip(ids)
-            .any(|(attempted, id)| *attempted && !id.as_deref().is_some_and(identifier))
+        || attempted.iter().zip(ids).any(|(attempted, id)| {
+            if *attempted {
+                !id.as_deref().is_some_and(identifier)
+            } else {
+                id.is_some()
+            }
+        })
+        || ids.iter().flatten().collect::<BTreeSet<_>>().len() != ids.iter().flatten().count()
     {
         return CleanupDisposition::OuterTeardownRequired;
     }
@@ -1718,6 +2479,7 @@ fn live_nofile_limits_and_effects_match_engine() {
     run.ids = vec![None; 8];
     run.attempted = vec![false; 8];
     let owner = BoundOuterCleanupOwner::bind(&run);
+    let mut networks = NofileNetworks::new(&run, &owner);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         diagnostics.all(&run, NofileOperation::Context);
         // Single-thread libtest can leave its test-name prefix unterminated.
@@ -1756,12 +2518,15 @@ fn live_nofile_limits_and_effects_match_engine() {
                 }) + outer_backend.snapshot_extra_calls(),
             "closed original context capture count"
         );
+        for index in 0..2 {
+            networks.create(&run, index);
+        }
         let mut records = Vec::new();
         let mut slot_calls = Vec::new();
         let _ = writeln!(std::io::stderr(), "DOCKERLENS_NATIVE_CHECK: nofile_effects");
         for index in 0..8 {
             let before = run.calls.get();
-            create_nofile(&mut run, index, &diagnostics);
+            create_nofile(&mut run, index, &diagnostics, &networks);
             let effect = exercise(&run, index, &image, &diagnostics);
             diagnostics.slot(&run, index, NofileOperation::SlotAccounting);
             let expected = if effect["stage"] == "running" { 8 } else { 7 };
@@ -1825,7 +2590,7 @@ fn live_nofile_limits_and_effects_match_engine() {
         );
         let _ = writeln!(std::io::stderr(), "DOCKERLENS_NATIVE_CHECK: nofile_capture");
         diagnostics.all(&run, NofileOperation::Acquisition);
-        let acquired = acquisition(&run, outer_backend, &diagnostics);
+        let acquired = acquisition(&run, outer_backend, &diagnostics, Some(&networks));
         (uid, image, cases, acquired, context_calls, slot_calls)
     }));
     // Freeze the original work context before any cleanup call can change it.
@@ -1847,12 +2612,23 @@ fn live_nofile_limits_and_effects_match_engine() {
     let ids = run.ids.clone();
     let entered = Cell::new(false);
     let first_unverified = Cell::new(None);
+    let container_cleanup_calls = Cell::new(0);
+    let container_cleanup_bytes = Cell::new(0);
     let cleanup_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if !networks.bound(&run) {
+            return CleanupDisposition::OuterTeardownRequired;
+        }
         nofile_cleanup_with(&attempted, &ids, || {
             entered.set(true);
             let (disposition, phase) = cleanup_with_phase(&mut run);
+            container_cleanup_calls.set(run.calls.get() - before_calls);
+            container_cleanup_bytes.set(run.bytes.get() - before_bytes);
             first_unverified.set(phase);
-            disposition
+            if networks.cleanup(&run, disposition == CleanupDisposition::VerifiedAbsent) {
+                disposition
+            } else {
+                CleanupDisposition::OuterTeardownRequired
+            }
         })
     }));
     let cleanup_refusal = match &cleanup_result {
@@ -1898,16 +2674,28 @@ fn live_nofile_limits_and_effects_match_engine() {
     let ordinary_bytes = run.bytes.get() - cleanup_bytes;
     let ordinary_elapsed = started.elapsed().saturating_sub(cleanup_elapsed);
     let final_readback_calls = 2 + outer_backend.snapshot_extra_calls();
+    let network_setup_calls: usize = networks.owned.iter().map(|n| n.setup_calls).sum();
+    let network_setup_bytes: usize = networks.owned.iter().map(|n| n.setup_bytes).sum();
+    let network_cleanup_calls: usize = networks.owned.iter().map(|n| n.cleanup_calls).sum();
+    let network_cleanup_bytes: usize = networks.owned.iter().map(|n| n.cleanup_bytes).sum();
     assert!(
         ordinary_calls
             == context_calls
+                + network_setup_calls
                 + slot_calls.iter().sum::<usize>()
                 + 1
                 + REQUESTS
                 + final_readback_calls
             && ordinary_bytes > BODIES + 2 * outer_backend.snapshot_extra_bytes()
             && ordinary_bytes <= MAX_BYTES - CLEANUP_BYTES
-            && cleanup_calls == 8 * 9
+            && network_setup_calls == 6
+            && network_setup_bytes > 0
+            && ordinary_calls <= MAX_CALLS - CLEANUP_CALLS
+            && container_cleanup_calls.get() == 8 * 9
+            && network_cleanup_calls == 12
+            && cleanup_calls == container_cleanup_calls.get() + network_cleanup_calls
+            && cleanup_calls <= CLEANUP_CALLS
+            && cleanup_bytes == container_cleanup_bytes.get() + network_cleanup_bytes
             && cleanup_bytes <= CLEANUP_BYTES,
         "derived closed nofile total accounting"
     );
@@ -1918,8 +2706,9 @@ fn live_nofile_limits_and_effects_match_engine() {
             && started.elapsed() <= Duration::from_secs(180),
         "original nofile absolute deadline and cleanup reserve"
     );
-    let proof = json!({"schema_version":1,"contract":CONTRACT,"capability_admission":[],"catalogue_admission":false,"scope":"four_diagonal_nofile_cases_source_only","context":{"candidate_sha":run.candidate,"run_id":run.run,"lane":run.lane,"engine_release":run.engine,"rendering_api":run.api,"acquisition_api":if run.lane.starts_with("debian11-"){ "1.41" }else{"1.49"},"mode":if run.mode==DaemonMode::Rootless{"rootless"}else{"rootful"},"docker_package":if run.lane.starts_with("debian11-"){"20.10.5+dfsg1-1+deb11u2"}else{""},"fixture_image":run.base,"daemon_uid":uid,"outer":outer},
-        "borrowed_image":{"id":image["id"],"identity":"unchanged","removal":"not_owned"},"cases":cases,"acquisition":acquired,"daemon_health":"version_matches_after_all_cases","accounting":{"context_calls":context_calls,"slot_calls":slot_calls,"daemon_health_calls":1,"acquisition_reserved_calls":REQUESTS,"final_readback_calls":final_readback_calls,"ordinary_calls":ordinary_calls,"ordinary_bytes":ordinary_bytes,"cleanup_calls":cleanup_calls,"cleanup_bytes":cleanup_bytes,"deadline_seconds":180,"cleanup_reserve_seconds":46,"ordinary_elapsed_ns":ordinary_elapsed.as_nanos(),"cleanup_elapsed_ns":cleanup_elapsed.as_nanos(),"elapsed_ns":started.elapsed().as_nanos(),"initial_context_acquisition":{"max_requests":16,"max_total_bytes":2097152,"max_elapsed_seconds":15,"accounting":"separate_existing_bound"}},"cleanup":{"containers":"absent","rounds":2,"outstanding":0,"uncertain":false}});
+    let topology = networks.topology(&run, &acquired);
+    let proof = json!({"schema_version":2,"contract":CONTRACT,"capability_admission":[],"catalogue_admission":false,"scope":"four_diagonal_nofile_cases_source_only","context":{"candidate_sha":run.candidate,"run_id":run.run,"lane":run.lane,"engine_release":run.engine,"rendering_api":run.api,"acquisition_api":if run.lane.starts_with("debian11-"){ "1.41" }else{"1.49"},"mode":if run.mode==DaemonMode::Rootless{"rootless"}else{"rootful"},"docker_package":if run.lane.starts_with("debian11-"){"20.10.5+dfsg1-1+deb11u2"}else{""},"fixture_image":run.base,"daemon_uid":uid,"outer":outer},
+        "borrowed_image":{"id":image["id"],"identity":"unchanged","removal":"not_owned"},"cases":cases,"network_topology":topology,"acquisition":acquired,"daemon_health":"version_matches_after_all_cases","accounting":{"network_setup_calls":network_setup_calls,"network_setup_bytes":network_setup_bytes,"container_cleanup_calls":container_cleanup_calls.get(),"container_cleanup_bytes":container_cleanup_bytes.get(),"network_cleanup_calls":network_cleanup_calls,"network_cleanup_bytes":network_cleanup_bytes,"context_calls":context_calls,"slot_calls":slot_calls,"daemon_health_calls":1,"acquisition_reserved_calls":REQUESTS,"final_readback_calls":final_readback_calls,"ordinary_calls":ordinary_calls,"ordinary_bytes":ordinary_bytes,"cleanup_calls":cleanup_calls,"cleanup_bytes":cleanup_bytes,"deadline_seconds":180,"cleanup_reserve_seconds":46,"ordinary_elapsed_ns":ordinary_elapsed.as_nanos(),"cleanup_elapsed_ns":cleanup_elapsed.as_nanos(),"elapsed_ns":started.elapsed().as_nanos(),"initial_context_acquisition":{"max_requests":16,"max_total_bytes":2097152,"max_elapsed_seconds":15,"accounting":"separate_existing_bound"}},"cleanup":{"containers":"absent","networks":"absent","owned_networks":2,"rounds":2,"outstanding":0,"uncertain":false}});
     let mut metadata = proof.clone();
     for case in metadata["cases"].as_array_mut().unwrap() {
         for item in case["containers"].as_array_mut().unwrap() {
@@ -1981,4 +2770,793 @@ fn nofile_observed_termination_clears_current_and_retains_first_cleanup_failure(
         NofileTermination::Unknown
     );
     assert!(observation.first_failure.get().is_none());
+}
+
+// Inert, real Unix HTTP transport: these controls execute the production curl
+// path/ledger and public acquisition, never a daemon or a runtime substitute.
+struct NofileSocketControl {
+    private: PathBuf,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+struct NofileReply {
+    method: &'static str,
+    path: String,
+    request: Option<Value>,
+    status: u16,
+    body: String,
+}
+
+impl NofileSocketControl {
+    fn start(replies: Vec<NofileReply>) -> (Self, HealthRun) {
+        use std::io::{BufRead, BufReader};
+        use std::os::unix::{fs::DirBuilderExt, net::UnixListener};
+        let private =
+            std::env::temp_dir().join(format!("dl-nfb-{}-{}", std::process::id(), utc_ns()));
+        fs::DirBuilder::new().mode(0o700).create(&private).unwrap();
+        let socket = private.join("s");
+        let listener = UnixListener::bind(&socket).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let thread = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(8);
+            for reply in replies {
+                let (mut stream, _) = loop {
+                    match listener.accept() {
+                        Ok(value) => break value,
+                        Err(error)
+                            if error.kind() == std::io::ErrorKind::WouldBlock
+                                && Instant::now() < deadline =>
+                        {
+                            std::thread::sleep(Duration::from_millis(1))
+                        }
+                        Err(_) => panic!("inert bridge control did not receive expected request"),
+                    }
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut reader = BufReader::new(&stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                assert!(
+                    line == format!("{} {} HTTP/1.1\r\n", reply.method, reply.path),
+                    "exact inert bridge request path"
+                );
+                let mut length = 0;
+                for _ in 0..32 {
+                    line.clear();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" {
+                        break;
+                    }
+                    if let Some(raw) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        length = raw.trim().parse::<usize>().unwrap();
+                    }
+                }
+                assert!(
+                    line == "\r\n" && length <= 4096,
+                    "bounded inert bridge request headers"
+                );
+                let mut body = vec![0; length];
+                reader.read_exact(&mut body).unwrap();
+                match reply.request {
+                    Some(expected) => assert!(
+                        serde_json::from_slice::<Value>(&body).ok().as_ref() == Some(&expected),
+                        "independent complete bridge create body"
+                    ),
+                    None => assert!(body.is_empty(), "read/delete has no request body"),
+                }
+                let response = format!(
+                    "HTTP/1.1 {} Control\r\nContent-Length: {}\r\n\r\n{}",
+                    reply.status,
+                    reply.body.len(),
+                    reply.body
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+        });
+        let mut run = offline_run(socket.to_str().unwrap().into());
+        run.run = "Ab12Cd34".into();
+        run.lane = "upstream-rootful".into();
+        run.engine = "29.8.1".into();
+        run.api = "1.56".into();
+        run.candidate = "d".repeat(40);
+        run.outer = "dl-native-Ab12Cd34".into();
+        run.deadline = Instant::now() + Duration::from_secs(180);
+        run.names = (0..8).map(|i| format!("inert-slot-{i}")).collect();
+        run.ids = (1..=8).map(|i| Some(format!("{i:064x}"))).collect();
+        run.attempted = vec![true; 8];
+        (
+            Self {
+                private,
+                thread: Some(thread),
+            },
+            run,
+        )
+    }
+
+    fn finish(mut self) {
+        let result = self.thread.take().unwrap().join();
+        fs::remove_dir_all(&self.private).unwrap();
+        assert!(result.is_ok(), "inert nofile socket script completed");
+    }
+}
+
+fn bridge_control_reply(
+    method: &'static str,
+    key: &str,
+    request: Option<Value>,
+    status: u16,
+    body: Value,
+) -> NofileReply {
+    NofileReply {
+        method,
+        path: format!("/v1.56/networks/{key}"),
+        request,
+        status,
+        body: if status == 204 {
+            String::new()
+        } else {
+            body.to_string()
+        },
+    }
+}
+
+fn bridge_control_identity(index: usize) -> Value {
+    json!({"Id":if index==0 {"b".repeat(64)}else{"c".repeat(64)},
+        "Name":format!("dl-nf-Ab12Cd34-net-{}",CASES[index+2].0),"Driver":"bridge", "Labels":{OWNER:"Ab12Cd34"}})
+}
+
+fn control_networks(run: &HealthRun) -> NofileNetworks {
+    let owner = BoundOuterCleanupOwner {
+        snapshot: json!({"id":"d".repeat(64),"name":run.outer,"owner":run.run}),
+    };
+    NofileNetworks::new(run, &owner)
+}
+
+fn bridge_control_setup() -> Vec<NofileReply> {
+    let mut replies = Vec::new();
+    for index in 0..2 {
+        let identity = bridge_control_identity(index);
+        replies.push(bridge_control_reply(
+            "GET",
+            identity["Name"].as_str().unwrap(),
+            None,
+            404,
+            json!({}),
+        ));
+        replies.push(bridge_control_reply(
+            "POST",
+            "create",
+            Some(json!({"Name":identity["Name"],"Driver":"bridge","Labels":{OWNER:"Ab12Cd34"}})),
+            201,
+            json!({"Id":identity["Id"],"Warning":""}),
+        ));
+        replies.push(bridge_control_reply(
+            "GET",
+            identity["Id"].as_str().unwrap(),
+            None,
+            200,
+            identity.clone(),
+        ));
+    }
+    replies
+}
+
+fn bridge_control_cleanup(fault: Option<&str>) -> Vec<NofileReply> {
+    let mut replies = Vec::new();
+    for index in 0..2 {
+        let mut identity = bridge_control_identity(index);
+        if index == 0 && fault == Some("owner") {
+            identity["Labels"][OWNER] = json!("foreign-private-canary");
+        }
+        replies.push(bridge_control_reply(
+            "GET",
+            identity["Id"].as_str().unwrap(),
+            None,
+            200,
+            identity.clone(),
+        ));
+        if index == 0 && fault == Some("owner") {
+            continue;
+        }
+        replies.push(bridge_control_reply(
+            "DELETE",
+            identity["Id"].as_str().unwrap(),
+            None,
+            if index == 0 && fault == Some("delete") {
+                500
+            } else {
+                204
+            },
+            json!({}),
+        ));
+    }
+    for _ in 0..2 {
+        for index in 0..2 {
+            if index == 0 && fault.is_some() {
+                continue;
+            }
+            let identity = bridge_control_identity(index);
+            for key in ["Id", "Name"] {
+                replies.push(bridge_control_reply(
+                    "GET",
+                    identity[key].as_str().unwrap(),
+                    None,
+                    404,
+                    json!({}),
+                ));
+            }
+        }
+    }
+    replies
+}
+
+#[test]
+fn nofile_owned_bridges_use_real_bounded_transport_and_measured_cleanup() {
+    for fault in [None, Some("owner"), Some("delete")] {
+        let mut replies = bridge_control_setup();
+        replies.extend(bridge_control_cleanup(fault));
+        let expected_bytes: usize = replies.iter().map(|reply| reply.body.len() + 4).sum();
+        let expected_calls = replies.len();
+        let (server, run) = NofileSocketControl::start(replies);
+        let mut networks = control_networks(&run);
+        for i in 0..2 {
+            networks.create(&run, i);
+        }
+        assert!(
+            networks.bound(&run) && run.calls.get() == 6,
+            "both bridges really bound in six calls"
+        );
+        let before = run.calls.get();
+        assert!(
+            !networks.cleanup(&run, false) && run.calls.get() == before,
+            "no network cleanup before verified container absence"
+        );
+        let primary = std::panic::catch_unwind(|| panic!("original nofile work failure"));
+        let verified = networks.cleanup(&run, true);
+        assert!(
+            verified == fault.is_none()
+                && run.calls.get() == expected_calls
+                && run.bytes.get() == expected_bytes,
+            "actual transport status/call/byte cleanup receipts"
+        );
+        assert!(
+            !networks.cleanup(&run, true) && run.calls.get() == expected_calls,
+            "one network cleanup attempt, no mutation retry"
+        );
+        let retained = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            require_verified_result::<()>(primary, cleanup_disposition(verified));
+        }))
+        .unwrap_err();
+        assert!(
+            retained.downcast_ref::<&str>() == Some(&"original nofile work failure"),
+            "cleanup does not replace primary failure"
+        );
+        if verified {
+            assert!(
+                networks
+                    .owned
+                    .iter()
+                    .all(|n| n.setup_calls == 3 && n.cleanup_calls == 6 && n.deleted),
+                "two complete real ID/name absence rounds"
+            );
+        } else {
+            assert!(
+                !networks.owned[0].deleted && networks.owned[1].deleted,
+                "foreign/uncertain deletion is not adopted"
+            );
+        }
+        println!(
+            "nofile bridge transport fault={} calls={} bytes={} cleanup_calls={} verified={verified}",
+            fault.unwrap_or("none"),
+            run.calls.get(),
+            run.bytes.get(),
+            run.calls.get() - 6
+        );
+        server.finish();
+    }
+}
+
+#[test]
+fn nofile_bridge_uncertain_create_and_crossed_scope_never_adopt_or_remove() {
+    for fault in ["create", "id", "outer", "owner", "partial"] {
+        let mut replies = bridge_control_setup();
+        let index = if fault == "partial" { 4 } else { 1 };
+        match fault {
+            "create" | "partial" => {
+                replies[index].status = 500;
+                replies[index].body = "{}".into();
+                replies.truncate(index + 1);
+            }
+            "id" => {
+                replies[index].body = json!({"Id":"malformed-private-id"}).to_string();
+                replies.truncate(index + 1);
+            }
+            "outer" => {
+                replies[index].body = json!({"Id":"d".repeat(64)}).to_string();
+                replies.truncate(index + 1);
+            }
+            _ => {
+                replies[2].body=json!({"Id":"b".repeat(64),"Name":"private-crossed-name","Driver":"bridge","Labels":{OWNER:"foreign"}}).to_string();
+                replies.truncate(3);
+            }
+        }
+        let expected_calls = replies.len();
+        let (server, run) = NofileSocketControl::start(replies);
+        let mut networks = control_networks(&run);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            networks.create(&run, 0);
+            networks.create(&run, 1);
+        }));
+        assert!(
+            result.is_err() && !networks.bound(&run),
+            "uncertain or foreign network create remains unbound"
+        );
+        assert!(
+            !networks.cleanup(&run, true) && run.calls.get() == expected_calls,
+            "unknown network ID forbids every cleanup request"
+        );
+        println!(
+            "nofile bridge create fault={fault} calls={} cleanup_calls=0",
+            run.calls.get()
+        );
+        server.finish();
+    }
+    let (server, mut run) = NofileSocketControl::start(bridge_control_setup());
+    let mut networks = control_networks(&run);
+    for i in 0..2 {
+        networks.create(&run, i);
+    }
+    let original_id = run.ids[0].clone();
+    run.ids[0] = Some("b".repeat(64));
+    assert!(
+        !networks.bound(&run) && !networks.cleanup(&run, true) && run.calls.get() == 6,
+        "late selected container/network collision refuses cleanup without requests"
+    );
+    run.ids[0] = original_id;
+    let admission = networks.request(&run, 0, NetworkAction::InspectId, false);
+    assert!(
+        !admission.matches(&run, true),
+        "work token cannot become cleanup admission"
+    );
+    run.socket.push_str("-crossed");
+    assert!(
+        !admission.matches(&run, false)
+            && !networks.bound(&run)
+            && !networks.cleanup(&run, true)
+            && run.calls.get() == 6,
+        "crossed custody scope performs no I/O"
+    );
+    server.finish();
+}
+
+fn case_capture_control(
+    endpoint_state: &str,
+    membership_state: &str,
+    fault: Option<&str>,
+) -> Vec<NofileReply> {
+    case_capture_control_with_maps(endpoint_state, membership_state, fault, None)
+}
+
+fn case_capture_control_with_maps(
+    endpoint_state: &str,
+    membership_state: &str,
+    fault: Option<&str>,
+    maps: Option<(&str, &[usize])>,
+) -> Vec<NofileReply> {
+    let mut replies = Vec::new();
+    let mut reply = |path: String, body: Value| {
+        replies.push(NofileReply {
+            method: "GET",
+            path,
+            request: None,
+            status: 200,
+            body: body.to_string(),
+        })
+    };
+    reply(
+        "/version".into(),
+        json!({"Version":"29.8.1","ApiVersion":"1.56","MinAPIVersion":"1.44"}),
+    );
+    reply("/v1.49/info".into(), json!({"ServerVersion":"29.8.1"}));
+    let id = |group: usize| {
+        if group == 0 && fault == Some("default_outer") {
+            "d".repeat(64)
+        } else if group == 0 && fault == Some("default_root") {
+            format!("{:064x}", 1)
+        } else {
+            ["a", "b", "c"][group].repeat(64)
+        }
+    };
+    let name = |group: usize| {
+        if group == 0 {
+            "bridge".to_owned()
+        } else {
+            format!("dl-nf-Ab12Cd34-net-{}", CASES[group + 1].0)
+        }
+    };
+    let mut referenced = [false; 3];
+    for index in 0..8 {
+        let group = if index < 4 { 0 } else { index / 2 - 1 };
+        let mut endpoint = json!({"NetworkID":id(group)});
+        if group > 0 {
+            match endpoint_state {
+                "missing" => {
+                    endpoint.as_object_mut().unwrap().remove("NetworkID");
+                }
+                "null" => endpoint["NetworkID"] = Value::Null,
+                "empty" => endpoint["NetworkID"] = json!(""),
+                "redacted" => endpoint["NetworkID"] = json!({"__docker_lens_redacted__":true}),
+                "malformed" => endpoint["NetworkID"] = json!(17),
+                _ => {}
+            }
+        }
+        let network_name = if index == 4 && fault == Some("route") {
+            name(2)
+        } else {
+            name(group)
+        };
+        let (_, soft, hard) = CASES[index / 2];
+        let mut body = json!({"Id":format!("{:064x}",index+1),"HostConfig":{"NetworkMode":if group==0{"default".into()}else{name(group)},"Ulimits":[{"Name":"nofile","Soft":soft,"Hard":hard}]},
+                "NetworkSettings":{"Networks":{(network_name):endpoint}},"Mounts":[]});
+        let running = index < 4 || endpoint_state == "present";
+        body["State"] = json!({"Status":if running{"running"}else{"created"},"Running":running,
+            "Pid":if running{100+index}else{0},"StartedAt":if running{"2026-11-23T00:00:00Z"}else{"0001-01-01T00:00:00Z"}});
+        if index == 4 && fault == Some("mode") {
+            body["HostConfig"]["NetworkMode"] = json!("none");
+        }
+        if let Some((state, _)) = maps.filter(|(_, slots)| slots.contains(&index)) {
+            match state {
+                "missing" => {
+                    body["NetworkSettings"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("Networks");
+                }
+                "null" => body["NetworkSettings"]["Networks"] = Value::Null,
+                "empty" => body["NetworkSettings"]["Networks"] = json!({}),
+                _ => panic!("closed map availability control"),
+            }
+        } else {
+            referenced[group] = true;
+        }
+        reply(format!("/v1.49/containers/{:064x}/json", index + 1), body);
+    }
+    let mut network_replies = Vec::new();
+    for (group, &has_reference) in referenced.iter().enumerate() {
+        if !has_reference {
+            continue;
+        }
+        let mut body = json!({"Id":id(group),"Name":name(group),"Driver":"bridge"});
+        if group > 0 {
+            body["Labels"] = json!({OWNER:"Ab12Cd34"});
+        }
+        match membership_state {
+            "missing" => {}
+            "null" => body["Containers"] = Value::Null,
+            "redacted" => body["Containers"] = json!({"__docker_lens_redacted__":true}),
+            "empty" => body["Containers"] = json!({}),
+            _ => {
+                let indices: Vec<usize> = match group {
+                    0 => (0..4).collect(),
+                    1 => vec![4, 5],
+                    _ => vec![6, 7],
+                };
+                let mut members = serde_json::Map::new();
+                for i in indices {
+                    members.insert(
+                        format!("{:064x}", i + 1),
+                        json!({"Name":format!("inert-slot-{i}")}),
+                    );
+                }
+                if group == 0 || fault == Some("foreign") {
+                    members.insert("f".repeat(64), json!({"Name":"private-unselected-canary"}));
+                }
+                if group == 0 && fault == Some("audience") {
+                    members.insert(format!("{:064x}", 5), json!({"Name":"private-wrong-case"}));
+                }
+                body["Containers"] = Value::Object(members);
+            }
+        }
+        if group == 1 && fault == Some("owner") {
+            body["Labels"][OWNER] = json!("foreign-private-canary");
+        }
+        if group == 1 && fault == Some("identity") {
+            body["Id"] = json!("e".repeat(64));
+        }
+        let key = if group == 0 || endpoint_state == "present" {
+            id(group)
+        } else {
+            name(group)
+        };
+        network_replies.push((key, body));
+    }
+    network_replies.sort_by(|a, b| a.0.cmp(&b.0));
+    for (key, body) in network_replies {
+        reply(format!("/v1.49/networks/{key}"), body);
+    }
+    replies
+}
+
+fn bound_case_control_networks(run: &HealthRun) -> NofileNetworks {
+    let mut networks = control_networks(run);
+    for index in 0..2 {
+        networks.owned[index].attempted = true;
+        networks.owned[index].authenticated = true;
+        networks.owned[index].id = Some(if index == 0 {
+            "b".repeat(64)
+        } else {
+            "c".repeat(64)
+        });
+    }
+    networks
+}
+
+#[test]
+fn nofile_case_capture_keeps_actual_identity_availability_audience_and_limits() {
+    for endpoint in ["present", "missing", "null", "empty", "redacted"] {
+        for membership in ["missing", "null", "empty", "present", "redacted"] {
+            let replies = case_capture_control(endpoint, membership, None);
+            let bodies: usize = replies.iter().map(|reply| reply.body.len()).sum();
+            let (server, run) = NofileSocketControl::start(replies);
+            let networks = bound_case_control_networks(&run);
+            let diagnostics = NofileDiagnostics::default();
+            let proof = acquisition(
+                &run,
+                SourceOuterBackend::Podman,
+                &diagnostics,
+                Some(&networks),
+            );
+            assert!(
+                proof["actual_expansions"] == 11
+                    && proof["actual_requests"] == 13
+                    && proof["actual_response_bytes"] == bodies
+                    && proof["actual_elapsed_ns"]
+                        .as_u64()
+                        .is_some_and(|n| n > 0 && n <= 10_000_000_000),
+                "real eleven-expansion thirteen-GET measured capture"
+            );
+            assert!(
+                run.calls.get() == 20 && run.bytes.get() == 524288,
+                "unchanged conservative acquisition reservation"
+            );
+            for index in 4..8 {
+                assert!(
+                    proof["container_networks"][index]["network_id_availability"] == endpoint,
+                    "actual endpoint availability retained"
+                );
+            }
+            for group in 0..3 {
+                let network = &proof["networks"][group];
+                assert!(
+                    network["active_membership_availability"] == membership,
+                    "optional membership availability retained"
+                );
+                if matches!(membership, "missing" | "null" | "redacted") {
+                    assert!(
+                        network["active_unselected_count"].is_null()
+                            && network["active_selected_ids"] == json!([]),
+                        "unavailable membership is not empty"
+                    );
+                } else {
+                    let expected = usize::from(group == 0 && membership == "present");
+                    assert!(
+                        network["active_unselected_count"] == expected,
+                        "observed unselected count without identities"
+                    );
+                }
+            }
+            println!(
+                "nofile case capture endpoint={endpoint} membership={membership} requests=13 expansions=11 response_bytes={bodies}"
+            );
+            server.finish();
+        }
+    }
+}
+
+#[test]
+fn nofile_case_capture_refuses_crossed_identity_route_and_observed_foreign_members() {
+    for fault in [
+        "identity",
+        "owner",
+        "route",
+        "mode",
+        "default_outer",
+        "default_root",
+        "audience",
+        "foreign",
+        "malformed",
+    ] {
+        let endpoint = if fault == "malformed" {
+            "malformed"
+        } else {
+            "empty"
+        };
+        let replies = case_capture_control(endpoint, "present", Some(fault));
+        let (server, run) = NofileSocketControl::start(replies);
+        let networks = bound_case_control_networks(&run);
+        let diagnostics = NofileDiagnostics::default();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            acquisition(
+                &run,
+                SourceOuterBackend::Docker,
+                &diagnostics,
+                Some(&networks),
+            )
+        }));
+        assert!(
+            result.is_err() && run.calls.get() == 20 && run.bytes.get() == 524288,
+            "contradictory captured evidence cannot produce successful nofile proof"
+        );
+        println!("nofile case capture fault={fault} refused=true");
+        server.finish();
+    }
+}
+
+#[test]
+fn nofile_case_capture_never_invents_a_peer_endpoint_or_unrequested_network() {
+    for state in ["missing", "null", "empty"] {
+        for slots in [
+            &[5][..],
+            &[4, 5][..],
+            &[0, 1, 2, 3][..],
+            &[0, 1, 2, 3, 4, 5, 6, 7][..],
+        ] {
+            let captured =
+                case_capture_control_with_maps("empty", "present", None, Some((state, slots)));
+            let requests = captured.len();
+            let bytes: usize = captured.iter().map(|r| r.body.len()).sum();
+            let mut replies = bridge_control_setup();
+            replies.extend(captured);
+            replies.extend(bridge_control_cleanup(None));
+            let (server, run) = NofileSocketControl::start(replies);
+            let mut networks = control_networks(&run);
+            for i in 0..2 {
+                networks.create(&run, i);
+            }
+            let proof = acquisition(
+                &run,
+                SourceOuterBackend::Podman,
+                &NofileDiagnostics::default(),
+                Some(&networks),
+            );
+            let n = proof["networks"].as_array().unwrap().len();
+            assert!(
+                proof["actual_requests"] == requests
+                    && requests == 10 + n
+                    && proof["actual_expansions"] == 8 + n
+                    && proof["actual_response_bytes"] == bytes,
+                "actual counts derive only from supporting observed endpoint references"
+            );
+            for &i in slots {
+                let row = &proof["container_networks"][i];
+                assert!(
+                    row["endpoint_map_availability"] == state
+                        && row["name"].is_null()
+                        && row["network_id"].is_null()
+                        && row["network_id_availability"].is_null()
+                        && row["lookup"].is_null(),
+                    "whole-map absence never borrows a peer exchange"
+                );
+            }
+            assert!(
+                networks.cleanup(&run, true),
+                "real owned bridge cleanup after capture controls"
+            );
+            let topology = networks.topology(&run, &proof);
+            assert!(
+                topology["default"]["id"]
+                    == if slots.contains(&0) {
+                        Value::Null
+                    } else {
+                        json!("a".repeat(64))
+                    },
+                "unobserved configured default never inherits an owned network identity"
+            );
+            println!(
+                "nofile absent map state={state} absent_slots={} actual_requests={requests} expansions={} response_bytes={bytes}",
+                slots.len(),
+                8 + n
+            );
+            server.finish();
+        }
+    }
+}
+
+#[test]
+fn nofile_bridge_transport_refuses_exhausted_original_calls_bytes_and_clock_before_io() {
+    for control in [
+        "work_calls",
+        "work_bytes",
+        "work_clock",
+        "cleanup_calls",
+        "cleanup_bytes",
+        "cleanup_clock",
+    ] {
+        let (server, mut run) = NofileSocketControl::start(vec![]);
+        let cleanup = control.starts_with("cleanup");
+        let mut networks = if cleanup {
+            bound_case_control_networks(&run)
+        } else {
+            control_networks(&run)
+        };
+        match control {
+            "work_calls" => run.calls.set(300),
+            "work_bytes" => run.bytes.set(2 * 1024 * 1024),
+            "work_clock" => run.deadline = Instant::now() + Duration::from_secs(46),
+            "cleanup_calls" => run.calls.set(400),
+            "cleanup_bytes" => run.bytes.set(4 * 1024 * 1024),
+            _ => run.deadline = Instant::now() + Duration::from_secs(1),
+        }
+        let before = (run.calls.get(), run.bytes.get());
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if cleanup {
+                assert!(
+                    !networks.cleanup(&run, true),
+                    "exhausted cleanup cannot verify absence"
+                );
+            } else {
+                networks.create(&run, 0);
+            }
+        }));
+        assert!(
+            (cleanup || result.is_err()) && before == (run.calls.get(), run.bytes.get()),
+            "original bounds refuse before network I/O"
+        );
+        server.finish();
+    }
+}
+
+#[test]
+fn nofile_case_bridges_keep_debian_acquisition_and_rendering_api_boundaries() {
+    let mut captured =
+        case_capture_control_with_maps("empty", "null", None, Some(("empty", &[4, 5])));
+    let requests = captured.len();
+    for reply in &mut captured {
+        reply.path = reply.path.replace("/v1.49/", "/v1.41/");
+        if reply.path == "/version" {
+            reply.body =
+                json!({"Version":"20.10.5+dfsg1","ApiVersion":"1.41","MinAPIVersion":"1.12"})
+                    .to_string();
+        } else if reply.path == "/v1.41/info" {
+            reply.body = json!({"ServerVersion":"20.10.5+dfsg1"}).to_string();
+        }
+    }
+    let bytes: usize = captured.iter().map(|r| r.body.len()).sum();
+    let mut replies = bridge_control_setup();
+    replies.extend(captured);
+    replies.extend(bridge_control_cleanup(None));
+    for reply in &mut replies {
+        reply.path = reply.path.replace("/v1.56/", "/v1.41/");
+    }
+    let (server, mut run) = NofileSocketControl::start(replies);
+    run.api = "1.41".into();
+    run.engine = "20.10.5+dfsg1".into();
+    run.lane = "debian11-rootful".into();
+    let mut networks = control_networks(&run);
+    for i in 0..2 {
+        networks.create(&run, i);
+    }
+    let acquired = acquisition(
+        &run,
+        SourceOuterBackend::Docker,
+        &NofileDiagnostics::default(),
+        Some(&networks),
+    );
+    assert!(
+        acquired["requested_api"] == "1.41"
+            && acquired["actual_requests"] == requests
+            && acquired["actual_response_bytes"] == bytes
+            && acquired["actual_expansions"] == 10,
+        "real 1.41 capture with an unreferenced configured case bridge"
+    );
+    assert!(
+        networks.cleanup(&run, true) && run.calls.get() == 38,
+        "same measured network setup/reservation/cleanup costs"
+    );
+    println!(
+        "nofile Debian API1.41 requests={requests} expansions=10 response_bytes={bytes} setup_calls=6 network_cleanup_calls=12"
+    );
+    server.finish();
 }

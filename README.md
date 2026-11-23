@@ -83,7 +83,10 @@ It runs in its own one-child cleanup-owner scope only after all original 27
 calls and the immediate strict PIDs reader succeed. Its independent reader is
 mandatory even without public evidence; the emitter repeats validation without
 adding a nofile field or capability. The producer remains ignored outside the
-native harness. Source wiring is not native execution, full28 completion or
+native harness. [ADR 0056](docs/decisions/0056-nofile-case-bridge-proof-schema-2.md)
+requires private schema2 for two owned unlimited-case bridges plus the unchanged
+finite default, retaining the fixed filename, original global caps and public
+duplicate-network rejection. Source wiring is not native execution, full28 completion or
 capability admission; strict PIDs prerequisites cannot be bypassed.
 
 The planned native work is tracked in [DockerLens #3](https://github.com/Strukturpiloten/docker-lens/issues/3).

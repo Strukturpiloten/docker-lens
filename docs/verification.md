@@ -81,6 +81,14 @@ external context. A missing or invalid nofile proof prevents any output. The
 19-argument ABI, public maps/schema, catalogue and capability admission remain
 unchanged. Finite, exact-unlimited, finite-normalized and specifically
 attributable known-ID start-refusal outcomes remain distinct private facts.
+[ADR 0056](decisions/0056-nofile-case-bridge-proof-schema-2.md) requires schema 2 at
+the same private filename and refuses stale schema 1. Independent controls bind
+the default plus two owned unlimited-case bridges, all eight case/role roots,
+optional membership/endpoint-ID availability and every cross-case outcome pair.
+Per-bridge setup/cleanup and actual acquisition measurements reconcile under the
+original global caps. Whole-map absence creates no observed endpoint or request;
+captured summaries require real supporting entries. Actual counters must equal
+8+N expansions/10+N GETs for N supported captured networks, with eleven the ceiling. This revision changes no public alias-rejection policy.
 
 Focused synthetic controls exercise order, PIDs fail-fast behavior, separate
 owner scope, once-bound deadline, bounded/token-free diagnostics, all four lanes

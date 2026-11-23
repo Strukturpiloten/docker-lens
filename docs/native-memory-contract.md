@@ -74,6 +74,15 @@ this private root remain unobserved, never unbounded. The observed root limit
 must corroborate the authenticated configured4 GiB outer; that setting alone is
 not a kernel observation or a workload Memory proof.
 
+A mount root displayed as `/` is relative to the observed view. A private or
+delegated view may expose a non-root cgroup at that path. The true hierarchy
+root lacks `cgroup.type` and the required local memory interface. It cannot
+supply the required 4 GiB observation. A mount row reporting another root
+refuses before collection. Each held visible node must report the complete
+`domain` record. The same check applies to the baseline mount root, every
+workload leaf, and each visible ancestor. A threaded domain or a threaded or
+invalid node cannot establish this memory-domain chain. [Kernel cgroup v2 core interface](https://docs.kernel.org/admin-guide/cgroup-v2.html#core-interface-files) · [Kernel cgroup namespace views](https://docs.kernel.org/admin-guide/cgroup-v2.html#the-root-and-views)
+
 Finite leaves require actual memory.max = 67108864. Omitted/zero leaves require
 actual local max and agreement on the same observed visible inherited limits.
 Finite inherited capacity is compatible with unlimited/no authored leaf cap.
@@ -166,6 +175,14 @@ guest marker family in stderr, on a complete line naming a known stage. Both
 hints describe observed bytes. The writer's identity and guest entry remain
 unverified. No raw command output, environment, paths, evidence values or
 cleanup outcome are projected in that work record.
+
+The baseline selects only the visible mount root. Its type-check hint can
+distinguish an unavailable file, an unexpected object, a failed bounded byte
+read, the three documented non-domain records, or other bytes. An unavailable
+file does not establish the underlying errno or prove that the visible root
+is the true hierarchy root. The existing legacy `node_type` hint stays readable.
+Type-check failures during live samples still stop the collector before any
+complete report can be accepted.
 The parser and resource predicates remain fail-closed.
 
 ## Private custody, readers and qualification

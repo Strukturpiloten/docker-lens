@@ -233,7 +233,7 @@ else:
         from test_native_shm_size_proof import fixture as shm_fixture
         from test_native_supplementary_groups_proof import fixture as groups_fixture
         from test_native_kernel_settings_proof import fixture as kernel_fixture
-        from test_native_nofile_proof import fixture as nofile_fixture
+        from test_native_nofile_proof import fixture as nofile_fixture, bind_context as bind_nofile_context
         from test_native_device_mapping_proof import fixture as device_fixture
         from test_native_memory_proof import fixture as memory_fixture, bind_context as bind_memory_context
         from test_native_capabilities_proof import fixture as capabilities_fixture, bind_context as bind_capabilities_context
@@ -344,10 +344,7 @@ else:
                                 proof = bind_capabilities_context(proof, context)
                             proof["context"] = json.loads(json.dumps(context))
                             if family == "nofile":
-                                for case in proof["cases"]:
-                                    for item in case["containers"]:
-                                        item["owner"] = context["run_id"]
-                                        item["name"] = f"dl-nf-{context['run_id']}-{case['case']}-{item['role']}"
+                                proof = bind_nofile_context(proof, context)
                             if family == "device_mapping":
                                 for item in proof["containers"]:
                                     item["owner"] = context["run_id"]

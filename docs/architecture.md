@@ -81,6 +81,15 @@ retains the original wrapper deadline and cleanup reserve. The existing
 the 19-argument emitter revalidates with independent lane/context and selected
 outer-backend facts and requires the exact three-key unadmitted result. It
 adds no public nofile projection, schema, capability or catalogue grant.
+[ADR 0056](decisions/0056-nofile-case-bridge-proof-schema-2.md) now requires private
+schema 2 under the same filename/contract: the finite fixtures retain the borrowed
+default bridge and each unlimited pair has its own owned bridge. The reader binds
+three configured network audiences and all eight roots, whole-map and membership
+availability, only actually referenced network exchanges, and measured setup/cleanup
+deltas. For N captured networks, actual GETs/expansions are 10+N/8+N under the
+eleven-expansion ceiling; missing maps do not borrow a peer's lookup.
+The original request/body/time/global cleanup caps and public duplicate-network
+refusal remain unchanged; 84 normal cleanup captures cover containers and bridges.
 Original lane EXIT cleanup remains mandatory. Full final-source checks and fresh
 exact-candidate four-lane32-call qualification remain pending; source wiring
 cannot bypass strict rootless PIDs/delegation or hosted-runtime prerequisites.

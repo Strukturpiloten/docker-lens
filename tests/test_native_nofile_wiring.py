@@ -82,7 +82,7 @@ class NofileWiringTests(unittest.TestCase):
             markers[name] = matches[0]
         observer = self.failure_line(operation="observe", code="1").rstrip(b"\n") + b" observer_site=workerexe\n"
         acquisition = (self.failure_line("all", "none", "acquisition", "unknown", "none").rstrip(b"\n")
-                       + b" acquisition_error=shape\n")
+                       + b" acquisition_error=shape acquisition_shape=duplicate_network_id\n")
         refusal = self.cleanup_line(reason="ownership_guard", termination="unknown", code="none")
         with tempfile.TemporaryDirectory(prefix="dl-nofile-libtest-") as directory:
             root = Path(directory)
@@ -1108,6 +1108,36 @@ fn main() {
         result, _, _ = self.wrapper(transcript(work), 0)
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn(b"acquisition_error=", result.stdout + result.stderr)
+
+    def test_nofile_shape_detail_requires_the_exact_acquisition_error(self):
+        base = self.failure_line("all", "none", "acquisition", "unknown", "none").rstrip(b"\n")
+        cleanup_stage = b"DOCKERLENS_NATIVE_CHECK: nofile_cleanup\n"
+
+        def output(work):
+            return self.failure_transcript(work + b"\n").replace(
+                cleanup_stage, b"DOCKERLENS_NATIVE_CHECK: nofile_capture\n" + cleanup_stage)
+
+        fields = (b"container_identity", b"container_related", b"network_request",
+                  b"network_identity", b"network_id", b"duplicate_network_id",
+                  b"duplicate_noncanonical_network_id", b"volume_request", b"volume_identity")
+        for field in fields:
+            work = base + b" acquisition_error=shape acquisition_shape=" + field
+            result, _, _ = self.wrapper(output(work), 101)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn(b"failed (exit 101)", result.stderr)
+            self.assertEqual(result.stderr.count(work + b"\n"), 1)
+            self.assertNotIn(SECRET, result.stdout + result.stderr)
+
+        shape = b" acquisition_shape=duplicate_network_id"
+        invalid = (base + shape, base + b" acquisition_error=status" + shape,
+                   base + b" acquisition_error=shape acquisition_shape=" + SECRET,
+                   base + b" acquisition_error=shape" + shape + shape,
+                   base.replace(b"operation=acquisition", b"operation=daemon_health")
+                   + b" acquisition_error=shape" + shape)
+        for work in invalid:
+            result, _, _ = self.wrapper(output(work), 101)
+            self.assertNotIn(b"acquisition_shape=", result.stdout + result.stderr)
+            self.assertNotIn(SECRET, result.stdout + result.stderr)
 
     def test_nofile_acquisition_record_and_cleanup_pair_precede_optional_terminal_summary(self):
         work = (self.failure_line("all", "none", "acquisition", "unknown", "none").rstrip(b"\n")

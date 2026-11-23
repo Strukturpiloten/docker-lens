@@ -72,6 +72,21 @@ class CompleteNofileCustody(unittest.TestCase):
         self.write(proof)
         self.rejected(proof["context"])
 
+    def test_current_fixed_filename_requires_schema_two_and_never_selects_a_legacy_packet(self):
+        proof = fixture()
+        self.write(proof)
+        self.assertEqual(reader.read_nofile_proof(self.path, self.directory, proof["context"], outer_backend="podman"),
+                         {"contract": "nofile-v1", "capability_admission": [], "catalogue_admission": False})
+        proof["schema_version"] = 1
+        self.write(proof)
+        self.rejected(proof["context"])
+        proof["schema_version"] = 2
+        self.write(proof)
+        wrong = self.directory / "nofile-v2.json"
+        self.path.rename(wrong)
+        with self.assertRaisesRegex(ValueError, "^invalid private nofile proof$"):
+            reader.read_nofile_proof(wrong, self.directory, proof["context"], outer_backend="podman")
+
 
 if __name__ == "__main__":
     unittest.main()

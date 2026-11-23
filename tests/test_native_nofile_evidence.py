@@ -1,5 +1,6 @@
 """Mandatory nofile re-reading gates emission without changing public evidence."""
 from copy import deepcopy
+from itertools import product
 import importlib.util
 import inspect
 import json
@@ -12,7 +13,7 @@ from unittest.mock import patch
 import test_native_evidence as legacy
 import test_native_external_network_evidence as canonical
 from test_native_command_clear_projection import expected_shapes
-from test_native_nofile_proof import refuse_case
+from test_native_nofile_proof import refuse_case, unreference_slots
 
 ROOT = Path(__file__).resolve().parents[1]
 LANES = ("debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless")
@@ -57,7 +58,8 @@ class NofileEvidenceTests(unittest.TestCase):
                         self.assertNotIn(withheld, record["admitted_shapes"])
                     self.assertNotIn("nofile_contract", record)
                     self.assertNotIn("nofile_outcomes", record)
-                    for private in ("owned_files", "descriptors", "retained_count", "dl-nf-", "ordinary_calls", "daemon_uid"):
+                    for private in ("owned_files", "descriptors", "retained_count", "dl-nf-", "ordinary_calls", "daemon_uid",
+                                    "network_topology", "active_selected_ids", "active_unselected_count", "network_setup_calls"):
                         self.assertNotIn(private, path.read_text())
                     result, path = self.emit(lane, outer_backend=backend, nofile_missing=True)
                     self.assertNotEqual(result.returncode, 0)
@@ -96,6 +98,15 @@ class NofileEvidenceTests(unittest.TestCase):
 
     def test_context_effect_accounting_and_partial_or_private_packets_refuse_all_output(self):
         changes = {
+            "stale-schema": lambda value: value.update(schema_version=1),
+            "borrowed-network-adopted": lambda value: value["network_topology"]["default"].update(ownership="owned"),
+            "network-alias": lambda value: value["network_topology"]["owned"][0].update(id=value["network_topology"]["default"]["id"]),
+            "foreign-owned-member": lambda value: value["acquisition"]["networks"][1].update(active_unselected_count=1),
+            "wrong-network-cost": lambda value: value["accounting"].update(network_setup_calls=0),
+            "impossible-capture-bytes": lambda value: value["acquisition"].update(actual_response_bytes=1),
+            "unverified-network-teardown": lambda value: value["cleanup"].update(networks="unknown"),
+            "missing-network-exchange": lambda value: value["acquisition"]["networks"].pop(),
+            "invented-peer-lookup": lambda value: value["acquisition"]["container_networks"][4].update(endpoint_map_availability="empty"),
             "partial": lambda value: value["cases"].pop(),
             "candidate": lambda value: value["context"].update(candidate_sha="f" * 40),
             "run": lambda value: value["context"].update(run_id="Wrong145"),
@@ -127,6 +138,59 @@ class NofileEvidenceTests(unittest.TestCase):
                 self.assertEqual(rerun.stdout, "")
                 self.assertEqual(rerun.stderr, "native evidence rejected\n")
                 self.assertNotIn(SECRET, rerun.stdout + rerun.stderr)
+
+    def test_all_cross_case_dispositions_and_optional_membership_keep_public_bytes_identical(self):
+        for backend in ("podman", "docker"):
+            result, path = self.emit(outer_backend=backend)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            original = path.read_bytes()
+            source = path.parent.parent / "nofile-v1.json"
+            exact = json.loads(source.read_text())
+            self.assertEqual(exact["schema_version"], 2)
+            for dispositions in product(("exact", "normalized", "refused"), repeat=2):
+                with self.subTest(backend=backend, dispositions=dispositions):
+                    proof = deepcopy(exact)
+                    for index, disposition in zip((2, 3), dispositions):
+                        if disposition == "refused":
+                            refuse_case(proof, index)
+                        elif disposition == "normalized":
+                            for item in proof["cases"][index]["containers"]:
+                                witness = item["effect"]["witness"]
+                                witness["outcome"] = "finite_kernel_normalization"
+                                witness["kernel"]["hard"] = 1048576
+                                if index == 3:
+                                    witness["kernel"]["soft"] = 1048576
+                                for sample in witness["samples"].values():
+                                    sample.update(witness["kernel"])
+                    for network in proof["acquisition"]["networks"]:
+                        network.update(active_membership_availability="missing", active_selected_ids=[],
+                                       active_unselected_count=None)
+                    path.unlink()
+                    source.write_text(json.dumps(proof))
+                    rerun = self.rerun(result, path, backend)
+                    self.assertEqual(rerun.returncode, 0, rerun.stderr)
+                    self.assertEqual(path.read_bytes(), original)
+
+    def test_actual_partial_network_capture_leaves_public_projection_byte_identical(self):
+        for backend in ("podman", "docker"):
+            result, path = self.emit(outer_backend=backend)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            original = path.read_bytes()
+            source = path.parent.parent / "nofile-v1.json"
+            complete = json.loads(source.read_text())
+            peer_missing = deepcopy(complete)
+            unreference_slots(peer_missing, [5])
+            refused_pair_missing = deepcopy(complete)
+            refuse_case(refused_pair_missing, 2)
+            unreference_slots(refused_pair_missing, [4, 5])
+            all_unavailable = deepcopy(complete)
+            unreference_slots(all_unavailable, range(8), "missing")
+            for proof in (peer_missing, refused_pair_missing, all_unavailable):
+                path.unlink()
+                source.write_text(json.dumps(proof))
+                rerun = self.rerun(result, path, backend)
+                self.assertEqual(rerun.returncode, 0, rerun.stderr)
+                self.assertEqual(path.read_bytes(), original)
 
     def test_custody_size_and_duplicate_keys_are_mandatory_at_emitter_seam(self):
         for fault in ("symlink", "hardlink", "mode", "duplicate", "oversize"):

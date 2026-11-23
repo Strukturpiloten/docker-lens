@@ -3659,11 +3659,36 @@ fn validate_outer_owner_state(raw: &Value, id: &str, run: &str) -> PidsResult<()
 }
 
 impl OuterIdentity {
-    fn acquire(run: &HealthRun, cleanup: bool) -> PidsResult<Self> {
+    fn acquire(run: &HealthRun, backend: SourceOuterBackend, cleanup: bool) -> PidsResult<Self> {
         // This executes the original selected actor's canonical exact-CID
         // inspection now. It never accepts a serialized snapshot or a PID flag.
         let (projection, raw) = outer_context_observation(run, cleanup);
         let id = required("NATIVE_OUTER_CONTAINER_ID");
+        Self::from_snapshot(backend, projection, &raw, id, &run.run, |pid| {
+            reserve(run, 1, 0, cleanup)?;
+            let mut process = OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                .open(format!("/proc/{pid}/stat"))
+                .map_err(|_| "pids-proc")?;
+            let mut bytes = [0; 4096];
+            let size = process.read(&mut bytes).map_err(|_| "pids-proc")?;
+            let mut end = [0; 1];
+            if size == 0 || process.read(&mut end).map_err(|_| "pids-proc")? != 0 {
+                return Err("pids-proc");
+            }
+            proc_start(&bytes[..size], pid)
+        })
+    }
+
+    fn from_snapshot(
+        backend: SourceOuterBackend,
+        projection: Value,
+        raw: &Value,
+        id: String,
+        run: &str,
+        read_start: impl FnOnce(u32) -> PidsResult<u64>,
+    ) -> PidsResult<Self> {
         let pid = raw["State"]["Pid"]
             .as_u64()
             .and_then(|pid| u32::try_from(pid).ok())
@@ -3675,25 +3700,12 @@ impl OuterIdentity {
             .ok_or("pids-outer")?
             .to_owned();
         let restart_count = raw["RestartCount"].as_u64().ok_or("pids-outer")?;
-        let cgroup_namespace = raw["HostConfig"]["CgroupnsMode"]
-            .as_str()
-            .filter(|mode| *mode == "private")
+        let cgroup_namespace = backend
+            .private_cgroup_namespace(raw)
             .ok_or("pids-cgroup-namespace")?
             .to_owned();
-        validate_outer_owner_state(&raw, &id, &run.run)?;
-        reserve(run, 1, 0, cleanup)?;
-        let mut process = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(format!("/proc/{pid}/stat"))
-            .map_err(|_| "pids-proc")?;
-        let mut bytes = [0; 4096];
-        let size = process.read(&mut bytes).map_err(|_| "pids-proc")?;
-        let mut end = [0; 1];
-        if size == 0 || process.read(&mut end).map_err(|_| "pids-proc")? != 0 {
-            return Err("pids-proc");
-        }
-        let start = proc_start(&bytes[..size], pid)?;
+        validate_outer_owner_state(raw, &id, run)?;
+        let start = read_start(pid)?;
         Ok(Self {
             projection,
             id,
@@ -3820,6 +3832,7 @@ fn create_configured_cases(
 
 struct NativeProducer {
     run: HealthRun,
+    backend: SourceOuterBackend,
     target: ProofTarget,
     root: RootChannel,
     original: OuterIdentity,
@@ -3836,7 +3849,7 @@ struct NativeProducer {
 impl NativeProducer {
     fn new() -> PidsResult<Self> {
         let mut run = HealthRun::new_for("NATIVE_PIDS_CANDIDATE_SHA", "NATIVE_PIDS_DEADLINE_EPOCH");
-        source_outer_backend();
+        let backend = source_outer_backend();
         run.names = SLOTS
             .iter()
             .map(|slot| format!("dl-pids-{}-{slot}", run.run))
@@ -3853,7 +3866,7 @@ impl NativeProducer {
         let before = monotonic_ns()?;
         let remaining = u64::try_from(run.remaining().as_nanos()).map_err(|_| "pids-deadline")?;
         let deadline_ns = before.checked_add(remaining).ok_or("pids-deadline")?;
-        let original = OuterIdentity::acquire(&run, false)?;
+        let original = OuterIdentity::acquire(&run, backend, false)?;
         assert_eq!(required("NATIVE_LIFECYCLE_CLEANUP_OWNER"), CLEANUP_OWNER);
         let cleanup_owner = BoundOuterCleanupOwner {
             snapshot: original.projection.clone(),
@@ -3861,7 +3874,7 @@ impl NativeProducer {
         let mut root = RootChannel::launch(&run, &target, deadline_ns)?;
         root.constructor_status(&run, ConstructorIoPhase::Bind, "RootBindRuntime", json!({"context":{"backend":required("NATIVE_OUTER_ENGINE"),"candidate":run.candidate,"run":run.run,"lane":run.lane,"outer_id":original.id},
             "outer_pid":original.pid,"outer_start":original.start,"owner_labels":{(LABEL):run.run},"external_source":worker.source.value()}), "pending")?;
-        let second = OuterIdentity::acquire(&run, false)?;
+        let second = OuterIdentity::acquire(&run, backend, false)?;
         if original != second {
             return Err("pids-outer-changed");
         }
@@ -3885,6 +3898,7 @@ impl NativeProducer {
         let nonce: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
         Ok(Self {
             run,
+            backend,
             target,
             root,
             original,
@@ -4593,7 +4607,7 @@ impl NativeProducer {
     }
 
     fn finish(&mut self, measured: Value) -> PidsResult<Value> {
-        let final_outer = OuterIdentity::acquire(&self.run, true)?;
+        let final_outer = OuterIdentity::acquire(&self.run, self.backend, true)?;
         if final_outer != self.original {
             return Err("pids-outer-changed");
         }
@@ -6375,6 +6389,75 @@ fn pids_outer_owner_state_preserves_exact_cid_running_and_restart_guards() {
         *changed.pointer_mut(pointer).unwrap() = replacement;
         assert_eq!(
             validate_outer_owner_state(&changed, &id, "outer-owner-fixture"),
+            Err("pids-outer")
+        );
+    }
+}
+
+#[test]
+fn pids_outer_snapshot_keeps_namespace_identity_and_proc_order() {
+    let id = "a".repeat(64);
+    let owner = "outer-owner-fixture";
+    let projection = json!({"bound": true});
+    let mut raw = json!({
+        "Id": id,
+        "Config": {"Labels": {"io.dockerlens.native-run": owner}},
+        "State": {
+            "Pid": 17, "StartedAt": "2026-11-01T00:00:00Z",
+            "Running": true, "Restarting": false, "Paused": false
+        },
+        "RestartCount": 0
+    });
+    for (backend, field, crossed) in [
+        (
+            SourceOuterBackend::Docker,
+            "CgroupnsMode",
+            SourceOuterBackend::Podman,
+        ),
+        (
+            SourceOuterBackend::Podman,
+            "CgroupMode",
+            SourceOuterBackend::Docker,
+        ),
+    ] {
+        raw["HostConfig"] = json!({(field): "private"});
+        let observe = |selected, raw, read_start: fn(u32) -> PidsResult<u64>| {
+            OuterIdentity::from_snapshot(
+                selected,
+                projection.clone(),
+                raw,
+                id.clone(),
+                owner,
+                read_start,
+            )
+        };
+        let identity = observe(backend, &raw, |pid| {
+            assert_eq!(pid, 17);
+            Ok(234)
+        })
+        .unwrap();
+        assert_eq!(
+            identity.private_value(),
+            json!({
+                "context": projection, "id": id, "pid": 17, "start_ticks": 234,
+                "runtime_started_at": "2026-11-01T00:00:00Z", "restart_count": 0,
+                "cgroup_namespace_mode": "private"
+            })
+        );
+        assert_eq!(
+            observe(crossed, &raw, |_| panic!("namespace must precede proc")),
+            Err("pids-cgroup-namespace")
+        );
+        assert_eq!(
+            observe(backend, &raw, |_| Err("pids-proc")),
+            Err("pids-proc")
+        );
+        let mut wrong_owner = raw.clone();
+        wrong_owner["Config"]["Labels"]["io.dockerlens.native-run"] = json!("other-owner");
+        assert_eq!(
+            observe(backend, &wrong_owner, |_| panic!(
+                "ownership must precede proc"
+            )),
             Err("pids-outer")
         );
     }

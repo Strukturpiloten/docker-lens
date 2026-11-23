@@ -27,7 +27,7 @@ mod shm_size;
 mod supplementary_groups;
 // Prepared only: canonical invocation 28 must remain behind unresolved PIDs27.
 #[path = "native_nofile_tests.rs"]
-mod nofile;
+pub(super) mod nofile;
 
 #[path = "native_device_mapping_tests.rs"]
 mod device_mapping;
@@ -55,6 +55,23 @@ impl SourceOuterBackend {
             "docker" => Some(Self::Docker),
             _ => None,
         }
+    }
+
+    fn private_cgroup_namespace(self, raw: &Value) -> Option<&str> {
+        // The selected CLI supplies its native HostConfig schema. The bridge
+        // already rejects duplicate JSON keys before forwarding the snapshot.
+        let (expected, other) = match self {
+            Self::Podman => ("CgroupMode", "CgroupnsMode"),
+            Self::Docker => ("CgroupnsMode", "CgroupMode"),
+        };
+        let config = raw.get("HostConfig")?.as_object()?;
+        if config.contains_key(other) {
+            return None;
+        }
+        config
+            .get(expected)?
+            .as_str()
+            .filter(|mode| *mode == "private")
     }
 
     fn snapshot_extra_calls(self) -> usize {
@@ -103,6 +120,51 @@ fn source_backend_accounting_is_closed_and_does_not_charge_io() {
     );
     for value in ["", "Docker", "podman ", "docker\n", "unknown", "rootless"] {
         assert!(SourceOuterBackend::parse(value).is_none());
+    }
+}
+
+#[test]
+fn source_private_cgroup_namespace_requires_the_selected_backend_field() {
+    for (backend, expected, other) in [
+        (SourceOuterBackend::Podman, "CgroupMode", "CgroupnsMode"),
+        (SourceOuterBackend::Docker, "CgroupnsMode", "CgroupMode"),
+    ] {
+        let raw = |config| json!({"HostConfig": config});
+        let own = |mode| json!({(expected): mode});
+        assert_eq!(
+            backend.private_cgroup_namespace(&raw(own(json!("private")))),
+            Some("private")
+        );
+        for config in [
+            Value::Null,
+            json!([]),
+            json!("private"),
+            json!({}),
+            json!({(other): "private"}),
+            json!({"Cgroups": "private", "cgroupMode": "private"}),
+            json!({(expected): "private", (other): "private"}),
+            json!({(expected): "private", (other): "host"}),
+            json!({(expected): "private", (other): null}),
+            json!({(expected): "host", (other): "private"}),
+        ] {
+            assert_eq!(backend.private_cgroup_namespace(&raw(config)), None);
+        }
+        assert_eq!(backend.private_cgroup_namespace(&json!({})), None);
+        for mode in [
+            json!("host"),
+            json!(""),
+            json!("default"),
+            json!("container:peer"),
+            json!("ns:/some/path"),
+            json!("Private"),
+            json!("private "),
+            json!(null),
+            json!(true),
+            json!(1),
+            json!({"mode": "private"}),
+        ] {
+            assert_eq!(backend.private_cgroup_namespace(&raw(own(mode))), None);
+        }
     }
 }
 

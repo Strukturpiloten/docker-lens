@@ -1892,6 +1892,7 @@ python3 "$script_dir/native_pids_proof.py" "$run_dir" "$NATIVE_PIDS_CANDIDATE_SH
   "$(dirname "$0")/run-exact-native-test.sh" native_nofile live_nofile_limits_and_effects_match_engine
 )
 # Mandatory independent validation, including without public evidence emission.
+# The fixed nofile-v1 filename now requires private schema 2; no legacy fallback.
 python3 "$script_dir/native_nofile_proof.py" "$run_dir" "$NATIVE_NOFILE_CANDIDATE_SHA" "$run_id" \
   "$lane" "$server_version" "$api_version" "$expected_mode" "$installed_docker_package" \
   "$NATIVE_FIXTURE_IMAGE" "$image" "$NATIVE_OUTER_CONTAINER_ID" "$NATIVE_BIND_RELABEL_DAEMON_UID"

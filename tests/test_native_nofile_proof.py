@@ -71,29 +71,58 @@ def fixture(lane="upstream-rootful", baseline=3, maximal=False, *, outer_backend
     extra_calls = {"podman": 0, "docker": 1}[outer_backend]
     context_calls = (9 if lane.startswith("debian11-") else 8) + extra_calls
     final_readback_calls = 2 + extra_calls
-    return {"schema_version": 1, "contract": "nofile-v1", "capability_admission": [], "catalogue_admission": False,
+    network_ids = [f"{100 + index:064x}" for index in range(3)]
+    network_names = ["bridge"] + [f"dl-nf-{context['run_id']}-net-{name}" for name in (
+        "soft64_hard_unlimited", "both_unlimited")]
+    audiences = ([0, 1, 2, 3], [4, 5], [6, 7])
+    owned = []
+    networks = []
+    container_networks = []
+    ids = [item["id"] for case in cases for item in case["containers"]]
+    for index, (network_id, name, indices) in enumerate(zip(network_ids, network_names, audiences)):
+        if index:
+            owned.append({"case": ("soft64_hard_unlimited", "both_unlimited")[index - 1],
+                          "id": network_id, "name": name, "owner": context["run_id"], "driver": "bridge",
+                          "container_indices": indices, "setup_calls": 3, "setup_bytes": 512,
+                          "cleanup_calls": 6, "cleanup_bytes": 256, "cleanup": "absent", "absence_rounds": 2})
+        networks.append({"id": network_id, "name": name, "driver": "bridge",
+                         "ownership": "owned" if index else "not_owned", "owner": context["run_id"] if index else None,
+                         "container_indices": indices, "lookup": "id", "active_membership_availability": "present",
+                         "active_selected_ids": [ids[i] for i in indices], "active_unselected_count": 0})
+        for i in indices:
+            container_networks.append({"container_id": ids[i], "endpoint_map_availability": "present", "network_id": network_id,
+                                       "network_id_availability": "present", "name": name, "lookup": "id"})
+    return {"schema_version": 2, "contract": "nofile-v1", "capability_admission": [], "catalogue_admission": False,
             "scope": "four_diagonal_nofile_cases_source_only", "context": context,
             "borrowed_image": {"id": image, "identity": "unchanged", "removal": "not_owned"},
+            "network_topology": {"default": {"id": network_ids[0], "name": "bridge", "driver": "bridge",
+                                             "ownership": "not_owned", "container_indices": [0, 1, 2, 3]}, "owned": owned},
             "cases": cases, "daemon_health": "version_matches_after_all_cases",
             "acquisition": {"route": "explicit_unix_socket", "selected_ids": 8, "requested_api": context["acquisition_api"],
-                            "reserved_calls": 20, "reserved_bytes": 524288, "actual_requests": 11, "actual_response_bytes": 65536,
+                            "reserved_calls": 20, "reserved_bytes": 524288, "actual_requests": 13, "actual_response_bytes": 65536,
+                            "actual_expansions": 11, "actual_elapsed_ns": 1_000_000,
+                            "networks": networks, "container_networks": container_networks,
                             "decoded": "present_effective_exact_nofile_values",
                             "daemon_mode_evidence": "rootless_observed" if lane.endswith("rootless") else "unknown_with_independent_rootful_context",
                             "byte_scope": "decoded_response_bodies_only",
                             "separate_transport_bounds": {"response_header_bytes": 16384, "chunk_line_bytes": 64,
                                                           "chunk_payload_crlf_bytes": 2, "final_trailer_line_bytes": 16384,
                                                           "actual_wire_bytes": "not_measured"},
-                            "limits": {"max_requests": 20, "max_selected_resources": 8, "max_expansions": 10,
+                            "limits": {"max_requests": 20, "max_selected_resources": 8, "max_expansions": 11,
                                        "max_response_bytes": 131072, "max_total_bytes": 524288, "max_elapsed_seconds": 10}},
             "accounting": {"context_calls": context_calls, "slot_calls": [8] * 8, "daemon_health_calls": 1,
                            "acquisition_reserved_calls": 20, "final_readback_calls": final_readback_calls,
-                           "ordinary_calls": context_calls + 64 + 1 + 20 + final_readback_calls,
-                           "ordinary_bytes": 1048576 + 2 * extra_calls * 65536, "cleanup_calls": 72, "cleanup_bytes": 8192, "deadline_seconds": 180,
+                           "network_setup_calls": 6, "network_setup_bytes": 1024,
+                           "container_cleanup_calls": 72, "container_cleanup_bytes": 8192,
+                           "network_cleanup_calls": 12, "network_cleanup_bytes": 512,
+                           "ordinary_calls": context_calls + 6 + 64 + 1 + 20 + final_readback_calls,
+                           "ordinary_bytes": 1048576 + 2 * extra_calls * 65536, "cleanup_calls": 84, "cleanup_bytes": 8704, "deadline_seconds": 180,
                            "cleanup_reserve_seconds": 46, "ordinary_elapsed_ns": 5_000_000_000,
                            "cleanup_elapsed_ns": 2_000_000_000, "elapsed_ns": 8_000_000_000,
                            "initial_context_acquisition": {"max_requests": 16, "max_total_bytes": 2097152,
                                                            "max_elapsed_seconds": 15, "accounting": "separate_existing_bound"}},
-            "cleanup": {"containers": "absent", "rounds": 2, "outstanding": 0, "uncertain": False}}
+            "cleanup": {"containers": "absent", "networks": "absent", "owned_networks": 2,
+                        "rounds": 2, "outstanding": 0, "uncertain": False}}
 
 
 def refuse_case(proof, case_index):
@@ -105,6 +134,51 @@ def refuse_case(proof, case_index):
                                       "never_started": True, "terminal_unchanged": True, "error": "setting_rlimit_nofile_eperm"}}
         proof["accounting"]["slot_calls"][2 * case_index + role_index] = 7
         proof["accounting"]["ordinary_calls"] -= 1
+    audience = [case_index * 2, case_index * 2 + 1]
+    for network in proof["acquisition"]["networks"]:
+        if network["container_indices"] == audience:
+            network.update(lookup="name", active_membership_availability="empty", active_selected_ids=[], active_unselected_count=0)
+    for item in proof["acquisition"]["container_networks"][case_index * 2:case_index * 2 + 2]:
+        if item["endpoint_map_availability"] == "present":
+            item.update(lookup="name", network_id_availability="empty", network_id="")
+
+
+def bind_context(proof, context):
+    """Bind all fixture-owned names to a caller's independent emitter context."""
+    proof["context"] = deepcopy(context)
+    for case in proof["cases"]:
+        for item in case["containers"]:
+            item["owner"] = context["run_id"]
+            item["name"] = f"dl-nf-{context['run_id']}-{case['case']}-{item['role']}"
+    for network in proof["network_topology"]["owned"]:
+        network["name"] = f"dl-nf-{context['run_id']}-net-{network['case']}"
+        network["owner"] = context["run_id"]
+        for observed in proof["acquisition"]["networks"]:
+            if observed["container_indices"] == network["container_indices"]:
+                observed.update(name=network["name"], owner=context["run_id"])
+        for slot in network["container_indices"]:
+            binding = proof["acquisition"]["container_networks"][slot]
+            if binding["endpoint_map_availability"] == "present":
+                binding["name"] = network["name"]
+    return proof
+
+
+def unreference_slots(proof, indices, availability="empty"):
+    """A missing whole map adds no request key, unlike an entry with empty ID."""
+    for index in indices:
+        proof["acquisition"]["container_networks"][index].update(
+            endpoint_map_availability=availability, name=None, network_id=None,
+            network_id_availability=None, lookup=None)
+    groups = ([0, 1, 2, 3], [4, 5], [6, 7])
+    supporting = [group for group in groups if any(
+        proof["acquisition"]["container_networks"][i]["endpoint_map_availability"] == "present" for i in group)]
+    proof["acquisition"]["networks"] = [network for network in proof["acquisition"]["networks"]
+                                                if network["container_indices"] in supporting]
+    if groups[0] not in supporting:
+        proof["network_topology"]["default"]["id"] = None
+    count = len(proof["acquisition"]["networks"])
+    proof["acquisition"]["actual_requests"] = 10 + count
+    proof["acquisition"]["actual_expansions"] = 8 + count
 
 
 def report_bytes(value):
@@ -162,7 +236,7 @@ class NofileProofTests(unittest.TestCase):
     def test_exact_context_and_final_cost_split_and_byte_floor_stay_bounded(self):
         for backend, extra in (("podman", 0), ("docker", 1)):
             value = fixture(outer_backend=backend)
-            minimum = 524289 + 2 * extra * 65536
+            minimum = 524289 + value["accounting"]["network_setup_bytes"] + 2 * extra * 65536
             value["accounting"]["ordinary_bytes"] = minimum
             reader.validate_nofile_proof(value, value["context"], outer_backend=backend)
             for wrong_bytes in (minimum - 1, 2097153, True):
@@ -286,6 +360,8 @@ class NofileProofTests(unittest.TestCase):
 
     def test_closed_nested_objects_and_required_fields(self):
         paths = ((), ("borrowed_image",), ("accounting",), ("acquisition",), ("cleanup",),
+                 ("network_topology",), ("network_topology", "default"), ("network_topology", "owned", 0),
+                 ("acquisition", "networks", 0), ("acquisition", "container_networks", 0),
                  ("cases", 0), ("cases", 0, "containers", 0), ("cases", 0, "containers", 0, "effect"),
                  ("cases", 0, "containers", 0, "effect", "witness"),
                  ("cases", 0, "containers", 0, "effect", "witness", "kernel"))

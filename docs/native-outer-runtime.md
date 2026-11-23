@@ -800,6 +800,12 @@ directory; the historical `NATIVE_PODMAN_USE_SUDO` variable selects privilege on
 It no longer selects an executable. Local default remains Podman.
 No product dependency on BoxFerry or Rust API change is introduced.
 
+PIDs and memory corroborate private cgroup namespace configuration in the raw
+outer snapshot. Podman reports `HostConfig.CgroupMode` and Docker reports
+`HostConfig.CgroupnsMode`. Only the exact string
+`private` qualifies, and a snapshot containing both fields is rejected.
+These metadata checks accompany the existing kernel identity and mount checks.
+
 The independent dockerd UID helper receives the selected engine and private run
 directory explicitly and uses the same attach-only `exec` boundary. Its native
 UID oracle, eight-second root-owned command timer and twelve-second capture
