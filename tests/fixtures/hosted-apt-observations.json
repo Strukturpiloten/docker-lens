@@ -1,0 +1,90 @@
+{
+  "provenance": {
+    "kind": "authored models from authenticated Ubuntu snapshot package metadata, not hosted installed state",
+    "apt_version": "3.2.0",
+    "snapshot": "20261017T000000Z",
+    "normalization": "Only the private model status file path in policy output becomes /var/lib/dpkg/status",
+    "signed_index_hashes": [
+      {
+        "suite": "resolute",
+        "component": "main",
+        "compressed_sha256": "ed9ac41cb263efaecc5a06a0742dc56570e2fb5ff94c4f2e4b2fbdcddd73cf24",
+        "uncompressed_sha256": "92eb335c0ed27983d41a5a0efdf0edce3e67bfa34e8e987af9df260ca72d9bf9",
+        "bytes": 7581722
+      },
+      {
+        "suite": "resolute",
+        "component": "universe",
+        "compressed_sha256": "1587be86d66d38542325215e0e109f75bd695c8f24d793ace2762038a6ad581e",
+        "uncompressed_sha256": "9c009342905706a05822f6e751f5b1ac34b687f054bfca9a0a652178445fc44c",
+        "bytes": 76792699
+      },
+      {
+        "suite": "resolute-updates",
+        "component": "main",
+        "compressed_sha256": "bfb2da787caf71c38b99767306308902e55dad2c759cb3201c68102bfd92737a",
+        "uncompressed_sha256": "ee87d5a7d027417a8a7dfb98b8287bf8393a05138bc0e831bd76d5327b2574c3",
+        "bytes": 3927665
+      },
+      {
+        "suite": "resolute-updates",
+        "component": "universe",
+        "compressed_sha256": "f4e87734b6c8e3b09e044cc1d9061be1c1c9a50f9ca1bd079c113bcd43fc396c",
+        "uncompressed_sha256": "84d251cc9e40fc5b9f65bb6f441c24ce698ae9ff732499c8600208b6d835b7fa",
+        "bytes": 1617618
+      },
+      {
+        "suite": "resolute-security",
+        "component": "main",
+        "compressed_sha256": "52c862536ffe7b896e6d48304c950125eb5f6f1ae7ec075a114a4ca3e8b8fcae",
+        "uncompressed_sha256": "b66f99fb8009d8f1f66b1c05bfd0434f3db1ccb611a9ddd0ce66391c709017ad",
+        "bytes": 3173830
+      },
+      {
+        "suite": "resolute-security",
+        "component": "universe",
+        "compressed_sha256": "85b7c03dc944b12be0dd747784e7331567d33fd3211c06fb0bddbb307c3abf92",
+        "uncompressed_sha256": "24987da10fd78b08e4bf0d91996f39be0dfcc1ecdc72019e2ec464fcf6316908",
+        "bytes": 972957
+      }
+    ]
+  },
+  "cases": {
+    "exact-installed": {
+      "policy": "qemu-system-x86:\n  Installed: 1:10.2.1+ds-1ubuntu3.2\n  Candidate: 1:10.2.1+ds-1ubuntu3.2\n  Version table:\n     1:10.2.1+ds-1ubuntu3.2 500\n        500 https://snapshot.ubuntu.com/ubuntu/20261017T000000Z resolute-updates/main amd64 Packages\n *** 1:10.2.1+ds-1ubuntu3.2 100\n        100 /var/lib/dpkg/status\n     1:10.2.1+ds-1ubuntu3 500\n        500 https://snapshot.ubuntu.com/ubuntu/20261017T000000Z resolute/main amd64 Packages\nqemu-system-common:\n  Installed: 1:10.2.1+ds-1ubuntu3.2\n  Candidate: 1:10.2.1+ds-1ubuntu3.2\n  Version table:\n     1:10.2.1+ds-1ubuntu3.2 500\n        500 https://snapshot.ubuntu.com/ubuntu/20261017T000000Z resolute-updates/main amd64 Packages\n *** 1:10.2.1+ds-1ubuntu3.2 100\n        100 /var/lib/dpkg/status\n     1:10.2.1+ds-1ubuntu3 500\n        500 https://snapshot.ubuntu.com/ubuntu/20261017T000000Z resolute/main amd64 Packages\nqemu-system-data:\n  Installed: 1:10.2.1+ds-1ubuntu3.2\n  Candidate: 1:10.2.1+ds-1ubuntu3.2\n  Version table:\n     1:10.2.1+ds-1ubuntu3.2 500\n        500 https://snapshot.ubuntu.com/ubuntu/20261017T000000Z resolute-updates/main amd64 Packages\n *** 1:10.2.1+ds-1ubuntu3.2 100\n        100 /var/lib/dpkg/status\n     1:10.2.1+ds-1ubuntu3 500\n        500 https://snapshot.ubuntu.com/ubuntu/20261017T000000Z resolute/main amd64 Packages\nqemu-utils:\n  Installed: 1:10.2.1+ds-1ubuntu3.2\n  Candidate: 1:10.2.1+ds-1ubuntu3.2\n  Version table:\n     1:10.2.1+ds-1ubuntu3.2 500\n        500 https://snapshot.ubuntu.com/ubuntu/20261017T000000Z resolute-updates/main amd64 Packages\n *** 1:10.2.1+ds-1ubuntu3.2 100\n        100 /var/lib/dpkg/status\n     1:10.2.1+ds-1ubuntu3 500\n        500 https://snapshot.ubuntu.com/ubuntu/20261017T000000Z resolute/main amd64 Packages\nxorriso:\n  Installed: 1:1.5.6-1.1ubuntu4\n  Candidate: 1:1.5.6-1.1ubuntu4\n  Version table:\n     1:1.5.6-1.1ubuntu4 500\n        500 https://snapshot.ubuntu.com/ubuntu/20261017T000000Z resolute/main amd64 Packages\n *** 1:1.5.6-1.1ubuntu4 100\n        100 /var/lib/dpkg/status\n",
+      "stderr": "",
+      "stdout": "NOTE: This is only a simulation!\n      apt-get needs root privileges for real execution.\n      Keep also in mind that locking is deactivated,\n      so don't depend on the relevance to the real current situation!\nReading package lists...\nBuilding dependency tree...\nSkipping qemu-system-x86, it is already installed and upgrade is not set.\nSkipping qemu-system-common, it is already installed and upgrade is not set.\nSkipping qemu-system-data, it is already installed and upgrade is not set.\nSkipping qemu-utils, it is already installed and upgrade is not set.\nSkipping xorriso, it is already installed and upgrade is not set.\nSolving dependencies...\n0 upgraded, 0 newly installed, 0 to remove and 113 not upgraded.\n",
+      "original_policy_sha256": "6e0c2a8d22baaceabfba5a139503ffa34ed613a389b0769a6525da5fc3e1ff27",
+      "plan_exit": 0
+    },
+    "older-requested-installed": {
+      "policy": "qemu-system-x86:\n  Installed: 1:10.2.1+ds-1ubuntu3.2\n  Candidate: 1:10.2.1+ds-1ubuntu3.2\n  Version table:\n     1:10.2.1+ds-1ubuntu3.2 500\n        500 https://snapshot.ubuntu.com/ubuntu/20261017T000000Z resolute-updates/main amd64 Packages\n *** 1:10.2.1+ds-1ubuntu3.2 100\n        100 /var/lib/dpkg/status\n     1:10.2.1+ds-1ubuntu3 500\n        500 https://snapshot.ubuntu.com/ubuntu/20261017T000000Z resolute/main amd64 Packages\nqemu-system-common:\n  Installed: 1:10.2.1+ds-1ubuntu3.2\n  Candidate: 1:10.2.1+ds-1ubuntu3.2\n  Version table:\n     1:10.2.1+ds-1ubuntu3.2 500\n        500 https://snapshot.ubuntu.com/ubuntu/20261017T000000Z resolute-updates/main amd64 Packages\n *** 1:10.2.1+ds-1ubuntu3.2 100\n        100 /var/lib/dpkg/status\n     1:10.2.1+ds-1ubuntu3 500\n        500 https://snapshot.ubuntu.com/ubuntu/20261017T000000Z resolute/main amd64 Packages\nqemu-system-data:\n  Installed: 1:10.2.1+ds-1ubuntu3.2\n  Candidate: 1:10.2.1+ds-1ubuntu3.2\n  Version table:\n     1:10.2.1+ds-1ubuntu3.2 500\n        500 https://snapshot.ubuntu.com/ubuntu/20261017T000000Z resolute-updates/main amd64 Packages\n *** 1:10.2.1+ds-1ubuntu3.2 100\n        100 /var/lib/dpkg/status\n     1:10.2.1+ds-1ubuntu3 500\n        500 https://snapshot.ubuntu.com/ubuntu/20261017T000000Z resolute/main amd64 Packages\nqemu-utils:\n  Installed: 1:10.2.1+ds-1ubuntu3\n  Candidate: 1:10.2.1+ds-1ubuntu3.2\n  Version table:\n     1:10.2.1+ds-1ubuntu3.2 500\n        500 https://snapshot.ubuntu.com/ubuntu/20261017T000000Z resolute-updates/main amd64 Packages\n     1:10.2.1+ds-1ubuntu3 500\n        500 https://snapshot.ubuntu.com/ubuntu/20261017T000000Z resolute/main amd64 Packages\n *** 1:10.2.1+ds-1ubuntu3 100\n        100 /var/lib/dpkg/status\nxorriso:\n  Installed: 1:1.5.6-1.1ubuntu4\n  Candidate: 1:1.5.6-1.1ubuntu4\n  Version table:\n     1:1.5.6-1.1ubuntu4 500\n        500 https://snapshot.ubuntu.com/ubuntu/20261017T000000Z resolute/main amd64 Packages\n *** 1:1.5.6-1.1ubuntu4 100\n        100 /var/lib/dpkg/status\n",
+      "stderr": "",
+      "stdout": "NOTE: This is only a simulation!\n      apt-get needs root privileges for real execution.\n      Keep also in mind that locking is deactivated,\n      so don't depend on the relevance to the real current situation!\nReading package lists...\nBuilding dependency tree...\nSkipping qemu-system-x86, it is already installed and upgrade is not set.\nSkipping qemu-system-common, it is already installed and upgrade is not set.\nSkipping qemu-system-data, it is already installed and upgrade is not set.\nSkipping qemu-utils, it is already installed and upgrade is not set.\nSkipping xorriso, it is already installed and upgrade is not set.\nSolving dependencies...\n0 upgraded, 0 newly installed, 0 to remove and 113 not upgraded.\n",
+      "original_policy_sha256": "52dac5ec9226b94a4926f91063504f7ec9d95df611c8ebeecd2baaf14590d895",
+      "plan_exit": 0
+    },
+    "hwe-owner-installed": {
+      "policy": "qemu-system-x86:\n  Installed: (none)\n  Candidate: 1:10.2.1+ds-1ubuntu3.2\n  Version table:\n     1:10.2.1+ds-1ubuntu3.2 500\n        500 https://snapshot.ubuntu.com/ubuntu/20261017T000000Z resolute-updates/main amd64 Packages\n     1:10.2.1+ds-1ubuntu3 500\n        500 https://snapshot.ubuntu.com/ubuntu/20261017T000000Z resolute/main amd64 Packages\nqemu-system-common:\n  Installed: (none)\n  Candidate: 1:10.2.1+ds-1ubuntu3.2\n  Version table:\n     1:10.2.1+ds-1ubuntu3.2 500\n        500 https://snapshot.ubuntu.com/ubuntu/20261017T000000Z resolute-updates/main amd64 Packages\n     1:10.2.1+ds-1ubuntu3 500\n        500 https://snapshot.ubuntu.com/ubuntu/20261017T000000Z resolute/main amd64 Packages\nqemu-system-data:\n  Installed: (none)\n  Candidate: 1:10.2.1+ds-1ubuntu3.2\n  Version table:\n     1:10.2.1+ds-1ubuntu3.2 500\n        500 https://snapshot.ubuntu.com/ubuntu/20261017T000000Z resolute-updates/main amd64 Packages\n     1:10.2.1+ds-1ubuntu3 500\n        500 https://snapshot.ubuntu.com/ubuntu/20261017T000000Z resolute/main amd64 Packages\nqemu-utils:\n  Installed: (none)\n  Candidate: 1:10.2.1+ds-1ubuntu3.2\n  Version table:\n     1:10.2.1+ds-1ubuntu3.2 500\n        500 https://snapshot.ubuntu.com/ubuntu/20261017T000000Z resolute-updates/main amd64 Packages\n     1:10.2.1+ds-1ubuntu3 500\n        500 https://snapshot.ubuntu.com/ubuntu/20261017T000000Z resolute/main amd64 Packages\nxorriso:\n  Installed: 1:1.5.6-1.1ubuntu4\n  Candidate: 1:1.5.6-1.1ubuntu4\n  Version table:\n     1:1.5.6-1.1ubuntu4 500\n        500 https://snapshot.ubuntu.com/ubuntu/20261017T000000Z resolute/main amd64 Packages\n *** 1:1.5.6-1.1ubuntu4 100\n        100 /var/lib/dpkg/status\n",
+      "stderr": "E: Packages need to be removed but remove is disabled.\n",
+      "stdout": "NOTE: This is only a simulation!\n      apt-get needs root privileges for real execution.\n      Keep also in mind that locking is deactivated,\n      so don't depend on the relevance to the real current situation!\nReading package lists...\nBuilding dependency tree...\nSkipping xorriso, it is already installed and upgrade is not set.\nSolving dependencies...\nThe following additional packages will be installed:\n  seabios ubuntu-virt\nSuggested packages:\n  samba vde2 passt\nRecommended packages:\n  ipxe-qemu-256k-compat-efi-roms ovmf qemu-system-gui\n  qemu-system-modules-spice qemu-system-modules-opengl qemu-block-extra\n  cpu-checker\nThe following packages will be REMOVED:\n  ubuntu-virt-hwe\nThe following NEW packages will be installed:\n  qemu-system-common qemu-system-data qemu-system-x86 qemu-utils seabios\n  ubuntu-virt\n0 upgraded, 6 newly installed, 1 to remove and 107 not upgraded.\n",
+      "original_policy_sha256": "8a17983a07677d251287228be2737368fe92edb6775c16dd210ad46987ca4788",
+      "plan_exit": 100
+    },
+    "base-only-empty": {
+      "policy": "qemu-system-x86:\n  Installed: (none)\n  Candidate: 1:10.2.1+ds-1ubuntu3\n  Version table:\n     1:10.2.1+ds-1ubuntu3 500\n        500 https://snapshot.ubuntu.com/ubuntu/20261017T000000Z resolute/main amd64 Packages\nqemu-system-common:\n  Installed: (none)\n  Candidate: 1:10.2.1+ds-1ubuntu3\n  Version table:\n     1:10.2.1+ds-1ubuntu3 500\n        500 https://snapshot.ubuntu.com/ubuntu/20261017T000000Z resolute/main amd64 Packages\nqemu-system-data:\n  Installed: (none)\n  Candidate: 1:10.2.1+ds-1ubuntu3\n  Version table:\n     1:10.2.1+ds-1ubuntu3 500\n        500 https://snapshot.ubuntu.com/ubuntu/20261017T000000Z resolute/main amd64 Packages\nqemu-utils:\n  Installed: (none)\n  Candidate: 1:10.2.1+ds-1ubuntu3\n  Version table:\n     1:10.2.1+ds-1ubuntu3 500\n        500 https://snapshot.ubuntu.com/ubuntu/20261017T000000Z resolute/main amd64 Packages\nxorriso:\n  Installed: (none)\n  Candidate: 1:1.5.6-1.1ubuntu4\n  Version table:\n     1:1.5.6-1.1ubuntu4 500\n        500 https://snapshot.ubuntu.com/ubuntu/20261017T000000Z resolute/main amd64 Packages\n",
+      "stderr": "E: Version '1:10.2.1+ds-1ubuntu3.2' for 'qemu-system-x86' was not found\nE: Version '1:10.2.1+ds-1ubuntu3.2' for 'qemu-system-common' was not found\nE: Version '1:10.2.1+ds-1ubuntu3.2' for 'qemu-system-data' was not found\nE: Version '1:10.2.1+ds-1ubuntu3.2' for 'qemu-utils' was not found\n",
+      "stdout": "NOTE: This is only a simulation!\n      apt-get needs root privileges for real execution.\n      Keep also in mind that locking is deactivated,\n      so don't depend on the relevance to the real current situation!\nReading package lists...\nBuilding dependency tree...\nPackage qemu-utils is a virtual package provided by:\n  qemu-utils-hwe 1:10.2.1+ds-1ubuntu4 (= 1:10.2.1+ds-1ubuntu4)\n\nPackage qemu-system-common is a virtual package provided by:\n  qemu-system-common-hwe 1:10.2.1+ds-1ubuntu4 (= 1:10.2.1+ds-1ubuntu4)\n\nPackage qemu-system-x86 is a virtual package provided by:\n  qemu-system-x86-hwe 1:10.2.1+ds-1ubuntu4 (= 1:10.2.1+ds-1ubuntu4)\n\nPackage qemu-system-data is a virtual package provided by:\n  qemu-system-data-hwe 1:10.2.1+ds-1ubuntu4 (= 1:10.2.1+ds-1ubuntu4)\n\n",
+      "original_policy_sha256": "d9ae62b16629445df0d7182f17a97f7ad7d62fcd8d87f5a59453b6273ccb3468",
+      "plan_exit": 100
+    },
+    "no-base-empty": {
+      "policy": "qemu-system-x86:\n  Installed: (none)\n  Candidate: 1:10.2.1+ds-1ubuntu3.2\n  Version table:\n     1:10.2.1+ds-1ubuntu3.2 500\n        500 https://snapshot.ubuntu.com/ubuntu/20261017T000000Z resolute-updates/main amd64 Packages\nqemu-system-common:\n  Installed: (none)\n  Candidate: 1:10.2.1+ds-1ubuntu3.2\n  Version table:\n     1:10.2.1+ds-1ubuntu3.2 500\n        500 https://snapshot.ubuntu.com/ubuntu/20261017T000000Z resolute-updates/main amd64 Packages\nqemu-system-data:\n  Installed: (none)\n  Candidate: 1:10.2.1+ds-1ubuntu3.2\n  Version table:\n     1:10.2.1+ds-1ubuntu3.2 500\n        500 https://snapshot.ubuntu.com/ubuntu/20261017T000000Z resolute-updates/main amd64 Packages\nqemu-utils:\n  Installed: (none)\n  Candidate: 1:10.2.1+ds-1ubuntu3.2\n  Version table:\n     1:10.2.1+ds-1ubuntu3.2 500\n        500 https://snapshot.ubuntu.com/ubuntu/20261017T000000Z resolute-updates/main amd64 Packages\nxorriso:\n  Installed: (none)\n  Candidate: (none)\n  Version table:\n",
+      "stderr": "E: Version '1:1.5.6-1.1ubuntu4' for 'xorriso' was not found\n",
+      "stdout": "NOTE: This is only a simulation!\n      apt-get needs root privileges for real execution.\n      Keep also in mind that locking is deactivated,\n      so don't depend on the relevance to the real current situation!\nReading package lists...\nBuilding dependency tree...\nPackage xorriso is not available, but is referred to by another package.\nThis may mean that the package is missing, has been obsoleted, or\nis only available from another source\n\n",
+      "original_policy_sha256": "bb83d08c8058a5becd8a46fa3632797cd01f9b26feacbeefe410b51a70febf91",
+      "plan_exit": 100
+    }
+  },
+  "update_stderr": "E: Failed to fetch https://snapshot.ubuntu.com/ubuntu/20261017T000000Z/dists/resolute/InRelease  Could not connect to 127.0.0.1:33205 (127.0.0.1). - connect (111: Connection refused)\nE: Failed to fetch https://snapshot.ubuntu.com/ubuntu/20261017T000000Z/dists/resolute-updates/InRelease  Unable to connect to 127.0.0.1:33205:\nE: Failed to fetch https://snapshot.ubuntu.com/ubuntu/20261017T000000Z/dists/resolute-security/InRelease  Unable to connect to 127.0.0.1:33205:\nE: Some index files failed to download. They have been ignored, or old ones used instead.\n"
+}

@@ -75,6 +75,10 @@ avoid removing or upgrading installed packages. The archive keyring supplied
 by Ubuntu authenticates the snapshot package indexes and acquisition. The fixed
 historical snapshot uses its signed file identities instead of the rolling
 archive freshness deadline.
+The host's existing unprivileged update also uses `--error-on=any`; a transient
+index-fetch error stops provisioning rather than allowing incomplete lists into
+the plan. The independently transferred guest retains its existing update
+behavior and needs no host helper module.
 [Dated Ubuntu cloud images](https://cloud-images.ubuntu.com/releases/noble/release-20261017/) ·
 [Ubuntu snapshot service](https://snapshot.ubuntu.com/) ·
 [Ubuntu archive verification](https://documentation.ubuntu.com/security/software-integrity/archive-verification/)
@@ -134,6 +138,36 @@ absent before an operation starts, after it succeeds, and on later unrelated
 failures. Earlier schema-1 receipts remain readable without this optional field;
 absence alone does not establish a successful package operation. The guest's
 package behavior and receipt are unchanged.
+Native host update or plan failures may also report `host_package_messages`,
+containing only recognized message categories: `fetch`, `authentication`,
+`index_validity`, `transport`, `permission`, `lock`, `cache`,
+`requested_version_missing`, `package_unavailable`, `removal_disabled`,
+`unmet_dependencies` or `held_broken`. Unrecognized wording is `unclassified`;
+unavailable observations are `unobserved`. These describe wording, not causes.
+In particular, a held/broken message does not prove a package hold. Guards,
+successful operations and unrelated failures do not produce these fields.
+
+After a native plan failure only, the trusted host-only
+[package helper](../scripts/hosted_zero_swap_packages.py) may make one
+unprivileged, read-only `apt-cache policy` query for the five pinned host names
+using the same private lists and configuration. The optional
+`host_package_policy` maps those fixed names to `installed` values
+`exact`, `different`, `none` or `unobserved`, and `wanted_archive_version`
+values `present`, `absent` or `unobserved`. Complete records must match the
+snapshot origin, suite, component and amd64 index. Status-file-only versions
+and the Candidate header do not establish an archive version. Mixed,
+incomplete or contradictory records remain unobserved. These observations
+never substitute for the final installed-version/status guard or select a
+different version.
+
+The optional query has at most two seconds within the original deadline and
+the existing output cap. Cancellation, expired work time or unverified command
+cleanup skips it. Observation, parsing and query cleanup failures preserve the
+original native work failure and report cleanup separately. No failed operation
+is retried. Raw APT output, dependency names, private paths, version values and
+protected-byte hashes remain private. Pins remain solely in the existing pin
+file; the helper adds no dependency, download or Renovate-managed pin. Its
+saved APT regression fixture is historical model evidence, not a host inventory.
 The guest requires the owned container to be absent by ID and name.
 Cancellation during guest cleanup fails completed work, while an earlier
 work failure keeps its result and the cleanup outcome remains separate.
