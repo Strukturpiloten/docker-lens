@@ -15,6 +15,27 @@ through the KVM API. QEMU must boot with KVM acceleration. GitHub documents
 nested virtualization as experimental on its hosted runners.
 [GitHub-hosted runners](https://docs.github.com/en/actions/concepts/runners/github-hosted-runners#preinstalled-software-for-github-owned-images)
 
+The receipt's optional `host.kvm_probe` records the first failed operation or
+a completed probe. It distinguishes opening the device, reading its metadata,
+its type and identity, getting API version 12, creating a probe VM, and
+closing either descriptor. The outcome uses closed details for permission
+denial, absence, unsupported operations, other errors, and mismatches.
+Descriptor cleanup is recorded separately, even when a close also fails.
+The probe uses the ordinary non-root runner identity. It does not change
+device permissions or groups. A successful probe proceeds to the same
+KVM-only boot trial.
+[Linux KVM API](https://docs.kernel.org/virt/kvm/api.html)
+
+A denied open also records `group_observation`. A separate no-follow
+metadata read checks for the root-owned KVM character device, the named
+`kvm` owning group, group read/write mode bits and no world-write bit.
+For that layout, `group_rw_held` or `group_rw_not_held` reports whether
+the job's effective primary or supplementary groups contain the owning group.
+`other_layout` records a mismatch, and `unobserved` records a missing
+observation. These facts describe the later metadata and process membership.
+They do not establish why the earlier open was denied or whether changing
+membership would allow access. The original refusal is preserved.
+
 The fixed cloud-image release and tool versions are in
 [scripts/hosted-zero-swap-pins.json](../scripts/hosted-zero-swap-pins.json).
 The collector verifies Ubuntu's signed checksum file against the pinned

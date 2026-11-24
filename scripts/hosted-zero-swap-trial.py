@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Bounded infrastructure trial. The native validation harness is a separate owner."""
 
+import errno
 import fcntl
+import grp
 import hashlib
 import json
 import os
@@ -31,6 +33,8 @@ REPO = "Strukturpiloten/docker-lens"
 WORKFLOW = ".github/workflows/hosted-zero-swap-trial.yml"
 RESULT = "dockerlens-hosted-zero-swap-trial.json"
 ARCHIVE = "https://snapshot.ubuntu.com/ubuntu/"
+KVM_PATH = "/dev/kvm"
+KVM_RDEV = os.makedev(10, 232)
 KEYRING = "/usr/share/keyrings/ubuntu-archive-keyring.gpg"
 OUTPUT_LIMIT = 512 * 1024
 GUEST_STAGES = (
@@ -952,19 +956,79 @@ def guest_report(raw, status, pins, host_boot):
         raise Refusal("guest_response", code) from error
 
 
-def kvm_preflight():
+def kvm_errno(error):
+    if error.errno in (errno.EACCES, errno.EPERM):
+        return "denied"
+    if error.errno in (errno.ENOENT, errno.ENODEV, errno.ENXIO):
+        return "absent"
+    if error.errno in (errno.ENOTTY, errno.EOPNOTSUPP, errno.ENOSYS):
+        return "unsupported"
+    return "other"
+
+
+def kvm_group_observation():
     try:
-        with open(
-            "/dev/kvm", "r+b", buffering=0, opener=lambda p, f: os.open(p, f | os.O_NOFOLLOW)
-        ) as kvm:
-            require(
-                stat.S_ISCHR(os.fstat(kvm.fileno()).st_mode)
-                and fcntl.ioctl(kvm.fileno(), 0xAE00) == 12
-            )
-            fd = fcntl.ioctl(kvm.fileno(), 0xAE01, 0)
-            os.close(fd)
-    except OSError:
-        raise Refusal("unavailable") from None
+        device = os.lstat(KVM_PATH)
+        group_rw = stat.S_IRGRP | stat.S_IWGRP
+        if not (
+            stat.S_ISCHR(device.st_mode)
+            and device.st_rdev == KVM_RDEV
+            and device.st_uid == 0
+            and device.st_mode & group_rw == group_rw
+            and not device.st_mode & stat.S_IWOTH
+        ):
+            return "other_layout"
+        group = grp.getgrnam("kvm").gr_gid
+        if device.st_gid != group:
+            return "other_layout"
+        if group == os.getegid() or group in os.getgroups():
+            return "group_rw_held"
+        return "group_rw_not_held"
+    except (OSError, KeyError):
+        return "unobserved"
+
+
+def kvm_preflight(probe):
+    device_fd = vm_fd = None
+    operation, detail, reason = "open", "ok", None
+    probe.update(device_close="not_opened", vm_close="not_opened")
+    try:
+        device_fd = os.open(KVM_PATH, os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC)
+        operation = "device_stat"
+        device = os.fstat(device_fd)
+        operation = "device_type"
+        require(stat.S_ISCHR(device.st_mode))
+        operation = "device_identity"
+        require(device.st_rdev == KVM_RDEV)
+        operation = "api_version"
+        require(fcntl.ioctl(device_fd, 0xAE00) == 12)
+        operation = "create_vm"
+        vm_fd = fcntl.ioctl(device_fd, 0xAE01, 0)
+    except OSError as error:
+        detail, reason = kvm_errno(error), "unavailable"
+        if operation == "open" and detail == "denied":
+            probe["group_observation"] = kvm_group_observation()
+    except Refusal:
+        detail, reason = "mismatch", "refused"
+    finally:
+        for fd, close_operation in ((vm_fd, "vm_close"), (device_fd, "device_close")):
+            if fd is None:
+                continue
+            try:
+                os.close(fd)
+            except OSError as error:
+                probe[close_operation] = kvm_errno(error)
+                if reason is None:
+                    operation, detail, reason = (
+                        close_operation,
+                        probe[close_operation],
+                        "unavailable",
+                    )
+            else:
+                probe[close_operation] = "closed"
+    probe.update(operation=operation if reason else "complete", detail=detail)
+    if reason:
+        raise Refusal(reason)
 
 
 def allocated(work):
@@ -1088,7 +1152,8 @@ def host_trial():
             available_cpus=len(os.sched_getaffinity(0)),
         )
         result["stage"] = "kvm"
-        kvm_preflight()
+        result["host"]["kvm_probe"] = probe = {}
+        kvm_preflight(probe)
         result["host"]["kvm_api"] = 12
         work = Path(tempfile.mkdtemp(prefix="dockerlens-boot-", dir=directory))
         require(re.fullmatch(r"[A-Za-z0-9._/-]+", str(work)))

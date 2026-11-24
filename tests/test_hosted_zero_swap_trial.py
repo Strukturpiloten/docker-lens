@@ -1,17 +1,20 @@
 """Contracts for the fixed hosted VM boot trial."""
 
+import errno
+import grp
 import hashlib
 import importlib.util
 import io
 import json
 import os
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
-from contextlib import ExitStack, redirect_stdout
+from contextlib import ExitStack, contextmanager, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -47,6 +50,93 @@ def receipt_path(handoff):
 
 def command_json(value):
     return 0, json.dumps(value).encode(), b""
+
+
+@contextmanager
+def inert_kvm(
+    *,
+    failures=None,
+    mode=stat.S_IFCHR,
+    device=(10, 232),
+    version=12,
+    layout=None,
+    named_gid=55103,
+    effective_gid=55104,
+    supplementary=(),
+):
+    failures = failures or {}
+    metadata = {
+        "st_mode": stat.S_IFCHR | 0o660,
+        "st_rdev": os.makedev(10, 232),
+        "st_uid": 0,
+        "st_gid": 55103,
+    } | (layout or {})
+    calls = []
+    device_fd, vm_fd = 40821, 40822
+    real_open, real_fstat, real_close, real_lstat = os.open, os.fstat, os.close, os.lstat
+
+    def observe(operation, value=None):
+        calls.append(operation)
+        if operation in failures:
+            raise OSError(failures[operation], "private diagnostic", "/private/sentinel")
+        return value
+
+    def open_device(path, flags, *args, **kwargs):
+        if os.fspath(path) != "/dev/kvm":
+            return real_open(path, flags, *args, **kwargs)
+        assert flags == os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC
+        return observe("open", device_fd)
+
+    def fstat(fd):
+        if fd != device_fd:
+            return real_fstat(fd)
+        return observe("device_stat", SimpleNamespace(st_mode=mode, st_rdev=os.makedev(*device)))
+
+    def lstat(path, *args, **kwargs):
+        if os.fspath(path) != "/dev/kvm":
+            return real_lstat(path, *args, **kwargs)
+        return observe("device_metadata", SimpleNamespace(**metadata))
+
+    def group_by_name(name):
+        assert name == "kvm"
+        gid = observe("group_lookup", named_gid)
+        if gid is None:
+            raise KeyError("missing group")
+        return SimpleNamespace(gr_gid=gid)
+
+    def ioctl(fd, number, *args):
+        assert fd == device_fd
+        if number == 0xAE00:
+            assert not args
+            return observe("api_version", version)
+        assert (number, args) == (0xAE01, (0,))
+        return observe("create_vm", vm_fd)
+
+    def close(fd):
+        if fd == vm_fd:
+            observe("vm_close")
+        elif fd == device_fd:
+            observe("device_close")
+        else:
+            real_close(fd)
+
+    with (
+        patch.object(trial.os, "open", side_effect=open_device),
+        patch.object(trial.os, "fstat", side_effect=fstat),
+        patch.object(trial.fcntl, "ioctl", side_effect=ioctl),
+        patch.object(trial.os, "close", side_effect=close),
+        patch.object(trial.os, "lstat", side_effect=lstat),
+        patch.object(grp, "getgrnam", side_effect=group_by_name),
+        patch.object(
+            trial.os, "getegid", side_effect=lambda: observe("effective_gid", effective_gid)
+        ),
+        patch.object(
+            trial.os,
+            "getgroups",
+            side_effect=lambda: observe("supplementary_groups", supplementary),
+        ),
+    ):
+        yield calls
 
 
 class BootTrial(unittest.TestCase):
@@ -491,6 +581,167 @@ except trial.Refusal as error:
                 trial.guest_report(receipt, status, PINS, host_boot)
             self.assertEqual((raised.exception.reason, raised.exception.code), expected)
 
+    def test_kvm_probe_classifies_each_operation_and_preserves_closes(self):
+        checked = ["open", "device_stat", "api_version", "create_vm"]
+        closed = ["vm_close", "device_close"]
+        for options, last, detail, vm_close, device_close, calls in (
+            ({}, "complete", "ok", "closed", "closed", checked + closed),
+            (
+                {"failures": {"open": errno.ENOENT}},
+                "open",
+                "absent",
+                "not_opened",
+                "not_opened",
+                ["open"],
+            ),
+            (
+                {"failures": {"open": errno.ELOOP}},
+                "open",
+                "other",
+                "not_opened",
+                "not_opened",
+                ["open"],
+            ),
+            (
+                {"failures": {"device_stat": errno.EIO, "device_close": errno.EPERM}},
+                "device_stat",
+                "other",
+                "not_opened",
+                "denied",
+                checked[:2] + closed[1:],
+            ),
+            (
+                {"mode": stat.S_IFREG},
+                "device_type",
+                "mismatch",
+                "not_opened",
+                "closed",
+                checked[:2] + closed[1:],
+            ),
+            (
+                {"device": (1, 3)},
+                "device_identity",
+                "mismatch",
+                "not_opened",
+                "closed",
+                checked[:2] + closed[1:],
+            ),
+            (
+                {"version": 99, "failures": {"device_close": errno.EIO}},
+                "api_version",
+                "mismatch",
+                "not_opened",
+                "other",
+                checked[:3] + closed[1:],
+            ),
+            (
+                {"failures": {"api_version": errno.EACCES}},
+                "api_version",
+                "denied",
+                "not_opened",
+                "closed",
+                checked[:3] + closed[1:],
+            ),
+            (
+                {"failures": {"api_version": errno.ENOTTY}},
+                "api_version",
+                "unsupported",
+                "not_opened",
+                "closed",
+                checked[:3] + closed[1:],
+            ),
+            (
+                {"failures": {"create_vm": errno.ENODEV}},
+                "create_vm",
+                "absent",
+                "not_opened",
+                "closed",
+                checked + closed[1:],
+            ),
+            (
+                {"failures": {"vm_close": errno.EIO, "device_close": errno.EPERM}},
+                "vm_close",
+                "other",
+                "other",
+                "denied",
+                checked + closed,
+            ),
+            (
+                {"failures": {"device_close": errno.EIO}},
+                "device_close",
+                "other",
+                "closed",
+                "other",
+                checked + closed,
+            ),
+        ):
+            with self.subTest(options=options), inert_kvm(**options) as actual:
+                probe = {}
+                if last == "complete":
+                    trial.kvm_preflight(probe)
+                else:
+                    with self.assertRaises(trial.Refusal) as raised:
+                        trial.kvm_preflight(probe)
+                    self.assertEqual(
+                        raised.exception.reason,
+                        "refused" if detail == "mismatch" else "unavailable",
+                    )
+                self.assertEqual(actual, calls)
+                self.assertEqual(
+                    probe,
+                    {
+                        "operation": last,
+                        "detail": detail,
+                        "vm_close": vm_close,
+                        "device_close": device_close,
+                    },
+                )
+
+    def test_kvm_denied_open_observes_only_closed_group_facts(self):
+        metadata = ["open", "device_metadata"]
+        lookup = metadata + ["group_lookup"]
+        effective = lookup + ["effective_gid"]
+        membership = effective + ["supplementary_groups"]
+        for options, status, calls in (
+            ({}, "group_rw_not_held", membership),
+            ({"layout": {"st_mode": stat.S_IFCHR | 0o664}}, "group_rw_not_held", membership),
+            ({"effective_gid": 55103}, "group_rw_held", effective),
+            ({"supplementary": (55112, 55103)}, "group_rw_held", membership),
+            ({"layout": {"st_mode": stat.S_IFLNK | 0o660}}, "other_layout", metadata),
+            ({"layout": {"st_mode": stat.S_IFREG | 0o660}}, "other_layout", metadata),
+            ({"layout": {"st_rdev": os.makedev(1, 3)}}, "other_layout", metadata),
+            ({"layout": {"st_uid": 55112}}, "other_layout", metadata),
+            ({"layout": {"st_gid": 55112}}, "other_layout", lookup),
+            ({"layout": {"st_mode": stat.S_IFCHR | 0o640}}, "other_layout", metadata),
+            ({"layout": {"st_mode": stat.S_IFCHR | 0o620}}, "other_layout", metadata),
+            ({"layout": {"st_mode": stat.S_IFCHR | 0o662}}, "other_layout", metadata),
+            ({"failures": {"device_metadata": errno.ENOENT}}, "unobserved", metadata),
+            ({"named_gid": None}, "unobserved", lookup),
+            ({"failures": {"group_lookup": errno.EIO}}, "unobserved", lookup),
+            ({"failures": {"effective_gid": errno.EIO}}, "unobserved", effective),
+            ({"failures": {"supplementary_groups": errno.EIO}}, "unobserved", membership),
+        ):
+            for denial in (errno.EACCES, errno.EPERM):
+                settings = options | {"failures": options.get("failures", {}) | {"open": denial}}
+                with self.subTest(options=options, denial=denial), inert_kvm(**settings) as actual:
+                    probe = {}
+                    with self.assertRaises(trial.Refusal) as raised:
+                        trial.kvm_preflight(probe)
+                    self.assertEqual(
+                        (raised.exception.code, raised.exception.reason), (1, "unavailable")
+                    )
+                    self.assertEqual(actual, calls)
+                    self.assertEqual(
+                        probe,
+                        {
+                            "operation": "open",
+                            "detail": "denied",
+                            "device_close": "not_opened",
+                            "vm_close": "not_opened",
+                            "group_observation": status,
+                        },
+                    )
+
     def test_vm_argv_is_kvm_only_and_probe_shell_is_valid(self):
         with patch.object(trial.subprocess, "Popen") as spawn:
             trial.launch_vm(Path("/own"), 47953)
@@ -674,7 +925,9 @@ class EntrypointTrial(unittest.TestCase):
         code, report, _ = self.guest(security=["name=seccomp,profile=builtin", "name=cgroupns"])
         self.assertEqual((code, report["stage"]), (0, "complete"))
 
-    def host(self, probes, *, cloud_failure=None, publish_failure=False, vm_exit_after=None):
+    def host(
+        self, probes, *, cloud_failure=None, publish_failure=False, vm_exit_after=None, kvm=None
+    ):
         now, deadlines, host_boot = [0], [], "e" * 64
         digest = PINS["cloud_image"].split("@sha256:")[1]
         guest_code, guest, _ = self.guest()
@@ -727,6 +980,21 @@ class EntrypointTrial(unittest.TestCase):
             handoff = Path(temporary) / "set_output"
             handoff.touch()
             with ExitStack() as stack:
+                stack.enter_context(inert_kvm(**(kvm or {})))
+                provision = stack.enter_context(
+                    patch.object(trial, "packages", return_value=PINS["host_packages"])
+                )
+                launch = stack.enter_context(
+                    patch.object(
+                        trial,
+                        "launch_vm",
+                        return_value=Mock(
+                            poll=Mock(
+                                side_effect=lambda: 17 if vm_exit_after == len(deadlines) else None
+                            )
+                        ),
+                    )
+                )
                 for context in (
                     patch.object(trial, "Path", side_effect=fake_path),
                     patch.dict(
@@ -744,8 +1012,6 @@ class EntrypointTrial(unittest.TestCase):
                     ),
                     patch.object(trial, "admitted_host", return_value={}),
                     patch.object(trial, "boot_id", return_value=host_boot),
-                    patch.object(trial, "kvm_preflight"),
-                    patch.object(trial, "packages", return_value=PINS["host_packages"]),
                     patch.object(trial, "verify_cloud_manifest", return_value="inert/"),
                     patch.object(
                         trial,
@@ -759,15 +1025,6 @@ class EntrypointTrial(unittest.TestCase):
                     ),
                     patch.object(trial, "make_seed"),
                     patch.object(trial.socket, "socket", return_value=listener_context),
-                    patch.object(
-                        trial,
-                        "launch_vm",
-                        return_value=Mock(
-                            poll=Mock(
-                                side_effect=lambda: 17 if vm_exit_after == len(deadlines) else None
-                            )
-                        ),
-                    ),
                     patch.object(trial, "capture", side_effect=run),
                     patch.object(trial, "reap", return_value=True),
                     patch.object(trial, "cancelled", None),
@@ -793,6 +1050,9 @@ class EntrypointTrial(unittest.TestCase):
                     stack.enter_context(patch.object(trial.os, "write", side_effect=short_write))
                 summary = stack.enter_context(redirect_stdout(io.StringIO()))
                 code = trial.host_trial()
+                if kvm:
+                    provision.assert_not_called()
+                    launch.assert_not_called()
             if publish_failure:
                 evidence = handoff.read_bytes()
                 self.assertIsNone(runner_receipt_value(evidence))
@@ -808,6 +1068,94 @@ class EntrypointTrial(unittest.TestCase):
                 receipt_path(handoff) if handoff.stat().st_size else Path(temporary) / trial.RESULT
             )
             return code, json.loads(path.read_text()), deadlines
+
+    def test_host_publishes_closed_kvm_refusal_before_provisioning(self):
+        for options, operation, detail, reason, dev_close, group_status in (
+            (
+                {"failures": {"open": errno.EACCES}},
+                "open",
+                "denied",
+                "unavailable",
+                "not_opened",
+                "group_rw_not_held",
+            ),
+            (
+                {"failures": {"open": errno.EPERM, "device_metadata": errno.ENOENT}},
+                "open",
+                "denied",
+                "unavailable",
+                "not_opened",
+                "unobserved",
+            ),
+            (
+                {"failures": {"open": errno.ENOENT}},
+                "open",
+                "absent",
+                "unavailable",
+                "not_opened",
+                None,
+            ),
+            ({"device": (1, 3)}, "device_identity", "mismatch", "refused", "closed", None),
+            (
+                {"failures": {"api_version": errno.ENOTTY}},
+                "api_version",
+                "unsupported",
+                "unavailable",
+                "closed",
+                None,
+            ),
+            (
+                {"failures": {"create_vm": errno.ENODEV, "device_close": errno.EIO}},
+                "create_vm",
+                "absent",
+                "unavailable",
+                "other",
+                None,
+            ),
+        ):
+            with self.subTest(options=options):
+                code, report, observed = self.host((), kvm=options)
+                self.assertEqual(
+                    (code, report["stage"], report["reason"], report["cleanup"]),
+                    (1, "kvm", reason, "not_started"),
+                )
+                self.assertEqual(observed, [])
+                self.assertNotIn("kvm_api", report["host"])
+                self.assertNotIn("host_packages", report)
+                self.assertEqual(
+                    report["host"]["kvm_probe"],
+                    {
+                        "operation": operation,
+                        "detail": detail,
+                        "vm_close": "not_opened",
+                        "device_close": dev_close,
+                    }
+                    | ({"group_observation": group_status} if group_status else {}),
+                )
+                for private in (
+                    "private diagnostic",
+                    "/private/sentinel",
+                    "/dev/kvm",
+                    "40821",
+                    "40822",
+                    "55103",
+                    "55104",
+                ):
+                    self.assertNotIn(private, json.dumps(report))
+
+    def test_host_continues_after_a_successful_kvm_probe(self):
+        code, report, observed = self.host(("ready",))
+        self.assertEqual((code, report["stage"], observed), (0, "complete", [7]))
+        self.assertEqual(report["host"]["kvm_api"], 12)
+        self.assertEqual(
+            report["host"]["kvm_probe"],
+            {
+                "operation": "complete",
+                "detail": "ok",
+                "vm_close": "closed",
+                "device_close": "closed",
+            },
+        )
 
     def test_host_retries_transient_timeouts_within_the_absolute_boot_budget(self):
         for probes, cloud_failure, expected, deadlines in (
