@@ -19,6 +19,7 @@ use std::io::{Read, Write};
 use std::net::Ipv4Addr;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::AtomicBool;
@@ -142,6 +143,28 @@ fn exact_acquisition_versions(
     !captured.is_empty() && captured.iter().all(|api| *api == expected) && decoded == [expected]
 }
 
+fn first_transport_failure(
+    reported: &mut bool,
+    cleanup: bool,
+    status: &std::process::ExitStatus,
+) -> Option<String> {
+    if status.success() || *reported {
+        return None;
+    }
+    *reported = true;
+    let phase = if cleanup { "cleanup" } else { "work" };
+    let context = if let Some(code) = status.code().filter(|code| (1..=255).contains(code)) {
+        format!("exit={code}")
+    } else if let Some(signal) = status.signal().filter(|signal| (1..=64).contains(signal)) {
+        format!("signal={signal}")
+    } else {
+        "status=unavailable".to_owned()
+    };
+    Some(format!(
+        "DOCKERLENS_NATIVE_TRANSPORT: source=native_network_attachment_tests phase={phase} {context}"
+    ))
+}
+
 struct Run {
     token: String,
     lane: String,
@@ -169,6 +192,7 @@ struct Run {
     context: Value,
     mutation_uncertain: bool,
     cleanup_uncertain: bool,
+    transport_failure_reported: bool,
     finished: bool,
 }
 impl Run {
@@ -264,6 +288,7 @@ impl Run {
             context: Value::Null,
             mutation_uncertain: false,
             cleanup_uncertain: false,
+            transport_failure_reported: false,
             finished: false,
         }
     }
@@ -457,6 +482,14 @@ impl Run {
                 })
         })
     }
+    fn report_transport_failure(&mut self, cleanup: bool, status: &std::process::ExitStatus) {
+        if let Some(context) =
+            first_transport_failure(&mut self.transport_failure_reported, cleanup, status)
+        {
+            eprintln!("{context}");
+        }
+    }
+
     fn api(
         &mut self,
         cleanup: bool,
@@ -501,6 +534,7 @@ impl Run {
             format!("http://localhost{path}"),
         ]);
         let output = self.capture(cleanup, false, 3, &args, input.as_deref(), 16 * 1024 + 8);
+        self.report_transport_failure(cleanup, &output.status);
         assert!(
             output.status.success(),
             "attachment API transport must complete"
@@ -1632,6 +1666,248 @@ fn live_network_attachments_match_engine() {
     publish(&run.path, &run.directory, &proof);
     run.finished = true;
     eprintln!("DOCKERLENS_NATIVE_CHECK: network_attachment_evidence");
+}
+
+#[test]
+fn attachment_transport_local_api_and_wrapper_controls() {
+    const FIXTURE: &str = "DOCKERLENS_ATTACHMENT_LOCAL_TRANSPORT_FIXTURE";
+    const SELECTED: &str = "native_network_attachment_tests::live_network_attachments_match_engine";
+    if let Ok(mode) = std::env::var(FIXTURE) {
+        // This subprocess owns no native resources and contacts only its private
+        // local socket. Keep the real API/capture/assertion and libtest path.
+        let directory = PathBuf::from(required("DOCKERLENS_ATTACHMENT_LOCAL_DIRECTORY"));
+        let handle = std::thread::Builder::new()
+            .name(SELECTED.into())
+            .spawn(move || {
+                let mut run = Run {
+                    token: String::new(),
+                    lane: String::new(),
+                    mode: DaemonMode::Rootful,
+                    api: "1.41".into(),
+                    release: String::new(),
+                    package: String::new(),
+                    image: String::new(),
+                    outer_image: String::new(),
+                    outer_id: String::new(),
+                    outer_name: String::new(),
+                    socket: directory
+                        .join("PRIVATE_ATTACHMENT_CANARY.sock")
+                        .to_str()
+                        .unwrap()
+                        .into(),
+                    path: directory.join("unused"),
+                    directory,
+                    candidate: String::new(),
+                    elevated: false,
+                    deadline: Instant::now() + Duration::from_secs(120),
+                    epoch: SystemTime::now() + Duration::from_secs(120),
+                    work_calls: 0,
+                    work_bytes: 0,
+                    cleanup_calls: 0,
+                    cleanup_bytes: 0,
+                    resources: Vec::new(),
+                    facts: None,
+                    context: Value::Null,
+                    mutation_uncertain: false,
+                    cleanup_uncertain: false,
+                    transport_failure_reported: false,
+                    finished: true,
+                };
+                eprintln!("DOCKERLENS_NATIVE_CHECK: network_attachment_oracle");
+                let work = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    if mode != "cleanup" {
+                        run.api(false, "GET", "/version", None);
+                    }
+                }));
+                // A second real API call runs even after the work assertion panics.
+                // The marker is private and must never escape the projector.
+                fs::write(run.directory.join("cleanup-attempted"), b"yes").unwrap();
+                eprintln!("DOCKERLENS_NATIVE_CHECK: network_attachment_cleanup");
+                let cleanup = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    run.api(true, "GET", "/version", None);
+                }));
+                if let Err(original) = work {
+                    std::panic::resume_unwind(original);
+                }
+                if let Err(original) = cleanup {
+                    std::panic::resume_unwind(original);
+                }
+            })
+            .unwrap();
+        if let Err(original) = handle.join() {
+            std::panic::resume_unwind(original);
+        }
+        return;
+    }
+    let directory =
+        std::env::temp_dir().join(format!("dl-attachment-transport-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    let cargo = directory.join("cargo");
+    fs::write(&cargo, format!(
+        "#!/bin/sh\ncase \" $* \" in *' --list '*) printf '%s: test\\n' '{SELECTED}';; *) exec \"$DOCKERLENS_ATTACHMENT_LOCAL_BINARY\" --exact native_network_attachment_tests::attachment_transport_local_api_and_wrapper_controls --nocapture;; esac\n"
+    )).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&cargo, fs::Permissions::from_mode(0o700)).unwrap();
+    for mode in ["work", "cleanup", "success"] {
+        let server = if mode == "success" {
+            let listener = std::os::unix::net::UnixListener::bind(
+                directory.join("PRIVATE_ATTACHMENT_CANARY.sock"),
+            )
+            .unwrap();
+            listener.set_nonblocking(true).unwrap();
+            Some(std::thread::spawn(move || {
+                for _ in 0..2 {
+                    let deadline = Instant::now() + Duration::from_secs(10);
+                    let mut stream = loop {
+                        match listener.accept() {
+                            Ok((stream, _)) => break stream,
+                            Err(error)
+                                if error.kind() == std::io::ErrorKind::WouldBlock
+                                    && Instant::now() < deadline =>
+                            {
+                                std::thread::sleep(Duration::from_millis(5))
+                            }
+                            Err(_) => panic!("local fixture accept"),
+                        }
+                    };
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(2)))
+                        .unwrap();
+                    let mut request = Vec::new();
+                    while !request.ends_with(b"\r\n\r\n") {
+                        assert!(request.len() < 4096);
+                        let mut byte = [0];
+                        stream.read_exact(&mut byte).unwrap();
+                        request.push(byte[0]);
+                    }
+                    stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 27\r\nConnection: close\r\n\r\nPRIVATE_ATTACHMENT_CANARY!!").unwrap();
+                }
+            }))
+        } else {
+            None
+        };
+        let output = Command::new("bash")
+            .args([
+                "scripts/run-exact-native-test.sh",
+                "native_network_attachment",
+                "live_network_attachments_match_engine",
+            ])
+            .env(FIXTURE, mode)
+            .env("DOCKERLENS_ATTACHMENT_LOCAL_DIRECTORY", &directory)
+            .env(
+                "DOCKERLENS_ATTACHMENT_LOCAL_BINARY",
+                std::env::current_exe().unwrap(),
+            )
+            .env(
+                "PATH",
+                format!("{}:{}", directory.display(), required("PATH")),
+            )
+            .output()
+            .unwrap();
+        if let Some(server) = server {
+            server.join().unwrap();
+        }
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(directory.join("cleanup-attempted").exists());
+        fs::remove_file(directory.join("cleanup-attempted")).unwrap();
+        assert!(
+            !stderr.contains("PRIVATE_ATTACHMENT_CANARY")
+                && !stdout.contains("PRIVATE_ATTACHMENT_CANARY")
+        );
+        assert!(!stderr.contains(directory.to_str().unwrap()));
+        if mode == "success" {
+            assert!(output.status.success());
+            assert!(stderr.is_empty());
+        } else {
+            assert!(!output.status.success());
+            assert!(stderr.contains("failed (exit 101)"));
+            assert!(stderr.contains(&format!("phase={mode} exit=7")));
+            assert_eq!(stderr.matches("DOCKERLENS_NATIVE_TRANSPORT:").count(), 1);
+            if mode == "work" {
+                let assertion_line = include_str!("native_network_attachment_tests.rs")
+                    .lines()
+                    .position(|line| line.trim() == "\"attachment API transport must complete\"")
+                    .unwrap()
+                    - 1;
+                assert!(stderr.contains(&format!(
+                    "DOCKERLENS_NATIVE_PANIC: source=native_network_attachment_tests line={assertion_line} column=9"
+                )));
+            }
+        }
+    }
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn attachment_transport_retains_first_work_and_cleanup_status() {
+    let mut reported = false;
+    let work = std::process::ExitStatus::from_raw(28 << 8);
+    let cleanup = std::process::ExitStatus::from_raw(15);
+    assert_eq!(
+        first_transport_failure(&mut reported, false, &work),
+        Some("DOCKERLENS_NATIVE_TRANSPORT: source=native_network_attachment_tests phase=work exit=28".to_owned())
+    );
+    assert!(first_transport_failure(&mut reported, true, &cleanup).is_none());
+    reported = false;
+    assert_eq!(
+        first_transport_failure(&mut reported, true, &cleanup),
+        Some("DOCKERLENS_NATIVE_TRANSPORT: source=native_network_attachment_tests phase=cleanup signal=15".to_owned())
+    );
+    assert!(first_transport_failure(&mut reported, false, &work).is_none());
+}
+
+#[test]
+fn attachment_transport_success_does_not_consume_first_failure() {
+    let mut reported = false;
+    assert!(
+        first_transport_failure(&mut reported, false, &std::process::ExitStatus::from_raw(0))
+            .is_none()
+    );
+    assert!(!reported);
+    assert_eq!(
+        first_transport_failure(&mut reported, false, &std::process::ExitStatus::from_raw(255 << 8)),
+        Some("DOCKERLENS_NATIVE_TRANSPORT: source=native_network_attachment_tests phase=work exit=255".to_owned())
+    );
+}
+
+#[test]
+fn attachment_transport_reports_actual_signal_or_unavailable_without_guessing() {
+    for (command, expected) in [("exit 28", "exit=28"), ("kill -TERM $$", "signal=15")] {
+        let status = Command::new("sh").args(["-c", command]).status().unwrap();
+        let mut reported = false;
+        assert_eq!(
+            first_transport_failure(&mut reported, false, &status),
+            Some(format!(
+                "DOCKERLENS_NATIVE_TRANSPORT: source=native_network_attachment_tests phase=work {expected}"
+            ))
+        );
+    }
+    for (raw, expected) in [
+        (
+            64,
+            "DOCKERLENS_NATIVE_TRANSPORT: source=native_network_attachment_tests phase=work signal=64",
+        ),
+        (
+            65,
+            "DOCKERLENS_NATIVE_TRANSPORT: source=native_network_attachment_tests phase=work status=unavailable",
+        ),
+        (
+            0x7f,
+            "DOCKERLENS_NATIVE_TRANSPORT: source=native_network_attachment_tests phase=work status=unavailable",
+        ),
+    ] {
+        let mut reported = false;
+        assert_eq!(
+            first_transport_failure(
+                &mut reported,
+                false,
+                &std::process::ExitStatus::from_raw(raw)
+            ),
+            Some(expected.to_owned())
+        );
+        assert!(reported);
+    }
 }
 
 #[test]

@@ -108,8 +108,24 @@ fi
 network_attachment_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: network_attachment_(context|oracle|rendered|cleanup|cleanup_unverified|evidence)$' <<<"$result" | tail -n 1 || true)
 if [[ -n $network_attachment_marker ]]; then marker=$network_attachment_marker; fi
 network_attachment_causal_marker=
+network_attachment_transport=
 if [[ $target == native_network_attachment ]]; then
   network_attachment_causal_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: network_attachment_(context|oracle|rendered|cleanup|cleanup_unverified|evidence)$' <<<"$result" | awk '/^DOCKERLENS_NATIVE_CHECK: network_attachment_cleanup(_unverified)?$/ { exit } { last=$0 } END { if (last != "") print last }' || true)
+  # A first malformed classification or earlier panic cannot be repaired by cleanup output.
+  network_attachment_transport='DOCKERLENS_NATIVE_TRANSPORT: source=native_network_attachment_tests phase=unavailable status=unavailable'
+  if [[ $selected == native_network_attachment_tests::live_network_attachments_match_engine ]]; then
+    attachment_transport_first=$(awk '
+      /^[[:space:]]*thread .* panicked at([[:space:]]|$)/ { exit }
+      /^[[:space:]]*DOCKERLENS_NATIVE_TRANSPORT([[:space:]:]|$)/ { print; exit }
+    ' <<<"$result")
+    if [[ $attachment_transport_first =~ ^DOCKERLENS_NATIVE_TRANSPORT:\ source=native_network_attachment_tests\ phase=(work|cleanup)\ exit=([1-9][0-9]{0,2})$ ]] && (( BASH_REMATCH[2] <= 255 )); then
+      network_attachment_transport=$attachment_transport_first
+    elif [[ $attachment_transport_first =~ ^DOCKERLENS_NATIVE_TRANSPORT:\ source=native_network_attachment_tests\ phase=(work|cleanup)\ signal=([1-9][0-9]?)$ ]] && (( BASH_REMATCH[2] <= 64 )); then
+      network_attachment_transport=$attachment_transport_first
+    elif [[ $attachment_transport_first =~ ^DOCKERLENS_NATIVE_TRANSPORT:\ source=native_network_attachment_tests\ phase=(work|cleanup)\ status=unavailable$ ]]; then
+      network_attachment_transport=$attachment_transport_first
+    fi
+  fi
 fi
 bind_relabel_marker=$(grep -Eo '^DOCKERLENS_NATIVE_CHECK: bind_relabel_(context|oracle|rendered|cleanup|cleanup_unverified|evidence)$' <<<"$result" | tail -n 1 || true)
 if [[ -n $bind_relabel_marker ]]; then marker=$bind_relabel_marker; fi
@@ -273,6 +289,7 @@ if (( run_status != 0 )); then
   if [[ -n $error_category ]]; then echo "$error_category" >&2; fi
   if [[ -n $network_cli_diag ]]; then echo "$network_cli_diag" >&2; fi
   if [[ -n $internal_cleanup ]]; then echo "$internal_cleanup" >&2; fi
+  if [[ -n $network_attachment_transport ]]; then echo "$network_attachment_transport" >&2; fi
   if [[ -n $panic_site ]]; then echo "$panic_site" >&2; fi
   if [[ -n $summary ]]; then
     echo "$summary" >&2
