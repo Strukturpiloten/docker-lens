@@ -478,6 +478,25 @@ native_outer_create_daemon held'''
                 self.assertEqual((result.returncode, result.stdout), (2, ""), result.stderr)
 
 
+def debian_domain_membership_script(bootstrap):
+    first = bootstrap.index('\n{\n  IFS= read -r pid\n') + 1
+    redirection = '\n} <"$root/cgroup.procs"\n'
+    end = bootstrap.index(redirection, first) + len(redirection)
+    guard = bootstrap[first:end]
+    return r'''set -eu
+root=$2
+case "$1" in
+  one) printf '%s\n' "$$";;
+  extra) printf '%s\n2\n' "$$";;
+  wrong) printf '0\n';;
+  empty) :;;
+  empty_second) printf '%s\n\n' "$$";;
+  truncated_second) printf '%s\n2' "$$";;
+  *) exit 2;;
+esac >"$root/cgroup.procs"
+''' + guard + "printf 'post-guard action\\n'\n"
+
+
 class LifecycleControls(unittest.TestCase):
     def create(self, engine, lane, owner="io.dockerlens.native-run", guest="/dockerlens-native"):
         body = '''native_outer_engine=$1
@@ -518,6 +537,62 @@ native_outer_create_daemon held
                         expected.append("--storage-driver=vfs")
                     self.assertEqual(arguments[start + 1:-1], expected)
                     self.assertEqual(arguments[-1], "0" * 64)
+
+    def test_only_dockerlens_debian_rootful_bootstraps_the_owned_memory_domain(self):
+        cases = (
+            ("debian11-rootful", "io.dockerlens.native-run", "/dockerlens-native", True),
+            ("debian11-rootless", "io.dockerlens.native-run", "/dockerlens-native", False),
+            ("upstream-rootful", "io.dockerlens.native-run", "/dockerlens-native", False),
+            ("upstream-rootless", "io.dockerlens.native-run", "/dockerlens-native", False),
+            ("debian11-rootful", "io.boxferry.docker-core-run", "/boxferry-core", False),
+            ("debian11-rootful", "io.boxferry.docker-core-run", "/dockerlens-native", False),
+            ("debian11-rootful", "io.dockerlens.native-run", "/boxferry-core", False),
+        )
+        for engine in ("podman", "docker"):
+            for lane, owner, guest, uses_bootstrap in cases:
+                with self.subTest(engine=engine, lane=lane, owner=owner, guest=guest):
+                    result = self.create(engine, lane, owner, guest)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    arguments = result.stdout.splitlines()
+                    self.assertEqual(arguments[:4], ["120", "run", "--pull=never", "-d"])
+                    self.assertEqual(arguments.count("--cgroupns=private"), int(uses_bootstrap))
+                    self.assertEqual(arguments.count("dl-native-domain"), int(uses_bootstrap))
+                    if uses_bootstrap:
+                        shell_start = arguments.index("/bin/sh")
+                        launcher = arguments.index("dl-native-domain")
+                        self.assertEqual(arguments[shell_start + 1], "-c")
+                        self.assertEqual(arguments[launcher + 1:-1],
+                                         ["/usr/local/bin/start-dockerd",
+                                          "--host=unix:///dockerlens-native/docker.sock"])
+                        program = "\n".join(arguments[shell_start + 2:launcher])
+                        result = subprocess.run(
+                            ["/bin/sh", "-c", program, *arguments[launcher:-1]],
+                            capture_output=True, check=False, timeout=2,
+                        )
+                        self.assertEqual((result.returncode, result.stdout, result.stderr), (1, b"", b""))
+
+    def test_debian_domain_bootstrap_checks_sole_membership_before_action(self):
+        launch = self.create("podman", "debian11-rootful")
+        self.assertEqual(launch.returncode, 0, launch.stderr)
+        arguments = launch.stdout.splitlines()
+        shell_start = arguments.index("/bin/sh")
+        launcher = arguments.index("dl-native-domain")
+        bootstrap = "\n".join(arguments[shell_start + 2:launcher])
+        self.assertLess(bootstrap.index('} <"$root/cgroup.procs"'),
+                        bootstrap.index('mkdir "$scope"'))
+        script = debian_domain_membership_script(bootstrap)
+        with tempfile.TemporaryDirectory() as owned:
+            for scenario in ("one", "extra", "wrong", "empty", "empty_second", "truncated_second"):
+                with self.subTest(scenario=scenario):
+                    result = subprocess.run(
+                        ["/bin/sh", "-c", script, "membership-fixture", scenario, owned],
+                        capture_output=True, check=False, timeout=2,
+                    )
+                    accepted = scenario == "one"
+                    self.assertEqual(
+                        (result.returncode, result.stdout, result.stderr),
+                        (0, b"post-guard action\n", b"") if accepted else (1, b"", b""),
+                    )
 
     def test_both_backends_keep_four_inner_lanes_and_distinct_mount_logger_remove_semantics(self):
         for engine in ("podman", "docker"):

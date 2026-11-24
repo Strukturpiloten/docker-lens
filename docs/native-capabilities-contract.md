@@ -23,6 +23,12 @@ entrypoint/init and root user rather than assuming image defaults. No image is
 built, owned or removed; no extra mount, device, port, inner privileged flag,
 privileged exec, setns, capsh or setcap is introduced.
 
+Borrowed image inspect uses the same authenticated policy as memory30. API
+1.56 may omit the unset image user. API 1.41 requires the explicit root user
+value, as does container inspect on both APIs. The container projection records
+omitted `HostConfig.Init` as null and retains explicit false. The producer and
+reader reject true and other JSON types.
+
 | Ordered role | Explicit source configuration | Independently required PID1 CapEff |
 | --- | --- | --- |
 | default-cli | No cap flags | Measure D; bit 10 present, bit 21 absent |

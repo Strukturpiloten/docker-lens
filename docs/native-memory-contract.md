@@ -16,6 +16,16 @@ score adjustment, extra product field, inner privilege, image or pin is added.
 Existing #147 memory bounds, decoder, renderer and capability gates are unchanged.
 The same exact two-process fixture runs in every case.
 
+The borrowed image check authenticates its ID and digest, then requires no
+volumes, no entrypoint wrapper and the default root user. Debian API 1.41
+returns an empty `Config.User` for the pinned image. API 1.56 omits an unset
+image `Config.User`; an explicit null still fails. Container inspections
+require an explicit default-root user value, and readiness measures UID 0.
+Both Engines omit unset `HostConfig.Init` on container inspect. The CLI
+projection records that omission as null and retains explicit false. True
+and other JSON types fail. The other required inspect fields still bind the
+container identity and configuration.
+
 The proof claims observed direct leaf-local memory pressure and the actual bound
 allocation-child victim, under the sampled visible context. It does not establish
 that the leaf was the unique cause of every concurrent event or exclude arbitrary
@@ -82,6 +92,17 @@ refuses before collection. Each held visible node must report the complete
 `domain` record. The same check applies to the baseline mount root, every
 workload leaf, and each visible ancestor. A threaded domain or a threaded or
 invalid node cannot establish this memory-domain chain. [Kernel cgroup v2 core interface](https://docs.kernel.org/admin-guide/cgroup-v2.html#core-interface-files) · [Kernel cgroup namespace views](https://docs.kernel.org/admin-guide/cgroup-v2.html#the-root-and-views)
+
+The DockerLens Debian 11 rootful fixture starts its pinned daemon in the
+owned outer's `init.scope` child. The outer runtime creates the private cgroup
+namespace at the original 4 GiB and 512-PID outer. A fixed PID1 bootstrap verifies
+that mount, limits, domain type and sole direct membership, then moves only
+itself into the child before enabling memory delegation at the now-empty root.
+The original daemon launcher and argv run from that child. This lets the nested
+cgroupfs runtime create independent ordinary memory domains under the same held
+outer root. The collector still checks every visible node and the reader still
+requires the actual limits, local counters, headroom and zero global swap.
+A fresh native run must verify both runtime placement and workload effects.
 
 Finite leaves require actual memory.max = 67108864. Omitted/zero leaves require
 actual local max and agreement on the same observed visible inherited limits.

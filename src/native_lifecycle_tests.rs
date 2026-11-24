@@ -400,6 +400,37 @@ fn image_snapshot(run: &HealthRun) -> Value {
     json!({"id":value["Id"],"repo_digests":value["RepoDigests"],"config":value["Config"]})
 }
 
+fn borrowed_image_config(config: &Value, api: &str) -> bool {
+    let Some(fields) = config.as_object() else {
+        return false;
+    };
+    (config["Volumes"].is_null() || config["Volumes"] == json!({}))
+        && (config["Entrypoint"].is_null() || config["Entrypoint"] == json!([]))
+        // API 1.56 image inspect omits an unset User. Container inspect still
+        // has to provide its own explicit user value at every observation.
+        && fields.get("User").map_or(api == "1.56", |user| {
+            matches!(user.as_str(), Some("" | "0" | "0:0"))
+        })
+}
+// The complete container templates emit this member even when the Engine
+// omits HostConfig.Init. An absent member here is a malformed projection.
+fn inspect_init_is_unset_or_disabled(projection: &Value) -> bool {
+    matches!(
+        projection.get("init"),
+        Some(Value::Null | Value::Bool(false))
+    )
+}
+
+#[test]
+fn strict_container_projection_retains_only_null_or_false_init() {
+    assert!(inspect_init_is_unset_or_disabled(&json!({"init":null})));
+    assert!(inspect_init_is_unset_or_disabled(&json!({"init":false})));
+    assert!(!inspect_init_is_unset_or_disabled(&json!({})));
+    for invalid in [json!(true), json!(0), json!("false"), json!([]), json!({})] {
+        assert!(!inspect_init_is_unset_or_disabled(&json!({"init":invalid})));
+    }
+}
+
 fn utc_ns() -> u64 {
     u64::try_from(
         SystemTime::now()

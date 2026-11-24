@@ -155,6 +155,20 @@ class MemoryProofTests(unittest.TestCase):
             p=fixture();sample=p["cases"][1]["containers"][0]["after"]["report"];sample["raw"]=sample["raw"].replace(before,after);rebind(p)
             with self.assertRaises(ValueError):reader.validate_memory_proof(p,p["context"],outer_backend="podman")
 
+    def test_complete_projection_init_is_null_or_false(self):
+        p = fixture()
+        record = p["cases"][0]["containers"][0]
+        for phase in ("running", "terminal"):
+            record[phase]["init"] = False
+        reader.validate_memory_proof(p, p["context"], outer_backend="podman")
+        for invalid in (True, 0, "false", [], {}):
+            with self.subTest(init=invalid), self.assertRaises(ValueError):
+                record["running"]["init"] = invalid
+                reader.validate_memory_proof(p, p["context"], outer_backend="podman")
+        del record["running"]["init"]
+        with self.assertRaises(ValueError):
+            reader.validate_memory_proof(p, p["context"], outer_backend="podman")
+
     def test_private_reader_requires_held_64k_custody_and_rejects_substitution(self):
         for fault in ("valid","malformed","duplicate","oversize","mode","directory-mode","symlink","hardlink","fifo"):
             with self.subTest(fault=fault),tempfile.TemporaryDirectory() as directory:

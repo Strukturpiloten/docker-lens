@@ -160,7 +160,9 @@ if [ "$mode" != baseline ]; then
 fi
 site=clock
 printf 'clock '; DOCKER_API_VERSION="$api" docker -H unix:///dockerlens-native/docker.sock info --format '{{.SystemTime}}'"#;
-const PROJECTION: &str = r#"{"id":{{json .Id}},"name":{{json .Name}},"image":{{json .Image}},"config_image":{{json .Config.Image}},"owner":{{json (index .Config.Labels "io.dockerlens.native-run")}},"cmd":{{json .Config.Cmd}},"entrypoint":{{json .Config.Entrypoint}},"user":{{json .Config.User}},"init":{{json .HostConfig.Init}},"memory":{{json .HostConfig.Memory}},"memory_swap":{{json .HostConfig.MemorySwap}},"running":{{json .State.Running}},"pid":{{json .State.Pid}},"started_at":{{json .State.StartedAt}},"finished_at":{{json .State.FinishedAt}},"oom":{{json .State.OOMKilled}},"exit":{{json .State.ExitCode}},"status":{{json .State.Status}},"restarts":{{json .RestartCount}},"error":{{json .State.Error}},"restarting":{{json .State.Restarting}},"paused":{{json .State.Paused}},"dead":{{json .State.Dead}},"privileged":{{json .HostConfig.Privileged}},"cap_add":{{json .HostConfig.CapAdd}},"cap_drop":{{json .HostConfig.CapDrop}},"mounts":{{json .Mounts}}}"#;
+// Both pinned Engines can omit HostConfig.Init when unset. Only that lookup
+// uses index; the remaining HostConfig fields still require the parent object.
+const PROJECTION: &str = r#"{"id":{{json .Id}},"name":{{json .Name}},"image":{{json .Image}},"config_image":{{json .Config.Image}},"owner":{{json (index .Config.Labels "io.dockerlens.native-run")}},"cmd":{{json .Config.Cmd}},"entrypoint":{{json .Config.Entrypoint}},"user":{{json .Config.User}},"init":{{json (index .HostConfig "Init")}},"memory":{{json .HostConfig.Memory}},"memory_swap":{{json .HostConfig.MemorySwap}},"running":{{json .State.Running}},"pid":{{json .State.Pid}},"started_at":{{json .State.StartedAt}},"finished_at":{{json .State.FinishedAt}},"oom":{{json .State.OOMKilled}},"exit":{{json .State.ExitCode}},"status":{{json .State.Status}},"restarts":{{json .RestartCount}},"error":{{json .State.Error}},"restarting":{{json .State.Restarting}},"paused":{{json .State.Paused}},"dead":{{json .State.Dead}},"privileged":{{json .HostConfig.Privileged}},"cap_add":{{json .HostConfig.CapAdd}},"cap_drop":{{json .HostConfig.CapDrop}},"mounts":{{json .Mounts}}}"#;
 const EVENT: &str = r#"{"type":{{json .Type}},"action":{{json .Action}},"id":{{json .Actor.ID}},"owner":{{json (index .Actor.Attributes "io.dockerlens.native-run")}},"time_nano":{{json .TimeNano}}}"#;
 
 #[derive(Default)]
@@ -488,7 +490,7 @@ fn check_config(run: &HealthRun, index: usize, image: &Value, v: &Value) {
             && v["cmd"] == json!(["sh", "-c", BARRIER, run.names[index], CHILD])
             && (v["entrypoint"].is_null() || v["entrypoint"] == json!([]))
             && matches!(v["user"].as_str(), Some("" | "0" | "0:0"))
-            && (v["init"].is_null() || v["init"] == false)
+            && inspect_init_is_unset_or_disabled(v)
             && v["memory"] == memory
             && v["memory_swap"].as_i64().is_some_and(|n| n >= -1)
             && v["restarts"] == 0
@@ -962,6 +964,49 @@ fn memory_context_retains_the_waited_baseline_failure_before_cleanup() {
 }
 
 #[test]
+fn memory_borrowed_image_config_accepts_the_pinned_engine_defaults() {
+    // Relevant fields from direct image inspect of the same pinned amd64
+    // BusyBox: Engine 29.8.1 omits all three, Debian 20.10.5 returns them.
+    let upstream = json!({"Cmd":["sh"]});
+    let debian = json!({"Cmd":["sh"],"Volumes":null,"Entrypoint":null,"User":""});
+    assert!(borrowed_image_config(&upstream, "1.56"));
+    assert!(borrowed_image_config(&debian, "1.41"));
+    assert!(!borrowed_image_config(&upstream, "1.41"));
+    for api in ["1.41", "1.56"] {
+        for user in ["", "0", "0:0"] {
+            let image = json!({"Volumes":{},"Entrypoint":[],"User":user});
+            assert!(borrowed_image_config(&image, api));
+        }
+    }
+}
+
+#[test]
+fn memory_borrowed_image_config_refuses_malformed_or_changed_defaults() {
+    for api in ["1.41", "1.56"] {
+        for image in [Value::Null, json!([]), json!("invalid")] {
+            assert!(!borrowed_image_config(&image, api));
+        }
+        for user in [
+            Value::Null,
+            json!(0),
+            json!("1000"),
+            json!("0:1000"),
+            json!("root"),
+        ] {
+            assert!(!borrowed_image_config(&json!({"User":user}), api));
+        }
+        for image in [
+            json!({"User":"","Volumes":[]}),
+            json!({"User":"","Volumes":{"/fixture":{}}}),
+            json!({"User":"","Entrypoint":{}}),
+            json!({"User":"","Entrypoint":["/bin/wrapper"]}),
+        ] {
+            assert!(!borrowed_image_config(&image, api));
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires exact isolated lane, actual live memory pressure and child victim evidence"]
 fn live_memory_limits_and_effects_match_engine() {
     let backend = source_outer_backend();
@@ -996,10 +1041,7 @@ fn live_memory_limits_and_effects_match_engine() {
         let image = image_snapshot(&run);
         borrowed = image.clone();
         assert!(
-            (image["config"]["Volumes"].is_null() || image["config"]["Volumes"] == json!({}))
-                && (image["config"]["Entrypoint"].is_null()
-                    || image["config"]["Entrypoint"] == json!([]))
-                && matches!(image["config"]["User"].as_str(), Some("" | "0" | "0:0")),
+            borrowed_image_config(&image["config"], &run.api),
             "borrowed image has no wrapper or altered UID"
         );
         MemoryContextTrace::select(MemoryContextOperation::OuterSnapshot);

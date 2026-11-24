@@ -338,6 +338,64 @@ native_outer_create_daemon() {
   local -a flags start
   flags=()
   start=(/usr/local/bin/start-dockerd "--host=unix://${context[guest_dir]}/docker.sock")
+  # The Debian cgroupfs runtime can enable only threaded controllers when
+  # the private outer still has direct tasks. Move the sole owned startup
+  # process below that root before launching the daemon and its helpers.
+  if [[ ${context[lane]} == debian11-rootful && ${context[owner_key]} == io.dockerlens.native-run &&
+        ${context[guest_dir]} == /dockerlens-native ]]; then
+    local domain_bootstrap
+    domain_bootstrap=$(cat <<'DOCKERLENS_DOMAIN_BOOTSTRAP'
+set -eu
+LC_ALL=C; export LC_ALL
+test "$$" = 1
+test "$#" = 2
+test "$1" = /usr/local/bin/start-dockerd
+test "$2" = --host=unix:///dockerlens-native/docker.sock
+root=/sys/fs/cgroup
+scope=$root/init.scope
+# Verify the fresh fixture's exact private cgroup2 mount and limits before writing.
+test "$(readlink -f "$root")" = "$root"
+test "$(stat -f -c %T "$root")" = cgroup2fs
+awk '$5=="/sys/fs/cgroup" {
+  for(i=7;i<=NF;i++) if($i=="-"&&$(i+1)=="cgroup2"&&$4=="/") n++
+} END{exit n!=1}' /proc/self/mountinfo
+IFS= read -r membership </proc/1/cgroup
+test "$membership" = 0::/
+IFS= read -r kind <"$root/cgroup.type"
+test "$kind" = domain
+IFS= read -r memory <"$root/memory.max"
+test "$memory" = 4294967296
+IFS= read -r pids <"$root/pids.max"
+test "$pids" = 512
+IFS= read -r controllers <"$root/cgroup.controllers"
+case " $controllers " in *" memory "*) :;; *) exit 1;; esac
+# An empty kernel controller mask has no terminating newline.
+delegated=$(head -c 257 "$root/cgroup.subtree_control")
+test -z "$delegated"
+{
+  IFS= read -r pid
+  test "$pid" = "$$"
+  extra=
+  if IFS= read -r extra || test -n "$extra"; then
+    exit 1
+  fi
+} <"$root/cgroup.procs"
+test ! -e "$scope"; test ! -L "$scope"
+mkdir "$scope"
+printf '%s\n' "$$" >"$scope/cgroup.procs"
+IFS= read -r membership </proc/1/cgroup
+test "$membership" = 0::/init.scope
+members=$(head -c 257 "$root/cgroup.procs")
+test -z "$members"
+printf '+memory\n' >"$root/cgroup.subtree_control"
+IFS= read -r delegated <"$root/cgroup.subtree_control"
+test "$delegated" = memory
+exec "$@"
+DOCKERLENS_DOMAIN_BOOTSTRAP
+)
+    flags+=(--cgroupns=private)
+    start=(/bin/sh -c "$domain_bootstrap" dl-native-domain "${start[@]}")
+  fi
   # PIDs27 uses a reader-domain monotonic deadline for the nested workers.
   # Docker 29.5+ creates private time namespaces unless the fixture disables it.
   if [[ ${context[lane]} == upstream-rootful && ${context[owner_key]} == io.dockerlens.native-run &&

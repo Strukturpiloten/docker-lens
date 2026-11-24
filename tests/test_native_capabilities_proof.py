@@ -136,6 +136,19 @@ class CapabilitiesProofTests(unittest.TestCase):
         reader.validate_capabilities_proof(p,p["context"],outer_backend="podman")
         p["containers"][7]["running"]["cap_drop"]=["CAP_ALL"];self.reject(p)
 
+    def test_complete_projection_init_is_null_or_false(self):
+        p = fixture()
+        record = p["containers"][0]
+        for phase in ("created", "running", "after"):
+            record[phase]["init"] = False
+        reader.validate_capabilities_proof(p, p["context"], outer_backend="podman")
+        for invalid in (True, 0, "false", [], {}):
+            with self.subTest(init=invalid):
+                record["created"]["init"] = invalid
+                self.reject(p)
+        del record["created"]["init"]
+        self.reject(p)
+
     def test_private_custody_malformed_and_substitution_controls(self):
         for mutation in ("valid","duplicate","malformed","oversize","mode","dir-mode","symlink","hardlink","missing","fifo","replaced"):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:

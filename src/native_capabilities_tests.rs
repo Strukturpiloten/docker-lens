@@ -24,7 +24,9 @@ const FULL: usize = 65550 + 8192;
 const ZERO_TIME: &str = "0001-01-01T00:00:00Z";
 // Direct idle PID1, no shell wrapper/init. Exceeds the once-bound test deadline.
 const COMMAND: [&str; 2] = ["sleep", "180"];
-const PROJECTION: &str = r#"{"id":{{json .Id}},"name":{{json .Name}},"image":{{json .Image}},"config_image":{{json .Config.Image}},"owner":{{json (index .Config.Labels "io.dockerlens.native-run")}},"hostname":{{json .Config.Hostname}},"cmd":{{json .Config.Cmd}},"entrypoint":{{json .Config.Entrypoint}},"user":{{json .Config.User}},"init":{{json .HostConfig.Init}},"running":{{json .State.Running}},"pid":{{json .State.Pid}},"started_at":{{json .State.StartedAt}},"finished_at":{{json .State.FinishedAt}},"oom":{{json .State.OOMKilled}},"exit":{{json .State.ExitCode}},"status":{{json .State.Status}},"restarts":{{json .RestartCount}},"error":{{json .State.Error}},"restarting":{{json .State.Restarting}},"paused":{{json .State.Paused}},"dead":{{json .State.Dead}},"privileged":{{json .HostConfig.Privileged}},"cap_add":{{json .HostConfig.CapAdd}},"cap_drop":{{json .HostConfig.CapDrop}},"mounts":{{json .Mounts}},"devices":{{json .HostConfig.Devices}},"ports":{{json .HostConfig.PortBindings}}}"#;
+// Both pinned Engines can omit HostConfig.Init when unset. Only that lookup
+// uses index; the remaining HostConfig fields still require the parent object.
+const PROJECTION: &str = r#"{"id":{{json .Id}},"name":{{json .Name}},"image":{{json .Image}},"config_image":{{json .Config.Image}},"owner":{{json (index .Config.Labels "io.dockerlens.native-run")}},"hostname":{{json .Config.Hostname}},"cmd":{{json .Config.Cmd}},"entrypoint":{{json .Config.Entrypoint}},"user":{{json .Config.User}},"init":{{json (index .HostConfig "Init")}},"running":{{json .State.Running}},"pid":{{json .State.Pid}},"started_at":{{json .State.StartedAt}},"finished_at":{{json .State.FinishedAt}},"oom":{{json .State.OOMKilled}},"exit":{{json .State.ExitCode}},"status":{{json .State.Status}},"restarts":{{json .RestartCount}},"error":{{json .State.Error}},"restarting":{{json .State.Restarting}},"paused":{{json .State.Paused}},"dead":{{json .State.Dead}},"privileged":{{json .HostConfig.Privileged}},"cap_add":{{json .HostConfig.CapAdd}},"cap_drop":{{json .HostConfig.CapDrop}},"mounts":{{json .Mounts}},"devices":{{json .HostConfig.Devices}},"ports":{{json .HostConfig.PortBindings}}}"#;
 // Regular, API-pinned exec, namespace-local root only. The held proc directory
 // is checked against current PID1 before/after; read target status, never self.
 const OBSERVE: &str = r#"set -eu; LC_ALL=C; export LC_ALL
@@ -176,7 +178,7 @@ fn check_config(run: &HealthRun, index: usize, image: &Value, v: &Value, live: b
             && v["cmd"] == json!(COMMAND)
             && (v["entrypoint"].is_null() || v["entrypoint"] == json!([]))
             && matches!(v["user"].as_str(), Some("" | "0" | "0:0"))
-            && (v["init"].is_null() || v["init"] == false)
+            && inspect_init_is_unset_or_disabled(v)
             && v["privileged"] == false
             && v["mounts"] == json!([])
             && (v["devices"].is_null() || v["devices"] == json!([]))
@@ -416,10 +418,7 @@ fn live_named_capabilities_match_engine() {
         let uid = run.context();
         let image = image_snapshot(&run);
         assert!(
-            (image["config"]["Volumes"].is_null() || image["config"]["Volumes"] == json!({}))
-                && (image["config"]["Entrypoint"].is_null()
-                    || image["config"]["Entrypoint"] == json!([]))
-                && matches!(image["config"]["User"].as_str(), Some("" | "0" | "0:0")),
+            borrowed_image_config(&image["config"], &run.api),
             "borrowed image has no volumes, wrapper or altered UID"
         );
         let facts = run.facts.as_mut().unwrap();

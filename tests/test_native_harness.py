@@ -1474,32 +1474,74 @@ fi
             self.assertNotIn("private", result.stdout + result.stderr)
 
     def test_guest_daemon_launch_arguments_stay_lane_specific(self) -> None:
-        source = (ROOT / "scripts/native-outer-runtime.sh").read_text()
-        block = "start=(/usr/local/bin/start-dockerd" + source.split(
-            "start=(/usr/local/bin/start-dockerd", 1
-        )[1].split('\n  mount=', 1)[0]
-        for lane in (
-            "debian11-rootful",
-            "debian11-rootless",
-            "upstream-rootful",
-            "upstream-rootless",
-        ):
-            with self.subTest(lane=lane):
-                result = subprocess.run(
-                    ["bash", "-c", "set -euo pipefail\ndeclare -A context=([lane]=$1 [guest_dir]=/dockerlens-native [owner_key]=io.dockerlens.native-run)\nflags=()\n" + block
-                     + '\nprintf \'%s\\n\' "${start[@]}"\n', "launch-args", lane],
-                    capture_output=True, text=True, timeout=5, check=False,
-                )
-                self.assertEqual(result.returncode, 0, result.stderr)
-                expected = [
-                    "/usr/local/bin/start-dockerd",
-                    "--host=unix:///dockerlens-native/docker.sock",
-                ]
-                if lane == "debian11-rootless":
-                    expected.append("--storage-driver=vfs")
-                if lane == "upstream-rootful":
-                    expected.extend(("--feature", "time-namespaces=false"))
-                self.assertEqual(result.stdout.splitlines(), expected)
+        runtime = ROOT / "scripts/native-outer-runtime.sh"
+        # The CLI arguments are NUL-framed so the guest program remains one
+        # argument. The recorder does not invoke an outer runtime.
+        recorder = r'''set -euo pipefail
+source "$1"
+native_outer_engine=$2
+native_outer_directory=$4
+native_outer_script_dir=$5
+exec 3>&1
+native_outer_command() { printf '%s\0' "$@" >&3; }
+python3() {
+  [[ $# == 3 && $1 == "$native_outer_script_dir/native-outer-observation.py" &&
+     $2 == created-cid && $3 == "$native_outer_directory/outer-create.cid" ]]
+  printf '%064d\n' 0
+}
+declare -A held=([name]=owned [run]=run [lane]="$3"
+  [owner_key]=io.dockerlens.native-run [network]=owned-net [volume]=owned-data
+  [socket_dir]="$4/socket" [guest_dir]=/dockerlens-native
+  [image]="$6" [log_path]="$4/daemon.log")
+native_outer_create_daemon held'''
+        source = runtime.read_text()
+        bootstrap = source.split("<<'DOCKERLENS_DOMAIN_BOOTSTRAP'\n", 1)[1].split(
+            "\nDOCKERLENS_DOMAIN_BOOTSTRAP", 1
+        )[0]
+        self.assertIn("\n", bootstrap)
+        image = "example.invalid/engine:1@sha256:" + "a" * 64
+        for backend in ("podman", "docker"):
+            for lane in ("debian11-rootful", "debian11-rootless",
+                         "upstream-rootful", "upstream-rootless"):
+                with self.subTest(backend=backend, lane=lane), tempfile.TemporaryDirectory() as owned:
+                    result = subprocess.run(
+                        ["bash", "-c", recorder, "launch-args", str(runtime), backend,
+                         lane, owned, str(ROOT / "scripts"), image],
+                        capture_output=True, timeout=5, check=False,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    argv, separator, cid = result.stdout.rpartition(b"\0")
+                    self.assertEqual((separator, cid, result.stderr), (b"\0", b"0" * 64 + b"\n", b""))
+                    expected = [
+                        "120", "run", "--pull=never", "-d", "--name", "owned",
+                        "--cidfile", f"{owned}/outer-create.cid",
+                        "--label", "io.dockerlens.native-run=run", "--network", "owned-net",
+                        "--privileged", "--pids-limit=512", "--memory=4g",
+                    ]
+                    if lane == "debian11-rootful":
+                        expected.append("--cgroupns=private")
+                    if lane == "debian11-rootless":
+                        expected.extend(("--oom-score-adj=0", "--security-opt", "apparmor=unconfined"))
+                    destination = "/home/docker/.local/share/docker" if lane.endswith("-rootless") else "/var/lib/docker"
+                    mount = "owned-data:" + destination
+                    if backend == "podman":
+                        expected.extend(("--image-volume=ignore", "--log-driver=k8s-file",
+                                         "--log-opt", f"path={owned}/daemon.log", "--log-opt",
+                                         "max-size=1048576", "--cpus=2"))
+                        mount += ":U,suid,dev" if lane == "debian11-rootless" else ":U"
+                    else:
+                        expected.extend(("--cpu-period=100000", "--cpu-quota=200000",
+                                         "--log-driver=json-file", "--log-opt", "max-size=1m",
+                                         "--log-opt", "max-file=1"))
+                    expected.extend(("--volume", mount, "--volume", f"{owned}/socket:/dockerlens-native", image))
+                    if lane == "debian11-rootful":
+                        expected.extend(("/bin/sh", "-c", bootstrap, "dl-native-domain"))
+                    expected.extend(("/usr/local/bin/start-dockerd", "--host=unix:///dockerlens-native/docker.sock"))
+                    if lane == "debian11-rootless":
+                        expected.append("--storage-driver=vfs")
+                    if lane == "upstream-rootful":
+                        expected.extend(("--feature", "time-namespaces=false"))
+                    self.assertEqual(argv.decode().split("\0"), expected)
 
     def test_vfs_driver_evidence_is_positive_only_for_debian_rootless(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text()

@@ -117,4 +117,16 @@ else:sys.stdout.buffer.write(open(os.environ["OUTPUT"],"rb").read());sys.exit(in
                 self.assertLessEqual(full*73742+88*8192+2*65536*extra,2097152)
         self.assertEqual(11*9,99);self.assertEqual(99*(8192+2048),1013760)
 
+    def test_only_init_uses_optional_host_config_lookup(self):
+        for fixture in ("memory", "capabilities"):
+            source = (ROOT / f"src/native_{fixture}_tests.rs").read_text()
+            template = re.search(r'const PROJECTION: &str = r#"(.*?)"#;', source)[1]
+            with self.subTest(fixture=fixture):
+                self.assertEqual(re.findall(r'index \.HostConfig "(\w+)"', template), ["Init"])
+                self.assertIn('"init":{{json (index .HostConfig "Init")}}', template)
+                self.assertIn('"privileged":{{json .HostConfig.Privileged}}', template)
+                self.assertIn('"user":{{json .Config.User}}', template)
+                self.assertIn('"running":{{json .State.Running}}', template)
+                self.assertIn('borrowed_image_config(&image["config"], &run.api)', source)
+
 if __name__=='__main__':unittest.main()
