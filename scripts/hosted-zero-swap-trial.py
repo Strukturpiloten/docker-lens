@@ -990,7 +990,7 @@ def kvm_group_observation():
         return "unobserved"
 
 
-def kvm_preflight(probe):
+def kvm_preflight(probe, expected_device=None):
     device_fd = vm_fd = None
     operation, detail, reason = "open", "ok", None
     probe.update(device_close="not_opened", vm_close="not_opened")
@@ -1002,6 +1002,11 @@ def kvm_preflight(probe):
         require(stat.S_ISCHR(device.st_mode))
         operation = "device_identity"
         require(device.st_rdev == KVM_RDEV)
+        if expected_device is not None:
+            require(
+                device.st_uid == 0
+                and [device.st_dev, device.st_ino, device.st_mode, device.st_gid] == expected_device
+            )
         operation = "api_version"
         require(fcntl.ioctl(device_fd, 0xAE00) == 12)
         operation = "create_vm"
@@ -1075,6 +1080,449 @@ def launch_vm(work, port):
     )
 
 
+def kvm_device_group():
+    node = os.lstat(KVM_PATH)
+    rw = stat.S_IRGRP | stat.S_IWGRP
+    group = grp.getgrnam("kvm").gr_gid
+    require(
+        stat.S_ISCHR(node.st_mode)
+        and node.st_rdev == KVM_RDEV
+        and node.st_uid == 0
+        and node.st_gid == group
+        and node.st_mode & rw == rw
+        and not node.st_mode & stat.S_IWOTH
+    )
+    return [node.st_dev, node.st_ino, node.st_mode, group]
+
+
+def proc_status(pid):
+    data = (Path("/proc") / str(pid) / "status").read_text()
+    return {
+        key: value.split()
+        for key, value in (line.split(":", 1) for line in data.splitlines() if ":" in line)
+    }
+
+
+def verify_group_process(pid, identity, executable, parent):
+    user, gid, groups = identity
+    info = proc_status(pid)
+    require(
+        user > 0 and gid > 0 and info["Uid"] == [str(user)] * 4 and info["Gid"] == [str(gid)] * 4
+    )
+    require(sorted(map(int, info["Groups"])) == groups and info["PPid"] == [str(parent)])
+    require(
+        info["NoNewPrivs"] == ["1"]
+        and all(
+            int(info[name][0], 16) == 0
+            for name in ("CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb")
+        )
+    )
+    require((Path("/proc") / str(pid) / "exe").samefile(executable))
+
+
+def group_tool(path, owners, deadline):
+    binary = Path(path).resolve(strict=True)
+    mode = binary.stat()
+    require(
+        binary.is_relative_to("/usr")
+        and stat.S_ISREG(mode.st_mode)
+        and mode.st_uid == 0
+        and not mode.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+    )
+    _, ownership, _ = capture(["/usr/bin/dpkg-query", "--search", str(binary)], deadline)
+    owner = next((p for p in owners if ownership == f"{p}: {binary}\n".encode()), None)
+    require(owner is not None)
+    _, installed, _ = capture(["/usr/bin/dpkg-query", "-W", "-f=${Version}", owner], deadline)
+    version = installed.decode("ascii")
+    require(re.fullmatch(r"[0-9][0-9A-Za-z.+:~\-]{0,79}", version))
+    return {"package": owner, "version": version}
+
+
+class KvmChannel:
+    def __init__(self, stream):
+        self.stream = stream
+        self.pending = b""
+
+    def receive(self, deadline, *, closing=False, vm=None):
+        with selectors.DefaultSelector() as selector:
+            selector.register(self.stream, selectors.EVENT_READ)
+            while True:
+                if closing:
+                    if time.monotonic() >= deadline:
+                        raise Refusal("timeout", 124)
+                else:
+                    active(deadline)
+                if vm is not None and vm.poll() is not None:
+                    raise Refusal("command_failed", exit_status(vm.returncode) or 1)
+                row, separator, rest = self.pending.partition(b"\n")
+                if separator:
+                    self.pending = rest
+                    return json_document(row)
+                if selector.select(0.05):
+                    data = os.read(self.stream.fileno(), 4096)
+                    if not data:
+                        require(not self.pending)
+                        return None
+                    self.pending += data
+                    require(len(self.pending) <= 4096)
+
+
+def send_group(stream, value):
+    data = json.dumps(value, separators=(",", ":")).encode("ascii") + b"\n"
+    require(len(data) <= 4096 and stream.write(data) == len(data))
+    stream.flush()
+
+
+def worker_result(exitcode, reason, cleanup, vm_exit):
+    return {"exit": exitcode, "reason": reason, "cleanup": cleanup, "vm_exit": vm_exit}
+
+
+def group_worker():
+    channel = KvmChannel(sys.stdin.buffer)
+    vm = None
+    probe = {}
+    status, reason = 1, "refused"
+    try:
+        context = channel.receive(time.monotonic() + 10)
+        if context is None:
+            raise Refusal("cancelled", 143)
+        identity, device, deadline = context
+        require(time.monotonic() < deadline <= time.monotonic() + 885)
+        uid, gid, groups = identity
+        require(uid > 0 and gid > 0 and 0 not in groups and device[3] > 0 and device[3] in groups)
+        verify_group_process(os.getpid(), identity, "/usr/bin/python3", os.getppid())
+        require(kvm_device_group() == device)
+        try:
+            kvm_preflight(probe, device)
+        except Refusal:
+            send_group(sys.stdout.buffer, ["probe", os.getpid(), probe])
+            # Keep the credential identity available until the supervisor sees
+            # the failure or closes its control pipe. Keep the probe status.
+            try:
+                channel.receive(min(deadline, time.monotonic() + 10))
+            except (Refusal, OSError, ValueError):
+                pass
+            raise
+        send_group(sys.stdout.buffer, ["probe", os.getpid(), probe])
+        start = channel.receive(deadline)
+        if start is None:
+            raise Refusal("cancelled", 143)
+        name, port = start
+        work = Path(name)
+        require(
+            re.fullmatch(r"/[A-Za-z0-9._/-]+", name)
+            and work.resolve() == work
+            and work.name.startswith("dockerlens-boot-")
+            and work.stat().st_uid == uid
+            and type(port) is int
+            and 1 <= port <= 65535
+        )
+        require(kvm_device_group() == device)
+        active(deadline)
+        vm = launch_vm(work, port)
+        verify_group_process(vm.pid, identity, "/usr/bin/qemu-system-x86_64", os.getpid())
+        require(os.getpgid(vm.pid) == vm.pid)
+        send_group(sys.stdout.buffer, ["spawn", vm.pid])
+        stop = channel.receive(deadline, vm=vm)
+        if stop is None:
+            raise Refusal("cancelled", 143)
+        require(stop == "stop")
+        code = vm.poll()
+        if code is not None:
+            raise Refusal("command_failed", exit_status(code) or 1)
+        status, reason = 0, "ok"
+    except Refusal as error:
+        status, reason = error.code, error.reason
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        status, reason = 1, "io"
+    cleanup = "not_started"
+    if vm is not None:
+        cleanup = "verified" if reap(vm) else "unverified"
+    vm_exit = vm.poll() if vm is not None else None
+    if status == 0:
+        if cleanup != "verified" or vm_exit is None:
+            status, reason = 1, "cleanup_failed"
+        elif vm_exit not in (0, -signal.SIGTERM):
+            status, reason = exit_status(vm_exit), "command_failed"
+    send_group(sys.stdout.buffer, ["terminal", worker_result(status, reason, cleanup, vm_exit)])
+    return status
+
+
+def verified_worker_probe(probe):
+    require(
+        type(probe) is dict
+        and set(probe)
+        <= {
+            "operation",
+            "detail",
+            "device_close",
+            "vm_close",
+            "group_observation",
+        }
+    )
+    errors = ("denied", "absent", "unsupported", "other")
+    require(
+        probe["operation"]
+        in (
+            "open",
+            "device_stat",
+            "device_type",
+            "device_identity",
+            "api_version",
+            "create_vm",
+            "device_close",
+            "vm_close",
+            "complete",
+        )
+    )
+    require(probe["detail"] in (*errors, "mismatch", "ok"))
+    for key in ("device_close", "vm_close"):
+        require(probe[key] in (*errors, "closed", "not_opened"))
+    if "group_observation" in probe:
+        require(
+            probe["group_observation"]
+            in (
+                "group_rw_held",
+                "group_rw_not_held",
+                "other_layout",
+                "unobserved",
+            )
+        )
+    return (
+        probe["operation"] == "complete"
+        and probe["detail"] == "ok"
+        and all(probe[key] == "closed" for key in ("device_close", "vm_close"))
+    )
+
+
+class GroupVm:
+    def __init__(self, record, deadline):
+        self.record, self.deadline = record, deadline
+        self.process = self.channel = self.terminal = None
+        self.worker_pid = self.vm_pid = None
+        self.handles = []
+        self.vm_requested = self.stop_sent = False
+
+    def begin(self):
+        device = kvm_device_group()
+        uid, gid, groups = os.geteuid(), os.getegid(), sorted(os.getgroups())
+        group = device[3]
+        original = proc_status(os.getpid())
+        require(
+            original["Uid"] == [str(uid)] * 4
+            and original["Gid"] == [str(gid)] * 4
+            and sorted(map(int, original["Groups"])) == groups
+            and uid > 0
+            and gid > 0
+            and 0 not in groups
+            and group > 0
+            and group not in {gid, *groups}
+        )
+        worker_groups = sorted([*groups, group])
+        self.identity = [uid, gid, worker_groups]
+        group_list = ",".join(map(str, worker_groups))
+        require(len(group_list) <= 2048)
+        self.record["tools"] = {
+            "sudo": group_tool("/usr/bin/sudo", ("sudo", "sudo-rs"), self.deadline),
+            "setpriv": group_tool("/usr/bin/setpriv", ("util-linux",), self.deadline),
+        }
+        active(self.deadline)
+        self.process = subprocess.Popen(
+            [
+                "/usr/bin/sudo",
+                "-n",
+                "--",
+                "/usr/bin/setpriv",
+                "--reuid",
+                str(uid),
+                "--regid",
+                str(gid),
+                "--groups",
+                group_list,
+                "--inh-caps=-all",
+                "--ambient-caps=-all",
+                "--bounding-set=-all",
+                "--no-new-privs",
+                "--reset-env",
+                "--",
+                "/usr/bin/python3",
+                "-IB",
+                str(Path(__file__).resolve()),
+                "kvm-group-worker",
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C"},
+            start_new_session=True,
+        )
+        assert self.process.stdin is not None and self.process.stdout is not None
+        self.channel = KvmChannel(self.process.stdout)
+        send_group(self.process.stdin, [self.identity, device, self.deadline])
+        kind = self.event(min(self.deadline, time.monotonic() + 10))
+        require(kind == "probe" and verified_worker_probe(self.record["probe"]))
+
+    def event(self, deadline, *, closing=False):
+        assert self.channel is not None
+        row = self.channel.receive(deadline, closing=closing)
+        require(type(row) is list and len(row) >= 2 and self.terminal is None)
+        kind = row[0]
+        if kind == "probe":
+            require(len(row) == 3 and self.worker_pid is None)
+            _, pid, probe = row
+            verified_worker_probe(probe)
+            assert self.process is not None
+            if self.bind(pid, "/usr/bin/python3", self.process.pid, closing):
+                self.worker_pid = pid
+                self.record["worker_credentials_verified"] = True
+                self.record["probe"] = probe
+        elif kind == "spawn":
+            require(
+                len(row) == 2
+                and self.vm_requested
+                and self.worker_pid is not None
+                and self.vm_pid is None
+            )
+            pid = row[1]
+            if self.bind(pid, "/usr/bin/qemu-system-x86_64", self.worker_pid, closing):
+                self.vm_pid = pid
+                self.record["qemu_credentials_verified"] = True
+        else:
+            require(kind == "terminal" and len(row) == 2)
+            result = row[1]
+            require(
+                type(result) is dict and set(result) == {"exit", "reason", "cleanup", "vm_exit"}
+            )
+            require(
+                type(result["exit"]) is int
+                and 0 <= result["exit"] < 256
+                and result["reason"] in (*REASONS, "ok")
+                and result["cleanup"] in ("not_started", "unverified", "verified")
+                and (
+                    result["vm_exit"] is None
+                    or type(result["vm_exit"]) is int
+                    and -64 <= result["vm_exit"] < 256
+                )
+                and (self.vm_requested or result["cleanup"] == "not_started")
+                and (result["cleanup"] != "not_started" or result["vm_exit"] is None)
+                and (result["cleanup"] != "verified" or result["vm_exit"] is not None)
+                and (result["exit"] == 0) == (result["reason"] == "ok")
+                and (
+                    result["exit"] != 0
+                    or (
+                        self.stop_sent
+                        and self.vm_pid is not None
+                        and result["cleanup"] == "verified"
+                    )
+                )
+            )
+            self.terminal = self.record["worker"] = result
+        return kind
+
+    def bind(self, pid, executable, parent, closing):
+        require(type(pid) is int and 1 < pid < (1 << 31))
+        try:
+            fd = os.pidfd_open(pid)
+        except ProcessLookupError:
+            if closing:
+                return False  # Cancellation may have already reaped this child.
+            raise
+        try:
+            verify_group_process(pid, self.identity, executable, parent)
+            if executable.endswith("qemu-system-x86_64"):
+                require(os.getpgid(pid) == pid)
+        except (Refusal, OSError):
+            with selectors.DefaultSelector() as reader:
+                reader.register(fd, selectors.EVENT_READ)
+                exited = bool(reader.select(0))
+            os.close(fd)
+            if closing and exited:
+                return False
+            raise
+        self.handles.append(fd)
+        return True
+
+    def launch(self, work, port):
+        assert self.process is not None and self.process.stdin is not None
+        active(self.deadline)
+        self.vm_requested = True
+        send_group(self.process.stdin, [str(work), port])
+        if self.event(min(self.deadline, time.monotonic() + 10)) != "spawn":
+            assert self.terminal is not None
+            raise Refusal(self.terminal["reason"], self.terminal["exit"])
+        return self
+
+    def poll(self):
+        assert self.process is not None
+        return self.process.poll()
+
+    def close(self, normal):
+        if self.process is None:
+            self.record["launcher_cleanup"] = "not_started"
+            return True
+        assert self.process.stdin is not None and self.process.stdout is not None
+        deadline = time.monotonic() + 4
+        verified = protocol_ok = False
+        try:
+            try:
+                if self.vm_requested and self.vm_pid is None and self.terminal is None:
+                    # If startup was interrupted, bind a pending spawn before
+                    # EOF allows the worker to destroy the process identity.
+                    self.event(deadline, closing=True)
+                if normal and self.terminal is None and self.process.poll() is None:
+                    send_group(self.process.stdin, "stop")
+                    self.stop_sent = True
+            finally:
+                self.process.stdin.close()
+        except (Refusal, OSError, ValueError, KeyError, TypeError):
+            pass
+        try:
+            # On cancellation the last probe or spawn receipt may still be
+            # queued. Bind any live PID that can still be independently read.
+            for _ in range(3):
+                if self.terminal is not None:
+                    break
+                self.event(deadline, closing=True)
+            protocol_ok = self.terminal is not None
+        except (Refusal, OSError, ValueError, KeyError, TypeError):
+            pass
+        try:
+            code = self.process.wait(timeout=max(0, deadline - time.monotonic()))
+            self.record["launcher_exit"] = exit_status(code)
+            if protocol_ok:
+                assert self.channel is not None
+                protocol_ok = self.channel.receive(deadline, closing=True) is None
+            with selectors.DefaultSelector() as reader:
+                for fd in self.handles:
+                    reader.register(fd, selectors.EVENT_READ)
+                for key, _ in reader.select(0) if self.handles else ():
+                    reader.unregister(key.fileobj)
+                verified = not reader.get_map()
+            terminal = self.terminal
+            verified = (
+                verified
+                and protocol_ok
+                and terminal is not None
+                and exit_status(code) == terminal["exit"]
+                and self.worker_pid is not None
+                and (
+                    self.vm_pid is not None and terminal["cleanup"] == "verified"
+                    if self.vm_requested
+                    else terminal["cleanup"] == "not_started"
+                )
+            )
+        except (Refusal, OSError, ValueError, subprocess.TimeoutExpired):
+            verified = False
+        finally:
+            # Never signal an unbound PID. The worker also has the absolute
+            # trial deadline and owns the QEMU process group.
+            self.process.stdout.close()
+            for fd in self.handles:
+                os.close(fd)
+            self.record["launcher_cleanup"] = "verified" if verified else "unverified"
+        return verified
+
+
 def open_handoff():
     path = Path(os.environ["GITHUB_OUTPUT"])
     require(path.is_absolute())
@@ -1123,7 +1571,7 @@ def host_trial():
         "reason": "refused",
         "cleanup": "not_started",
     }
-    work = vm = vm_started = output = handoff = None
+    work = vm = vm_started = output = handoff = group_vm = None
     try:
         directory = Path(os.environ["RUNNER_TEMP"])
         require(
@@ -1155,7 +1603,25 @@ def host_trial():
         )
         result["stage"] = "kvm"
         result["host"]["kvm_probe"] = probe = {}
-        kvm_preflight(probe)
+        try:
+            kvm_preflight(probe)
+        except Refusal as direct:
+            if (probe.get("operation"), probe.get("detail"), probe.get("group_observation")) != (
+                "open",
+                "denied",
+                "group_rw_not_held",
+            ):
+                raise
+            group_record = result["host"]["kvm_group"] = {}
+            group_vm = GroupVm(group_record, deadline)
+            try:
+                group_vm.begin()
+            except (Refusal, OSError, ValueError, KeyError, TypeError) as error:
+                failure = error if isinstance(error, Refusal) else Refusal("io")
+                group_record["failure"] = {"exit": failure.code, "reason": failure.reason}
+                if failure.reason == "cancelled":
+                    raise failure from None
+                raise direct from None
         result["host"]["kvm_api"] = 12
         work = Path(tempfile.mkdtemp(prefix="dockerlens-boot-", dir=directory))
         require(re.fullmatch(r"[A-Za-z0-9._/-]+", str(work)))
@@ -1207,7 +1673,7 @@ def host_trial():
             listener.bind(("127.0.0.1", 0))
             port = listener.getsockname()[1]
         vm_started = time.monotonic()
-        vm = launch_vm(work, port)
+        vm = group_vm.launch(work, port) if group_vm is not None else launch_vm(work, port)
         boot_deadline = min(deadline, time.monotonic() + 100)
         while True:
             active(boot_deadline)
@@ -1262,13 +1728,21 @@ def host_trial():
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         result.update(exit=1, reason="io")
     finally:
+        group_clean = group_vm is None or group_vm.close(result["exit"] == 0 and cancelled is None)
+        if result["exit"] == 0 and cancelled is not None:
+            result.update(exit=128 + cancelled, reason="cancelled")
+        if result["exit"] == 0 and group_vm is not None and group_vm.terminal is not None:
+            terminal = group_vm.terminal
+            code, reason = terminal["exit"], terminal["reason"]
+            if code == 0 and terminal["vm_exit"] not in (0, -signal.SIGTERM):
+                code, reason = exit_status(terminal["vm_exit"]), "command_failed"
+            result.update(exit=code, reason=reason)
         if work is not None:
             try:
-                if vm is not None:
-                    reaped = reap(vm)
+                if vm_started is not None:
                     result["vm_active_ms"] = round((time.monotonic() - vm_started) * 1000)
-                    if not reaped:
-                        raise OSError()
+                if not group_clean or (group_vm is None and vm is not None and not reap(vm)):
+                    raise OSError()
                 try:
                     result["host_disk_allocated_sample_bytes"] = allocated(work)
                 finally:
@@ -1306,6 +1780,8 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, request_cancel)
     if len(sys.argv) == 5 and sys.argv[1] == "guest":
         sys.exit(within_guest(sys.argv[2:]))
+    if sys.argv[1:] == ["kvm-group-worker"]:
+        sys.exit(group_worker())
     if len(sys.argv) == 1:
         sys.exit(host_trial())
     sys.exit(2)

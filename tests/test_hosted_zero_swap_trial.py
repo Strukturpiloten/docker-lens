@@ -94,6 +94,8 @@ def inert_kvm(
         "st_rdev": os.makedev(10, 232),
         "st_uid": 0,
         "st_gid": 55103,
+        "st_dev": 23,
+        "st_ino": 345,
     } | (layout or {})
     calls = []
     device_fd, vm_fd = 40821, 40822
@@ -114,7 +116,10 @@ def inert_kvm(
     def fstat(fd):
         if fd != device_fd:
             return real_fstat(fd)
-        return observe("device_stat", SimpleNamespace(st_mode=mode, st_rdev=os.makedev(*device)))
+        return observe(
+            "device_stat",
+            SimpleNamespace(**(metadata | {"st_mode": mode, "st_rdev": os.makedev(*device)})),
+        )
 
     def lstat(path, *args, **kwargs):
         if os.fspath(path) != "/dev/kvm":
@@ -818,7 +823,174 @@ except trial.Refusal as error:
                         },
                     )
 
+    def test_group_preflight_binds_the_opened_descriptor_to_the_observed_node(self):
+        mode = stat.S_IFCHR | 0o660
+        for accepted, inode in ((True, 345), (False, 346)):
+            with self.subTest(accepted=accepted), inert_kvm(mode=mode) as commands:
+                probe = {}
+                device = [23, inode, mode, 55103]
+                if accepted:
+                    self.assertEqual(trial.kvm_device_group(), device)
+                    trial.kvm_preflight(probe, device)
+                    self.assertEqual(probe["operation"], "complete")
+                    self.assertEqual(
+                        commands[-4:], ["api_version", "create_vm", "vm_close", "device_close"]
+                    )
+                else:
+                    with self.assertRaises(trial.Refusal):
+                        trial.kvm_preflight(probe, device)
+                    self.assertEqual(probe["operation"], "device_identity")
+                    self.assertEqual(commands, ["open", "device_stat", "device_close"])
+
+    def test_group_broker_authenticates_ubuntu_package_owned_alternative(self):
+        for owner, allowed in (("sudo-rs", True), ("unowned-sentinel", False)):
+            binary = Path("/usr/lib/sudo/sudo")
+            metadata = SimpleNamespace(st_mode=stat.S_IFREG | 0o4755, st_uid=0)
+            with (
+                self.subTest(owner=owner),
+                patch.object(Path, "resolve", return_value=binary),
+                patch.object(Path, "stat", return_value=metadata),
+                patch.object(
+                    trial,
+                    "capture",
+                    side_effect=[
+                        (0, f"{owner}: {binary}\n".encode(), b""),
+                        (0, b"0.2.13-0ubuntu1.2", b""),
+                    ],
+                ) as commands,
+            ):
+                deadline = self.deadline()
+                if allowed:
+                    self.assertEqual(
+                        trial.group_tool("/usr/bin/sudo", ("sudo", "sudo-rs"), deadline),
+                        {"package": owner, "version": "0.2.13-0ubuntu1.2"},
+                    )
+                    self.assertEqual(commands.call_count, 2)
+                else:
+                    with self.assertRaises(trial.Refusal):
+                        trial.group_tool("/usr/bin/sudo", ("sudo", "sudo-rs"), deadline)
+                    commands.assert_called_once_with(
+                        ["/usr/bin/dpkg-query", "--search", str(binary)], deadline
+                    )
+
+    def test_group_pipe_requires_closed_complete_bounded_frames(self):
+        for data, valid in (
+            (b'["spawn",7]\n["terminal",{}]\n', True),
+            (b'["spawn",7]', False),
+            (b'{"a":1,"a":2}\n', False),
+            (b"x" * 4097 + b"\n", False),
+        ):
+            with self.subTest(data=data[:24]):
+                reader, writer = os.pipe()
+                with os.fdopen(reader, "rb") as stream, os.fdopen(writer, "wb") as sender:
+                    sender.write(data)
+                    sender.close()
+                    channel = trial.KvmChannel(stream)
+                    if valid:
+                        self.assertEqual(channel.receive(self.deadline()), ["spawn", 7])
+                        self.assertEqual(channel.receive(self.deadline()), ["terminal", {}])
+                        self.assertIsNone(channel.receive(self.deadline()))
+                    else:
+                        with self.assertRaises(trial.Refusal):
+                            channel.receive(self.deadline())
+
+    def test_group_terminal_distinguishes_work_exit_from_verified_cleanup(self):
+        vm = trial.GroupVm({}, self.deadline())
+        vm.vm_requested = True
+        vm.worker_pid = 23
+        checked_probe = {
+            "operation": "complete",
+            "detail": "ok",
+            "device_close": "closed",
+            "vm_close": "closed",
+        }
+        worker_exit = {"exit": 17, "reason": "command_failed", "cleanup": "verified", "vm_exit": 17}
+        self.assertTrue(trial.verified_worker_probe(checked_probe))
+        self.assertFalse(trial.verified_worker_probe(checked_probe | {"vm_close": "other"}))
+        for row in (
+            ["probe", 23, checked_probe],
+            ["spawn", True],
+            ["terminal", worker_exit | {"vm_exit": None}],
+            ["terminal", worker_exit | {"reason": "private diagnostic"}],
+            ["terminal", worker_exit | {"cleanup": "not_started"}],
+        ):
+            with (
+                self.subTest(row=row),
+                patch.object(vm, "channel", Mock(receive=Mock(return_value=row))),
+            ):
+                with self.assertRaises(trial.Refusal):
+                    vm.event(self.deadline())
+        with patch.object(
+            vm, "channel", Mock(receive=Mock(return_value=["terminal", worker_exit]))
+        ):
+            self.assertEqual(vm.event(self.deadline()), "terminal")
+            self.assertEqual(vm.record, {"worker": worker_exit})
+            with self.assertRaises(trial.Refusal):
+                vm.event(self.deadline())
+
+    def test_group_worker_preserves_actual_qemu_exit_and_any_prior_cause(self):
+        for control, final_qemu, reaped, code, reason in (
+            ("stop", 17, True, 17, "command_failed"),
+            ("stop", 0, True, 0, "ok"),
+            ("stop", -15, True, 0, "ok"),
+            ("stop", -9, True, 137, "command_failed"),
+            ("stop", None, False, 1, "cleanup_failed"),
+            (None, 17, True, 143, "cancelled"),
+        ):
+            with (
+                self.subTest(control=control, final_qemu=final_qemu),
+                tempfile.TemporaryDirectory(prefix="dockerlens-boot-") as directory,
+                ExitStack() as stack,
+            ):
+                vm = Mock(pid=12345, poll=Mock(return_value=None))
+                uid = os.geteuid()
+                device = [23, 345, 0o20660, 55103]
+                identity = [uid, 1000, [55103]]
+                frames = [[identity, device, self.deadline()], [directory, 42101], control]
+
+                def finish(process, outcome=final_qemu, clean=reaped):
+                    process.poll.return_value = outcome
+                    return clean
+
+                stack.enter_context(patch.object(trial.KvmChannel, "receive", side_effect=frames))
+                stack.enter_context(patch.object(trial, "verify_group_process"))
+                stack.enter_context(patch.object(trial, "kvm_device_group", return_value=device))
+                stack.enter_context(patch.object(trial, "kvm_preflight"))
+                stack.enter_context(patch.object(trial, "launch_vm", return_value=vm))
+                stack.enter_context(patch.object(trial.os, "getpgid", return_value=vm.pid))
+                stack.enter_context(patch.object(trial, "reap", side_effect=finish))
+                publish = stack.enter_context(patch.object(trial, "send_group"))
+                self.assertNotEqual(uid, 0)
+                self.assertEqual(trial.group_worker(), code)
+                self.assertEqual(
+                    publish.call_args.args[1],
+                    [
+                        "terminal",
+                        {
+                            "exit": code,
+                            "reason": reason,
+                            "vm_exit": final_qemu,
+                            "cleanup": "verified" if reaped else "unverified",
+                        },
+                    ],
+                )
+
+    def test_group_terminal_cannot_self_certify_parent_cleanup(self):
+        for worker_bound in (False, True):
+            supervisor = trial.GroupVm({}, self.deadline())
+            supervisor.vm_requested = True
+            if worker_bound:
+                supervisor.worker_pid = 12345
+            close = {"exit": 17, "reason": "command_failed", "cleanup": "verified", "vm_exit": 17}
+            supervisor.process = Mock(wait=Mock(return_value=17))
+            supervisor.channel = Mock(receive=Mock(side_effect=[["terminal", close], None]))
+            self.assertFalse(supervisor.close(False))
+            self.assertEqual(supervisor.record["worker"], close)
+            self.assertEqual(supervisor.record["launcher_exit"], 17)
+            self.assertEqual(supervisor.record["launcher_cleanup"], "unverified")
+
     def test_vm_argv_is_kvm_only_and_probe_shell_is_valid(self):
+        self.assertLessEqual(SOURCE.stat().st_size, 65536)  # guest SSH capture input bound
         with patch.object(trial.subprocess, "Popen") as spawn:
             trial.launch_vm(Path("/own"), 47953)
         argv = spawn.call_args.args[0]
@@ -1009,7 +1181,14 @@ class EntrypointTrial(unittest.TestCase):
         self.assertEqual((code, report["stage"]), (0, "complete"))
 
     def host(
-        self, probes, *, cloud_failure=None, publish_failure=False, vm_exit_after=None, kvm=None
+        self,
+        probes,
+        *,
+        cloud_failure=None,
+        publish_failure=False,
+        vm_exit_after=None,
+        kvm=None,
+        group=None,
     ):
         now, deadlines, host_boot = [0], [], "e" * 64
         digest = PINS["cloud_image"].split("@sha256:")[1]
@@ -1077,6 +1256,51 @@ class EntrypointTrial(unittest.TestCase):
             handoff.touch()
             with ExitStack() as stack:
                 stack.enter_context(inert_kvm(**(kvm or {})))
+                group_vm = Mock()
+                group_vm.poll.return_value = None
+                group_vm.launch.return_value = group_vm
+
+                group_class = trial.GroupVm
+
+                def create_group(record, _deadline):
+                    if group and ("startup_frame" in group or "shutdown_frame" in group):
+                        real = group_class(record, _deadline)
+                        real.worker_pid = 12345
+                        rows = []
+                        if "shutdown_frame" in group:
+                            rows.append(["spawn", 12346])
+                            real.bind = Mock(return_value=True)
+                        scenario = group.get("startup_frame") or group["shutdown_frame"]
+                        rows.extend((["terminal", scenario], None, None))
+                        real.process = Mock(
+                            stdin=io.BytesIO(),
+                            poll=Mock(return_value=None),
+                            wait=Mock(return_value=scenario["exit"]),
+                        )
+                        real.channel = Mock(receive=Mock(side_effect=rows))
+                        real.begin = Mock()
+                        return real
+                    group_vm.begin.side_effect = (group or {}).get(
+                        "begin", trial.Refusal("unavailable")
+                    )
+
+                    def close(normal):
+                        record["launcher_cleanup"] = (group or {}).get("cleanup", "verified")
+                        record["normal_for_test"] = normal
+                        group_vm.terminal = (group or {}).get(
+                            "terminal", {"exit": 0, "reason": "ok", "vm_exit": 0}
+                        )
+                        if (group or {}).get("cancel_in_close"):
+                            trial.request_cancel(signal.SIGTERM, None)
+                        return record["launcher_cleanup"] == "verified"
+
+                    group_vm.close.side_effect = close
+                    group_vm.terminal = None
+                    return group_vm
+
+                group_start = stack.enter_context(
+                    patch.object(trial, "GroupVm", side_effect=create_group)
+                )
                 provision = stack.enter_context(
                     patch.object(trial, "packages", side_effect=host_provision)
                 )
@@ -1146,11 +1370,20 @@ class EntrypointTrial(unittest.TestCase):
                     stack.enter_context(patch.object(trial.os, "write", side_effect=short_write))
                 summary = stack.enter_context(redirect_stdout(io.StringIO()))
                 code = trial.host_trial()
-                if kvm:
+                if kvm and not group:
                     provision.assert_not_called()
                     launch.assert_not_called()
                 else:
                     provision.assert_called_once()
+                if not kvm:
+                    group_start.assert_not_called()
+                if group:
+                    group_start.assert_called_once()
+                    if "startup_frame" not in group and "shutdown_frame" not in group:
+                        group_vm.begin.assert_called_once()
+                        group_vm.close.assert_called_once()
+                    launch.assert_not_called()
+                group_attempts = group_start.call_count
             if publish_failure:
                 evidence = handoff.read_bytes()
                 self.assertIsNone(runner_receipt_value(evidence))
@@ -1165,7 +1398,12 @@ class EntrypointTrial(unittest.TestCase):
             path = (
                 receipt_path(handoff) if handoff.stat().st_size else Path(temporary) / trial.RESULT
             )
-            return code, json.loads(path.read_text()), deadlines
+            report = json.loads(path.read_text())
+            probe = report.get("host", {}).get("kvm_probe", {})
+            self.assertEqual(
+                group_attempts, int(probe.get("group_observation") == "group_rw_not_held")
+            )
+            return code, report, deadlines
 
     def test_host_publishes_closed_kvm_refusal_before_provisioning(self):
         for options, operation, detail, reason, dev_close, group_status in (
@@ -1240,6 +1478,117 @@ class EntrypointTrial(unittest.TestCase):
                     "55104",
                 ):
                     self.assertNotIn(private, json.dumps(report))
+
+    def test_host_uses_only_the_eligible_group_launcher_and_keeps_initial_denial(self):
+        for cloud_failure, cleanup, expected in (
+            (None, "verified", (0, "complete", "ok", "verified", True)),
+            (31, "unverified", (31, "boot", "command_failed", "unverified", False)),
+            (None, "unverified", (1, "complete", "cleanup_failed", "unverified", True)),
+        ):
+            with self.subTest(cloud_failure=cloud_failure, cleanup=cleanup):
+                code, report, _ = self.host(
+                    ("ready",),
+                    cloud_failure=cloud_failure,
+                    kvm={"failures": {"open": errno.EACCES}},
+                    group={"begin": None, "cleanup": cleanup},
+                )
+                access = report["host"]["kvm_group"]
+                self.assertEqual(
+                    (
+                        code,
+                        report["stage"],
+                        report["reason"],
+                        report["cleanup"],
+                        access["normal_for_test"],
+                    ),
+                    expected,
+                )
+                self.assertEqual(
+                    report["host"]["kvm_probe"],
+                    {
+                        "operation": "open",
+                        "detail": "denied",
+                        "vm_close": "not_opened",
+                        "device_close": "not_opened",
+                        "group_observation": "group_rw_not_held",
+                    },
+                )
+                self.assertEqual(report["host"]["kvm_api"], 12)
+
+    def test_group_host_keeps_real_worker_status_and_cancellation_during_cleanup(self):
+        for controls, expected in (
+            (
+                {"terminal": {"exit": 17, "reason": "command_failed"}},
+                (17, "command_failed", "verified"),
+            ),
+            ({"cancel_in_close": True, "cleanup": "unverified"}, (143, "cancelled", "unverified")),
+        ):
+            with self.subTest(controls=controls):
+                code, report, _ = self.host(
+                    ("ready",),
+                    kvm={"failures": {"open": errno.EACCES}},
+                    group={"begin": None} | controls,
+                )
+                self.assertEqual((code, report["reason"], report["cleanup"]), expected)
+
+    def test_host_refuses_out_of_order_success_and_keeps_genuine_early_worker_status(self):
+        for worker_exit, reason, expected in (
+            (0, "ok", (1, "refused")),
+            (17, "command_failed", (17, "command_failed")),
+        ):
+            with self.subTest(worker_exit=worker_exit):
+                frame = {
+                    "exit": worker_exit,
+                    "reason": reason,
+                    "cleanup": "not_started",
+                    "vm_exit": None,
+                }
+                code, report, ssh = self.host(
+                    (), kvm={"failures": {"open": errno.EACCES}}, group={"startup_frame": frame}
+                )
+                self.assertEqual((code, report["reason"]), expected)
+                self.assertEqual(report["exit"], code)
+                self.assertEqual(
+                    (report["stage"], report["cleanup"], ssh), ("boot", "unverified", [])
+                )
+                self.assertNotIn("guest", report)
+                access = report["host"]["kvm_group"]
+                if worker_exit:
+                    self.assertEqual(access["worker"], frame)
+                else:
+                    self.assertNotIn("worker", access)
+                self.assertEqual(access["launcher_cleanup"], "unverified")
+
+    def test_host_checks_actual_qemu_exit_after_ordered_group_shutdown(self):
+        for vm_exit, worker_exit, worker_reason, expected in (
+            (0, 0, "ok", (0, "ok")),
+            (-15, 0, "ok", (0, "ok")),
+            (17, 0, "ok", (17, "command_failed")),
+            (22, 22, "command_failed", (22, "command_failed")),
+        ):
+            with self.subTest(vm_exit=vm_exit, worker_exit=worker_exit):
+                frame = {
+                    "exit": worker_exit,
+                    "reason": worker_reason,
+                    "vm_exit": vm_exit,
+                    "cleanup": "verified",
+                }
+                code, report, deadlines = self.host(
+                    ("ready",),
+                    kvm={"failures": {"open": errno.EACCES}},
+                    group={"shutdown_frame": frame},
+                )
+                self.assertEqual((code, report["reason"]), expected)
+                self.assertEqual(
+                    (report["exit"], report["stage"], report["cleanup"]),
+                    (code, "complete", "verified"),
+                )
+                access = report["host"]["kvm_group"]
+                self.assertTrue(access["qemu_credentials_verified"])
+                self.assertEqual(access["worker"], frame)
+                self.assertEqual(access["launcher_exit"], worker_exit)
+                self.assertEqual(access["launcher_cleanup"], "verified")
+                self.assertEqual(deadlines, [7])
 
     def test_host_continues_after_a_successful_kvm_probe(self):
         code, report, observed = self.host(("ready",))
