@@ -13,10 +13,17 @@ no candidate, command, path or other inputs. The existing pinned checkout Action
 checks out `github.sha`, not a movable ref, without persisted credentials. The
 collector accepts no arguments and checks repository, workflow ref/SHA, event,
 main ref, job, run/attempt, hosted Linux/X64 runner and Ubuntu image metadata.
+Check selects `ubuntu-26.04`. The runner publishes `ImageOS=ubuntu26` and a
+bounded numeric `ImageVersion`, both recorded in the binding. An old
+`ImageOS=ubuntu24`, a different architecture or a malformed image version is
+refused before any host collection. [GitHub runner image build metadata](https://github.com/actions/runner-images/blob/ubuntu26%2F20261122.9/helpers/GenerateResourcesAndImage.ps1)
 Its actual `git rev-parse HEAD` must equal the dispatch and workflow SHA. It reads
 the fixed `/usr/lib/os-release` data rather than executing a shell or following
-Ubuntu's standard `/etc/os-release` symlink. Environment labels and installed
-hashes are observations, not authenticated publisher integrity or OS attestation.
+Ubuntu's standard `/etc/os-release` symlink. Complete observations require
+`ID=ubuntu` and `VERSION_ID=26.04`, using the existing quoted or unquoted syntax.
+Missing, inconsistent or malformed release data leaves observations unavailable.
+Environment labels and installed hashes are observations, not authenticated
+publisher integrity or OS attestation.
 
 Normal PR and main-push validation keep their complete offline/native gates and
 fail-closed aggregate. Only main's diagnostic event excludes scaffold and
@@ -169,13 +176,11 @@ review its exact artifact/run/SHA before changing prerequisite policy.
 
 Only DockerLens Check consumes this collector. Its native harness, reviewed
 native dispatcher and release validator do not; the other workspace products
-gain no dependency or workflow change. Both added Action occurrences reuse the
-existing exact checkout v4.2.2 and upload-artifact v4.6.2 SHAs, uniquely owned by
-Renovate's GitHub Actions manager. The existing Cargo/toolchain owners, two regex
-managers, and five native-image extractions/grouping/manual approvals are
-unchanged. No new or moved package/image/toolchain pin, download or manager is
-introduced; policy tests check these extraction and ownership facts. Installed
-Python/core utilities, dpkg and systemd follow the existing mutable Ubuntu 24.04
-runner unavailable-integrity/manual-review boundary, not invented checksums.
+gain no dependency or workflow change. Renovate's GitHub Actions manager owns
+the Check Action refs and its `ubuntu-26.04` runner label. The collector values
+only verify metadata for that already-selected runner. Native-image and hosted
+zero-swap trial image managers remain scoped to their existing files.
+Installed Python/core utilities, dpkg and systemd follow the existing mutable
+Ubuntu 26.04 runner unavailable-integrity/manual-review boundary.
 Historical native evidence stays immutable. Focused fake controls establish only
 source behavior; independent review and final complete gates remain required.
