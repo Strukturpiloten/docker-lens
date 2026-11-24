@@ -8,6 +8,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import stat
 import subprocess
@@ -25,7 +26,7 @@ SPEC.loader.exec_module(PROFILE)
 SECRET = "private-host-source-user-stderr-canary"
 HEAD = "a" * 40
 CI = {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted", "RUNNER_OS": "Linux",
-      "RUNNER_ARCH": "X64", "ImageOS": "ubuntu24", "ImageVersion": "20261021.1.0",
+      "RUNNER_ARCH": "X64", "ImageOS": "ubuntu26", "ImageVersion": "20261122.9.1",
       "GITHUB_REPOSITORY": "Strukturpiloten/docker-lens", "GITHUB_EVENT_NAME": "workflow_dispatch",
       "GITHUB_REF": "refs/heads/main", "GITHUB_WORKFLOW": "Check", "GITHUB_WORKFLOW_REF": PROFILE.WORKFLOW,
       "GITHUB_WORKFLOW_SHA": HEAD, "GITHUB_SHA": HEAD, "GITHUB_JOB": PROFILE.JOB,
@@ -65,7 +66,7 @@ class HostedDiagnosticTests(unittest.TestCase):
             if source_id in PROFILE.DIRECTORY_IDS:
                 target.mkdir(mode=0o700)
             else:
-                target.write_text('ID=ubuntu\nVERSION_ID="24.04"\nIGNORED=' + SECRET + "\n"
+                target.write_text('ID=ubuntu\nVERSION_ID="26.04"\nIGNORED=' + SECRET + "\n"
                                   if source_id == "os-release" else SECRET + "\n")
                 target.chmod(0o644)
         self.addCleanup(patch.stopall)
@@ -122,6 +123,50 @@ class HostedDiagnosticTests(unittest.TestCase):
         self.assertNotIn(SECRET, json.dumps(result))
         self.assertEqual(result["admission"], "unadmitted")
         return result, calls
+
+    def test_check_workflow_runner_reaches_complete_receipt(self):
+        workflow = (ROOT / ".github/workflows/check.yml").read_text()
+        job = workflow.split("  hosted-prerequisite-diagnostic:\n", 1)[1]
+        job = re.split(r"\n  [a-z][a-z-]*:\n", job, maxsplit=1)[0]
+        self.assertIn("python3 -B scripts/native-outer-runtime-profile.py", job)
+        label, = re.findall(r"^    runs-on: ([a-z0-9.-]+)$", job, re.MULTILINE)
+        # The workflow selects a provider label, not a collector constant.
+        # ImageOS is the provider's build variable, not the workflow label.
+        metadata = {"ubuntu-24.04": ("ubuntu24", "24.04"), "ubuntu-26.04": ("ubuntu26", "26.04")}
+        self.assertIn(label, metadata)
+        image_os, version_id = metadata[label]
+        for version in (version_id, f'"{version_id}"'):
+            with self.subTest(label=label, version=version):
+                self.source("os-release").write_text(f'ID="ubuntu"\nVERSION_ID={version}\n')
+                result, calls = self.execute(environment=CI | {"ImageOS": image_os})
+                self.assertEqual((result["status"], result["reason"]), ("observed", "complete"))
+                self.assertEqual(calls, list(PROFILE.COMMANDS))
+                self.assertEqual((result["binding"]["image_os"], result["binding"]["image_version"]),
+                                 (image_os, CI["ImageVersion"]))
+                release = result["observations"]["files"]["os-release"]
+                self.assertEqual((release["distribution"], release["version_id"]), ("ubuntu", version_id))
+
+    def test_check_refuses_wrong_runner_image_before_collection(self):
+        for update in ({"ImageOS": "ubuntu24"},
+                       {"ImageOS": "ubuntu26-arm64", "RUNNER_ARCH": "ARM64"},
+                       {"ImageOS": "ubuntu-26.04"}, {"ImageOS": ""},
+                       {"ImageVersion": "20261122.9"}, {"ImageVersion": "20261122.9.1\n"}):
+            with self.subTest(update=update):
+                result, calls = self.execute(environment=CI | update)
+                self.assertEqual((result["status"], result["reason"]), ("unavailable", "ci_identity_unavailable"))
+                self.assertIsNone(result["binding"])
+                self.assertIsNone(result["observations"])
+                self.assertEqual(calls, [])
+
+    def test_current_runner_metadata_requires_matching_os_release(self):
+        for release in ('ID=ubuntu\nVERSION_ID="24.04"\n', 'ID=ubuntu\nVERSION_ID="26.04.1"\n',
+                        'ID=debian\nVERSION_ID="26.04"\n'):
+            with self.subTest(release=release):
+                self.source("os-release").write_text(release)
+                result, calls = self.execute()
+                self.assertEqual((result["status"], result["reason"]), ("unavailable", "invalid_metadata"))
+                self.assertIsNone(result["observations"])
+                self.assertEqual(calls, list(PROFILE.COMMANDS))
 
     def test_fixed_commands_bound_identity_hashes_and_no_native_query(self):
         result, calls = self.execute(environment=CI | {"GITHUB_TOKEN": SECRET, "DOCKER_HOST": SECRET,
@@ -286,8 +331,8 @@ class HostedDiagnosticTests(unittest.TestCase):
 
     def test_malformed_os_data_and_symlink_ancestors_are_refused(self):
         source = self.source("os-release")
-        for raw in (b"", b'ID=""ubuntu""\nVERSION_ID="24.04"\n',
-                    b'ID=ubuntu\nID=ubuntu\nVERSION_ID="24.04"\n', b"\xff"):
+        for raw in (b"", b'ID=""ubuntu""\nVERSION_ID="26.04"\n',
+                    b'ID=ubuntu\nID=ubuntu\nVERSION_ID="26.04"\n', b"\xff"):
             with self.subTest(raw=raw):
                 source.write_bytes(raw)
                 with self.assertRaises(PROFILE.Unavailable): self.read("os-release")

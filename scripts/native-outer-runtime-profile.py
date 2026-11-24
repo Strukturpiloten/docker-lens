@@ -64,6 +64,9 @@ PURPOSE = "hosted_prerequisite_diagnostic"
 SCHEMA_VERSION = 3
 WORKFLOW = "Strukturpiloten/docker-lens/.github/workflows/check.yml@refs/heads/main"
 JOB = "hosted-prerequisite-diagnostic"
+# Check's ubuntu-26.04 X64 job has distinct provider and os-release identities.
+RUNNER_IMAGE_OS = "ubuntu26"
+RUNNER_VERSION_ID = "26.04"
 REASONS = {"complete", "ci_identity_unavailable", "checkout_unavailable", "tool_unavailable",
            "command_failed", "timeout", "output_overflow", "invalid_metadata",
            "custody_failure", "cleanup_failure", "collector_io_failure", "completion_unknown",
@@ -446,11 +449,12 @@ def read_source(source_id, files, deadline, cancellation=None):
                     if line.startswith(("ID=", "VERSION_ID=")):
                         key, value = line.split("=", 1)
                         require(key not in fields)
-                        require(value in ({"ubuntu", '"ubuntu"'} if key == "ID" else {"24.04", '"24.04"'}))
+                        expected = "ubuntu" if key == "ID" else RUNNER_VERSION_ID
+                        require(value in {expected, f'"{expected}"'})
                         fields[key] = value[1:-1] if value.startswith('"') else value
-                require(fields == {"ID": "ubuntu", "VERSION_ID": "24.04"})
+                require(fields == {"ID": "ubuntu", "VERSION_ID": RUNNER_VERSION_ID})
                 result["distribution"] = "ubuntu"
-                result["version_id"] = "24.04"
+                result["version_id"] = RUNNER_VERSION_ID
         checkpoint(deadline, cancellation)
         guard, component_code = "stability", "leaf"
         source_check(source_identity(os.stat(components[-1], dir_fd=descriptor, follow_symlinks=False))
@@ -592,7 +596,7 @@ def unit_metadata(raw):
 
 def binding(environment):
     constants = {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted", "RUNNER_OS": "Linux",
-                 "RUNNER_ARCH": "X64", "ImageOS": "ubuntu24", "GITHUB_REPOSITORY": "Strukturpiloten/docker-lens",
+                 "RUNNER_ARCH": "X64", "ImageOS": RUNNER_IMAGE_OS, "GITHUB_REPOSITORY": "Strukturpiloten/docker-lens",
                  "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_REF": "refs/heads/main",
                  "GITHUB_WORKFLOW": "Check", "GITHUB_WORKFLOW_REF": WORKFLOW, "GITHUB_JOB": JOB}
     require(all(environment.get(key) == value for key, value in constants.items()), "ci_identity_unavailable")
@@ -606,7 +610,7 @@ def binding(environment):
             "ref": "refs/heads/main", "run_id": environment["GITHUB_RUN_ID"],
             "run_attempt": environment["GITHUB_RUN_ATTEMPT"], "job": JOB,
             "checkout_sha": environment["GITHUB_SHA"], "runner_os": "Linux", "runner_arch": "X64",
-            "runner_environment": "github-hosted", "image_os": "ubuntu24",
+            "runner_environment": "github-hosted", "image_os": RUNNER_IMAGE_OS,
             "image_version": environment["ImageVersion"]}
 
 

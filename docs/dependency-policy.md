@@ -16,15 +16,15 @@ The [hosted prerequisite diagnostic](hosted-prerequisite-diagnostic.md) adds no
 software installation, product dependency or operational version pin. Its sole
 consumer is Check's main-only diagnostic job; normal PR/main validation, native
 dispatch, release validation and the other workspace products retain their gates.
-The new Action occurrences reuse the existing full checkout v4.2.2 and
-upload-artifact v4.6.2 SHAs and remain uniquely extracted by the enabled GitHub
-Actions manager. The original diagnostic introduced no new pin source. The later shared adoption
-moves common ownership to immutable presets while preserving all five native-image
-extractions and historical evidence; native RE2 regressions verify unique owners. The `Required CI` display correction changes no job identity
-or software pin. Runner Python/coreutils/dpkg/systemd follow the existing mutable
-Ubuntu 24.04 runner unavailable-integrity boundary. Observed
-installed package versions and hash-only helper/control/unit metadata are not
-new pins, authenticated publisher integrity or permission to update/install them.
+The diagnostic uses the same full checkout and upload-artifact SHAs as the
+canonical native workflow. Renovate's GitHub Actions manager owns those Action
+refs and the `ubuntu-26.04` `runs-on` label advanced in #188. The collector's
+`ubuntu26` and `26.04` values check runner metadata and do not select software.
+Shared adoption keeps common policy in immutable presets and preserves the five
+native-image extractions. Runner Python/coreutils/dpkg/systemd follow the existing
+mutable Ubuntu 26.04 runner unavailable-integrity boundary. Observed installed
+package versions and hash-only helper/control/unit metadata are not new pins,
+authenticated publisher integrity or permission to update/install them.
 No third-party source is redistributed; copyright hashes and fixed provenance
 references support later independent source/license review. Historical evidence
 is not rewritten or added to automatic update streams.
@@ -67,8 +67,9 @@ Cargo ownership instead of freezing the historical version or checksum. Product
 dependencies remain serde_json/socket2; no custom manager, grouping or approval
 rule is added. The crate's Linux-only native validation is unchanged.
 
-GitHub Actions use full commit SHAs with exact release-tag comments on
-ubuntu-24.04. Renovate owns Cargo, GitHub Actions, and the pinned Rust toolchain.
+DockerLens's direct hosted jobs select `ubuntu-26.04`. Action refs use full
+commit SHAs with exact release-tag comments. Renovate owns Cargo, GitHub Actions,
+and the pinned Rust toolchain.
 One native-image regex manager extracts the five distinct version-tag plus
 manifest-digest pairs in scripts/native-conformance.sh: four GHCR Engine images
 and the BusyBox fixture. The policy test checks exact extraction and unique
@@ -122,7 +123,7 @@ other five repositories retain their independent native and product gates.
 The native bridge prerequisite uses the Ubuntu runner's kernel-provided
 `br_netfilter` and its installed `sudo`/`modprobe`; it downloads no tool and
 pins no independently versioned module. Kernel/module bytes follow the
-version-selected but mutable `ubuntu-24.04` GitHub-hosted runner image;
+version-selected but mutable `ubuntu-26.04` GitHub-hosted runner image;
 GitHub exposes no stable per-image or per-module digest to this repository.
 This is an explicit unavailable-integrity prerequisite exception, not
 a floating new package dependency: no package or
