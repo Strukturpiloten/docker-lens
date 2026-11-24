@@ -36,7 +36,30 @@ the job's effective primary or supplementary groups contain the owning group.
 `other_layout` records a mismatch, and `unobserved` records a missing
 observation. These facts describe the later metadata and process membership.
 They do not establish why the earlier open was denied or whether changing
-membership would allow access. The original refusal is preserved.
+membership would allow access. The original probe remains in the receipt.
+
+Only `open / denied / group_rw_not_held` permits one group-scoped attempt.
+The runner rechecks the KVM node and owning group, then uses its preinstalled
+noninteractive `sudo` and `setpriv` to start a fixed child under the original
+non-root UID and primary GID. The child keeps the original supplementary
+groups plus the verified KVM device group. It runs with empty capability
+sets and `no_new_privs`. It opens and checks the same device, creates and
+closes a probe VM, and starts QEMU under those credentials. The normal
+runner process checks the child and QEMU credentials and waits for their
+cleanup. It retains the direct probe, the optional group attempt, the
+child's probe and terminal results, and the waited launcher's exit and
+cleanup. The group attempt records the installed broker package versions.
+A failed attempt leaves the original probe refusal in effect.
+
+The launcher uses a private control pipe. On cancellation or an earlier
+failure the runner closes the pipe so the child can stop and reap its QEMU
+process group. The child reports its terminal work and teardown separately.
+The runner checks termination of the process identities it bound, as well
+as the launcher's waited status. A child's cleanup report alone cannot
+establish that the runner checked the worker or QEMU. Ordinary shutdown
+keeps the actual QEMU status and requires a previously verified QEMU start.
+An unverified cleanup keeps the trial incomplete. The attempt never edits the device, users, groups, or sudo
+policy. Direct KVM success does not select this launcher.
 
 The fixed cloud-image release and tool versions are in
 [scripts/hosted-zero-swap-pins.json](../scripts/hosted-zero-swap-pins.json).

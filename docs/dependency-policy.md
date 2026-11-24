@@ -163,3 +163,12 @@ not duplicate Renovate managers. The workflow/admission/package-plan regression
 requires a coherent runner refresh. The existing five
 native-image pins and cross-repository workflow call sites retain their
 ownership.
+
+The hosted trial uses its runner's installed `sudo` and util-linux
+`setpriv` only after its KVM probe identifies an eligible device. It checks
+the tools' installed package ownership and reports their versions. These
+runner-image prerequisites are supplied by GitHub's Ubuntu image, whose
+exact package bytes are not independently pinned or exposed for Renovate
+updates. The trial does not fetch or replace either utility. Its existing
+signed APT input, two image managers, and action references retain their
+ownership.
