@@ -35,6 +35,15 @@ event excludes aggregate, while another ref fails closed.
 Actual hosted sampling and independent artifact review are required after merge;
 definitions/fake controls alone establish no hosted prerequisite facts.
 
+## Hosted zero-swap boot trial
+
+The separate [hosted zero-swap boot trial](hosted-zero-swap-trial.md) is a fixed
+protected-main manual dispatch. It observes a disposable KVM guest, its
+rootful Docker peer and the effective constraints of one owned Debian
+container. The result belongs to the infrastructure trial and carries its own
+cleanup status. Native producers, independent readers, compatibility
+qualification and release gates use their existing evidence and workflows.
+
 ## Mandatory unadmitted runtime-cohort source observations
 
 The canonical harness requires nineteen exact ignored invocations, retaining the

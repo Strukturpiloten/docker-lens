@@ -1,0 +1,85 @@
+# Hosted zero-swap boot trial
+
+Run **Hosted zero-swap boot trial** manually on protected DockerLens `main`.
+The workflow has no inputs. It checks out its exact workflow SHA with
+read-only contents permission and without persisting credentials. It is a
+separate infrastructure trial on the standard x64 `ubuntu-24.04` runner.
+The existing Check diagnostic, native dispatch, release validation and their
+evidence formats retain their own gates.
+
+The collector checks the run, attempt, runner image version, workflow ref,
+dispatch/checkout SHA and protected-main state. It requires 9 GiB available
+memory, 12 GiB free disk and two available CPUs before provisioning.
+The runner must open the KVM character device and create a VM descriptor
+through the KVM API. QEMU must boot with KVM acceleration. GitHub documents
+nested virtualization as experimental on its hosted runners.
+[GitHub-hosted runners](https://docs.github.com/en/actions/concepts/runners/github-hosted-runners#preinstalled-software-for-github-owned-images)
+
+The fixed cloud-image release and tool versions are in
+[scripts/hosted-zero-swap-pins.json](../scripts/hosted-zero-swap-pins.json).
+The collector verifies Ubuntu's signed checksum file against the pinned
+cloud-image signing fingerprint, checks the exact image row, hashes the image
+bytes, and checks that QEMU recognizes a standalone QCOW2 image. A fresh 8 GiB
+overlay over the read-only base boots with 7 GiB RAM and two vCPUs. Exact host
+QEMU/xorriso and guest Docker/containerd/runc versions resolve through the dated
+Ubuntu signed APT snapshot. The package plans must avoid removing or upgrading
+installed packages. The archive keyring supplied by Ubuntu authenticates the
+snapshot package indexes and acquisition. The fixed historical snapshot uses
+its signed file identities instead of the rolling archive freshness deadline.
+[Dated Ubuntu cloud images](https://cloud-images.ubuntu.com/releases/noble/release-20261017/) ·
+[Ubuntu snapshot service](https://snapshot.ubuntu.com/) ·
+[Ubuntu archive verification](https://documentation.ubuntu.com/security/software-integrity/archive-verification/)
+
+A per-run NoCloud seed configures a fresh SSH client identity and a pinned
+guest host key. The host forwards SSH on loopback and sends the fixed observer
+over that connection. The host retries a reaped readiness timeout after the
+usual one-second pause while QEMU is still running. Each probe has up to seven
+seconds within the original 100-second boot window and the host deadline.
+Deadline expiry, cancellation, QEMU exit or unverified command cleanup ends
+readiness.
+Cloud-init status is checked separately after SSH becomes ready.
+The VM gets no checkout mount, host credentials or host
+Docker socket. The observer uses the guest kernel's global swap table and
+`SwapTotal` and ties its hashed boot identity to the observed kernel. It binds
+the local Docker socket and the listening rootful systemd-owned Docker process
+by peer, PID, descriptor and socket identities. Runner-supplied OS tools and
+installed keyrings form the hosted prerequisite. The runner image version and
+host boot hash are observations of this run.
+[NoCloud datasource](https://docs.cloud-init.io/en/latest/reference/datasources/nocloud.html)
+
+The guest pulls the exact Debian 11 rootful index used by product source
+`bd7461e584b3686123ac7534626c88333c5af39c`, verifies the Linux/amd64 manifest and
+config, and creates one owned container running a fixed idle process with
+networking disabled. The observer checks the configured limits and private
+cgroup namespace. It binds the container's mounted cgroup inode to the same
+node from the VM, reads the effective 4 GiB memory, 512 PID and two-CPU quota,
+verifies zero global swap in both contexts, and reads the installed Debian
+Engine package revision. Docker reports a canonical repository digest and
+a typed security option list. An index-based image store must expose matching
+index and selected platform descriptors, including the container's platform
+descriptor. A config-based store has an absent or null descriptor.
+The idle container provides the boot prerequisite
+observation. No inner daemon, memory workload or native proof reader runs in
+this trial.
+
+The sole artifact is a small versioned JSON result with scoped host and guest
+observations, bounded outcomes, sampled disk use, elapsed and VM active time,
+and separate work/cleanup results. The trial writes privately in a fresh
+directory, publishes the completed file without replacing an existing file,
+and then hands its exact path to the uploader through this step's output.
+The handoff ends at the closing delimiter, which the runner accepts at EOF.
+A short write leaves an incomplete output command.
+A fresh failure result can be uploaded. A missing handoff leaves no selected
+artifact. The guest requires the owned container to be absent by ID and name.
+Cancellation during guest cleanup fails completed work, while an earlier
+work failure keeps its result and the cleanup outcome remains separate.
+The host stops and reaps the owned VM group, then
+removes the overlay, seed, keys and scratch. Command output is captured
+privately and bounded. An interrupted transfer, unclear absence, failed cleanup
+or missing result leaves the trial incomplete. GitHub may forcibly stop a
+canceled job before artifact upload. No raw stdout/stderr, inventories,
+credentials, filesystem content or VM disks enter the artifact.
+
+A completed trial establishes the observed hosted boot and container
+prerequisite. The exact candidate still needs all four native lanes and their
+independent readers before compatibility can be claimed.

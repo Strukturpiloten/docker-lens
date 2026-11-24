@@ -103,11 +103,13 @@ class ScaffoldPolicyTests(unittest.TestCase):
         renovate = json.loads((ROOT / "renovate.json").read_text())
         self.assertEqual(renovate["enabledManagers"],
                          ["cargo", "github-actions", "rust-toolchain", "custom.regex"])
-        self.assertEqual(len(renovate["customManagers"]), 1)
         self.assertEqual(len(renovate["extends"]), 2)
         for reference in renovate["extends"]:
             self.assertRegex(reference, r"^github>Strukturpiloten/boxferry//renovate-presets/(common|rust)#[0-9a-f]{40}$")
-        native_manager = renovate["customManagers"][0]
+        native_managers = [manager for manager in renovate["customManagers"]
+                           if manager["managerFilePatterns"] == [r"/^scripts\/native-conformance\.sh$/"]]
+        self.assertEqual(len(native_managers), 1)
+        native_manager = native_managers[0]
         self.assertEqual(native_manager["managerFilePatterns"], ["/^scripts\\/native-conformance\\.sh$/"])
         native_extractor = re.sub(
             r"\(\?<(\w+)>", r"(?P<\1>", native_manager["matchStrings"][0]
@@ -352,15 +354,21 @@ class ScaffoldPolicyTests(unittest.TestCase):
         def check_pins(workflow: str, canonical: str, configuration: str) -> tuple[str, str]:
             renovate = json.loads(configuration)
             self.assertEqual(renovate["enabledManagers"].count("github-actions"), 1)
-            self.assertEqual(len(renovate["customManagers"]), 1)
-            self.assertEqual(
-                renovate["customManagers"][0]["managerFilePatterns"],
-                [r"/^scripts\/native-conformance\.sh$/"],
+            owned_manager_paths = [
+                (r"/^scripts\/native-conformance\.sh$/",),
+                (r"/^scripts\/hosted-zero-swap-pins\.json$/",),
+                (r"/^scripts\/hosted-zero-swap-pins\.json$/",),
+            ]
+            self.assertCountEqual(
+                (tuple(manager["managerFilePatterns"]) for manager in renovate["customManagers"]),
+                owned_manager_paths,
             )
-            # Local manual native-image rules cannot override inherited Action policy.
+            # Local historical-image rules cannot override inherited Action policy.
             for rule in renovate["packageRules"]:
-                self.assertEqual(rule["matchManagers"], ["custom.regex"])
-                self.assertEqual(rule["matchFileNames"], ["scripts/native-conformance.sh"])
+                self.assertIn(rule.get("matchFileNames"), [
+                    ["scripts/native-conformance.sh"], ["scripts/hosted-zero-swap-pins.json"],
+                ])
+                self.assertEqual(rule.get("matchManagers", ["custom.regex"]), ["custom.regex"])
                 self.assertNotIn("automerge", rule)
                 self.assertNotIn("dependencyDashboardApproval", rule)
 
