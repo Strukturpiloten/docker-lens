@@ -1189,8 +1189,12 @@ class EntrypointTrial(unittest.TestCase):
         vm_exit_after=None,
         kvm=None,
         group=None,
+        package_case=None,
+        package_cleanup=False,
     ):
         now, deadlines, host_boot = [0], [], "e" * 64
+        package_calls = []
+        package_impl, capture_impl = trial.packages, trial.capture
         digest = PINS["cloud_image"].split("@sha256:")[1]
         guest_code, guest, _ = self.guest()
         self.assertEqual(guest_code, 0)
@@ -1201,6 +1205,55 @@ class EntrypointTrial(unittest.TestCase):
             return Path(*args)
 
         def run(argv, deadline, **options):
+            if argv[0] in ("env", "sudo", "dpkg", "dpkg-query"):
+                self.assertIsNotNone(package_case)
+                if "apt-get" in argv:
+                    if argv[-1] == "update":
+                        operation = "update"
+                    elif "--simulate" in argv:
+                        operation = "plan"
+                    else:
+                        self.assertIn("-y", argv)
+                        self.assertIn("install", argv)
+                        operation = "install"
+                elif argv[0] == "dpkg":
+                    self.assertEqual(argv, ["dpkg", "--audit"])
+                    operation = "audit"
+                else:
+                    self.assertEqual(argv[0], "dpkg-query")
+                    operation = "verify"
+                self.assertEqual(
+                    operation, ("update", "plan", "audit", "install", "verify")[len(package_calls)]
+                )
+                package_calls.append(operation)
+                if package_case == (operation, "exit"):
+                    return capture_impl(
+                        [
+                            sys.executable,
+                            "-c",
+                            "import sys;print('private-package-output');"
+                            "sys.stderr.write('private-package-error');sys.exit(100)",
+                        ],
+                        deadline,
+                    )
+                if package_case == (operation, "cancel"):
+                    trial.request_cancel(signal.SIGTERM, None)
+                    trial.active(deadline)
+                if package_case == (operation, "upgrade"):
+                    return 0, b"Inst private-package [1] (2 private-source)\n", b""
+                if package_case == (operation, "remove"):
+                    return 0, b"Remv private-package [1]\n", b""
+                if package_case == (operation, "guard"):
+                    return 0, b"private-package-output\n", b""
+                if operation == "verify":
+                    return (
+                        0,
+                        "".join(
+                            f"{p}={v} installed\n" for p, v in PINS["host_packages"].items()
+                        ).encode(),
+                        b"",
+                    )
+                return 0, b"", b""
             if argv[0] == "qemu-img":
                 return command_json({"format": "qcow2", "virtual-size": 100})
             self.assertEqual(argv[0], "ssh")
@@ -1246,10 +1299,29 @@ class EntrypointTrial(unittest.TestCase):
         current_uid = os.geteuid()
         with tempfile.TemporaryDirectory() as temporary:
 
-            def host_provision(pins, scope, work, _deadline):
+            def host_provision(pins, scope, work, _deadline, *, progress=None):
                 self.assertEqual(pins, PINS)
                 self.assertEqual(scope, "host")
                 self.assertEqual(work.parent, Path(temporary))
+                if progress is not None:
+                    self.assertEqual(progress["stage"], "host_packages")
+                    self.assertNotIn("host_package_operation", progress)
+                if package_case:
+                    if package_case[0] == "prepare":
+                        (work / "lists").mkdir()
+                    if package_case[0] == "between":
+
+                        class UnreadablePackages(dict):
+                            def items(self):
+                                raise OSError("private-package-error")
+
+                        pins = pins | {"host_packages": UnreadablePackages(pins["host_packages"])}
+                    options = {} if progress is None else {"progress": progress}
+                    result = package_impl(pins, scope, work, _deadline, **options)
+                    self.assertEqual(
+                        package_calls, ["update", "plan", "audit", "install", "verify"]
+                    )
+                    return result
                 return PINS["host_packages"]
 
             handoff = Path(temporary) / "set_output"
@@ -1369,7 +1441,11 @@ class EntrypointTrial(unittest.TestCase):
 
                     stack.enter_context(patch.object(trial.os, "write", side_effect=short_write))
                 summary = stack.enter_context(redirect_stdout(io.StringIO()))
+                if package_cleanup:
+                    stack.enter_context(patch.object(trial, "allocated", side_effect=OSError))
                 code = trial.host_trial()
+                if package_case and package_case[0] != "complete":
+                    launch.assert_not_called()
                 if kvm and not group:
                     provision.assert_not_called()
                     launch.assert_not_called()
@@ -1399,11 +1475,76 @@ class EntrypointTrial(unittest.TestCase):
                 receipt_path(handoff) if handoff.stat().st_size else Path(temporary) / trial.RESULT
             )
             report = json.loads(path.read_text())
+            if package_case:
+                self.assertNotIn("private-package", path.read_text() + summary.getvalue())
+                self.assertFalse(
+                    [
+                        p
+                        for p in Path(temporary).glob("dockerlens-boot-*")
+                        if not p.name.startswith("dockerlens-boot-receipt-")
+                    ]
+                )
             probe = report.get("host", {}).get("kvm_probe", {})
             self.assertEqual(
                 group_attempts, int(probe.get("group_observation") == "group_rw_not_held")
             )
             return code, report, deadlines
+
+    def test_host_package_native_failure_records_only_its_operation(self):
+        for operation in ("update", "plan", "audit", "install", "verify"):
+            with self.subTest(operation=operation):
+                code, report, _ = self.host((), package_case=(operation, "exit"))
+                self.assertEqual(
+                    (code, report["stage"], report["reason"], report["cleanup"]),
+                    (100, "host_packages", "command_failed", "verified"),
+                )
+                self.assertEqual(report["host_package_operation"], operation)
+                self.assertNotIn("host_packages", report)
+
+    def test_host_package_guards_keep_the_operation_they_check(self):
+        for case in (
+            ("plan", "upgrade"),
+            ("plan", "remove"),
+            ("audit", "guard"),
+            ("verify", "guard"),
+        ):
+            with self.subTest(case=case):
+                code, report, _ = self.host((), package_case=case)
+                self.assertEqual(
+                    (code, report["stage"], report["reason"], report["cleanup"]),
+                    (1, "host_packages", "refused", "verified"),
+                )
+                self.assertEqual(report["host_package_operation"], case[0])
+
+    def test_host_package_operation_does_not_survive_success_or_preparation_failure(self):
+        for cloud_failure in (None, 37):
+            with self.subTest(cloud_failure=cloud_failure):
+                code, report, _ = self.host(
+                    ("ready",), package_case=("complete", "success"), cloud_failure=cloud_failure
+                )
+                self.assertEqual(code, cloud_failure or 0)
+                self.assertEqual(report["host_packages"], PINS["host_packages"])
+                self.assertNotIn("host_package_operation", report)
+        for operation in ("prepare", "between"):
+            with self.subTest(operation=operation):
+                code, report, _ = self.host((), package_case=(operation, "io"))
+                self.assertEqual(
+                    (code, report["stage"], report["reason"], report["cleanup"]),
+                    (1, "host_packages", "io", "verified"),
+                )
+                self.assertNotIn("host_package_operation", report)
+
+    def test_host_package_operation_preserves_cancellation_and_cleanup_failure(self):
+        code, report, _ = self.host((), package_case=("plan", "cancel"))
+        self.assertEqual(
+            (code, report["reason"], report["cleanup"]), (143, "cancelled", "verified")
+        )
+        self.assertEqual(report["host_package_operation"], "plan")
+        code, report, _ = self.host((), package_case=("install", "exit"), package_cleanup=True)
+        self.assertEqual(
+            (code, report["reason"], report["cleanup"]), (100, "command_failed", "unverified")
+        )
+        self.assertEqual(report["host_package_operation"], "install")
 
     def test_host_publishes_closed_kvm_refusal_before_provisioning(self):
         for options, operation, detail, reason, dev_close, group_status in (

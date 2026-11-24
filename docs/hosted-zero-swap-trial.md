@@ -127,7 +127,14 @@ and then hands its exact path to the uploader through this step's output.
 The handoff ends at the closing delimiter, which the runner accepts at EOF.
 A short write leaves an incomplete output command.
 A fresh failure result can be uploaded. A missing handoff leaves no selected
-artifact. The guest requires the owned container to be absent by ID and name.
+artifact. On a host package failure, optional `host_package_operation` identifies
+`update`, `plan`, `audit`, `install` or `verify`, including the guard checking that
+operation's result. It records the operation, not its root cause. The field is
+absent before an operation starts, after it succeeds, and on later unrelated
+failures. Earlier schema-1 receipts remain readable without this optional field;
+absence alone does not establish a successful package operation. The guest's
+package behavior and receipt are unchanged.
+The guest requires the owned container to be absent by ID and name.
 Cancellation during guest cleanup fails completed work, while an earlier
 work failure keeps its result and the cleanup outcome remains separate.
 The host stops and reaps the owned VM group, then

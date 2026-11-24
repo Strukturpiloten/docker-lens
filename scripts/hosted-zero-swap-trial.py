@@ -21,6 +21,7 @@ import sys
 import tempfile
 import time
 import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
 
 GIB = 1 << 30
@@ -196,7 +197,15 @@ def boot_id():
     return hashlib.sha256(contents).hexdigest()
 
 
-def packages(pins, scope, work, deadline):
+def packages(pins, scope, work, deadline, *, progress=None):
+    @contextmanager
+    def op(name):
+        if progress is not None:
+            progress["host_package_operation"] = name
+        yield
+        if progress is not None:
+            progress.pop("host_package_operation")
+
     source = work / "apt.sources"
     snapshot = pins["apt_snapshot"]
     suite = pins[scope + "_apt_suite"]
@@ -231,11 +240,10 @@ def packages(pins, scope, work, deadline):
         "-o",
         "DPkg::Lock::Timeout=2",
     ]
-    # Update privately without sudo on the host. Installation uses this
-    # fixed source and the disposable system's normal authenticated cache.
     (work / "lists").mkdir()
     (work / "lists" / "partial").mkdir()
-    capture(command[len(prefix) :] + ["-qq", "update"], min(deadline, time.monotonic() + 100))
+    with op("update"):
+        capture(command[len(prefix) :] + ["-qq", "update"], min(deadline, time.monotonic() + 100))
     install = [
         "--no-install-recommends",
         "--no-upgrade",
@@ -243,22 +251,27 @@ def packages(pins, scope, work, deadline):
         "install",
         *(f"{pkg}={version}" for pkg, version in pins.items()),
     ]
-    _, plan, _ = capture(command[len(prefix) :] + ["--simulate", *install], deadline)
-    require(not re.search(rb"(?m)^(?:Remv |Inst [^\n ]+ \[)", plan))
-    _, audit, _ = capture(["dpkg", "--audit"], deadline)
-    require(not audit)
-    capture(command + ["-qq", "-y", *install], min(deadline, time.monotonic() + 170))
-    _, actual, _ = capture(
-        ["dpkg-query", "-W", r"-f=${Package}=${Version} ${db:Status-Status}\n", *pins], deadline
-    )
-    require(
-        set(actual.decode("ascii").splitlines()) == {f"{p}={v} installed" for p, v in pins.items()}
-    )
+    with op("plan"):
+        _, plan, _ = capture(command[len(prefix) :] + ["--simulate", *install], deadline)
+        require(not re.search(rb"(?m)^(?:Remv |Inst [^\n ]+ \[)", plan))
+    with op("audit"):
+        _, audit, _ = capture(["dpkg", "--audit"], deadline)
+        require(not audit)
+    with op("install"):
+        capture(command + ["-qq", "-y", *install], min(deadline, time.monotonic() + 170))
+    with op("verify"):
+        _, actual, _ = capture(
+            ["dpkg-query", "-W", r"-f=${Package}=${Version} ${db:Status-Status}\n", *pins], deadline
+        )
+        require(
+            set(actual.decode("ascii").splitlines())
+            == {f"{p}={v} installed" for p, v in pins.items()}
+        )
     return pins
 
 
 def fetch(url, path, limit, deadline):
-    # curl bounds the actual sink even if the server provides no trustworthy size.
+    # Bound the sink without trusting a reported size.
     capture(
         [
             "curl",
@@ -335,7 +348,7 @@ def registry_read(path, token=None):
     }
     if token is not None:
         headers["Authorization"] = f"Bearer {token}"
-    # The fixed GHCR token and manifest endpoints are expected to be direct.
+    # Require direct fixed GHCR endpoints.
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
     with opener.open(urllib.request.Request(host + path, headers=headers), timeout=7) as response:
         data = response.read(65537)
@@ -399,8 +412,7 @@ def make_seed(work, token, deadline):
     host = (work / "guest-host.pub").read_text().split()
     require(host[0] == "ssh-ed25519" and len(host) == 3)
     (work / "known_hosts").write_text("dockerlens-trial " + " ".join(host[:2]) + "\n")
-    # JSON is a YAML-compatible cloud-config document. The host key is scoped to
-    # the freshly owned guest. Host credentials and the checkout never enter it.
+    # JSON cloud-config: owned guest key, no host credentials or checkout.
     config = {
         "users": [
             {
@@ -567,7 +579,7 @@ def bind_image(docker, reference, digest_ref, pins, deadline):
     image = inspect_image([])
     image_id = image["Id"]
     if image_id == digest_ref.rsplit("@", 1)[-1]:
-        # Containerd reports the index and then the selected manifest.
+        # Check index, then selected manifest.
         bind_descriptor(image.get("Descriptor"), image_id)
         selected = inspect_image(["--platform", "linux/amd64"])
         manifest = pins["fixture_platform"]
@@ -668,7 +680,7 @@ def within_guest(args):
         require(len(memory) == 1 and 6 * GIB <= int(memory[0]) * 1024 <= MEMORY)
         result["boot"] = {"kernel": kernel, "identity_sha256": boot, "swap_kib": 0, "vcpus": CPUS}
         result["stage"] = "packages"
-        # A per-guest empty Docker client config prevents ambient credentials.
+        # No ambient Docker credentials.
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)
             result["packages"] = packages(pins, "guest", path, deadline)
@@ -1551,8 +1563,7 @@ def publish_receipt(output, handoff, result):
         os.link(partial, output)
     finally:
         partial.unlink()
-    # The runner accepts the closing delimiter at EOF. End there so any
-    # short write necessarily leaves an incomplete output command.
+    # EOF closes the handoff; short writes stay incomplete.
     marker = "DOCKERLENS_RECEIPT"
     entry = f"receipt_path<<{marker}\n{output}\n{marker}".encode("ascii")
     if os.write(handoff, entry) != len(entry):
@@ -1630,7 +1641,7 @@ def host_trial():
         require(re.fullmatch(r"[a-f0-9]{40}", source))
         result["product_fixture_source"] = source
         result["stage"] = "host_packages"
-        result["host_packages"] = packages(pins, "host", work, deadline)
+        result["host_packages"] = packages(pins, "host", work, deadline, progress=result)
         result["stage"] = "cloud_image"
         date, digest = pins["cloud_image"].split("@sha256:")
         require(re.fullmatch("[0-9]{8}", date) and re.fullmatch("[0-9a-f]{64}", digest))
