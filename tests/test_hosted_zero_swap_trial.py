@@ -7,6 +7,8 @@ import importlib.util
 import io
 import json
 import os
+import re
+import shlex
 import signal
 import stat
 import subprocess
@@ -27,6 +29,28 @@ trial = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(trial)
 PINS = json.loads((ROOT / "scripts/hosted-zero-swap-pins.json").read_text())
 FIXTURE = PINS["fixture_image"].split(":v")[0] + "@" + PINS["fixture_image"].rsplit("@", 1)[1]
+
+
+def host_environment(image_os="ubuntu26"):
+    sha = "a" * 40
+    return {
+        "GITHUB_ACTIONS": "true",
+        "RUNNER_ENVIRONMENT": "github-hosted",
+        "RUNNER_OS": "Linux",
+        "RUNNER_ARCH": "X64",
+        "ImageOS": image_os,
+        "GITHUB_REPOSITORY": "Strukturpiloten/docker-lens",
+        "GITHUB_REF": "refs/heads/main",
+        "GITHUB_REF_PROTECTED": "true",
+        "GITHUB_EVENT_NAME": "workflow_dispatch",
+        "GITHUB_JOB": "hosted-zero-swap-trial",
+        "GITHUB_WORKFLOW_REF": "Strukturpiloten/docker-lens/.github/workflows/hosted-zero-swap-trial.yml@refs/heads/main",
+        "GITHUB_SHA": sha,
+        "GITHUB_WORKFLOW_SHA": sha,
+        "GITHUB_RUN_ID": "45153925181",
+        "GITHUB_RUN_ATTEMPT": "1",
+        "ImageVersion": "20261116.202.1",
+    }
 
 
 def runner_receipt_value(data):
@@ -222,24 +246,7 @@ except trial.Refusal as error:
 
     def test_admission_binds_protected_main_and_exact_clean_checkout(self):
         sha = "a" * 40
-        env = {
-            "GITHUB_ACTIONS": "true",
-            "RUNNER_ENVIRONMENT": "github-hosted",
-            "RUNNER_OS": "Linux",
-            "RUNNER_ARCH": "X64",
-            "ImageOS": "ubuntu24",
-            "GITHUB_REPOSITORY": "Strukturpiloten/docker-lens",
-            "GITHUB_REF": "refs/heads/main",
-            "GITHUB_REF_PROTECTED": "true",
-            "GITHUB_EVENT_NAME": "workflow_dispatch",
-            "GITHUB_JOB": "hosted-zero-swap-trial",
-            "GITHUB_WORKFLOW_REF": "Strukturpiloten/docker-lens/.github/workflows/hosted-zero-swap-trial.yml@refs/heads/main",
-            "GITHUB_SHA": sha,
-            "GITHUB_WORKFLOW_SHA": sha,
-            "GITHUB_RUN_ID": "45153925181",
-            "GITHUB_RUN_ATTEMPT": "1",
-            "ImageVersion": "20261019.100.1",
-        }
+        env = host_environment()
         with patch.object(
             trial, "capture", side_effect=[(0, (sha + "\n").encode(), b""), (0, b"", b"")]
         ) as run:
@@ -256,6 +263,7 @@ except trial.Refusal as error:
                 "GITHUB_WORKFLOW_SHA",
                 "RUNNER_ENVIRONMENT",
                 "GITHUB_EVENT_NAME",
+                "ImageOS",
             ):
                 with self.subTest(field=field), self.assertRaises(trial.Refusal):
                     trial.admitted_host(ROOT, env | {field: "incorrect"})
@@ -266,6 +274,74 @@ except trial.Refusal as error:
             ):
                 with self.assertRaises(trial.Refusal):
                     trial.admitted_host(ROOT, env)
+
+    def test_workflow_runner_binds_admission_and_separate_host_guest_package_plans(self):
+        # This independently reviewed tuple must change together. A label-only
+        # runner update must not leave admission or package sources behind.
+        labels = re.findall(r"(?m)^    runs-on: (\S+)$", (ROOT / trial.WORKFLOW).read_text())
+        self.assertEqual(labels, ["ubuntu-26.04"])
+        image_os, host_suite = {"ubuntu-26.04": ("ubuntu26", "resolute")}[labels[0]]
+        env = host_environment(image_os)
+        with patch.object(
+            trial,
+            "capture",
+            side_effect=[(0, (env["GITHUB_SHA"] + "\n").encode(), b""), (0, b"", b"")],
+        ):
+            trial.admitted_host(ROOT, env)
+        for foreign_image in ("ubuntu24", "ubuntu22", "ubuntu28", "ubuntu26-arm64"):
+            with patch.object(trial, "capture") as run, self.assertRaises(trial.Refusal):
+                trial.admitted_host(ROOT, env | {"ImageOS": foreign_image})
+            run.assert_not_called()
+
+        for scope, suite in (("host", host_suite), ("guest", "noble")):
+            self.assertEqual(PINS[scope + "_apt_suite"], suite)
+            packages = PINS[scope + "_packages"]
+            actual = "".join(f"{name}={version} installed\n" for name, version in packages.items())
+            with (
+                tempfile.TemporaryDirectory() as temporary,
+                patch.object(
+                    trial, "capture", side_effect=[(0, b"", b"")] * 4 + [(0, actual.encode(), b"")]
+                ) as run,
+            ):
+                trial.packages(PINS, scope, Path(temporary), self.deadline())
+                source = (Path(temporary) / "apt.sources").read_text()
+                self.assertIn(f"Suites: {suite} {suite}-updates {suite}-security\n", source)
+                self.assertIn(f"URIs: {trial.ARCHIVE}{PINS['apt_snapshot']}/\n", source)
+                install = run.call_args_list[3].args[0]
+                self.assertEqual(
+                    install[:2],
+                    ["sudo", "-n"]
+                    if scope == "host"
+                    else ["env", "DEBIAN_FRONTEND=noninteractive"],
+                )
+                self.assertIn("--no-upgrade", install)
+                self.assertIn("--no-remove", install)
+                self.assertEqual(
+                    install[-len(packages) :], [f"{p}={v}" for p, v in packages.items()]
+                )
+
+        self.assertEqual(trial.IMAGE, "ubuntu-24.04-server-cloudimg-amd64.img")
+        date, digest = PINS["cloud_image"].split("@sha256:")
+
+        def fetch(_url, path, _limit, _deadline):
+            path.write_text(f"{digest} *{trial.IMAGE}\n" if path.name == "SHA256SUMS" else "inert")
+
+        with (
+            tempfile.TemporaryDirectory() as temporary,
+            patch.object(trial, "fetch", side_effect=fetch),
+            patch.object(
+                trial,
+                "capture",
+                side_effect=[
+                    (0, b"", b""),
+                    (0, f"[GNUPG:] VALIDSIG {trial.SIGNER} \n".encode(), b""),
+                ],
+            ),
+        ):
+            self.assertEqual(
+                trial.verify_cloud_manifest(Path(temporary), date, digest, self.deadline()),
+                f"https://cloud-images.ubuntu.com/releases/noble/release-{date}/",
+            )
 
     def test_real_unadmitted_execution_selects_only_its_fresh_closed_refusal(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -810,6 +886,12 @@ class EntrypointTrial(unittest.TestCase):
         sysfs = CgroupPath()
         calls = []
 
+        def provision(pins, scope, work, _deadline):
+            self.assertEqual(pins, PINS)
+            self.assertEqual(scope, "guest")
+            self.assertIsInstance(work, Path)
+            return PINS["guest_packages"]
+
         def run(argv, _deadline, **options):
             if argv[:1] == ["systemd-detect-virt"]:
                 return 0, b"kvm\n", b""
@@ -876,13 +958,14 @@ class EntrypointTrial(unittest.TestCase):
             ),
             patch.object(trial, "swap_zero"),
             patch.object(trial, "boot_id", return_value=boot),
-            patch.object(trial, "packages", return_value=PINS["guest_packages"]),
+            patch.object(trial, "packages", side_effect=provision) as installer,
             patch.object(trial, "docker_peer"),
             patch.object(trial, "fixture_identity", return_value=FIXTURE),
             patch.object(trial, "cancelled", None),
             redirect_stdout(io.StringIO()) as record,
         ):
             code = trial.within_guest([token, host_boot, json.dumps(PINS)])
+            installer.assert_called_once()
         return code, json.loads(record.getvalue()), calls
 
     def test_guest_cancellation_during_real_cleanup_preserves_work_and_cleanup(self):
@@ -968,6 +1051,12 @@ class EntrypointTrial(unittest.TestCase):
                     raise trial.Refusal("command_failed", cloud_failure)
                 return 0, b"", b""
             self.assertEqual(options["input_bytes"], SOURCE.read_bytes())
+            remote = shlex.split(argv[-1])
+            self.assertEqual(remote[:6], ["sudo", "-n", "python3", "-B", "-", "guest"])
+            self.assertEqual(len(remote), 9)
+            self.assertRegex(remote[6], r"^[a-f0-9]{32}$")
+            self.assertEqual(remote[7], host_boot)
+            self.assertEqual(json.loads(remote[8]), PINS)
             return 0, json.dumps(guest).encode() + b"\n", b""
 
         listener = Mock()
@@ -977,12 +1066,19 @@ class EntrypointTrial(unittest.TestCase):
         listener_context.__exit__ = Mock(return_value=False)
         current_uid = os.geteuid()
         with tempfile.TemporaryDirectory() as temporary:
+
+            def host_provision(pins, scope, work, _deadline):
+                self.assertEqual(pins, PINS)
+                self.assertEqual(scope, "host")
+                self.assertEqual(work.parent, Path(temporary))
+                return PINS["host_packages"]
+
             handoff = Path(temporary) / "set_output"
             handoff.touch()
             with ExitStack() as stack:
                 stack.enter_context(inert_kvm(**(kvm or {})))
                 provision = stack.enter_context(
-                    patch.object(trial, "packages", return_value=PINS["host_packages"])
+                    patch.object(trial, "packages", side_effect=host_provision)
                 )
                 launch = stack.enter_context(
                     patch.object(
@@ -1053,6 +1149,8 @@ class EntrypointTrial(unittest.TestCase):
                 if kvm:
                     provision.assert_not_called()
                     launch.assert_not_called()
+                else:
+                    provision.assert_called_once()
             if publish_failure:
                 evidence = handoff.read_bytes()
                 self.assertIsNone(runner_receipt_value(evidence))
