@@ -199,10 +199,12 @@ def boot_id():
 def packages(pins, scope, work, deadline):
     source = work / "apt.sources"
     snapshot = pins["apt_snapshot"]
+    suite = pins[scope + "_apt_suite"]
     require(re.fullmatch("[0-9]{8}T[0-9]{6}Z", snapshot))
+    require(re.fullmatch("[a-z]+", suite))
     source.write_text(
         f"Types: deb\nURIs: {ARCHIVE}{snapshot}/\n"
-        "Suites: noble noble-updates noble-security\nComponents: main universe\n"
+        f"Suites: {suite} {suite}-updates {suite}-security\nComponents: main universe\n"
         f"Architectures: amd64\nSigned-By: {KEYRING}\nCheck-Valid-Until: no\n"
     )
     pins = pins[scope + "_packages"]
@@ -826,7 +828,7 @@ def admitted_host(root, env):
         "RUNNER_ENVIRONMENT": "github-hosted",
         "RUNNER_OS": "Linux",
         "RUNNER_ARCH": "X64",
-        "ImageOS": "ubuntu24",
+        "ImageOS": "ubuntu26",
         "GITHUB_REPOSITORY": REPO,
         "GITHUB_REF": "refs/heads/main",
         "GITHUB_REF_PROTECTED": "true",

@@ -145,14 +145,21 @@ updates inherit the shared automatic policy.
 The [hosted zero-swap boot trial](hosted-zero-swap-trial.md) is the sole consumer
 of its own fixed pin file. GitHub Actions owns the workflow's checkout and
 upload-artifact SHAs and release comments. Two path-scoped regex managers own
-the dated Ubuntu image/hash and Debian fixture tag/index digest. The Noble
-release directory supplies version discovery. Both image records are held
+the dated Ubuntu guest image/hash and Debian fixture tag/index digest. The Noble
+release directory still supplies guest image version discovery; it does not
+select the host runner or host tools. Both image records are held
 together with the signed archive snapshot and exact package versions, and with
 the fixture's audited product SHA, platform manifest and config. The trial's
 group requires a reviewed coherent refresh before routine replacement.
 A release index alone cannot supply the verified signed image row or the
 fixture's audited source and platform binding. The Ubuntu snapshot's signed
 indexes provide package hashes and dependency provenance. The listed package
-versions and snapshot date are a single reviewed update. The existing five
+versions, separate host Resolute and guest Noble suite pins, and snapshot date
+are a single reviewed update. Host QEMU/xorriso now select Ubuntu 26.04 amd64
+packages without changing the Ubuntu 24.04 cloud guest or its Docker packages.
+The two existing regex managers still extract exactly the same two image
+records; APT suites/versions remain manually reviewed signed-snapshot inputs,
+not duplicate Renovate managers. The workflow/admission/package-plan regression
+requires a coherent runner refresh. The existing five
 native-image pins and cross-repository workflow call sites retain their
 ownership.

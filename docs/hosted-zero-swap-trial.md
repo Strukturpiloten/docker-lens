@@ -3,7 +3,9 @@
 Run **Hosted zero-swap boot trial** manually on protected DockerLens `main`.
 The workflow has no inputs. It checks out its exact workflow SHA with
 read-only contents permission and without persisting credentials. It is a
-separate infrastructure trial on the standard x64 `ubuntu-24.04` runner.
+separate infrastructure trial on the standard x64 `ubuntu-26.04` runner, whose
+official runner image identity is `ImageOS=ubuntu26`. The disposable cloud
+guest remains Ubuntu 24.04 (Noble); the host label does not select its release.
 The existing Check diagnostic, native dispatch, release validation and their
 evidence formats retain their own gates.
 
@@ -42,14 +44,25 @@ The collector verifies Ubuntu's signed checksum file against the pinned
 cloud-image signing fingerprint, checks the exact image row, hashes the image
 bytes, and checks that QEMU recognizes a standalone QCOW2 image. A fresh 8 GiB
 overlay over the read-only base boots with 7 GiB RAM and two vCPUs. Exact host
-QEMU/xorriso and guest Docker/containerd/runc versions resolve through the dated
-Ubuntu signed APT snapshot. The package plans must avoid removing or upgrading
-installed packages. The archive keyring supplied by Ubuntu authenticates the
-snapshot package indexes and acquisition. The fixed historical snapshot uses
-its signed file identities instead of the rolling archive freshness deadline.
+QEMU/xorriso resolve from the signed Resolute/Resolute-updates/Resolute-security
+indexes for Ubuntu 26.04 amd64. Guest Docker/containerd/runc resolve separately
+from Noble/Noble-updates/Noble-security for the unchanged Ubuntu 24.04 guest.
+Both scopes use the pinned dated Ubuntu APT snapshot. The package plans must
+avoid removing or upgrading installed packages. The archive keyring supplied
+by Ubuntu authenticates the snapshot package indexes and acquisition. The fixed
+historical snapshot uses its signed file identities instead of the rolling
+archive freshness deadline.
 [Dated Ubuntu cloud images](https://cloud-images.ubuntu.com/releases/noble/release-20261017/) ·
 [Ubuntu snapshot service](https://snapshot.ubuntu.com/) ·
 [Ubuntu archive verification](https://documentation.ubuntu.com/security/software-integrity/archive-verification/)
+
+The workflow label, admitted `ImageOS`, separate APT suites and exact package
+plans are covered together by the owning regression. A runner-label-only bump
+must fail that contract until admission and the signed host package selection
+are reviewed together. GitHub's runner image version remains an observation,
+not an immutable runner-image pin.
+[Official Ubuntu 26.04 runner metadata](https://github.com/actions/runner-images/blob/e015a08e7601a17f5d9a2938136537aab0f66b6c/images/ubuntu/Ubuntu2604-Readme.md) ·
+[Official runner identity mapping](https://github.com/actions/runner-images/blob/e015a08e7601a17f5d9a2938136537aab0f66b6c/helpers/GenerateResourcesAndImage.ps1)
 
 A per-run NoCloud seed configures a fresh SSH client identity and a pinned
 guest host key. The host forwards SSH on loopback and sends the fixed observer
