@@ -210,6 +210,12 @@ retained. Actual host `/proc/PID/stat` start ticks are measured separately.
 The second observation is a second actual inspection after root acquisition,
 before confirmation; it is not a clone reported as a measurement. A third actual
 inspection follows inner cleanup. All three must agree.
+The final inspection uses the cleanup capture limit. The same bounded bridge
+reads the original outer snapshot and performs the selected backend's image
+binding before forwarding only the custody fields required by PIDs. Both
+namespace field spellings, when present, and mount and network shape still
+reach the existing checks. Launcher argv and unrelated inspect fields are
+discarded by the bridge. Query counts, deadlines and reservations are unchanged.
 
 The privileged source receives one caller-private capture-directory descriptor
 over an exclusively owned socketpair. SCM_RIGHTS is accepted only for that

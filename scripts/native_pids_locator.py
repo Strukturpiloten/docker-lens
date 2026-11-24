@@ -17,7 +17,7 @@ import socket
 import stat
 import struct
 import sys
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 
 _boundary_path = Path(__file__).with_name("native_pids_boundary.py").resolve()
@@ -919,39 +919,55 @@ class DaemonExpectation:
     direct_managed_runtime: bool = False
 
 
+def _unobserved_bind(_site):
+    return nullcontext()
+
+
+_BIND_HTTP_SITES = {
+    http.Category.DEADLINE: "db_http_time",
+    http.Category.PROTOCOL: "db_http_proto",
+    http.Category.SIZE: "db_http_size",
+}
+
+
 class PeerLease:
     """Same-stream pidfd remains held; original daemon cannot be replaced."""
 
-    def __init__(self, locator, stream):
+    def __init__(self, locator, stream, *, bind_scope=_unobserved_bind):
         self.locator, self.fd, self.closed = locator, None, False
+        self.bind_scope = bind_scope
         source = locator.source
         try:
-            source.budget.fd()
-            try:
-                self.fd = source.own(stream.getsockopt(socket.SOL_SOCKET, SO_PEERPIDFD))
-            except OSError as error:
-                if error.errno in (errno.ENOPROTOOPT, errno.EOPNOTSUPP):
-                    raise LocatorRefusal("UnsupportedPeerPidfd") from None
-                raise LocatorRefusal() from None
-            os.set_inheritable(self.fd, False)
-            live(self.fd)
-            pid, uid, _gid = struct.unpack("3i", stream.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
-            require(pid > 0 and uid == locator.expectation.uid)
-            self.pid = pid
-            locator._bind_peer(pid, uid, self.fd)
+            with bind_scope("db_peer_socket"):
+                source.budget.fd()
+                try:
+                    self.fd = source.own(stream.getsockopt(socket.SOL_SOCKET, SO_PEERPIDFD))
+                except OSError as error:
+                    if error.errno in (errno.ENOPROTOOPT, errno.EOPNOTSUPP):
+                        raise LocatorRefusal("UnsupportedPeerPidfd") from None
+                    raise LocatorRefusal() from None
+                os.set_inheritable(self.fd, False)
+                live(self.fd)
+                pid, uid, _gid = struct.unpack("3i", stream.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+                require(pid > 0 and uid == locator.expectation.uid)
+                self.pid = pid
+            with bind_scope("db_peer_bind"):
+                locator._bind_peer(pid, uid, self.fd, bind_scope=bind_scope)
             self.check()
         except BaseException:
             self.close()
             raise
 
     def check(self):
-        live(self.fd)
-        self.locator.check_daemon()
-        require(self.pid == self.locator.daemon.pid)
-        live(self.fd)
+        with self.bind_scope("db_peer_check"):
+            live(self.fd)
+            self.locator.check_daemon()
+            require(self.pid == self.locator.daemon.pid)
+            live(self.fd)
 
     def reserve_read(self, maximum):
-        self.locator.source.budget.read(maximum)
+        with self.bind_scope("db_read_budget"):
+            self.locator.source.budget.read(maximum)
 
     def close(self):
         if not self.closed:
@@ -1037,7 +1053,7 @@ class RuntimeLocator:
             for fd in reversed(parents):
                 source.close_fd(fd)
 
-    def _bind_peer(self, pid, uid, original_peer_pidfd):
+    def _bind_peer(self, pid, uid, original_peer_pidfd, *, bind_scope=_unobserved_bind):
         source = self.source
         if self.daemon is not None:
             require(pid == self.daemon.pid)
@@ -1054,7 +1070,8 @@ class RuntimeLocator:
             with lease.acquire(record) as candidate:
                 require(candidate.status[1] == (uid,) * 4 and outer_namespace in candidate.namespace_chain)
                 lease.select(discovery.Role.PEER, candidate)
-        transfer = discovery.discover(source, self.outer_group, discovery.Mode.PEER, consume)
+        with bind_scope("db_discovery"):
+            transfer = discovery.discover(source, self.outer_group, discovery.Mode.PEER, consume)
         try:
             source.adopt_discovery_types(transfer, self.outer_group)
             candidate = transfer.selections[0].candidate
@@ -1092,29 +1109,47 @@ class RuntimeLocator:
             self.failed = True
             raise LocatorRefusal() from None
 
-    def bind_runtime(self, expected_engine, reserve_probe):
+    def bind_runtime(self, expected_engine, reserve_probe, *, bind_scope=_unobserved_bind):
         """Acquire the actual daemon before any experiment fixture exists."""
         require(not self.failed and self.daemon is None and callable(reserve_probe))
         try:
-            self.source.budget.check()
-            reserve_probe()
-            status, body = http.request(self.endpoint.address, "GET", "/version",
-                timeout=(self.source.budget.work_ns - self.source.budget.clock()) / 1e9,
-                max_response_bytes=VERSION_CAP, peer_lease=lambda stream: PeerLease(self, stream))
-            require(status == 200)
+            with bind_scope("db_budget"):
+                self.source.budget.check()
+            with bind_scope("db_reserve"):
+                reserve_probe()
+            with bind_scope("db_endpoint"):
+                address = self.endpoint.address
+                timeout = (self.source.budget.work_ns - self.source.budget.clock()) / 1e9
+            with bind_scope("db_http"):
+                try:
+                    status, body = http.request(address, "GET", "/version", timeout=timeout,
+                        max_response_bytes=VERSION_CAP,
+                        peer_lease=lambda stream: PeerLease(self, stream, bind_scope=bind_scope))
+                except http.TransportError as error:
+                    # Peer/source scopes have already seen an inner escape. The
+                    # transport categories need no raw socket or response data.
+                    with bind_scope(_BIND_HTTP_SITES.get(error.category, "db_http")):
+                        raise
+            with bind_scope("db_status"):
+                require(status == 200)
             def unique(pairs):
                 result = {}
                 for key, value in pairs:
                     require(key not in result)
                     result[key] = value
                 return result
-            value = json.loads(body, object_pairs_hook=unique, parse_constant=lambda _: require(False))
-            require(type(value) is dict and value.get("Version") == expected_engine)
+            with bind_scope("db_json"):
+                value = json.loads(body, object_pairs_hook=unique, parse_constant=lambda _: require(False))
+                require(type(value) is dict)
+            with bind_scope("db_version"):
+                require(value.get("Version") == expected_engine)
             def api(value):
                 require(type(value) is str and re.fullmatch(r"1\.[0-9]{1,2}", value) is not None)
                 return int(value.split(".")[1])
-            require(api(value.get("MinAPIVersion")) <= api(self.api_version) <= api(value.get("ApiVersion")))
-            self.check_daemon()
+            with bind_scope("db_api"):
+                require(api(value.get("MinAPIVersion")) <= api(self.api_version) <= api(value.get("ApiVersion")))
+            with bind_scope("db_recheck"):
+                self.check_daemon()
         except (Exception, KeyboardInterrupt):
             self.failed = True
             raise LocatorRefusal() from None

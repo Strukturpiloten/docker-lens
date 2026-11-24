@@ -511,6 +511,23 @@ const BIND_SITES: &[&str] = &[
     "w_oc_select",
     "w_oc_max",
     "w_oc_recheck",
+    "w_db_budget",
+    "w_db_reserve",
+    "w_db_endpoint",
+    "w_db_peer_socket",
+    "w_db_discovery",
+    "w_db_peer_bind",
+    "w_db_peer_check",
+    "w_db_read_budget",
+    "w_db_http",
+    "w_db_http_time",
+    "w_db_http_proto",
+    "w_db_http_size",
+    "w_db_status",
+    "w_db_json",
+    "w_db_version",
+    "w_db_api",
+    "w_db_recheck",
 ];
 
 const HOST_BIND_SITES: &[&str] = &[
@@ -4687,6 +4704,61 @@ fn pids_cleanup_test_run() -> HealthRun {
 }
 
 #[test]
+fn pids_final_snapshot_preserves_the_real_cleanup_capture_limit() {
+    let run = pids_cleanup_test_run();
+    let launch = "unused fixture launcher\n".repeat(400);
+    let raw = json!({
+        "Id": "a".repeat(64),
+        "Name": "owned",
+        "Args": [launch],
+        "Config": {"Cmd": [launch], "Labels": {"io.dockerlens.native-run": "owner"}},
+        "HostConfig": {"CgroupMode": "private"},
+    });
+    let mut full = Command::new("sh");
+    full.args(["-c", "printf '%s' \"$1\"", "full-outer", &raw.to_string()]);
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run.capture(&mut full, None, true)
+        }))
+        .is_err()
+    );
+    assert_eq!(run.bytes.get(), 8192);
+
+    let compact = |raw: &Value| {
+        let mut command = Command::new("sh");
+        command.args([
+            "-c",
+            "printf '%s' \"$1\" | python3 \"$2\" observe container podman pids-final",
+            "compact-outer",
+            &raw.to_string(),
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/scripts/native-outer-observation.py"
+            ),
+        ]);
+        command
+    };
+    let bytes = run.capture(&mut compact(&raw), None, true);
+    assert_eq!(run.bytes.get(), 8192 + bytes.len());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&bytes).unwrap(),
+        json!({
+            "Id": "a".repeat(64),
+            "Name": "owned",
+            "Config": {"Labels": {"io.dockerlens.native-run": "owner"}},
+            "HostConfig": {"CgroupMode": "private"},
+        })
+    );
+    let required = json!({"Id": "a".repeat(64), "Name": "owned",
+        "Mounts": [{"Type": "bind", "Source": "x".repeat(8192)}]});
+    let failing = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run.capture(&mut compact(&required), None, true)
+    }));
+    assert!(failing.is_err());
+    assert_eq!(run.bytes.get(), 8192 + bytes.len() + 8192);
+}
+
+#[test]
 fn pids_worker_wait_requires_exact_zero_and_classifies_existing_bytes() {
     assert_eq!(require_worker_zero(b"0\n"), Ok(()));
     for (raw, expected) in [
@@ -5135,9 +5207,26 @@ fn pids_bind_records_have_only_closed_worker_sites_and_no_kind() {
         "w_oc_select",
         "w_oc_max",
         "w_oc_recheck",
+        "w_db_budget",
+        "w_db_reserve",
+        "w_db_endpoint",
+        "w_db_peer_socket",
+        "w_db_discovery",
+        "w_db_peer_bind",
+        "w_db_peer_check",
+        "w_db_read_budget",
+        "w_db_http",
+        "w_db_http_time",
+        "w_db_http_proto",
+        "w_db_http_size",
+        "w_db_status",
+        "w_db_json",
+        "w_db_version",
+        "w_db_api",
+        "w_db_recheck",
     ];
     assert_eq!(BIND_SITES, expected);
-    assert_eq!(expected.len(), 25);
+    assert_eq!(expected.len(), 42);
     let mut longest = 0;
     for site in expected {
         let line = format!("DOCKERLENS_NATIVE_PIDS_BIND: s={site}\n");

@@ -878,7 +878,11 @@ class BindObservationTests(unittest.TestCase):
         "context_schema", "labels", "external_debit", "outer_args", "outer_process", "outer_vector",
         "outer_pidns", "outer_cgroup", "endpoint", "daemon_context", "daemon_bind", "reserve_api",
         "outer_recheck", "pending_reply",
-        "oc_pre", "oc_host", "oc_guest", "oc_select", "oc_max", "oc_recheck")
+        "oc_pre", "oc_host", "oc_guest", "oc_select", "oc_max", "oc_recheck",
+        "db_budget", "db_reserve", "db_endpoint", "db_peer_socket", "db_discovery",
+        "db_peer_bind", "db_peer_check", "db_read_budget", "db_http", "db_http_time",
+        "db_http_proto", "db_http_size", "db_status", "db_json", "db_version", "db_api",
+        "db_recheck")
 
     def test_every_literal_site_has_only_a_bounded_worker_call_escape(self):
         self.assertEqual(s.BIND_SITES, self.SITES)
@@ -1089,6 +1093,13 @@ class BindObservationTests(unittest.TestCase):
         self.assertEqual(ast.dump(calls[0].keywords[0].value),
             "Attribute(value=Name(id='_BIND', ctx=Load()), attr='escape', ctx=Load())")
         calls[0].keywords.clear()
+        probe, = (node for node in ast.walk(method) if isinstance(node, ast.Call)
+                  and isinstance(node.func, ast.Attribute) and node.func.attr == "bind_runtime")
+        self.assertEqual(len(probe.keywords), 1)
+        self.assertEqual(probe.keywords[0].arg, "bind_scope")
+        self.assertEqual(ast.dump(probe.keywords[0].value),
+            "Attribute(value=Name(id='_BIND', ctx=Load()), attr='scope', ctx=Load())")
+        probe.keywords.clear()
         raw = (Path(__file__).parent / "fixtures/native_pids_pre_observer_methods.json").read_bytes()
         self.assertEqual(hashlib.sha256(raw).hexdigest(),
             "b9b67119b1ce97aca44d7121e4f747dadcf41aa33f7d502743536838d997f46c")
@@ -1119,6 +1130,30 @@ class BindObservationTests(unittest.TestCase):
         channel.response.assert_called_once_with({"version": 1, "sequence": 1, "op": "ReserveApi",
             "reservation": 1, "units": 1, "max_body_bytes": 4096})
         channel.object.assert_called_once_with()
+
+    def test_daemon_bind_internal_escape_reaches_the_existing_session_record(self):
+        session, channel, _, request = self.make_handler()
+        actual = l.RuntimeLocator.__new__(l.RuntimeLocator)
+        actual.source, actual.failed, actual.daemon = session.source, False, None
+        actual.endpoint = type("Endpoint", (), {"address": "/held-only"})()
+        actual.source.budget.work_ns = 180_000_000_001
+        actual.source.budget.clock.return_value = 1
+        recorder = s.BindRecorder()
+        recorder.begin()
+        with patch.object(s, "_BIND", recorder), patch.object(s.os, "write") as output, \
+                patch.object(l, "status_vectors", return_value=((), (100, 1))), \
+                patch.object(l, "HeldEndpoint"), patch.object(l, "RuntimeLocator", return_value=actual), \
+                patch.object(l.http, "request", side_effect=l.http.TransportError(3)) as exchange:
+            with self.assertRaisesRegex(l.LocatorRefusal, "^BindingFailed$"):
+                session.handle(request, channel)
+        self.assertTrue(actual.failed)
+        self.assertTrue(session.failed)
+        self.assertEqual(session.phase, "unbound")
+        self.assertEqual(recorder.value, "db_http_time")
+        output.assert_called_once_with(2, b"DOCKERLENS_NATIVE_PIDS_BIND: s=w_db_http_time\n")
+        channel.reserve_api.assert_called_once_with(1, 4096)
+        self.assertEqual(exchange.call_args.args, ("/held-only", "GET", "/version"))
+        self.assertEqual(exchange.call_args.kwargs["max_response_bytes"], 4096)
 
     def test_pending_response_is_complete_before_disable_and_later_phases_are_silent(self):
         for partial in (False, True):
@@ -1205,7 +1240,8 @@ class BindObservationTests(unittest.TestCase):
         session.source.check_process.side_effect = lambda *_args: log.append("outer_recheck")
         session.source.close.side_effect = lambda: log.append("outer_disposal")
         channel.reserve_api.side_effect = lambda units, maximum: log.append(("reserve", units, maximum))
-        def bind(_engine, reserve_probe):
+        def bind(_engine, reserve_probe, *, bind_scope):
+            self.assertEqual(bind_scope, recorder.scope)
             log.append("daemon_bind")
             reserve_probe()
         runtime.bind_runtime.side_effect = bind
@@ -1873,7 +1909,7 @@ class HostBindObservationTests(unittest.TestCase):
     def test_every_legal_pair_is_one_closed_attempt_and_legacy_is_unchanged(self):
         self.assertEqual(s.HOST_BIND_SITES, self.SITES)
         self.assertEqual(s.HOST_BIND_EXCEPTIONS, self.TAGS)
-        self.assertEqual(len(s.BIND_SITES) + len(self.SITES), 42)
+        self.assertEqual(len(s.BIND_SITES) + len(self.SITES), 59)
         records = []
         for site in self.SITES:
             for tag in self.TAGS:

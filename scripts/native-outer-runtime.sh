@@ -270,23 +270,25 @@ native_outer_presence() {
 
 native_outer_observe() {
   local kind=$1 identity=$2
+  shift 2
   [[ $kind =~ ^(container|network|volume)$ && $identity =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]] || return 2
   (set -o pipefail
     native_outer_command 8 "$kind" inspect --format '{{json .}}' "$identity" |
-      native_outer_helper observe "$kind" "$native_outer_engine")
+      native_outer_helper observe "$kind" "$native_outer_engine" "$@")
 }
 
 native_outer_snapshot() {
   local identity=$1 snapshot image
+  shift
   if [[ $native_outer_engine == podman ]]; then
-    native_outer_observe container "$identity"
+    native_outer_observe container "$identity" "$@"
     return
   fi
   snapshot=$(native_outer_observe container "$identity") || return 2
   image=$(printf '%s' "$snapshot" | native_outer_helper snapshot-image "$identity") || return 2
   (set -o pipefail
     native_outer_command 8 image inspect --format '{{json .}}' "$image" |
-      native_outer_helper snapshot "$snapshot")
+      native_outer_helper snapshot "$snapshot" "$@")
 }
 
 native_outer_binding() {

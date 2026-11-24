@@ -370,6 +370,49 @@ def snapshot(value, image):
     return result
 
 
+def pids_final_snapshot(value):
+    """Keep the custody fields that PIDs compares after inner cleanup."""
+    def select(item, fields):
+        if type(item) is dict:
+            return {key: item[key] for key in fields if key in item}
+        return item
+
+    result = select(value, ("Id", "Name", "ImageDigest", "RestartCount",
+                            "State", "Config", "HostConfig", "Mounts", "NetworkSettings"))
+    fields = {
+        "State": ("Pid", "StartedAt", "Running", "Restarting", "Paused"),
+        "Config": ("Labels",),
+        "HostConfig": ("Privileged", "Memory", "CpuQuota", "CpuPeriod", "PidsLimit",
+                       "CgroupMode", "CgroupnsMode"),
+        "NetworkSettings": ("Networks",),
+    }
+    for key, names in fields.items():
+        if key in result:
+            result[key] = select(result[key], names)
+    config = result.get("Config")
+    if type(config) is dict and "Labels" in config:
+        config["Labels"] = select(config["Labels"], ("io.dockerlens.native-run",))
+    mounts = result.get("Mounts")
+    if type(mounts) is list:
+        result["Mounts"] = [
+            select(mount, ("Type", "Name", "Source", "Destination", "RW")) for mount in mounts
+        ]
+    networks = result.get("NetworkSettings")
+    if type(networks) is dict and type(networks.get("Networks")) is dict:
+        networks["Networks"] = dict.fromkeys(networks["Networks"])
+    return result
+
+
+def emit_snapshot(value, view):
+    need(view in ([], ["pids-final"]))
+    raw = json.dumps(value, separators=(",", ":"))
+    need(len(raw.encode()) <= LIMIT)
+    if view:
+        raw = json.dumps(pids_final_snapshot(value), separators=(",", ":"))
+        need(len(raw.encode()) <= LIMIT)
+    print(raw)
+
+
 def daemon_binding(value, engine, identity, name, owner, run, image):
     need(engine in {"podman", "docker"} and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_./:-]+@sha256:[0-9a-f]{64}", image) is not None)
     actual = binding(value, "container", identity, name, owner, run)
@@ -487,16 +530,13 @@ def main(argv):
                 mounts(value, *args)
             elif command == "runtime-receipt" and len(args) == 5:
                 runtime_receipt(value, *args)
-            elif command == "observe" and len(args) == 2:
-                raw = json.dumps(observe(value, *args), separators=(",", ":"))
-                need(len(raw.encode()) <= LIMIT)
-                print(raw)
+            elif command == "observe" and len(args) in (2, 3):
+                need(len(args) == 2 or args[:2] == ["container", "podman"])
+                emit_snapshot(observe(value, *args[:2]), args[2:])
             elif command == "snapshot-image" and len(args) == 1:
                 print(snapshot_image(value, args[0]))
-            elif command == "snapshot" and len(args) == 1:
-                raw = json.dumps(snapshot(document(args[0].encode()), value), separators=(",", ":"))
-                need(len(raw.encode()) <= LIMIT)
-                print(raw)
+            elif command == "snapshot" and len(args) in (1, 2):
+                emit_snapshot(snapshot(document(args[0].encode()), value), args[1:])
             elif command == "image-info" and not args:
                 print(json.dumps(image_info(value), separators=(",", ":")))
             elif command == "volume-path" and len(args) == 3:

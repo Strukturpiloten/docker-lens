@@ -142,6 +142,17 @@ dead peers, proxies, unrelated listeners and changed executables refuse.
 The fixed factory first binds that actual peer with a bounded `GET /version`,
 before any experiment workers are created; the per-ID inspections occur later.
 
+On a constructor bind EOF or reset, the existing finite BIND record can
+distinguish the probe budget, reservation, endpoint, same-stream peer
+authentication, peer discovery, held peer checks and read reservation.
+The HTTP stage preserves separately observed deadline, protocol and size
+refusals. After a complete exchange, separate stages distinguish the HTTP
+status, JSON object, Engine version, API interval and final daemon recheck.
+Each record names only an escaping operation. For example, a discovery
+escape can include its internal FD disposal, and a generic transport escape
+does not identify an unobserved syscall or operation. The existing single
+failure slot, phase gate, request count, custody and cleanup still apply.
+
 Daemon UID and executable components must come from independently reviewed lane
 facts, with reader-visible UID mapping established by the original runtime
 owner. They must never be chosen by observing the peer being authenticated.

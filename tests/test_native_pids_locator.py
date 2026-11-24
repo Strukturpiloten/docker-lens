@@ -6,6 +6,7 @@ AST equivalence. Current configured-role expectations below are literal controls
 
 import ctypes
 import ast
+from contextlib import contextmanager
 import errno
 import hashlib
 import json
@@ -15,6 +16,7 @@ import socket
 import struct
 import sys
 import tempfile
+import threading
 import time
 from types import SimpleNamespace
 import unittest
@@ -1097,6 +1099,120 @@ class LocatorTests(unittest.TestCase):
         lease.close()
         runtime.inspect = lambda cid: tree.inspects[cid]
         return runtime
+
+    def test_daemon_bind_probes_one_held_unix_peer_and_preserves_fail_closed_checks(self):
+        good = b'{"Version":"29.8.1","MinAPIVersion":"1.44","ApiVersion":"1.56"}'
+        for fault, expected in (
+            ("upstream", None), ("debian", None), ("peer", "db_peer_socket"),
+            ("missing", "db_discovery"), ("exe", "db_peer_bind"),
+            ("framing", "db_http_proto"), ("size", "db_http_size"),
+            ("status", "db_status"), ("duplicate", "db_json"),
+            ("version", "db_version"), ("api", "db_api"),
+        ):
+            def run(tree):
+                self.bind_probe(tree, fault, expected, good)
+            with self.subTest(fault=fault):
+                self.run_tree(True, run)
+
+    def bind_probe(self, tree, fault, expected, good):
+        source = tree.source
+        # The acceptor's Unix credentials and same-stream pidfd are real. The
+        # normal process/namespace/cgroup algorithms read the authored tree.
+        pid, uid = os.getpid(), os.getuid()
+        self.assertNotIn(pid, (100, 110, *range(200, 206)))
+        tree.make_process(pid, "daemon", (pid, 2), "owned", uid)
+        tree.make_group(tree.cg / "owned", 512, [100, 110] if fault == "missing" else [100, pid])
+        if fault == "exe":
+            alternate = tree.rootfs / "other"
+            alternate.touch()
+            executable = tree.proc / str(pid) / "exe"
+            executable.unlink()
+            executable.symlink_to(alternate)
+        cap = tree.root / "socket"
+        cap.mkdir()
+        socket_path = cap / "docker.sock"
+        outer = source.process(100, 1000)
+        group = source.group(outer)
+        source.capture_directory = source.open(str(tree.root), directory=True)
+        debit, incoming, server_error, first = [], [], [], []
+        reservations = l.ParentReservations(lambda units, size: debit.append((units, size)))
+
+        @contextmanager
+        def scope(site):
+            try:
+                yield
+            except BaseException:
+                if not first:
+                    first.append(site)
+                raise
+
+        def response(status, body):
+            return (f"HTTP/1.1 {status}\r\nContent-Length: {len(body)}\r\n\r\n".encode()
+                    + body)
+
+        engine, api = ("20.10.5+dfsg1", "1.41") if fault == "debian" else ("29.8.1", "1.49")
+        wire = {
+            "debian": response("200 OK", b'{"Version":"20.10.5+dfsg1","MinAPIVersion":"1.12","ApiVersion":"1.41"}'),
+            "framing": b"HTTP/1.1 200 OK\r\nContent-Length: 50\r\n\r\n{}",
+            "size": b"HTTP/1.1 200 OK\r\nContent-Length: 4097\r\n\r\n",
+            "status": response("503 Unavailable", good),
+            "duplicate": response("200 OK", good[:-1] + b',"Version":"PRIVATE_BIND_CANARY"}'),
+            "version": response("200 OK", good.replace(b"29.8.1", b"PRIVATE_BIND_CANARY")),
+            "api": response("200 OK", good.replace(b"1.44", b"1.50")),
+        }.get(fault, response("200 OK", good))
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+            server.settimeout(4)
+            server.bind(str(socket_path))
+            server.listen(1)
+
+            def serve():
+                try:
+                    peer, _ = server.accept()
+                    with peer:
+                        peer.settimeout(4)
+                        request = b""
+                        while not request.endswith(b"\r\n\r\n"):
+                            fragment = peer.recv(128)
+                            if not fragment:
+                                break
+                            request += fragment
+                            if len(request) > 256:
+                                raise AssertionError("unexpected probe request")
+                        incoming.append(request)
+                        if request:
+                            peer.sendall(wire)
+                except BaseException as error:
+                    server_error.append(error)
+
+            endpoint = l.HeldEndpoint(source, source.capture_directory)
+            runtime = l.RuntimeLocator(source, outer, group, endpoint,
+                l.DaemonExpectation(uid + (fault == "peer"), ("usr", "bin", "dockerd"), True),
+                api, {"owner": "run1"}, reservations)
+            acceptor = threading.Thread(target=serve)
+            acceptor.start()
+            try:
+                if expected is None:
+                    runtime.bind_runtime(engine, reservations.reserve_probe, bind_scope=scope)
+                    self.assertEqual(runtime.daemon.pid, pid)
+                    l.live(runtime.daemon_peer_pidfd)
+                    self.assertFalse(runtime.failed)
+                else:
+                    with self.assertRaisesRegex(l.LocatorRefusal, "^BindingFailed$"):
+                        runtime.bind_runtime(engine, reservations.reserve_probe, bind_scope=scope)
+                    self.assertTrue(runtime.failed)
+            finally:
+                acceptor.join(5)
+            self.assertFalse(acceptor.is_alive())
+        self.assertEqual(server_error, [])
+        self.assertEqual(first, [] if expected is None else [expected])
+        sent = b"" if fault in ("peer", "missing", "exe") else (
+            b"GET /version HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        self.assertEqual(incoming, [sent])
+        self.assertEqual(debit, [(1, 4096)])
+        self.assertEqual(reservations.receipt(), {
+            "inspect_calls_reserved": 0, "inspect_body_bytes_reserved": 0,
+            "runtime_probe_calls_reserved": 1, "runtime_probe_body_bytes_reserved": 4096,
+        })
 
     def test_six_roles_actual_source_reads_with_and_without_extra_rootlesskit_pidns(self):
         for nested in (False, True):

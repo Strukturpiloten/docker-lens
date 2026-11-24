@@ -896,6 +896,7 @@ ambient remote selectors; Docker still has its fixed endpoint/private config.
 | `check-context` | none; attach-only validation for final/failed cleanup |
 | `exec` | optional `--user UID`, caller-held target, exact guest argv |
 | `snapshot` | held container ID; outer-proof JSON only |
+| `pids-final-snapshot` | held container ID, PIDs final custody fields only |
 | `inspect` | `--format` plus one inventoried outer template and held target |
 | `observe` / `presence` | kind, held identity |
 | `binding` | kind, ID, name, owner key, run |
@@ -910,7 +911,7 @@ ambient remote selectors; Docker still has its fixed endpoint/private config.
 | `logs` | held ID; fixed tail 80 |
 | `volume-create` / `volume-remove` / `volume-path` | name, owner key, run |
 
-Only outer `inspect --format '{{json .}}'` uses snapshot normalization. Docker's
+The full and PIDs final outer snapshot operations share normalization. Docker's
 actual container image ID must match the independently inspected image ID, and
 the exact declared manifest pin must match that image's repository digest before
 the adapter supplies the Podman-compatible ImageDigest and slash-free outer name.

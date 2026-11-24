@@ -129,6 +129,91 @@ else:
         self.assertEqual(json.loads(result.stdout), self.container)
         self.assertEqual(len(self.calls()), 1)
 
+    def test_pids_final_snapshot_drops_only_unused_fields_after_full_binding(self):
+        canary = "private unused launcher line\n" * 360
+        for backend, mode in (("docker", "CgroupnsMode"), ("podman", "CgroupMode")):
+            with self.subTest(backend=backend):
+                container = self.container | {
+                    "Args": [canary], "RestartCount": 0,
+                    "Config": {"Image": PIN, "Cmd": [canary],
+                               "Labels": {"io.dockerlens.native-run": "run", "other": canary}},
+                    "State": {"Pid": 42, "StartedAt": "2026-01-01T00:00:00Z",
+                              "Running": True, "Restarting": False, "Paused": False},
+                    "HostConfig": self.container["HostConfig"] | {
+                        mode: "private", "Privileged": True, "Memory": 4294967296,
+                        "PidsLimit": 512,
+                    },
+                    "Mounts": [
+                        {"Type": "bind", "Source": "/native/socket", "Destination": "/dockerlens-native", "RW": True},
+                        {"Type": "volume", "Name": "owned-data", "Destination": "/var/lib/docker", "RW": True},
+                    ],
+                    "NetworkSettings": {"Networks": {"owned-network": {"unused": canary}}},
+                }
+                if backend == "podman":
+                    container |= {"Name": "owned", "ImageDigest": DIGEST}
+                changes = {"MOCK_CONTAINER": json.dumps(container)}
+                self.trace.unlink(missing_ok=True)
+                full = self.invoke("snapshot", ID, engine=backend, changes=changes)
+                self.assertEqual(full.returncode, 0, full.stderr)
+                self.assertGreater(len(full.stdout), 8192)
+                full_calls = self.calls()
+                self.assertEqual(len(full_calls), 2 if backend == "docker" else 1)
+                self.trace.unlink()
+                result = self.invoke("pids-final-snapshot", ID, engine=backend, changes=changes)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.calls(), full_calls)
+                self.assertLess(len(result.stdout), 1024)
+                self.assertNotIn(b"private unused launcher", result.stdout + result.stderr)
+                self.assertEqual(json.loads(result.stdout), {
+                    "Id": ID, "Name": "owned", "ImageDigest": DIGEST, "RestartCount": 0,
+                    "Config": {"Labels": {"io.dockerlens.native-run": "run"}},
+                    "State": container["State"],
+                    "HostConfig": {mode: "private", "Privileged": True, "Memory": 4294967296,
+                                   "CpuQuota": 200000, "CpuPeriod": 100000, "PidsLimit": 512},
+                    "Mounts": container["Mounts"],
+                    "NetworkSettings": {"Networks": {"owned-network": None}},
+                })
+
+    def test_pids_final_snapshot_preserves_normalized_document_ceiling(self):
+        # One non-ASCII code point means the normalized document is four
+        # bytes larger than the raw UTF-8 document, before the CLI's newline.
+        value = {"Id": ID, "Name": "owned", "Args": ["é"]}
+        base = len(json.dumps(value, separators=(",", ":")).encode())
+        value["Args"][0] += "x" * (65536 - base)
+        for increment in (0, 1):
+            with self.subTest(increment=increment):
+                value["Args"][0] += "x" * increment
+                raw = json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+                self.assertLess(len(raw.encode()) + 1, 65536)
+                result = self.invoke("pids-final-snapshot", ID, engine="podman",
+                                     changes={"MOCK_CONTAINER": raw})
+                if increment == 0:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(json.loads(result.stdout), {"Id": ID, "Name": "owned"})
+                else:
+                    self.assertEqual((result.returncode, result.stdout), (2, b""))
+
+    def test_pids_final_snapshot_preserves_ambiguous_and_invalid_custody(self):
+        self.container["HostConfig"].update({"CgroupMode": "private", "CgroupnsMode": None})
+        self.container["Mounts"] = ["bad-shape", {"Type": "unexpected", "RW": False}]
+        self.container["NetworkSettings"] = {"Networks": {"owned": {}, "extra": "value"}}
+        result = self.invoke("pids-final-snapshot", ID)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        decoded = json.loads(result.stdout)
+        self.assertIsNone(decoded["HostConfig"]["CgroupnsMode"])
+        self.assertEqual(decoded["HostConfig"]["CgroupMode"], "private")
+        self.assertEqual(decoded["Mounts"], self.container["Mounts"])
+        self.assertEqual(decoded["NetworkSettings"]["Networks"], {"owned": None, "extra": None})
+        for args, changes in (
+            (("owned",), {}),
+            ((ID, "other"), {}),
+            ((ID,), {"MOCK_IMAGE": json.dumps(self.image | {"RepoDigests": []})}),
+            ((ID,), {"MOCK_CONTAINER": '{"Id":"a","Id":"b"}'}),
+            ((ID,), {"MOCK_CONTAINER": json.dumps(self.container | {"Args": ["x" * 65536]})}),
+        ):
+            result = self.invoke("pids-final-snapshot", *args, changes=changes)
+            self.assertEqual((result.returncode, result.stdout), (2, b""))
+
     def test_exec_preserves_literal_inner_output_and_original_caller_timer(self):
         result = self.invoke("exec", "--user", "1000", ID, "docker", "inspect", "inner")
         self.assertEqual(result.returncode, 0, result.stderr)

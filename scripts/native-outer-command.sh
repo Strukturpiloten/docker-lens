@@ -55,6 +55,9 @@ case $operation in
       *) refuse ;;
     esac ;;
   snapshot) [[ $# == 1 ]] && cid "$1" || refuse; native_outer_snapshot "$1" ;;
+  pids-final-snapshot)
+    [[ $# == 1 ]] && cid "$1" || refuse
+    native_outer_snapshot "$1" pids-final ;;
   observe) [[ $# == 2 ]] || refuse; native_outer_observe "$@" ;;
   presence) [[ $# == 2 ]] || refuse; native_outer_presence "$@" "$directory" ;;
   binding) [[ $# == 5 ]] || refuse; native_outer_binding "$@" ;;

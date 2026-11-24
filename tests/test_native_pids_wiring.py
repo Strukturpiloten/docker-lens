@@ -898,7 +898,11 @@ exit "$STATUS"
             "context_schema", "labels", "external_debit", "outer_args", "outer_process", "outer_vector",
             "outer_pidns", "outer_cgroup", "endpoint", "daemon_context", "daemon_bind", "reserve_api",
             "outer_recheck", "pending_reply",
-        "oc_pre", "oc_host", "oc_guest", "oc_select", "oc_max", "oc_recheck")
+        "oc_pre", "oc_host", "oc_guest", "oc_select", "oc_max", "oc_recheck",
+        "db_budget", "db_reserve", "db_endpoint", "db_peer_socket", "db_discovery",
+        "db_peer_bind", "db_peer_check", "db_read_budget", "db_http", "db_http_time",
+        "db_http_proto", "db_http_size", "db_status", "db_json", "db_version", "db_api",
+        "db_recheck")
         tree = ast.parse((ROOT / "scripts/native-pids-supervisor.py").read_text())
         declared = next(ast.literal_eval(node.value) for node in tree.body if isinstance(node, ast.Assign)
             and any(isinstance(target, ast.Name) and target.id == "BIND_SITES" for target in node.targets))
@@ -912,8 +916,18 @@ exit "$STATUS"
         for node in ast.walk(locator):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_outer_escape":
                 used.add(node.args[1].value)
+        for node in ast.walk(locator):
+            if not isinstance(node, ast.Call) or not node.args or not isinstance(node.args[0], ast.Constant):
+                continue
+            func = node.func
+            if ((isinstance(func, ast.Name) and func.id == "bind_scope")
+                    or (isinstance(func, ast.Attribute) and func.attr == "bind_scope")):
+                used.add(node.args[0].value)
+        http_sites, = (node.value for node in locator.body if isinstance(node, ast.Assign)
+                       and any(isinstance(target, ast.Name) and target.id == "_BIND_HTTP_SITES" for target in node.targets))
+        used.update(value.value for value in http_sites.values)
         self.assertEqual(used, set(expected))
-        self.assertEqual(len(expected), 25)
+        self.assertEqual(len(expected), 42)
         sites = ["w_" + name for name in expected]
         rust = (ROOT / "src/native_pids_tests.rs").read_text()
         rust_sites = re.findall(r'"([a-z_]+)"', rust.split("const BIND_SITES: &[&str] = &[", 1)[1].split("];", 1)[0])
@@ -942,7 +956,11 @@ exit "$STATUS"
             "context_schema", "labels", "external_debit", "outer_args", "outer_process", "outer_vector",
             "outer_pidns", "outer_cgroup", "endpoint", "daemon_context", "daemon_bind", "reserve_api",
             "outer_recheck", "pending_reply",
-        "oc_pre", "oc_host", "oc_guest", "oc_select", "oc_max", "oc_recheck")
+        "oc_pre", "oc_host", "oc_guest", "oc_select", "oc_max", "oc_recheck",
+        "db_budget", "db_reserve", "db_endpoint", "db_peer_socket", "db_discovery",
+        "db_peer_bind", "db_peer_check", "db_read_budget", "db_http", "db_http_time",
+        "db_http_proto", "db_http_size", "db_status", "db_json", "db_version", "db_api",
+        "db_recheck")
         for code, kind in (("pids-eof", "eof"), ("pids-read", "reset")):
             general, detail = SETUP_REFUSAL + code, IO_DETAIL + f" phase=bind kind={kind}"
             for site in sites:

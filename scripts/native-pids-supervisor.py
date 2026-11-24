@@ -140,6 +140,10 @@ BIND_SITES = (
     "outer_vector", "outer_pidns", "outer_cgroup", "endpoint", "daemon_context",
     "daemon_bind", "reserve_api", "outer_recheck", "pending_reply",
     "oc_pre", "oc_host", "oc_guest", "oc_select", "oc_max", "oc_recheck",
+    "db_budget", "db_reserve", "db_endpoint", "db_peer_socket", "db_discovery",
+    "db_peer_bind", "db_peer_check", "db_read_budget", "db_http", "db_http_time",
+    "db_http_proto", "db_http_size", "db_status", "db_json", "db_version", "db_api",
+    "db_recheck",
 )
 HOST_BIND_SITES = ("gh_read", "gh_mount", "gh_walk", "gh_leaf", "gh_verify", "gh_root", "gh_nodes", "gv_make", "gv_call", "gv_time", "gv_record", "gv_bind", "gv_ids", "gv_dirs", "gv_files", "gv_type", "gv_cache")
 HOST_BIND_EXCEPTIONS = ("unclassified", "ENOENT", "EACCES", "EPERM", "EMFILE", "ENFILE", "ENOMEM",
@@ -601,7 +605,7 @@ class RuntimeBoundSession:
                             locator.DaemonExpectation(uid, executable, True), api,
                             {OWNER_LABEL: context["run"]}, self.accounting, slot_label=SLOT_LABEL)
                     with _BIND.scope("daemon_bind"):
-                        runtime.bind_runtime(engine, self.accounting.reserve_probe)
+                        runtime.bind_runtime(engine, self.accounting.reserve_probe, bind_scope=_BIND.scope)
                     with _BIND.scope("outer_recheck"):
                         self.source.check_process(outer)
                     self.context, self.runtime = dict(context), runtime

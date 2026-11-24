@@ -280,7 +280,7 @@ try:
     bind, bind_tainted = None, False
     family_conflict = (any(line.startswith(startup_prefix) for line in lines)
                        and any(line.startswith(bind_prefix) for line in lines))
-    bind_sites = set(b"w_capture_adopt w_session_init w_request_read w_handler w_request_schema w_context_schema w_labels w_external_debit w_outer_args w_outer_process w_outer_vector w_outer_pidns w_outer_cgroup w_endpoint w_daemon_context w_daemon_bind w_reserve_api w_outer_recheck w_pending_reply w_oc_pre w_oc_host w_oc_guest w_oc_select w_oc_max w_oc_recheck".split())
+    bind_sites = set(b"w_capture_adopt w_session_init w_request_read w_handler w_request_schema w_context_schema w_labels w_external_debit w_outer_args w_outer_process w_outer_vector w_outer_pidns w_outer_cgroup w_endpoint w_daemon_context w_daemon_bind w_reserve_api w_outer_recheck w_pending_reply w_oc_pre w_oc_host w_oc_guest w_oc_select w_oc_max w_oc_recheck w_db_budget w_db_reserve w_db_endpoint w_db_peer_socket w_db_discovery w_db_peer_bind w_db_peer_check w_db_read_budget w_db_http w_db_http_time w_db_http_proto w_db_http_size w_db_status w_db_json w_db_version w_db_api w_db_recheck".split())
     host_bind_sites = set(b"w_gh_read w_gh_mount w_gh_walk w_gh_leaf w_gh_verify w_gh_root w_gh_nodes w_gv_make w_gv_call w_gv_time w_gv_record w_gv_bind w_gv_ids w_gv_dirs w_gv_files w_gv_type w_gv_cache".split())
     host_bind_exceptions = set(b"unclassified ENOENT EACCES EPERM EMFILE ENFILE ENOMEM ENOSPC EIO EINVAL ESPIPE EINTR other_os declared_unsupported_events".split())
     host_type_details = set(b"o_time o_fds o_opens o_other m_syscall m_guard m_other r_time r_reads r_bytes r_cap r_other d_domain d_domthr d_dominv d_thread d_other cleanup".split())

@@ -315,7 +315,13 @@ fn outer_context_observation(run: &HealthRun, cleanup: bool) -> (Value, Value) {
     run.charge_outer_snapshot(cleanup);
     let mut command = run.timer(cleanup, elevated);
     command.args(crate::native_outer_test_command::prefix());
-    command.args(["inspect", "--format", "{{json .}}", &id]);
+    if cleanup {
+        // PIDs final readback uses the cleanup stream envelope. The bridge
+        // still authenticates the same snapshot before dropping unused fields.
+        command.args(["pids-final-snapshot", &id]);
+    } else {
+        command.args(["inspect", "--format", "{{json .}}", &id]);
+    }
     let value: Value = serde_json::from_slice(&run.capture(&mut command, None, cleanup))
         .unwrap_or_else(|_| panic!("private outer JSON"));
     let mounts = value["Mounts"]
