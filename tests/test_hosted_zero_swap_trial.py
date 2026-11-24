@@ -1191,6 +1191,10 @@ class EntrypointTrial(unittest.TestCase):
         group=None,
         package_case=None,
         package_cleanup=False,
+        policy_reply=None,
+        policy_cleanup=False,
+        policy_advance=0,
+        package_error=None,
     ):
         now, deadlines, host_boot = [0], [], "e" * 64
         package_calls = []
@@ -1205,10 +1209,23 @@ class EntrypointTrial(unittest.TestCase):
             return Path(*args)
 
         def run(argv, deadline, **options):
+            if "apt-cache" in argv:
+                self.assertEqual(package_case, ("plan", "exit"))
+                self.assertNotIn("sudo", argv)
+                self.assertEqual(argv[-6:], ["policy", *PINS["host_packages"]])
+                self.assertEqual(deadline, 2)
+                now[0] += policy_advance
+                if policy_cleanup:
+                    trial.command_cleanup_failed = True
+                    raise trial.Refusal("cleanup_failed")
+                if isinstance(policy_reply, Exception):
+                    raise policy_reply
+                return 0, policy_reply or b"", b""
             if argv[0] in ("env", "sudo", "dpkg", "dpkg-query"):
                 self.assertIsNotNone(package_case)
                 if "apt-get" in argv:
                     if argv[-1] == "update":
+                        self.assertIn("--error-on=any", argv)
                         operation = "update"
                     elif "--simulate" in argv:
                         operation = "plan"
@@ -1232,7 +1249,7 @@ class EntrypointTrial(unittest.TestCase):
                             sys.executable,
                             "-c",
                             "import sys;print('private-package-output');"
-                            "sys.stderr.write('private-package-error');sys.exit(100)",
+                            f"sys.stderr.buffer.write({package_error or b'private-package-error'!r});sys.exit(100)",
                         ],
                         deadline,
                     )
@@ -1299,13 +1316,10 @@ class EntrypointTrial(unittest.TestCase):
         current_uid = os.geteuid()
         with tempfile.TemporaryDirectory() as temporary:
 
-            def host_provision(pins, scope, work, _deadline, *, progress=None):
+            def host_provision(pins, scope, work, _deadline, **options):
                 self.assertEqual(pins, PINS)
                 self.assertEqual(scope, "host")
                 self.assertEqual(work.parent, Path(temporary))
-                if progress is not None:
-                    self.assertEqual(progress["stage"], "host_packages")
-                    self.assertNotIn("host_package_operation", progress)
                 if package_case:
                     if package_case[0] == "prepare":
                         (work / "lists").mkdir()
@@ -1316,7 +1330,6 @@ class EntrypointTrial(unittest.TestCase):
                                 raise OSError("private-package-error")
 
                         pins = pins | {"host_packages": UnreadablePackages(pins["host_packages"])}
-                    options = {} if progress is None else {"progress": progress}
                     result = package_impl(pins, scope, work, _deadline, **options)
                     self.assertEqual(
                         package_calls, ["update", "plan", "audit", "install", "verify"]
@@ -1327,6 +1340,7 @@ class EntrypointTrial(unittest.TestCase):
             handoff = Path(temporary) / "set_output"
             handoff.touch()
             with ExitStack() as stack:
+                stack.enter_context(patch.object(sys, "path", [str(ROOT / "scripts"), *sys.path]))
                 stack.enter_context(inert_kvm(**(kvm or {})))
                 group_vm = Mock()
                 group_vm.poll.return_value = None
@@ -1515,6 +1529,8 @@ class EntrypointTrial(unittest.TestCase):
                     (1, "host_packages", "refused", "verified"),
                 )
                 self.assertEqual(report["host_package_operation"], case[0])
+                self.assertNotIn("host_package_messages", report)
+                self.assertNotIn("host_package_policy", report)
 
     def test_host_package_operation_does_not_survive_success_or_preparation_failure(self):
         for cloud_failure in (None, 37):

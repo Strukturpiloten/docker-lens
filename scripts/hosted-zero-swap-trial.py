@@ -21,7 +21,7 @@ import sys
 import tempfile
 import time
 import urllib.request
-from contextlib import contextmanager
+from contextlib import nullcontext
 from pathlib import Path
 
 GIB = 1 << 30
@@ -154,7 +154,9 @@ def capture(argv, deadline, *, input_bytes=None, allow_failure=False):
                     active(deadline)
                     time.sleep(0.05)
             if p.returncode and not allow_failure:
-                raise Refusal("command_failed", exit_status(p.returncode))
+                error = Refusal("command_failed", exit_status(p.returncode))
+                error._native_output = tuple(bytes(buf) for buf in buffers)
+                raise error
             return p.returncode, bytes(buffers[0]), bytes(buffers[1])
         except BaseException:
             failed = True
@@ -197,15 +199,8 @@ def boot_id():
     return hashlib.sha256(contents).hexdigest()
 
 
-def packages(pins, scope, work, deadline, *, progress=None):
-    @contextmanager
-    def op(name):
-        if progress is not None:
-            progress["host_package_operation"] = name
-        yield
-        if progress is not None:
-            progress.pop("host_package_operation")
-
+def packages(pins, scope, work, deadline, *, op=nullcontext, run=None):
+    run = capture if run is None else run
     source = work / "apt.sources"
     snapshot = pins["apt_snapshot"]
     suite = pins[scope + "_apt_suite"]
@@ -243,7 +238,7 @@ def packages(pins, scope, work, deadline, *, progress=None):
     (work / "lists").mkdir()
     (work / "lists" / "partial").mkdir()
     with op("update"):
-        capture(command[len(prefix) :] + ["-qq", "update"], min(deadline, time.monotonic() + 100))
+        run(command[len(prefix) :] + ["-qq", "update"], min(deadline, time.monotonic() + 100))
     install = [
         "--no-install-recommends",
         "--no-upgrade",
@@ -252,15 +247,15 @@ def packages(pins, scope, work, deadline, *, progress=None):
         *(f"{pkg}={version}" for pkg, version in pins.items()),
     ]
     with op("plan"):
-        _, plan, _ = capture(command[len(prefix) :] + ["--simulate", *install], deadline)
+        _, plan, _ = run(command[len(prefix) :] + ["--simulate", *install], deadline)
         require(not re.search(rb"(?m)^(?:Remv |Inst [^\n ]+ \[)", plan))
     with op("audit"):
-        _, audit, _ = capture(["dpkg", "--audit"], deadline)
+        _, audit, _ = run(["dpkg", "--audit"], deadline)
         require(not audit)
     with op("install"):
-        capture(command + ["-qq", "-y", *install], min(deadline, time.monotonic() + 170))
+        run(command + ["-qq", "-y", *install], min(deadline, time.monotonic() + 170))
     with op("verify"):
-        _, actual, _ = capture(
+        _, actual, _ = run(
             ["dpkg-query", "-W", r"-f=${Package}=${Version} ${db:Status-Status}\n", *pins], deadline
         )
         require(
@@ -1641,7 +1636,9 @@ def host_trial():
         require(re.fullmatch(r"[a-f0-9]{40}", source))
         result["product_fixture_source"] = source
         result["stage"] = "host_packages"
-        result["host_packages"] = packages(pins, "host", work, deadline, progress=result)
+        from hosted_zero_swap_packages import install
+
+        result["host_packages"] = install(globals(), pins, work, deadline, result)
         result["stage"] = "cloud_image"
         date, digest = pins["cloud_image"].split("@sha256:")
         require(re.fullmatch("[0-9]{8}", date) and re.fullmatch("[0-9a-f]{64}", digest))
@@ -1736,7 +1733,7 @@ def host_trial():
         result.update(stage="complete", exit=0, reason="ok")
     except Refusal as error:
         result.update(exit=error.code, reason=error.reason)
-    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, ImportError):
         result.update(exit=1, reason="io")
     finally:
         group_clean = group_vm is None or group_vm.close(result["exit"] == 0 and cancelled is None)
