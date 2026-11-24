@@ -642,8 +642,13 @@ class SharedAutomationTests(unittest.TestCase):
 
     def test_only_the_five_qualified_native_fixture_tuples_are_excluded(self) -> None:
         rules = json.loads((ROOT / "renovate.json").read_text())["packageRules"]
-        self.assertEqual(len(rules), 1)
-        fixed = rules[0]
+        native_rules = [
+            rule
+            for rule in rules
+            if rule.get("matchFileNames") == ["scripts/native-conformance.sh"]
+        ]
+        self.assertEqual(len(native_rules), 1)
+        fixed = native_rules[0]
         self.assertFalse(fixed["enabled"])
         self.assertNotIn("automerge", fixed)
         self.assertNotIn("dependencyDashboardApproval", fixed)
@@ -1000,6 +1005,38 @@ const validation=await validateConfig('repository',local);
 assert.deepEqual(validation.errors,[]);
 const {GlobalConfig}=require(base+'config/global.js');GlobalConfig.set({localDir:root});
 const {extractPackageFile:extractActions}=require(base+'modules/manager/github-actions/extract.js');
+const trialFile='scripts/hosted-zero-swap-pins.json';
+const trialSource=fs.readFileSync(root+'/'+trialFile,'utf8');
+const trialPins=JSON.parse(trialSource);
+const trialDeps=effective.customManagers.flatMap(manager=>
+ manager.managerFilePatterns.some(p=>new RegExp(p.slice(1,-1)).test(trialFile))?
+ (extract(trialSource,trialFile,manager)||{deps:[]}).deps:[]);
+assert.equal(trialDeps.length,2);
+const cloud=trialDeps.find(dep=>dep.datasource==='custom.ubuntu-noble-cloud');
+const fixture=trialDeps.find(dep=>dep.datasource==='docker');
+assert.equal(cloud.depName,'ubuntu-noble-cloud-amd64');
+assert.equal(cloud.currentValue+'@'+cloud.currentDigest,trialPins.cloud_image);
+assert.equal(fixture.depName+':'+fixture.currentValue+'@'+fixture.currentDigest,trialPins.fixture_image);
+for(const dep of [cloud,fixture]){
+ const config={...effective,...dep,manager:'regex',packageName:dep.depName,updateType:'digest'};
+ const policy=await applyPackageRules({...config,packageFile:trialFile});
+ assert.equal(policy.enabled,false);
+ assert.equal(policy.groupName,'DockerLens hosted zero-swap trial images');
+ assert.notEqual((await applyPackageRules({...config,packageFile:'scripts/other.json'})).enabled,false);
+}
+const trialWorkflow='.github/workflows/hosted-zero-swap-trial.yml';
+const trialActions=(await extractActions(fs.readFileSync(root+'/'+trialWorkflow,'utf8'),trialWorkflow,{})).deps;
+for(const name of ['actions/checkout','actions/upload-artifact']){
+ const entries=trialActions.filter(dep=>dep.depName===name);
+ assert.equal(entries.length,1);
+ assert.match(entries[0].currentDigest,/^[a-f0-9]{40}$/);
+ assert.match(entries[0].currentValue,/^v[0-9]+\.[0-9]+\.[0-9]+$/);
+}
+const trialWorkflowSource=fs.readFileSync(root+'/'+trialWorkflow,'utf8');
+const trialCustomActions=effective.customManagers.flatMap(manager=>
+ manager.managerFilePatterns.some(p=>new RegExp(p.slice(1,-1)).test(trialWorkflow))?
+ (extract(trialWorkflowSource,trialWorkflow,manager)||{deps:[]}).deps:[]);
+assert.equal(trialCustomActions.length,0);
 const releaseFile='.github/workflows/release.yml';
 const releaseSource=fs.readFileSync(root+'/'+releaseFile,'utf8');
 const releasePin=JSON.parse(fs.readFileSync(root+'/.github/automation.json')).revision;

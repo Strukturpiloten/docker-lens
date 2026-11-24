@@ -82,7 +82,7 @@ manifests were verified on 2026-09-28. Debian 11 rootful and rootless are
 tagged v1.0.0; upstream Engine 29 rootful and rootless are tagged v29.8.1.
 The readable tags and immutable manifest digests are both required. Their
 native entrypoints, package lists, and runtime provenance are owned by the
-published images. DockerLens does no runtime APT installation.
+published images. The four-lane native harness does no runtime APT installation.
 
 Both Debian images contain native docker.io
 20.10.5+dfsg1-1+deb11u2. The harness checks that exact installed revision
@@ -139,3 +139,19 @@ DockerLens native harness, so no cross-repository consumer changes are needed.
 The [fixed-fixture inventory](shared-automation.md#fixed-qualified-native-fixtures)
 records the exact five disabled native-image/path tuples; other dependency
 updates inherit the shared automatic policy.
+
+
+The [hosted zero-swap boot trial](hosted-zero-swap-trial.md) is the sole consumer
+of its own fixed pin file. GitHub Actions owns the workflow's checkout and
+upload-artifact SHAs and release comments. Two path-scoped regex managers own
+the dated Ubuntu image/hash and Debian fixture tag/index digest. The Noble
+release directory supplies version discovery. Both image records are held
+together with the signed archive snapshot and exact package versions, and with
+the fixture's audited product SHA, platform manifest and config. The trial's
+group requires a reviewed coherent refresh before routine replacement.
+A release index alone cannot supply the verified signed image row or the
+fixture's audited source and platform binding. The Ubuntu snapshot's signed
+indexes provide package hashes and dependency provenance. The listed package
+versions and snapshot date are a single reviewed update. The existing five
+native-image pins and cross-repository workflow call sites retain their
+ownership.

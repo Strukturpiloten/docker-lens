@@ -24,8 +24,28 @@
       "matchStrings": [
         "# renovate: datasource=(?<datasource>docker) depName=(?<depName>[^\\s]+)\\s+[A-Z_]+_IMAGE='[^']+:(?<currentValue>[^@']+)@(?<currentDigest>sha256:[a-f0-9]{64})'"
       ]
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^scripts\\/hosted-zero-swap-pins\\.json$/"],
+      "matchStrings": ["\"cloud_image\"\\s*:\\s*\"(?<currentValue>[0-9]{8})@(?<currentDigest>sha256:[a-f0-9]{64})\""],
+      "datasourceTemplate": "custom.ubuntu-noble-cloud",
+      "depNameTemplate": "ubuntu-noble-cloud-amd64",
+      "versioningTemplate": "loose"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^scripts\\/hosted-zero-swap-pins\\.json$/"],
+      "matchStrings": ["\"fixture_image\"\\s*:\\s*\"(?<depName>ghcr\\.io/strukturpiloten/docker-debian-11-rootful):(?<currentValue>v[0-9.]+)@(?<currentDigest>sha256:[a-f0-9]{64})\""],
+      "datasourceTemplate": "docker"
     }
   ],
+  "customDatasources": {
+    "ubuntu-noble-cloud": {
+      "defaultRegistryUrlTemplate": "https://cloud-images.ubuntu.com/releases/noble/",
+      "format": "html"
+    }
+  },
   "packageRules": [
     {
       "description": [
@@ -43,6 +63,22 @@
         "ghcr.io/strukturpiloten/docker-debian-11-rootless",
         "docker.io/library/busybox"
       ],
+      "enabled": false
+    },
+    {
+      "description": ["Discover Noble cloud releases by exact dated directory."],
+      "matchFileNames": ["scripts/hosted-zero-swap-pins.json"],
+      "matchDatasources": ["custom.ubuntu-noble-cloud"],
+      "extractVersion": "^release-(?<version>[0-9]{8})/$"
+    },
+    {
+      "description": ["Keep the hosted boot trial pins together with the reviewed signed archive, platform and product fixture identities."],
+      "matchFileNames": ["scripts/hosted-zero-swap-pins.json"],
+      "matchManagers": ["custom.regex"],
+      "matchDatasources": ["custom.ubuntu-noble-cloud", "docker"],
+      "matchPackageNames": ["ubuntu-noble-cloud-amd64", "ghcr.io/strukturpiloten/docker-debian-11-rootful"],
+      "groupName": "DockerLens hosted zero-swap trial images",
+      "pinDigests": true,
       "enabled": false
     }
   ]
