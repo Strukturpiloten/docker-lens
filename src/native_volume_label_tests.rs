@@ -156,16 +156,17 @@ impl LabelRun {
         command.args(["--kill-after=1", "60"]);
         match required("NATIVE_PODMAN_USE_SUDO").as_str() {
             "0" => {
-                command.arg("podman");
+                command.args(crate::native_outer_test_command::prefix());
             }
             "1" => {
-                command.args(["sudo", "-n", "podman"]);
+                command.args(["sudo", "-n"]);
+                command.args(crate::native_outer_test_command::prefix());
             }
             _ => panic!("closed Podman selector"),
         }
         command.args([
             "exec",
-            &required("NATIVE_OUTER_CONTAINER"),
+            &required("NATIVE_OUTER_CONTAINER_ID"),
             "docker",
             "-H",
             "unix:///dockerlens-native/docker.sock",

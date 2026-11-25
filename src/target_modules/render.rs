@@ -4,12 +4,16 @@ use crate::observation::ResourceRef;
 use crate::version::{ApiVersion, DaemonMode, EngineBuild};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
+use std::num::NonZeroU64;
 
 #[cfg(test)]
 #[path = "render/bind_relabel_tests.rs"]
 mod bind_relabel_tests;
 #[path = "render/container.rs"]
 mod container;
+#[cfg(test)]
+#[path = "render/destination_pids_tests.rs"]
+mod destination_pids_tests;
 #[cfg(test)]
 #[path = "render/external_internal_tests.rs"]
 mod external_internal_tests;
@@ -26,6 +30,7 @@ pub struct RenderedArtifact {
     network_prerequisites: Vec<NetworkPrerequisite>,
     volume_prerequisites: Vec<VolumePrerequisite>,
     bind_source_prerequisites: Vec<BindSourcePrerequisite>,
+    destination_pids_prerequisites: Vec<DestinationPidsPrerequisite>,
     native: Option<NativeRenderState>,
 }
 
@@ -39,6 +44,51 @@ enum PrerequisiteOrder {
     Network(usize),
     Volume(usize),
     BindSource(usize),
+    DestinationPids(usize),
+}
+
+/// An unresolved destination obligation for one finite rootless PIDs request.
+///
+/// Generated only by the native renderer, bound to the owning container and
+/// planning context. Context catalogue evidence is not destination evidence.
+/// Exact build/package provenance, delegation and enforcement cannot be proved
+/// by the existing `/info` reports. Even metadata-compatible assessment leaves
+/// delegation and enforcement unverified; this type grants no capability.
+pub struct DestinationPidsPrerequisite {
+    pub reference: ResourceRef,
+    identity: ProtectedValue,
+    pids_limit: NonZeroU64,
+    context: PlanningContext,
+}
+
+impl DestinationPidsPrerequisite {
+    /// Explicit protected-data read of the authored owning container name.
+    #[must_use]
+    pub fn identity(&self) -> &[u8] {
+        self.identity.as_bytes()
+    }
+
+    /// The authored finite limit, not an observed or enforced limit.
+    #[must_use]
+    pub const fn pids_limit(&self) -> NonZeroU64 {
+        self.pids_limit
+    }
+
+    /// Planning authority, never an implicit selection of a destination capture.
+    #[must_use]
+    pub fn context(&self) -> &PlanningContext {
+        &self.context
+    }
+}
+
+impl std::fmt::Debug for DestinationPidsPrerequisite {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DestinationPidsPrerequisite")
+            .field("reference", &self.reference)
+            .field("identity", &"[redacted]")
+            .field("pids_limit", &"[redacted]")
+            .finish_non_exhaustive()
+    }
 }
 
 /// Consumer obligations for a destination-host source, not satisfied facts.
@@ -194,6 +244,7 @@ impl RenderedArtifact {
             network_prerequisites: Vec::new(),
             volume_prerequisites: Vec::new(),
             bind_source_prerequisites: Vec::new(),
+            destination_pids_prerequisites: Vec::new(),
             native: None,
         }
     }
@@ -220,6 +271,13 @@ impl RenderedArtifact {
         &self.bind_source_prerequisites
     }
 
+    /// Unresolved finite-rootless-PIDs destination obligations, not proof of
+    /// delegation, enforcement, exact build/package provenance or readiness.
+    #[must_use]
+    pub fn destination_pids_prerequisites(&self) -> &[DestinationPidsPrerequisite] {
+        &self.destination_pids_prerequisites
+    }
+
     /// The validated planning context retained by the native renderer.
     /// Caller-created opaque request bytes have no such context.
     #[must_use]
@@ -235,7 +293,9 @@ impl RenderedArtifact {
             .native
             .as_ref()
             .ok_or(CompleteArtifactError::MissingNativeProvenance)?;
-        let schema = if self
+        let schema = if !self.destination_pids_prerequisites.is_empty() {
+            4
+        } else if self
             .network_prerequisites
             .iter()
             .any(|network| network.expected_internal.is_some())
@@ -293,6 +353,19 @@ impl RenderedArtifact {
                 PrerequisiteOrder::BindSource(index) => {
                     append_bind_source(&mut document, &self.bind_source_prerequisites[*index]);
                 }
+                PrerequisiteOrder::DestinationPids(index) => {
+                    let pids = &self.destination_pids_prerequisites[*index];
+                    document.push_str("{\"kind\":\"rootless_pids\",\"reference\":");
+                    json_string(
+                        &mut document,
+                        pids.reference.local_index().to_string().as_bytes(),
+                    );
+                    document.push_str(",\"identity\":");
+                    json_string(&mut document, pids.identity());
+                    document.push_str(",\"pids_limit\":");
+                    json_string(&mut document, pids.pids_limit().to_string().as_bytes());
+                    document.push_str(",\"required_cgroup_driver\":\"systemd\",\"required_cgroup_version\":\"2\",\"required_pids_report\":true,\"delegation\":\"unverified\",\"enforcement\":\"unverified\"");
+                }
             }
             document.push('}');
         }
@@ -344,6 +417,7 @@ impl Renderer for DockerApiRenderer {
         let mut network_prerequisites = Vec::new();
         let mut volume_prerequisites = Vec::new();
         let mut bind_source_prerequisites = Vec::new();
+        let mut destination_pids_prerequisites = Vec::new();
         let mut prerequisite_order = Vec::new();
         while emitted.len() < graph.nodes().len() {
             let node = graph
@@ -413,6 +487,24 @@ impl Renderer for DockerApiRenderer {
                     None
                 }
                 TargetResource::Container(container) => {
+                    let mode = match graph.context() {
+                        PlanningContext::Observed(scope) => scope.mode,
+                        PlanningContext::Target(profile) => profile.mode(),
+                    };
+                    if mode == DaemonMode::Rootless
+                        && let Some(super::PidsLimit::Count(pids_limit)) =
+                            container.settings.pids_limit
+                    {
+                        prerequisite_order.push(PrerequisiteOrder::DestinationPids(
+                            destination_pids_prerequisites.len(),
+                        ));
+                        destination_pids_prerequisites.push(DestinationPidsPrerequisite {
+                            reference: container.reference,
+                            identity: ProtectedValue::new(container.identity.bytes().to_vec()),
+                            pids_limit,
+                            context: graph.context().clone(),
+                        });
+                    }
                     for (mount_index, mount) in container.mounts.iter().enumerate() {
                         let Some(relabel) = mount.bind_relabel() else {
                             continue;
@@ -485,6 +577,7 @@ impl Renderer for DockerApiRenderer {
             network_prerequisites,
             volume_prerequisites,
             bind_source_prerequisites,
+            destination_pids_prerequisites,
             native: Some(NativeRenderState {
                 context: graph.context().clone(),
                 requests,

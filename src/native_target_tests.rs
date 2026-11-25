@@ -130,13 +130,14 @@ fn api(method: &str, path: &str, body: Option<&Value>) -> (u16, Vec<u8>) {
 }
 
 fn inner_docker_command(args: &[&str]) -> Command {
-    let outer = required("NATIVE_OUTER_CONTAINER");
+    let outer = required("NATIVE_OUTER_CONTAINER_ID");
     let mut command = Command::new("timeout");
     command.arg("60");
     if required("NATIVE_PODMAN_USE_SUDO") == "1" {
-        command.args(["sudo", "-n", "podman"]);
+        command.args(["sudo", "-n"]);
+        command.args(crate::native_outer_test_command::prefix());
     } else {
-        command.arg("podman");
+        command.args(crate::native_outer_test_command::prefix());
     }
     command.args([
         "exec",
@@ -330,13 +331,14 @@ fn start_error_tail_wait_has_a_deadline_if_a_writer_remains_open() {
 // Test-only independent evidence from the outer container's own /proc view.
 // Neither the harness lane name nor a missing /info marker establishes rootful mode.
 fn dockerd_effective_uid() -> u32 {
-    let outer = required("NATIVE_OUTER_CONTAINER");
+    let outer = required("NATIVE_OUTER_CONTAINER_ID");
     let mut command = Command::new("timeout");
     command.arg("15");
     if required("NATIVE_PODMAN_USE_SUDO") == "1" {
-        command.args(["sudo", "-n", "podman"]);
+        command.args(["sudo", "-n"]);
+        command.args(crate::native_outer_test_command::prefix());
     } else {
-        command.arg("podman");
+        command.args(crate::native_outer_test_command::prefix());
     }
     command.args([
         "exec",

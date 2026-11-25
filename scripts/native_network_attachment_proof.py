@@ -138,12 +138,14 @@ def read_network_attachment_proof(path, capture_dir, expected_context):
     return read_private_proof(path, capture_dir, FILENAME, expected_context, validate_network_attachment_proof)
 
 
-def read_private_proof(path, capture_dir, filename, expected_context, validator):
+def read_private_proof(path, capture_dir, filename, expected_context, validator, *, max_bytes=LIMIT):
     """Read one stable, bounded, exclusive caller-private direct child."""
     directory = Path(os.path.abspath(capture_dir))
     path = Path(path)
     descriptors = []
     try:
+        if type(max_bytes) is not int or not 0 < max_bytes <= 512 * 1024:
+            fail()
         if (type(filename) is not str or not filename or filename in (".", "..") or Path(filename).name != filename
                 or directory.resolve(strict=True) != directory or path != directory / filename):
             fail()
@@ -162,10 +164,10 @@ def read_private_proof(path, capture_dir, filename, expected_context, validator)
         descriptors.append(source)
         before = os.fstat(source)
         if (not stat.S_ISREG(before.st_mode) or before.st_uid != uid or before.st_nlink != 1
-                or stat.S_IMODE(before.st_mode) != 0o600 or not 0 < before.st_size <= LIMIT):
+                or stat.S_IMODE(before.st_mode) != 0o600 or not 0 < before.st_size <= max_bytes):
             fail()
-        payload = os.read(source, LIMIT + 1)
-        if (len(payload) != before.st_size or len(payload) > LIMIT
+        payload = os.read(source, max_bytes + 1)
+        if (len(payload) != before.st_size or len(payload) > max_bytes
                 or fingerprint(os.fstat(source)) != fingerprint(before)
                 or fingerprint(os.stat(filename, dir_fd=held, follow_symlinks=False)) != fingerprint(before)
                 or fingerprint(os.stat(directory.name, dir_fd=ancestor, follow_symlinks=False)) != fingerprint(parent)

@@ -1,0 +1,176 @@
+{
+  "schema_version": 1,
+  "kind": "independent-native-source-evidence-review",
+  "repository": "Strukturpiloten/docker-lens",
+  "repository_id": 1387403220,
+  "decision": "GO for later separately reviewed CommandClear candidate source-cohort admission only",
+  "material_findings": [],
+  "review_scope": "Exact qualified source run and eight frozen append-only raw/envelope records; not the writer's mutable catalogue/policy diff or final admission head.",
+  "candidate_sha": "a36e42fbaeee6585c954948c9fe3a8686d86018b",
+  "candidate_tree": "77aee09deede1d13b23ccaccc04b5cc54f7314a2",
+  "source_manifest_sha256": "ed7921dade7361bef4d44d90436aac31ebb764ac0d8a7f350546b877a0f4b1d8",
+  "run": {
+    "id": 40119803977,
+    "attempt": 1,
+    "url": "https://github.com/Strukturpiloten/docker-lens/actions/runs/40119803977/attempts/1",
+    "event": "workflow_dispatch",
+    "workflow_path": ".github/workflows/native-validation.yml",
+    "workflow_ref": "refs/heads/main",
+    "dispatcher_sha": "b2870473551c45a4987fa2d27bd5dee9d2dd7ee5",
+    "status": "completed",
+    "conclusion": "success"
+  },
+  "source_and_dispatcher_are_distinct": true,
+  "authentication": {
+    "method": "Independent inspection of retained original run/jobs/artifact metadata, original ZIP bytes, corrected private r2 logs and immutable source.",
+    "actor_id": 1497405,
+    "triggering_actor_id": 1497405,
+    "closed_admission_succeeded_before_execution_each_lane_and_in_aggregate": true,
+    "seven_jobs_and_all_listed_steps_successful": true,
+    "complete_job_and_artifact_listings": true,
+    "exact_candidate_checkout_and_trusted_sha_guards_successful": true,
+    "separate_original_pr_permission_response_snapshot_retained": false,
+    "new_live_api_requests_performed_by_this_reviewer": false
+  },
+  "jobs": {
+    "admission": 120948672386,
+    "exact_candidate_offline": 120948702526,
+    "debian11_rootful": 120950832536,
+    "debian11_rootless": 120950832549,
+    "upstream_rootful": 120950832523,
+    "upstream_rootless": 120950832503,
+    "aggregate": 120952235143
+  },
+  "source_projection": {
+    "private_contract": "command-clear-v1",
+    "public_contract": "command-clear-native-source-v1",
+    "source_admission": "raw_source_only",
+    "catalogue_admission_in_raw_record": "unadmitted",
+    "capability": "CommandClear",
+    "admitted_shapes": [
+      "ClearCommand"
+    ],
+    "scope": "explicit_exec_entrypoint_required",
+    "outcome": "all_four_process_controls_verified",
+    "complete_maps_compared": true,
+    "independent_expected_maps": "Each immutable reviewed38106164571 lane baseline plus only literal CommandClear/[ClearCommand]; no emitter or projection-helper constants used as the expected result.",
+    "other_raw_fields_unchanged_from_original_qualified_native26_except_explicit_candidate_map_and_command_family_successor_fields": true,
+    "entrypoint_clear_and_neighboring_groups_not_admitted": true,
+    "complete_required_for_group_is_singleton": true,
+    "explicit_exec_entrypoint_guard_and_private_producer_reader_coordinator_unchanged": true,
+    "semantic_limit": "Authored Cmd [] is retained/accepted and yields no image command under explicit Exec entrypoint. The corresponding omitted-Cmd control intentionally has the same process effect; no new distinguishing effect or arbitrary-image success is claimed.",
+    "missing_entrypoint_clear_scope": "Empty entrypoint with inherited image command is not covered by the explicit-command control and remains outside this admission mapping."
+  },
+  "records": [
+    {
+      "lane": "debian11-rootful",
+      "artifact_id": 12571775396,
+      "artifact_name": "dockerlens-native-debian11-rootful",
+      "archive_sha256": "a7f888d7531cca598b073457b17bc36994146550e0f4b440b457c6e456f1649c",
+      "archive_size": 2750,
+      "member": "debian11-rootful.json",
+      "raw_sha256": "1de4ed02b0652db3bd2a5d4214efd7df00d674181c91cec16743d630e9ee2e26",
+      "reviewed_sha256": "9f26a185660badfbd6777bbf3a520f03e8fb48a777f8724bff506af5d28ba910",
+      "capabilities": 31,
+      "shapes": 48
+    },
+    {
+      "lane": "debian11-rootless",
+      "artifact_id": 12571222214,
+      "artifact_name": "dockerlens-native-debian11-rootless",
+      "archive_sha256": "c5735472d33d2656ca3a9e96d79d80e82014ac89931f131192a82896f5a3d916",
+      "archive_size": 2752,
+      "member": "debian11-rootless.json",
+      "raw_sha256": "e10976abab50da5e866b00b3fa42f9ea29ed27bb15dc4e242238df187a587320",
+      "reviewed_sha256": "1843873d6cae5b91d0ae3917f8238491239089905747c193e7f46027f17d891c",
+      "capabilities": 31,
+      "shapes": 48
+    },
+    {
+      "lane": "upstream-rootful",
+      "artifact_id": 12571585475,
+      "artifact_name": "dockerlens-native-upstream-rootful",
+      "archive_sha256": "a393a9fe341bce2cf436d7c58c121c11d5f743e7da3988a5eacd17d7cf0f6146",
+      "archive_size": 2674,
+      "member": "upstream-rootful.json",
+      "raw_sha256": "4cd85071ca05367827d62867da0388992478e7062f3d1a3de9d85b6da2bd4bdf",
+      "reviewed_sha256": "b0825b797f052257f706b0102c5c720e7fcbbaef0e585869bb6d23d2e756fb94",
+      "capabilities": 32,
+      "shapes": 50
+    },
+    {
+      "lane": "upstream-rootless",
+      "artifact_id": 12570897402,
+      "artifact_name": "dockerlens-native-upstream-rootless",
+      "archive_sha256": "dcefe25e10a4196efe8b931322a04c5ff0b24926c57e49f5e2d190b2435bcc04",
+      "archive_size": 2677,
+      "member": "upstream-rootless.json",
+      "raw_sha256": "eb27ec2010e57c9ed1fe9e522ffa4ba48f63e7e7dbb0433bd9e7632435b1ca23",
+      "reviewed_sha256": "e6d27662271bcce957d25fe83f027eafa0264f65787d4be9b8314eb157c9ec74",
+      "capabilities": 32,
+      "shapes": 50
+    }
+  ],
+  "record_validation": {
+    "original_archive_service_digests_and_upload_id_size_digest_match": true,
+    "safe_bounded_single_member_archives_read_in_memory_without_extraction": true,
+    "duplicate_keys_nonfinite_numbers_and_bool_for_integer_schema_rejected": true,
+    "four_new_raw_files_byte_exact_original_zip_members": true,
+    "four_reviewed_files_sha256_match_content_addressed_names": true,
+    "reviewed_root_and_nested_keys_types_schema_source_run_lane_artifact_identity_exact": true,
+    "complete_available_capability_and_ordered_shape_sets_exact_no_duplicate_groups": true,
+    "independently_expected_build_package_engine_api_mode_identity_exact": true,
+    "all_61_preexisting_tracked_evidence_file_bodies_unchanged": true,
+    "counts_are_summaries_not_admission_authority": true
+  },
+  "exact_profiles": {
+    "debian_engine": "20.10.5+dfsg1",
+    "debian_package": "20.10.5+dfsg1-1+deb11u2",
+    "debian_acquisition_rendering_and_advertised_api": "1.41",
+    "upstream_engine": "29.8.1",
+    "upstream_acquisition_api": "1.49",
+    "upstream_rendering_and_advertised_api": "1.56",
+    "rootful_and_rootless_lanes_separate": true,
+    "debian_whole_ipv6_expected_negative_group_unchanged": true
+  },
+  "execution": {
+    "twenty_six_required_tests_once_in_order_each_lane": true,
+    "no_omitted_reordered_duplicate_or_skipped_required_invocations": true,
+    "hosted_offline_rust_passed": 382,
+    "hosted_offline_rust_failed": 0,
+    "hosted_offline_rust_ignored": 27,
+    "hosted_offline_python_passed": 924,
+    "ordinary_success_after_guarded_resource_cleanup_each_lane": true,
+    "upstream_rootless_profile_receipt_exact_candidate_schema_label_removed_parser_and_verified_completion": true,
+    "native_error_diagnostic_branches_not_exercised_by_success": true,
+    "actual_hosted_outer_runtime_path": "Fixed legacy-main-dispatcher Docker selection; not local Podman or every modern main/release selection path."
+  },
+  "retained_evidence": {
+    "native_report_artifact": "docker31-attachment-native40119803977-independent-review-r1.md",
+    "native_report_sha256": "241e0085365bc0831bfb32e8d11702af8fa03ba572a1df167dad709fc872930d",
+    "original_file_count": 14,
+    "original_file_bytes": 474180,
+    "original_digest_set_sha256": "89a38ff377f914ac3fad9140fc4c7f4f86406ccdaa12c92d42af9b2fb6fbf72a",
+    "digest_set_definition": "SHA256 of sorted basename plus space plus file-SHA256 plus newline for three original metadata files, four original ZIPs and seven corrected r2 raw job logs.",
+    "initial_empty_or_partial_ansi_refused_capture_excluded": true,
+    "raw_logs_or_private_proof_bodies_redistributed": false
+  },
+  "authority_limits": {
+    "accepted_tier": "Trusted-harness execution/source assertions plus independently checked public projection and record mapping; not direct original private-proof replay or cryptographic daemon attestation.",
+    "source_sealed_catalogue_still_381_and_denies_both_clear_capabilities": true,
+    "raw_catalogue_unadmitted_tag_grants_no_product_authority_and_is_not_rewritten": true,
+    "current_mutable_admission_code_policy_or_final_head_approved_by_this_receipt": false,
+    "original_private_payload_identity_inode_cadence_and_complete_io_ledger_replayed": false,
+    "independent_final_host_inventory_performed": false,
+    "helper_profile_parser_abi_digests_independently_rehashed_from_private_files": false,
+    "rootless_observation": "none/version2; profile removal does not establish controller/systemd delegation, PIDs authority or enforcement.",
+    "original_run40113370193_internal_cause": "UNKNOWN; the fresh success neither identifies nor demonstrates a fix of that cause."
+  },
+  "remaining_gates": [
+    "Independent review of the explicit append-only catalogue/policy/test/ADR admission diff; this receipt alone selects no compiled profile.",
+    "Complete final-edit gates and fresh authenticated exact-final-admission-head four-lane26 execution plus independent artifact/cleanup review.",
+    "Inherited ADR0012/0019 all-six-authored-fixture volume-only and actual Nextcloud/Supabase bind/external-expectation consumers, source-bound producer/admission receipts and exact-head required checks.",
+    "Separate application/migration acceptance, PIDs27/nofile28/full28, release/publication/deployment authority; none is granted."
+  ],
+  "binding_rule": "Any change to a bound raw/envelope record requires renewed independent record review. A later admission head binds this historical source S/Rs without pretending its own head or dispatcher is S; its own final native evidence remains separate."
+}

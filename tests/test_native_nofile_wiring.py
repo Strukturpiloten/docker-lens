@@ -1,0 +1,1174 @@
+"""Canonical nofile28 controls with inert native commands and the real private reader."""
+import base64
+from copy import deepcopy
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import subprocess
+import tempfile
+import unittest
+
+from test_native_nofile_proof import fixture
+from test_native_device_mapping_proof import fixture as device_fixture
+from test_native_memory_proof import fixture as memory_fixture, bind_context as bind_memory_context
+from test_native_capabilities_proof import fixture as capabilities_fixture, bind_context as bind_capabilities_context
+from test_native_logging_proof import fixture as logging_fixture, bind_context as bind_logging_context
+
+ROOT = Path(__file__).resolve().parents[1]
+TARGET = "native_nofile"
+TEST = "live_nofile_limits_and_effects_match_engine"
+SELECTED = f"native_health_metadata_tests::lifecycle::nofile::{TEST}"
+SUCCESS = b"test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 100 filtered out;\n"
+HANDOFF = b"DOCKERLENS_NATIVE_LIFECYCLE_CLEANUP: owner=native_conformance_outer_v1 scope=outer_container_and_data_volume state=required\n"
+SECRET = b"PRIVATE_NOFILE_WIRING_CANARY"
+LANES = ("debian11-rootful", "debian11-rootless", "upstream-rootful", "upstream-rootless")
+# Independent original invocation ledger, not parsed from production or older tests.
+ORIGINAL27 = [
+    ("native_capture", "live_engine_capture_decodes"),
+    ("acquisition", "live_read_only_acquisition_matches_oracle"),
+    ("native_selection", "live_native_selection_and_source_observations"),
+    ("native_selection", "live_network_membership_matches_engine"),
+    ("native_target", "live_target_render_matches_engine"),
+    ("native_network", "live_network_render_matches_engine"),
+    ("native_network", "live_internal_network_blocks_external_egress"),
+    ("native_volume", "live_existing_volume_prerequisite_matches_engine"),
+    ("native_volume_label", "live_created_volume_labels_match_engine"),
+    ("native_identity", "live_container_process_identity_matches_engine"),
+    ("native_port", "live_port_publications_match_engine"),
+    ("native_health_metadata", "live_health_metadata_matches_engine"),
+    ("native_network_attachment", "live_network_attachments_match_engine"),
+    ("native_bind_relabel", "live_bind_relabel_configuration_matches_engine"),
+    ("native_external_network", "live_external_network_internal_matches_engine"),
+    ("native_stop_signal", "live_stop_signal_matches_engine"),
+    ("native_lifecycle", "live_lifecycle_matches_engine"),
+    ("native_runtime_filesystem", "live_runtime_filesystem_matches_engine"),
+    ("native_tmpfs_effect", "live_tmpfs_effects_match_engine"),
+    ("native_health_start_interval_boundary", "live_health_start_interval_boundary_matches_engine"),
+    ("native_lifecycle_default_effect", "live_lifecycle_default_effects_match_engine"),
+    ("native_hostname", "live_hostname_matches_engine"),
+    ("native_command_clear", "live_command_clear_matches_engine"),
+    ("native_shm_size", "live_shm_size_effects_match_engine"),
+    ("native_supplementary_groups", "live_supplementary_groups_match_engine"),
+    ("native_kernel_settings", "live_kernel_settings_match_engine"),
+    ("native_pids", "live_pids_limits_and_effects_match_engine"),
+]
+
+
+class NofileWiringTests(unittest.TestCase):
+    @staticmethod
+    def cases_source(source):
+        start = source.index("const CASES:")
+        end = source.index("\n];", start) + len("\n];")
+        return source[start:end] + "\n"
+
+    @staticmethod
+    def cleanup_phase_source(include_steps=False):
+        source = (ROOT / "src/native_lifecycle_tests.rs").read_text()
+        start = source.index("#[derive(Clone, Copy, Debug, Eq, PartialEq)]\nenum CleanupPhase")
+        end = source.index("fn create(" if include_steps else "fn remove_container(", start)
+        return source[start:end]
+
+    def test_actual_default_capture_libtest_preserves_marker_record_and_cleanup_order(self):
+        # Execute the production marker statements through ordinary capturing
+        # libtest and the real wrapper, including the exact ignored-only listing.
+        source = (ROOT / "src/native_nofile_tests.rs").read_text()
+        markers = {}
+        for name in ("context", "effects", "capture", "cleanup", "proof"):
+            matches = re.findall(r'(?:let _ = writeln!\(\s*std::io::stderr\(\),\s*|eprintln!\()'
+                                 rf'"[^"\n]*DOCKERLENS_NATIVE_CHECK: nofile_{name}"\s*,?\s*\);', source)
+            self.assertEqual(len(matches), 1)
+            markers[name] = matches[0]
+        observer = self.failure_line(operation="observe", code="1").rstrip(b"\n") + b" observer_site=workerexe\n"
+        acquisition = (self.failure_line("all", "none", "acquisition", "unknown", "none").rstrip(b"\n")
+                       + b" acquisition_error=shape acquisition_shape=duplicate_network_id\n")
+        refusal = self.cleanup_line(reason="ownership_guard", termination="unknown", code="none")
+        with tempfile.TemporaryDirectory(prefix="dl-nofile-libtest-") as directory:
+            root = Path(directory)
+            fixture = '''use std::io::Write;
+mod native_health_metadata_tests { pub mod lifecycle { pub mod nofile {
+use super::super::super::*;
+#[test] #[ignore]
+fn live_nofile_limits_and_effects_match_engine() {
+    let mode = std::env::var("NOFILE_TRANSPORT_MODE").unwrap();
+    let acquisition = matches!(mode.as_str(), "acquisition" | "acquisition_handoff");
+    let work = acquisition || matches!(mode.as_str(), "work" | "both");
+    let cleanup = matches!(mode.as_str(), "cleanup" | "both" | "acquisition_handoff");
+    let result = std::panic::catch_unwind(|| {
+        CONTEXT
+        EFFECTS
+        if acquisition || mode == "success" { CAPTURE }
+        if work { panic!("PRIVATE_NOFILE_WIRING_CANARY"); }
+    });
+    CLEANUP
+    if cleanup {
+        let _ = writeln!(std::io::stderr(), "DOCKERLENS_NATIVE_CHECK: lifecycle_cleanup_unverified");
+        let _ = std::io::stderr().write_all(HANDOFF);
+    }
+    if acquisition { let _ = std::io::stderr().write_all(ACQUISITION); }
+    else if work { let _ = std::io::stderr().write_all(WORK); }
+    if cleanup { let _ = std::io::stderr().write_all(REFUSAL); }
+    if let Err(error) = result { std::panic::resume_unwind(error); }
+    assert!(!cleanup, "PRIVATE_NOFILE_WIRING_CANARY");
+    PROOF
+}
+}}}
+'''
+            for token, value in (("CONTEXT", markers["context"]), ("EFFECTS", markers["effects"]),
+                                 ("CAPTURE", markers["capture"]), ("CLEANUP", markers["cleanup"]),
+                                 ("PROOF", markers["proof"]),
+                                 ("HANDOFF", 'b' + json.dumps(HANDOFF.decode())),
+                                 ("WORK", 'b' + json.dumps(observer.decode())),
+                                 ("ACQUISITION", 'b' + json.dumps(acquisition.decode())),
+                                 ("REFUSAL", 'b' + json.dumps(refusal.decode()))):
+                fixture = fixture.replace(token, value)
+            (root / "transport.rs").write_text(fixture)
+            built = subprocess.run(["rustc", "--edition=2024", "--test", str(root / "transport.rs"), "-o", str(root / "transport")],
+                                   cwd=ROOT, capture_output=True, timeout=30, check=False)
+            self.assertEqual(built.returncode, 0, built.stderr)
+            for threads in (1, 2):
+                for mode in ("work", "cleanup", "both", "success", "acquisition", "acquisition_handoff"):
+                    with self.subTest(threads=threads, mode=mode):
+                        result, calls, dates = self.wrapper(transport=(root / "transport", threads, mode))
+                        self.assertEqual(result.returncode, 0 if mode == "success" else 1, result.stderr)
+                        self.assertEqual(len(calls), 2)
+                        self.assertIn("--list", calls[0]["argv"])
+                        self.assertEqual(calls[1]["argv"][-4:], ["--", "--ignored", "--exact", SELECTED])
+                        self.assertEqual(dates, ["date"])
+                        output = result.stdout + result.stderr
+                        if mode != "success":
+                            self.assertIn(b"failed (exit 101)", output)
+                        handoff = mode in ("cleanup", "both", "acquisition_handoff")
+                        work = observer if mode in ("work", "both") else acquisition if mode.startswith("acquisition") else None
+                        self.assertEqual(output.count(b"DOCKERLENS_NATIVE_NOFILE_FAILURE:"), int(work is not None))
+                        self.assertEqual(output.count(HANDOFF), int(handoff))
+                        self.assertEqual(output.count(refusal), int(handoff))
+                        if work is not None:
+                            self.assertLessEqual(len(work.rstrip(b"\n")), 256)
+                            self.assertEqual(output.count(work), 1)
+                            if handoff:
+                                self.assertLess(output.index(work), output.index(refusal))
+
+    def wrapper(self, output=SUCCESS, status=0, *, listing=None, list_status=0, name=TEST, cleanup_failure=False, transport=None):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "cargo").write_text('''#!/usr/bin/python3
+import base64, json, os, sys
+with open(os.environ["TRACE"], "a") as stream:
+    stream.write(json.dumps({"argv": sys.argv[1:], "owner": os.environ.get("NATIVE_LIFECYCLE_CLEANUP_OWNER"),
+        "deadline": os.environ.get("NATIVE_NOFILE_DEADLINE_EPOCH"),
+        "shared": os.environ.get("NATIVE_LIFECYCLE_DEADLINE_EPOCH")}) + "\\n")
+binary = os.environ.get("NOFILE_TRANSPORT_BINARY")
+if binary:
+    os.execv(binary, [binary, *sys.argv[sys.argv.index("--") + 1:]])
+if "--list" in sys.argv:
+    sys.stdout.buffer.write(base64.b64decode(os.environ["LISTING"]))
+    sys.exit(int(os.environ["LIST_STATUS"]))
+sys.stdout.buffer.write(open(os.environ["OUTPUT_PATH"], "rb").read())
+sys.exit(int(os.environ["STATUS"]))
+''')
+            (root / "date").write_text('''#!/usr/bin/env bash
+printf 'date\\n' >> "$DATES"
+printf '2000\\n'
+''')
+            if cleanup_failure:
+                (root / "rm").write_text('''#!/usr/bin/env bash
+printf 'cleanup\\n' >> "$DATES"
+exit 1
+''')
+                (root / "rm").chmod(0o700)
+            for name_path in (root / "cargo", root / "date"):
+                name_path.chmod(0o700)
+            listing = (SELECTED + ": test\n").encode() if listing is None else listing
+            (root / "output").write_bytes(output)
+            env = {**os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"], "TMPDIR": directory,
+                   "TRACE": str(root / "trace"), "DATES": str(root / "dates"),
+                   "OUTPUT_PATH": str(root / "output"), "STATUS": str(status),
+                   "LISTING": base64.b64encode(listing).decode(), "LIST_STATUS": str(list_status),
+                   "NATIVE_NOFILE_DEADLINE_EPOCH": "1",
+                   "NATIVE_LIFECYCLE_CLEANUP_OWNER": "native_conformance_outer_v1"}
+            env.pop("NOFILE_TRANSPORT_BINARY", None)
+            if transport is not None:
+                binary, threads, mode = transport
+                env.pop("RUST_TEST_NOCAPTURE", None)
+                env.update(NOFILE_TRANSPORT_BINARY=str(binary), RUST_TEST_THREADS=str(threads),
+                           NOFILE_TRANSPORT_MODE=mode)
+            result = subprocess.run(["bash", str(ROOT / "scripts/run-exact-native-test.sh"), TARGET, name],
+                                    env=env, capture_output=True, timeout=10, check=False)
+            calls = [json.loads(line) for line in (root / "trace").read_text().splitlines()] if (root / "trace").exists() else []
+            dates = (root / "dates").read_text().splitlines() if (root / "dates").exists() else []
+            self.assertNotIn(SECRET, result.stdout + result.stderr)
+            return result, calls, dates
+
+    def test_cleanup_rejects_foreign_pids_before_any_projection(self):
+        work, cleanup = self.failure_line(), self.cleanup_line()
+        foreign = b"DOCKERLENS_NATIVE_PIDS_CLEANUP_REFUSAL: " + SECRET + b"\n"
+        for token in (foreign, b"embedded " + foreign):
+            with self.subTest(token=token):
+                result, _calls, _dates = self.wrapper(self.failure_transcript(work, cleanup) + token, 101)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(b"failed (exit 101)", result.stderr)
+                self.assertNotIn(b"DOCKERLENS_NATIVE_NOFILE_", result.stderr)
+                self.assertNotIn(HANDOFF.rstrip(), result.stderr)
+                self.assertNotIn(SECRET, result.stdout + result.stderr)
+
+    def test_only_exact_ignored_test_runs_with_original_once_only_deadline(self):
+        result, calls, dates = self.wrapper()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("--lib", calls[0]["argv"])
+        self.assertEqual(calls[1]["argv"][-4:], ["--", "--ignored", "--exact", SELECTED])
+        self.assertEqual(calls[1]["deadline"], "2180")
+        self.assertEqual(calls[1]["shared"], "2180")
+        self.assertEqual(calls[1]["owner"], "native_conformance_outer_v1")
+        self.assertEqual(dates, ["date"])
+        result, calls, dates = self.wrapper(name="other_ignored_nofile_test")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(calls, [])
+        self.assertEqual(dates, [])
+
+    def test_listing_execution_and_numeric_summary_cannot_silently_skip_work(self):
+        for listing in (b"", b"foreign: test\n", (SELECTED + ": test\n").encode() * 2):
+            with self.subTest(listing=listing):
+                result, calls, dates = self.wrapper(listing=listing)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(dates, [])
+        self.assertNotEqual(self.wrapper(list_status=7)[0].returncode, 0)
+        for output, status in ((SUCCESS, 101), (SUCCESS.replace(b"1 passed", b"0 passed"), 0),
+                               (SUCCESS.replace(b"1 passed", b"2 passed"), 0),
+                               (SUCCESS.replace(b"0 ignored", b"1 ignored"), 0), (b"", 0)):
+            with self.subTest(output=output, status=status):
+                self.assertNotEqual(self.wrapper(output, status)[0].returncode, 0)
+
+    def test_unverified_cleanup_handoff_and_capture_uncertainty_override_success(self):
+        for output in (HANDOFF + SUCCESS, b"DOCKERLENS_NATIVE_CHECK: lifecycle_cleanup_unverified\n" + SUCCESS,
+                       SECRET + b"\0" + SUCCESS, b"x" * 1048577 + SUCCESS):
+            with self.subTest(size=len(output)):
+                self.assertNotEqual(self.wrapper(output)[0].returncode, 0)
+        result, _calls, dates = self.wrapper(cleanup_failure=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(dates, ["date", "cleanup"])
+        self.assertEqual(result.stderr, b"required native test private capture cleanup unavailable\n")
+
+    def test_first_causal_site_is_closed_and_private_panic_text_never_escapes(self):
+        failure = (b"DOCKERLENS_NATIVE_CHECK: nofile_effects\n"
+                   + f"thread '{SELECTED}' panicked at src/native_nofile_tests.rs:123:4:\n".encode()
+                   + SECRET + b"\nDOCKERLENS_NATIVE_CHECK: nofile_cleanup\n"
+                   + b"DOCKERLENS_NATIVE_CHECK: lifecycle_cleanup_unverified\n" + HANDOFF)
+        result, _calls, _dates = self.wrapper(failure, 101)
+        for public in (b"(exit 101)", b"nofile_effects", b"lifecycle_cleanup_unverified",
+                       b"source=native_nofile_tests line=123 column=4", HANDOFF.rstrip()):
+            self.assertIn(public, result.stderr)
+        result, _calls, _dates = self.wrapper(b"thread 'worker' panicked at /private/" + SECRET + b":1:1:\n" + failure, 101)
+        self.assertIn(b"source=native_nofile_tests location=unavailable", result.stderr)
+        self.assertNotIn(b"line=123", result.stderr)
+        result, _calls, _dates = self.wrapper(b"DOCKERLENS_NATIVE_CHECK: nofile_secret_" + SECRET + b"\n", 101)
+        self.assertNotIn(b"nofile_secret_", result.stderr)
+
+    def test_original27_order_readers_and_separate_one_child_owner_are_preserved(self):
+        source = (ROOT / "scripts/native-conformance.sh").read_text()
+        calls = re.findall(r'^[ \t]*"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$', source, re.M)
+        self.assertEqual(calls, ORIGINAL27 + [(TARGET, TEST), ("native_device_mapping", "live_device_mapping_matches_engine"),
+                                 ("native_memory", "live_memory_limits_and_effects_match_engine"), ("native_capabilities", "live_named_capabilities_match_engine"), ("native_logging", "live_logging_matches_engine")])
+        owners = re.findall(r'^\(\n[ \t]+export NATIVE_LIFECYCLE_CLEANUP_OWNER=native_conformance_outer_v1\n(.*?)^\)', source, re.S | re.M)
+        owned = [re.findall(r'run-exact-native-test.sh" (\w+) (\w+)', block) for block in owners]
+        self.assertEqual(owned, [ORIGINAL27[16:21], [ORIGINAL27[21]], [ORIGINAL27[23]],
+                                [ORIGINAL27[24]], [ORIGINAL27[25]], [ORIGINAL27[26]], [(TARGET, TEST)],
+                                 [("native_device_mapping", "live_device_mapping_matches_engine")],
+                          [("native_memory", "live_memory_limits_and_effects_match_engine")], [("native_capabilities", "live_named_capabilities_match_engine")], [("native_logging", "live_logging_matches_engine")]])
+        self.assertEqual(source.count("export NATIVE_LIFECYCLE_CLEANUP_OWNER="), 11)
+        pids = source.index('python3 "$script_dir/native_pids_proof.py"')
+        nofile = source.index('"$(dirname "$0")/run-exact-native-test.sh" native_nofile')
+        reader = source.index('python3 "$script_dir/native_nofile_proof.py"')
+        publication = source.index('publish_native_evidence() {')
+        self.assertLess(pids, nofile)
+        self.assertLess(nofile, reader)
+        self.assertLess(reader, publication)
+        command = shlex.split(source[reader:source.index('\n# Invocation 29', reader)].replace('\\\n', ' '))
+        self.assertEqual(command[2:], ["$run_dir", "$NATIVE_NOFILE_CANDIDATE_SHA", "$run_id", "$lane",
+            "$server_version", "$api_version", "$expected_mode", "$installed_docker_package",
+            "$NATIVE_FIXTURE_IMAGE", "$image", "$NATIVE_OUTER_CONTAINER_ID", "$NATIVE_BIND_RELABEL_DAEMON_UID"])
+        self.assertIn('export NATIVE_NOFILE_PROOF_PATH="$run_dir/nofile-v1.json"', source)
+        self.assertIn('export NATIVE_NOFILE_CANDIDATE_SHA=$NATIVE_IDENTITY_CANDIDATE_SHA', source)
+
+    def tail(self, lane, backend, *, failure="", evidence=False, profile=False, proof_mutate=None, device_mutate=None, memory_mutate=None, capabilities_mutate=None, logging_mutate=None):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            (root / "socket").mkdir(mode=0o700)
+            payload = fixture(lane, outer_backend=backend)
+            context = payload["context"]
+            context["outer"]["socket_source"] = str(root / "socket")
+            context = deepcopy(context)
+            if proof_mutate is not None:
+                proof_mutate(payload)
+            device = device_fixture(lane, outer_backend=backend)
+            device["context"] = deepcopy(context)
+            if device_mutate is not None:
+                device_mutate(device)
+            memory = bind_memory_context(memory_fixture(lane, outer_backend=backend), context)
+            if memory_mutate is not None:
+                memory_mutate(memory)
+            capabilities = bind_capabilities_context(capabilities_fixture(lane, outer_backend=backend), context)
+            if capabilities_mutate is not None:
+                capabilities_mutate(capabilities)
+            logging = bind_logging_context(logging_fixture(lane, outer_backend=backend), context)
+            if logging_mutate is not None:
+                logging_mutate(logging)
+            logging_path = root / "logging-v1.json"
+            logging_path.write_text(json.dumps(logging, separators=(",", ":")))
+            logging_path.chmod(0o600)
+            cap_path = root / "named-capabilities-v1.json"
+            cap_path.write_text(json.dumps(capabilities))
+            cap_path.chmod(0o600)
+            memory_path = root / "memory-limits-v1.json"
+            memory_path.write_text(json.dumps(memory))
+            memory_path.chmod(0o600)
+            device_path = root / "device-mapping-v1.json"
+            device_path.write_text(json.dumps(device))
+            device_path.chmod(0o600)
+            proof_path = root / "nofile-v1.json"
+            proof_path.write_text(json.dumps(payload))
+            proof_path.chmod(0o600)
+            (root / "python3").write_text('''#!/usr/bin/python3
+import json, os, subprocess, sys
+if sys.argv[1] == "-c":
+    print("123456789")
+    raise SystemExit(0)
+name = sys.argv[1].rsplit("/", 1)[-1]
+event = {"build-native-pids-worker.py":"prebuild", "native_pids_proof.py":"pids_reader", "native_nofile_proof.py":"nofile_reader", "native_device_mapping_proof.py":"device_reader", "native_memory_proof.py":"memory_reader", "native_capabilities_proof.py":"capabilities_reader", "native_logging_proof.py":"logging_reader"}[name]
+with open(os.environ["TRACE"], "a") as stream:
+    stream.write(json.dumps({"event":event, "argv":sys.argv[2:], "backend":os.environ["NATIVE_OUTER_ENGINE"]}) + "\\n")
+if os.environ["FAILURE"] == event:
+    raise SystemExit(23)
+if event in ("nofile_reader", "device_reader", "memory_reader", "capabilities_reader", "logging_reader"):
+    raise SystemExit(subprocess.run([sys.executable, *sys.argv[1:]], check=False).returncode)
+''')
+            (root / "run-exact-native-test.sh").write_text('''#!/usr/bin/env bash
+set -euo pipefail
+case "$1 $2" in
+  'native_pids live_pids_limits_and_effects_match_engine') event=pids_child ;;
+  'native_nofile live_nofile_limits_and_effects_match_engine') event=nofile_child ;;
+  'native_device_mapping live_device_mapping_matches_engine') event=device_child ;;
+  'native_memory live_memory_limits_and_effects_match_engine') event=memory_child ;;
+  'native_capabilities live_named_capabilities_match_engine') event=capabilities_child ;;
+  'native_logging live_logging_matches_engine') event=logging_child ;;
+  *) exit 97 ;;
+esac
+printf '{"event":"%s","owner":"%s"}\\n' "$event" "${NATIVE_LIFECYCLE_CLEANUP_OWNER:-}" >> "$TRACE"
+if [[ $FAILURE == "$event" ]]; then exit 23; fi
+''')
+            for path in (root / "python3", root / "run-exact-native-test.sh"):
+                path.chmod(0o700)
+            source = (ROOT / "scripts/native-conformance.sh").read_text()
+            start = source.index('# Build the fixed inert witness before invocation27')
+            segment = source[start:source.index('\nnative_success_summary=', start)]
+            (root / "tail.sh").write_text('''#!/usr/bin/env bash
+set -euo pipefail
+unset NATIVE_LIFECYCLE_CLEANUP_OWNER
+native_publication_command() {
+  if [[ $1 == git ]]; then
+    if [[ $* == *'rev-parse HEAD' ]]; then printf '%s\\n' "$NATIVE_PIDS_CANDIDATE_SHA"; fi
+  else printf '{"event":"emitter"}\\n' >> "$TRACE"; fi
+}
+cleanup() {
+  local status=$?
+  trap - EXIT
+  printf '{"event":"teardown","status":%s}\\n' "$status" >> "$TRACE"
+  if [[ -n $apparmor_profile && $status == 0 && ${apparmor_native_completed:-0} == 1 ]]; then
+    publish_native_evidence || status=$?
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+''' + segment + '\nprintf \'{"event":"complete","owner":"%s"}\\n\' "${NATIVE_LIFECYCLE_CLEANUP_OWNER:-}" >> "$TRACE"\n')
+            env = {**os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"], "TRACE": str(root / "trace"),
+                   "FAILURE": failure, "run_dir": directory, "script_dir": str(ROOT / "scripts"),
+                   "run_id": context["run_id"], "lane": lane, "server_version": context["engine_release"],
+                   "api_version": context["rendering_api"], "expected_mode": context["mode"],
+                   "installed_docker_package": context["docker_package"], "image": context["outer"]["image"],
+                   "NATIVE_FIXTURE_IMAGE": context["fixture_image"], "NATIVE_OUTER_IMAGE": context["outer"]["image"],
+                   "NATIVE_OUTER_CONTAINER_ID": context["outer"]["id"], "NATIVE_OUTER_ENGINE": backend,
+                   "NATIVE_BIND_RELABEL_DAEMON_UID": str(context["daemon_uid"]),
+                   "NATIVE_PIDS_CANDIDATE_SHA": context["candidate_sha"], "NATIVE_NOFILE_CANDIDATE_SHA": context["candidate_sha"], "NATIVE_DEVICE_MAPPING_CANDIDATE_SHA": context["candidate_sha"], "NATIVE_MEMORY_CANDIDATE_SHA": context["candidate_sha"], "NATIVE_CAPABILITIES_CANDIDATE_SHA": context["candidate_sha"], "NATIVE_LOGGING_CANDIDATE_SHA": context["candidate_sha"],
+                   "DOCKERLENS_NATIVE_CANDIDATE_SHA": context["candidate_sha"],
+                   "DOCKERLENS_NATIVE_EVIDENCE_DIR": "synthetic" if evidence else "", "apparmor_profile": "owned" if profile else ""}
+            for name in ("SHAPES", "SOURCE_PROBES", "NETWORK_PROBES", "VOLUME_PROBES", "VOLUME_LABEL_PROBES",
+                         "IDENTITY_PROBES", "PORT_PROBES", "HEALTH_METADATA_PROOF", "NETWORK_ATTACHMENT_PROOF", "BIND_RELABEL_PROOF"):
+                env["NATIVE_" + name + "_PATH"] = "synthetic"
+            result = subprocess.run(["bash", str(root / "tail.sh")], env=env, capture_output=True, timeout=10, check=False)
+            events = [json.loads(line) for line in (root / "trace").read_text().splitlines()]
+            return result, events, deepcopy(context)
+
+    def test_actual_tail_always_runs_real_twelve_fact_reader_on_every_lane_and_backend(self):
+        for lane in LANES:
+            for backend in ("podman", "docker"):
+                with self.subTest(lane=lane, backend=backend):
+                    result, events, context = self.tail(lane, backend)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual([item["event"] for item in events],
+                        ["prebuild", "pids_child", "pids_reader", "nofile_child", "nofile_reader", "device_child", "device_reader", "memory_child", "memory_reader", "capabilities_child", "capabilities_reader", "logging_child", "logging_reader", "complete", "teardown"])
+                    reader = events[4]
+                    self.assertEqual(reader["backend"], backend)
+                    self.assertEqual(reader["argv"], [context["outer"]["socket_source"].removesuffix("/socket"),
+                        context["candidate_sha"], context["run_id"], lane, context["engine_release"], context["rendering_api"],
+                        context["mode"], context["docker_package"], context["fixture_image"], context["outer"]["image"],
+                        context["outer"]["id"], str(context["daemon_uid"])])
+                    self.assertEqual(events[1]["owner"], "native_conformance_outer_v1")
+                    self.assertEqual(events[3]["owner"], "native_conformance_outer_v1")
+                    self.assertEqual(events[-2]["owner"], "")
+                    self.assertEqual(events[-1]["status"], 0)
+
+    def test_each_required_failure_stops_before_later_work_and_original_exit_teardown_runs(self):
+        sequence = ["prebuild", "pids_child", "pids_reader", "nofile_child", "nofile_reader", "device_child", "device_reader", "memory_child", "memory_reader", "capabilities_child", "capabilities_reader", "logging_child", "logging_reader"]
+        for failure in sequence:
+            for profile in (False, True):
+                with self.subTest(failure=failure, profile=profile):
+                    result, events, _context = self.tail("upstream-rootless", "docker", failure=failure, evidence=True, profile=profile)
+                    expected_status = 1 if failure == "prebuild" else 23
+                    self.assertEqual(result.returncode, expected_status, result.stderr)
+                    self.assertEqual([item["event"] for item in events], sequence[:sequence.index(failure) + 1] + ["teardown"])
+                    self.assertEqual(events[-1]["status"], expected_status)
+        for profile in (False, True):
+            result, events, _context = self.tail("upstream-rootful", "podman", evidence=True, profile=profile)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            names = [item["event"] for item in events]
+            self.assertLess(names.index("nofile_reader"), names.index("emitter"))
+            if profile:
+                self.assertLess(names.index("teardown"), names.index("emitter"))
+            else:
+                self.assertLess(names.index("emitter"), names.index("teardown"))
+
+    def test_real_inline_reader_refuses_private_proof_even_without_emission(self):
+        for mutate in (lambda value: value["context"].update(candidate_sha="f" * 40),
+                       lambda value: value["accounting"].update(ordinary_calls=1),
+                       lambda value: value["cleanup"].update(uncertain=True)):
+            result, events, _context = self.tail("debian11-rootless", "docker", proof_mutate=mutate)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual([item["event"] for item in events][-2:], ["nofile_reader", "teardown"])
+            self.assertEqual(result.stderr, b"invalid private nofile proof\n")
+
+
+    @staticmethod
+    def run_observer_with_inert_commands(site):
+        source = (ROOT / "src/native_nofile_tests.rs").read_text()
+        program = source.split('const OBSERVE: &str = r#"', 1)[1].split('"#;', 1)[0]
+        # All existing commands are inert shell functions; no host/guest procfs or runtime is read.
+        stubs = r'''test(){ if command test "$site" = "$FAIL_SITE";then return 1;fi;return 0; }
+[(){ if command test "$1" = -f;then command test "$FAIL_SITE" != reportwait;else command test "$1" "$2" "$3";fi; }
+id(){ printf '0\n'; }
+seq(){ printf '1\n'; }
+sleep(){ command test "$FAIL_SITE" != reportwait; }
+awk(){ if command test "$site" = "$FAIL_SITE";then return 1;fi;printf '2\n'; }
+cmp(){ command test "$FAIL_SITE" != workerargv; }
+cat(){ command test "$FAIL_SITE" != transcript; }
+'''
+        # Only the inert shim needs Bash. Dash rejects its `[` function name.
+        return subprocess.run(["bash", "-c", stubs + program, "PRIVATE_NOFILE_WIRING_CANARY", "inert-worker"],
+                              env={**os.environ, "FAIL_SITE": site}, capture_output=True, timeout=3, check=False)
+
+    def test_actual_observer_program_reports_only_fixed_failing_site_with_inert_commands(self):
+        sites = ("rootuid", "rootgid", "reportwait", "reportfile", "reportlink", "workererror",
+                 "workerpid", "workerexe", "workerargv", "transcript", "parentlimits", "workerlimits")
+        for site in (*sites, "none"):
+            result = self.run_observer_with_inert_commands(site)
+            with self.subTest(site=site):
+                self.assertEqual(result.returncode, 0 if site == "none" else 1, result.stderr[:1024])
+                self.assertEqual(result.stderr, b"" if site == "none" else
+                                 f"DOCKERLENS_NATIVE_NOFILE_OBSERVER: site={site}\n".encode())
+
+    def test_actual_rust_observer_parser_and_work_freezing_without_workspace_build(self):
+        health = (ROOT / "src/native_health_metadata_tests.rs").read_text()
+        nofile = (ROOT / "src/native_nofile_tests.rs").read_text()
+        begin = health.index("#[derive(Clone, Copy, Debug, Eq, PartialEq)]\nenum NofileObserverSite")
+        definitions = health[begin:health.index("struct HealthRun {", begin)]
+        cases = self.cases_source(nofile)
+        begin = nofile.index("#[derive(Clone, Copy, Debug, Eq, PartialEq)]\nenum NofileOperation")
+        definitions += cases + nofile[begin:nofile.index("#[derive(Clone, Copy, Debug, Eq, PartialEq)]\nenum NofileCleanupRefusal", begin)]
+        controls = r'''fn main() {
+    use std::os::unix::process::ExitStatusExt;
+    let failed = std::process::ExitStatus::from_raw(1 << 8);
+    let run = HealthRun { nofile_command_observation: Some(NofileCommandObservation::default()) };
+    let diagnostics = NofileDiagnostics::default();
+    for site in NofileObserverSite::ALL {
+        let record = format!("DOCKERLENS_NATIVE_NOFILE_OBSERVER: site={}\n", site.name());
+        assert_eq!(NofileObserverSite::from_capture(record.as_bytes()), Some(site));
+        for invalid in [record.repeat(2), record.trim_end().to_string(), record.replace(site.name(), "PRIVATE_CANARY"),
+                        format!("{record}\0"), format!("{record}{}", "x".repeat(8192))] {
+            assert_eq!(NofileObserverSite::from_capture(invalid.as_bytes()), None);
+        }
+        diagnostics.select(&run, 0, NofileRole::Oracle, NofileOperation::Observe);
+        let observation = run.nofile_command_observation.as_ref().unwrap();
+        observation.observe_stderr(failed, record.as_bytes());
+        let frozen = diagnostics.failure(&run).unwrap();
+        assert!(frozen.ends_with(&format!(" observed_termination=exit code=1 observer_site={} observer_entry=unknown", site.name())));
+        assert!(frozen.len() <= 256);
+        observation.reset();
+        assert!(observation.observer_capture.get().is_none());
+        assert!(observation.first_failure.get().is_none());
+        assert!(diagnostics.failure(&run).unwrap().ends_with("observer_entry=unknown"));
+        assert!(frozen.contains("observer_site="));
+        observation.observe_stderr(std::process::ExitStatus::from_raw(0), record.as_bytes());
+        assert!(observation.observer_capture.get().is_none());
+        diagnostics.select(&run, 0, NofileRole::Oracle, NofileOperation::Create);
+        observation.observe_stderr(failed, record.as_bytes());
+        assert!(!diagnostics.failure(&run).unwrap().contains("observer_site="));
+        observation.begin_capture();
+        assert!(observation.observer_capture.get().is_none());
+    }
+}'''
+        with tempfile.TemporaryDirectory(prefix="dl-nofile-observer-") as directory:
+            root = Path(directory)
+            (root / "observer.rs").write_text("use std::cell::Cell;\n" + definitions +
+                "struct HealthRun { nofile_command_observation: Option<NofileCommandObservation> }\n" + controls)
+            built = subprocess.run(["rustc", "--edition=2024", str(root / "observer.rs"), "-o", str(root / "observer")],
+                                   cwd=ROOT, capture_output=True, timeout=30, check=False)
+            self.assertEqual(built.returncode, 0, built.stderr)
+            result = subprocess.run([str(root / "observer")], capture_output=True, timeout=3, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_actual_nested_docker_capture_classifies_stderr_and_preserves_phase_separation(self):
+        health = (ROOT / "src/native_health_metadata_tests.rs").read_text()
+        nofile = (ROOT / "src/native_nofile_tests.rs").read_text()
+        # Extract unchanged production methods, including their real byte guards.
+        def item(source, signature):
+            start = source.index(signature)
+            opened = source.index("{", start)
+            depth = 1
+            end = opened + 1
+            while depth:
+                depth += (source[end] == "{") - (source[end] == "}")
+                end += 1
+            return source[start:end]
+        begin = health.index("#[derive(Clone, Copy, Debug, Eq, PartialEq)]\nenum NofileObserverSite")
+        definitions = health[begin:health.index("struct HealthRun {", begin)]
+        definitions += self.cases_source(nofile)
+        begin = nofile.index("#[derive(Clone, Copy, Debug, Eq, PartialEq)]\nenum NofileOperation")
+        definitions += self.cleanup_phase_source() + nofile[begin:nofile.index("fn number(", begin)]
+        functions = "\n".join(item(health, signature) for signature in
+            ("fn required(", "fn stream(", "fn capture_room("))
+        methods = "\n".join(item(health, signature) for signature in
+            ("fn remaining(", "fn timer(", "fn capture(", "fn outer(", "fn docker("))
+        harness = r'''use std::cell::Cell;
+use std::io::{Read, Write};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+const MAX_CALLS: usize = 400;
+const MAX_BYTES: usize = 4 * 1024 * 1024;
+const CLEANUP_CALLS: usize = 100;
+const CLEANUP_BYTES: usize = 2 * 1024 * 1024;
+mod native_outer_test_command {
+    pub fn prefix() -> Vec<String> { vec![std::env::var("INERT_OUTER").unwrap()] }
+}
+struct HealthRun {
+    nofile_command_observation: Option<NofileCommandObservation>,
+    deadline: Instant, calls: Cell<usize>, bytes: Cell<usize>,
+}
+fn main() {
+    std::panic::set_hook(Box::new(|_| {}));
+    let run = HealthRun { nofile_command_observation: Some(NofileCommandObservation::default()),
+        deadline: Instant::now() + Duration::from_secs(180), calls: Cell::new(0), bytes: Cell::new(0) };
+    let diagnostics = NofileDiagnostics::default();
+    let operation = if std::env::var("OPERATION").unwrap() == "observe" {
+        NofileOperation::Observe
+    } else { NofileOperation::Create };
+    diagnostics.select(&run, 0, NofileRole::Oracle, operation);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run.docker(&["observe".to_owned()], false)));
+    let observation = run.nofile_command_observation.as_ref().unwrap();
+    assert_eq!(result.is_err(), std::env::var("EXPECT_FAILURE").unwrap() == "1");
+    if let Ok(output) = &result {
+        assert_eq!(*output, std::fs::read(std::env::var_os("EXPECTED_STDOUT").unwrap()).unwrap());
+    }
+    let frozen_line = result.as_ref().err().and_then(|_| diagnostics.failure(&run));
+    observation.reset();
+    // A later cleanup capture cannot supply the work termination.
+    observation.observe(std::os::unix::process::ExitStatusExt::from_raw(7 << 8));
+    if let Some(line) = frozen_line { println!("{line}"); }
+    if std::env::var("CLEANUP").unwrap() == "1" {
+        for reason in [NofileCleanupRefusal::InnerUnverified(Some(CleanupPhase::Delete)), NofileCleanupRefusal::Panic, NofileCleanupRefusal::OwnershipGuard] {
+            println!("{}", reason.diagnostic(observation.first_failure.get()));
+        }
+    }
+}
+'''
+        with tempfile.TemporaryDirectory(prefix="dl-nofile-nested-") as directory:
+            root = Path(directory)
+            fake = root / "outer"
+            fake.write_text("#!/usr/bin/python3\nimport base64,json,os,sys\n"
+                "open(os.environ['ARGV'], 'w').write(json.dumps(sys.argv[1:]))\n"
+                "sys.stdout.buffer.write(base64.b64decode(os.environ['OUT']))\n"
+                "sys.stderr.buffer.write(base64.b64decode(os.environ['ERR']))\n"
+                "sys.exit(int(os.environ['STATUS']))\n")
+            fake.chmod(0o700)
+            (root / "capture.rs").write_text(harness + definitions + functions + "impl HealthRun {" + methods + "}")
+            built = subprocess.run(["rustc", "--edition=2024", str(root / "capture.rs"), "-o", str(root / "capture")],
+                cwd=ROOT, capture_output=True, timeout=30, check=False)
+            self.assertEqual(built.returncode, 0, built.stderr)
+            marker = b"DOCKERLENS_NATIVE_NOFILE_OBSERVER: site=workerexe\n"
+            trap = self.run_observer_with_inert_commands("workerexe")
+            self.assertEqual((trap.returncode, trap.stdout, trap.stderr), (1, b"", marker))
+            # The fake outer only writes bytes. It can reproduce the real trap's
+            # stderr without ever starting the observer.
+            cases = [(b"", marker, "site"), (b"owned observer transcript\n", b"", "empty"),
+                (marker, b"ordinary CLI error\n", "marker_absent"),
+                (b"", marker + b"x" * 8193, "oversize"), (b"", marker + b"\0\n", "nul"),
+                (b"", b"\xff\n", "non_utf8"), (b"", marker + b"CLI tail", "unterminated"),
+                (b"", b"ordinary CLI error\n", "marker_absent"), (b"", marker * 2, "duplicate_marker"),
+                (b"", b"DOCKERLENS_NATIVE_NOFILE_OBSERVER: site=PRIVATE_CANARY\n", "malformed_marker"),
+                (b"", b"before\n" + marker + b"after\n", "site"),
+                (b"", b"\xff\n" + marker, "site"),
+                (b"", b"DOCKERLENS_NATIVE_NOFILE_OBSERVER: site=PRIVATE_CANARY\n\xff\n", "malformed_marker"),
+                (b"", b"DOCKERLENS_NATIVE_NOFILE_OBSERVER: site=PRIVATE_CANARY\n" * 2 + b"\xff\n", "duplicate_marker"),
+                (b"", b"\0", "nul"), (b"x" * 65551, marker, "stream_guard")]
+            for stdout, stderr, expected in cases:
+                for status, operation in ((1, "observe"), (0, "observe"), (1, "create")):
+                    with self.subTest(expected=expected, status=status, operation=operation):
+                        # Successful overflow still fails the original byte guard.
+                        failed = status != 0 or len(stderr) > 8192 or len(stdout) > 65550
+                        expected_stdout = root / "expected-stdout"
+                        expected_stdout.write_bytes(stdout)
+                        env = {**os.environ, "INERT_OUTER": str(fake), "ARGV": str(root / "argv"),
+                            "EXPECTED_STDOUT": str(expected_stdout),
+                            "NATIVE_PODMAN_USE_SUDO": "0", "NATIVE_OUTER_CONTAINER_ID": "inert-owned-outer",
+                            "OUT": base64.b64encode(stdout).decode(), "ERR": base64.b64encode(stderr).decode(),
+                            "STATUS": str(status), "OPERATION": operation, "EXPECT_FAILURE": str(int(failed)),
+                            "CLEANUP": str(int(status == 1 and operation == "observe"))}
+                        result = subprocess.run([str(root / "capture")], env=env, capture_output=True, timeout=5, check=False)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(json.loads((root / "argv").read_text()), ["exec", "inert-owned-outer", "docker", "-H",
+                            "unix:///dockerlens-native/docker.sock", "observe"])
+                        self.assertNotIn(b"PRIVATE_CANARY", result.stdout + result.stderr)
+                        self.assertEqual(result.stderr, b"")
+                        if status == 1 and operation == "observe" and expected != "stream_guard":
+                            suffix = (b"observer_site=workerexe observer_entry=unknown" if expected == "site"
+                                      else f"observer_capture={expected} observer_entry=unknown".encode())
+                            lines = result.stdout.splitlines()
+                            self.assertTrue(lines[0].endswith(suffix), lines)
+                            self.assertEqual(len(lines), 4)
+                            self.assertTrue(lines[1].endswith(b"first_observed_termination=exit code=7 first_unverified_phase=delete"))
+                            self.assertTrue(lines[2].endswith(b"first_observed_termination=exit code=7 first_unverified_phase=unknown"))
+                            self.assertTrue(lines[3].endswith(b"first_observed_termination=unknown code=none first_unverified_phase=unknown"))
+                            work = lines[0] + b"\n"
+                            cleanup = lines[1] + b"\n"
+                            projected, _, _ = self.wrapper(self.failure_transcript(work, cleanup), 101)
+                            self.assertIn(work, projected.stderr)
+                            self.assertIn(cleanup, projected.stderr)
+                            self.assertLess(projected.stderr.index(work), projected.stderr.index(cleanup))
+                        elif failed and operation == "observe":
+                            self.assertIn(b"observer_entry=unknown", result.stdout)
+                            self.assertNotIn(b"observer_site=", result.stdout)
+                        else:
+                            self.assertNotIn(b"observer_", result.stdout)
+
+    def test_actual_inner_cleanup_latches_first_phase_and_keeps_readbacks(self):
+        lifecycle = (ROOT / "src/native_lifecycle_tests.rs").read_text()
+        disposition = lifecycle[lifecycle.index("fn cleanup_disposition("):lifecycle.index("fn terminal_cleanup(")]
+        simulation = r'''use std::{cell::{Cell, RefCell}, collections::VecDeque, ops::Index};
+
+#[derive(Debug, PartialEq)]
+enum CleanupDisposition { VerifiedAbsent, OuterTeardownRequired }
+#[derive(Clone, Copy)]
+enum Reply { Status(u16), OtherOwner, Panic }
+use Reply::{Status, OtherOwner, Panic};
+
+const ID: &str = "inert-bound-identity";
+struct Value { owned: bool }
+impl Value {
+    fn as_str(&self) -> Option<&str> { Some(ID) }
+}
+impl Index<&str> for Value {
+    type Output = Self;
+    fn index(&self, key: &str) -> &Self {
+        assert_eq!(key, "Id");
+        self
+    }
+}
+fn owned(_: &HealthRun, value: &Value, _: usize, id: Option<&str>) -> bool {
+    assert_eq!(id, Some(ID));
+    value.owned
+}
+fn required(key: &str) -> String {
+    assert_eq!(key, "NATIVE_OUTER_CONTAINER_ID");
+    "inert-outer-identity".into()
+}
+type Step = (&'static str, Reply);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NofileLookupFailure { BeforeCapture, HttpStatus, LaterStatus }
+#[derive(Default)]
+struct LookupObservation {
+    active_lookup: Cell<Option<NofileLookupFailure>>,
+    first_lookup_failure: Cell<Option<NofileLookupFailure>>,
+}
+struct HealthRun {
+    attempted: Vec<bool>, ids: Vec<Option<String>>, names: Vec<String>, api: &'static str,
+    steps: RefCell<VecDeque<Step>>, unexpected_call: Cell<bool>,
+    nofile_command_observation: Option<LookupObservation>,
+}
+impl HealthRun {
+    fn next(&self, key: &str) -> (u16, Value) {
+        match self.steps.borrow_mut().pop_front() {
+            Some((expected, reply)) if expected == key => match reply {
+                Status(code) => {
+                    let observation = self.nofile_command_observation.as_ref().unwrap();
+                    if observation.active_lookup.get().is_some() {
+                        observation.active_lookup.set(Some(if code == 503 {
+                            NofileLookupFailure::LaterStatus
+                        } else {
+                            NofileLookupFailure::HttpStatus
+                        }));
+                    }
+                    (code, Value { owned: true })
+                }
+                OtherOwner => (200, Value { owned: false }),
+                Panic => panic!("inert transport panic"),
+            },
+            _ => {
+                self.unexpected_call.set(true);
+                panic!("unexpected cleanup call");
+            }
+        }
+    }
+    fn inspect(&self, key: &str, cleanup: bool) -> (u16, Value) {
+        assert!(cleanup);
+        self.next(key)
+    }
+    fn api(&mut self, method: &str, path: &str, input: Option<&()>, cleanup: bool) -> (u16, Value) {
+        assert!(cleanup && input.is_none());
+        assert_eq!(method, "DELETE");
+        assert_eq!(path, format!("/v1.41/containers/{ID}?force=1"));
+        self.next("DELETE")
+    }
+}
+fn check(remove: &[Step], rounds: &[Step], expected: Option<CleanupPhase>) {
+    let mut run = HealthRun {
+        attempted: vec![true], ids: vec![Some(ID.into())], names: vec!["name".into()],
+        api: "1.41", steps: RefCell::new(remove.iter().chain(rounds).copied().collect()),
+        unexpected_call: Cell::new(false),
+        nofile_command_observation: Some(LookupObservation::default()),
+    };
+    let (result, phase) = cleanup_with_phase(&mut run);
+    assert_eq!(phase, expected);
+    assert_eq!(result, if expected.is_some() {
+        CleanupDisposition::OuterTeardownRequired
+    } else { CleanupDisposition::VerifiedAbsent });
+    let observation = run.nofile_command_observation.as_ref().unwrap();
+    assert_eq!(observation.active_lookup.get(), None);
+    let expected_failure = if phase == Some(CleanupPhase::LookupName) {
+        Some(match remove[0].1 {
+            Reply::Status(500) => NofileLookupFailure::HttpStatus,
+            Reply::Panic => NofileLookupFailure::BeforeCapture,
+            _ => unreachable!(),
+        })
+    } else { None };
+    assert_eq!(observation.first_lookup_failure.get(), expected_failure);
+    assert!(!run.unexpected_call.get() && run.steps.borrow().is_empty());
+}
+
+fn check_later_lookup_does_not_replace_first(first: Reply, expected: Option<NofileLookupFailure>) {
+    const NEXT: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let rounds = [(ID, Reply::Status(404)), ("name", Reply::Status(404)),
+        (NEXT, Reply::Status(404)), ("next", Reply::Status(404))];
+    let mut run = HealthRun {
+        attempted: vec![true, true], ids: vec![Some(ID.into()), Some(NEXT.into())],
+        names: vec!["name".into(), "next".into()], api: "1.41",
+        steps: RefCell::new([("name", first), ("next", Reply::Status(503))].into_iter()
+            .chain(rounds).chain(rounds).collect()),
+        unexpected_call: Cell::new(false),
+        nofile_command_observation: Some(LookupObservation::default()),
+    };
+    let (result, _) = cleanup_with_phase(&mut run);
+    assert_eq!(result, CleanupDisposition::OuterTeardownRequired);
+    let observer = run.nofile_command_observation.as_ref().unwrap();
+    assert_eq!(observer.first_lookup_failure.get(), expected);
+    assert_eq!(observer.active_lookup.get(), None);
+    assert!(!run.unexpected_call.get() && run.steps.borrow().is_empty());
+}
+
+fn main() {
+    use CleanupPhase::*;
+    std::panic::set_hook(Box::new(|_| {}));
+    let remove = [("name", Status(200)), (ID, Status(200)), ("DELETE", Status(204)),
+        (ID, Status(404)), ("name", Status(404))];
+    let absent = [(ID, Status(404)), ("name", Status(404)), (ID, Status(404)), ("name", Status(404))];
+    check(&remove, &absent, None);
+    check(&[("name", Status(404))], &absent, None);
+    for (index, reply, phase) in [
+        (0, Status(500), LookupName), (0, Panic, LookupName), (0, OtherOwner, NameOwnership),
+        (1, OtherOwner, IdOwnership), (2, Status(500), Delete),
+        (3, Status(200), PostDeleteIdAbsence), (4, Status(200), PostDeleteNameAbsence),
+    ] {
+        let mut prefix = remove[..=index].to_vec();
+        prefix[index].1 = reply;
+        check(&prefix, &absent, Some(phase));
+    }
+    let id_failure = [(ID, Status(200)), (ID, Status(404)), ("name", Status(404))];
+    let name_failure = [(ID, Status(404)), ("name", Status(200)), (ID, Status(404)), ("name", Status(404))];
+    check(&remove, &id_failure, Some(ReadbackIdAbsence));
+    check(&remove, &name_failure, Some(ReadbackNameAbsence));
+    let mut failed_delete = remove[..3].to_vec();
+    failed_delete[2].1 = Status(500);
+    check(&failed_delete, &id_failure, Some(Delete));
+    check_later_lookup_does_not_replace_first(Status(500), Some(NofileLookupFailure::HttpStatus));
+    check_later_lookup_does_not_replace_first(OtherOwner, None);
+}
+'''
+        with tempfile.TemporaryDirectory(prefix="dl-nofile-cleanup-") as directory:
+            root = Path(directory)
+            (root / "cleanup.rs").write_text(simulation + disposition + self.cleanup_phase_source(include_steps=True))
+            built = subprocess.run(["rustc", "--edition=2024", str(root / "cleanup.rs"), "-o", str(root / "cleanup")],
+                                   cwd=ROOT, capture_output=True, timeout=30, check=False)
+            self.assertEqual(built.returncode, 0, built.stderr)
+            result = subprocess.run([str(root / "cleanup")], capture_output=True, timeout=3, check=False)
+            self.assertEqual((result.returncode, result.stdout, result.stderr), (0, b"", b""))
+
+    def test_explicit_unknown_and_cleanup_phase_projection_are_closed(self):
+        work = self.failure_line(operation="observe", termination="unknown", code="none").rstrip(b"\n")
+        work += b" observer_entry=unknown\n"
+        cleanup = self.cleanup_line(termination="unknown", code="none").rstrip(b"\n")
+        for phase in (b"lookup_name", b"name_ownership", b"id_ownership", b"delete",
+                      b"post_delete_id_absence", b"post_delete_name_absence",
+                      b"readback_id_absence", b"readback_name_absence", b"unknown"):
+            line = cleanup + b" first_unverified_phase=" + phase + b"\n"
+            result, _, _ = self.wrapper(self.failure_transcript(work, line), 101)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn(work, result.stderr)
+            self.assertIn(line, result.stderr)
+        lookup = cleanup + b" first_unverified_phase=lookup_name"
+        for outcome in (b"before_capture", b"capture_incomplete", b"stdout_limit", b"stderr_limit",
+                        b"both_limits", b"process", b"http_frame", b"http_status", b"json"):
+            line = lookup + b" lookup_failure=" + outcome + b"\n"
+            result, _, _ = self.wrapper(self.failure_transcript(work, line), 101)
+            self.assertIn(line, result.stderr)
+            self.assertLess(result.stderr.index(work), result.stderr.index(line))
+        contradictory = [
+            cleanup + b" first_unverified_phase=" + SECRET + b"\n",
+            cleanup + b" first_unverified_phase=delete first_unverified_phase=readback_id_absence\n",
+            cleanup.replace(b"inner_unverified", b"ownership_guard") + b" first_unverified_phase=delete\n",
+            cleanup.replace(b"inner_unverified", b"panic") + b" first_unverified_phase=id_ownership\n",
+            lookup + b" lookup_failure=" + SECRET + b"\n",
+            lookup + b" lookup_failure=stdout_limit lookup_failure=process\n",
+            lookup.replace(b"lookup_name", b"id_ownership") + b" lookup_failure=process\n",
+            cleanup + b" lookup_failure=process\n",
+        ]
+        for line in contradictory:
+            result, _, _ = self.wrapper(self.failure_transcript(work, line), 101)
+            self.assertEqual(result.returncode, 1)
+            self.assertNotIn(b"DOCKERLENS_NATIVE_NOFILE_", result.stderr)
+            self.assertNotIn(SECRET, result.stdout + result.stderr)
+        false_entry = self.failure_line(operation="create").rstrip(b"\n") + b" observer_entry=unknown\n"
+        result, _, _ = self.wrapper(self.failure_transcript(false_entry), 101)
+        self.assertNotIn(b"DOCKERLENS_NATIVE_NOFILE_FAILURE:", result.stderr)
+
+    def test_observer_suffix_projects_only_for_failed_observe_and_never_cleanup(self):
+        original = self.failure_line(operation="observe", code="1")
+        sites = ("rootuid", "rootgid", "reportwait", "reportfile", "reportlink", "workererror",
+                 "workerpid", "workerexe", "workerargv", "transcript", "parentlimits", "workerlimits")
+        for site in sites:
+            work = original.rstrip(b"\n") + f" observer_site={site}\n".encode()
+            cleanup = self.cleanup_line(termination="unknown", code="none")
+            result, _calls, _dates = self.wrapper(self.failure_transcript(work, cleanup), 101)
+            self.assertIn(work, result.stderr)
+            self.assertIn(cleanup, result.stderr)
+            self.assertNotIn(b"first_observed_termination=exit code=1", result.stderr)
+        for work in (original.rstrip(b"\n") + b" observer_site=PRIVATE_NOFILE_WIRING_CANARY\n",
+                     self.failure_line().rstrip(b"\n") + b" observer_site=workerexe\n",
+                     self.failure_line(operation="observe", termination="unknown", code="none").rstrip(b"\n") + b" observer_site=workerexe\n"):
+            result, _calls, _dates = self.wrapper(self.failure_transcript(work), 101)
+            self.assertNotIn(b"DOCKERLENS_NATIVE_NOFILE_FAILURE:", result.stderr)
+            self.assertNotIn(SECRET, result.stderr)
+
+    def test_capture_availability_is_closed_and_only_failed_observe_qualifies(self):
+        reasons = ('empty', 'oversize', 'nul', 'non_utf8', 'unterminated',
+            'marker_absent', 'duplicate_marker', 'malformed_marker')
+        for reason in reasons:
+            work = self.failure_line(operation='observe', code='1').rstrip(b'\n') + f' observer_capture={reason}\n'.encode()
+            self.assertLessEqual(len(work.rstrip(b'\n')), 256)
+            result, _, _ = self.wrapper(self.failure_transcript(work), 101)
+            self.assertIn(work, result.stderr)
+        original = self.failure_line(operation='observe', code='1').rstrip(b'\n')
+        for suffix in (b' observer_capture=PRIVATE_NOFILE_WIRING_CANARY', b' observer_capture=Non_utf8',
+                b' observer_capture=empty observer_site=workerexe', b' observer_capture=empty observer_capture=nul',
+                b' observer_entry=trap_reported', b' observer_site=workerexe observer_entry=trap_reported',
+                b' observer_capture=marker_absent observer_entry=trap_reported',
+                b' observer_entry=unknown observer_entry=unknown'):
+            result, _, _ = self.wrapper(self.failure_transcript(original + suffix + b'\n'), 101)
+            self.assertNotIn(b'DOCKERLENS_NATIVE_NOFILE_FAILURE:', result.stderr)
+            self.assertNotIn(SECRET, result.stdout + result.stderr)
+        for line in (self.failure_line().rstrip(b'\n'),
+                self.failure_line(operation='observe', termination='unknown', code='none').rstrip(b'\n')):
+            result, _, _ = self.wrapper(self.failure_transcript(line + b' observer_capture=empty\n'), 101)
+            self.assertNotIn(b'DOCKERLENS_NATIVE_NOFILE_FAILURE:', result.stderr)
+        # This grammar keeps cleanup's phase-specific termination semantics.
+        guard = self.cleanup_line('ownership_guard', 'exit', '1')
+        result, _, _ = self.wrapper(self.failure_transcript(cleanup=guard), 101)
+        self.assertNotIn(b'DOCKERLENS_NATIVE_NOFILE_CLEANUP_REFUSAL:', result.stderr)
+
+    @staticmethod
+    def failure_line(case="soft64_hard128", role="oracle", operation="create", termination="exit", code="125"):
+        return (f"DOCKERLENS_NATIVE_NOFILE_FAILURE: caller_case={case} caller_role={role} caller_operation={operation} "
+                f"observed_termination={termination} code={code}\n").encode()
+
+    @staticmethod
+    def cleanup_line(reason="inner_unverified", termination="exit", code="7"):
+        return (f"DOCKERLENS_NATIVE_NOFILE_CLEANUP_REFUSAL: reason={reason} "
+                f"first_observed_termination={termination} code={code}\n").encode()
+
+    @staticmethod
+    def failure_transcript(work=b"", cleanup=b""):
+        prefix = b"DOCKERLENS_NATIVE_CHECK: nofile_context\nDOCKERLENS_NATIVE_CHECK: nofile_effects\n"
+        panic = f"thread '{SELECTED}' panicked at src/native_health_metadata_tests.rs:541:9:\n".encode() + SECRET + b"\n"
+        if work:
+            prefix += panic
+        else:
+            prefix += b"DOCKERLENS_NATIVE_CHECK: nofile_capture\n"
+        result = prefix + b"DOCKERLENS_NATIVE_CHECK: nofile_cleanup\n" + (HANDOFF if cleanup else b"") + work + cleanup
+        if cleanup and not work:
+            result += f"thread '{SELECTED}' panicked at src/native_lifecycle_tests.rs:212:5:\n".encode()
+        return result
+
+    def test_closed_work_and_cleanup_failures_remain_independent_and_in_order(self):
+        work, cleanup = self.failure_line(), self.cleanup_line()
+        for work_record, cleanup_record in ((work, b""), (b"", cleanup), (work, cleanup)):
+            result, calls, dates = self.wrapper(self.failure_transcript(work_record, cleanup_record), 101)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(dates, ["date"])
+            self.assertEqual(work in result.stderr, bool(work_record))
+            self.assertEqual(cleanup in result.stderr, bool(cleanup_record))
+            if work_record and cleanup_record:
+                self.assertLess(result.stderr.index(work), result.stderr.index(cleanup))
+        for termination, code in (("exit", "124"), ("exit", "130"), ("exit", "143"), ("signal", "9"), ("unknown", "none")):
+            line = self.failure_line(termination=termination, code=code)
+            result, _calls, _dates = self.wrapper(self.failure_transcript(line), 101)
+            self.assertIn(line, result.stderr)
+        line = self.cleanup_line("ownership_guard", "unknown", "none")
+        result, _calls, _dates = self.wrapper(self.failure_transcript(cleanup=line), 101)
+        self.assertIn(line, result.stderr)
+        self.assertNotIn(b"DOCKERLENS_NATIVE_NOFILE_FAILURE:", result.stderr)
+        result, _calls, _dates = self.wrapper(self.failure_transcript(work, line), 101)
+        self.assertIn(work, result.stderr)
+        self.assertIn(line, result.stderr)
+        self.assertNotIn(b"first_observed_termination=exit code=125", result.stderr)
+
+    def test_handoff_requires_complete_pair_after_terminal_cleanup_before_projection(self):
+        work, cleanup = self.failure_line(), self.cleanup_line()
+        complete = self.failure_transcript(work, cleanup)
+        # Cut on a complete work-record newline between the producer's two writes.
+        # It is a valid work record in isolation, but the retained handoff proves
+        # that cleanup refusal also exists and cannot be silently dropped.
+        cut = complete[:complete.index(cleanup)]
+        self.assertTrue(cut.endswith(work))
+        impossible = (
+            cut,
+            complete.replace(HANDOFF + work, work + HANDOFF),
+            cut + HANDOFF,
+            self.failure_transcript(work) + HANDOFF,
+        )
+        for output in impossible:
+            result, calls, dates = self.wrapper(output, 101)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(dates, ["date"])
+            self.assertIn(b"(exit 101)", result.stderr)
+            self.assertIn(HANDOFF.rstrip(), result.stderr)
+            self.assertNotIn(b"DOCKERLENS_NATIVE_NOFILE_FAILURE:", result.stdout + result.stderr)
+            self.assertNotIn(b"DOCKERLENS_NATIVE_NOFILE_CLEANUP_REFUSAL:", result.stdout + result.stderr)
+        for work_record, cleanup_record in ((work, b""), (b"", cleanup), (work, cleanup)):
+            result, _calls, _dates = self.wrapper(self.failure_transcript(work_record, cleanup_record), 101)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(work in result.stderr, bool(work_record))
+            self.assertEqual(cleanup in result.stderr, bool(cleanup_record))
+        # Context/preflight can fail before nofile_effects; verified cleanup
+        # still permits its sole work record without an outer teardown handoff.
+        context = self.failure_line("all", "none", "context", "unknown", "none")
+        preflight = self.failure_transcript(context).replace(b"DOCKERLENS_NATIVE_CHECK: nofile_effects\n", b"")
+        result, _calls, _dates = self.wrapper(preflight, 101)
+        self.assertIn(context, result.stderr)
+        self.assertNotIn(b"DOCKERLENS_NATIVE_NOFILE_CLEANUP_REFUSAL:", result.stderr)
+
+    def test_closed_case_roles_and_noncommand_boundaries_keep_unknown_termination(self):
+        for case in ("soft64_hard128", "soft128_hard128", "soft64_hard_unlimited", "both_unlimited"):
+            for role in ("oracle", "rendered"):
+                line = self.failure_line(case, role, "observe", "exit", "1")
+                result, _calls, _dates = self.wrapper(self.failure_transcript(line), 101)
+                self.assertIn(line, result.stderr)
+        for case, role, operation, termination, code in (
+                ("all", "none", "context", "unknown", "none"),
+                ("soft64_hard128", "pair", "pair_comparison", "unknown", "none"),
+                ("all", "rendered", "capacity_comparison", "unknown", "none"),
+                ("all", "none", "daemon_health", "exit", "7"),
+                ("all", "none", "acquisition", "unknown", "none")):
+            line = self.failure_line(case, role, operation, termination, code)
+            result, _calls, _dates = self.wrapper(self.failure_transcript(line), 101)
+            self.assertIn(line, result.stderr)
+        from test_native_pids_wiring import PidsWiringTests
+        line = self.failure_line()
+        result, _trace = PidsWiringTests.wrapper(self, line.decode() + SUCCESS.decode(), status=0)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn(b"DOCKERLENS_NATIVE_NOFILE_", result.stdout + result.stderr)
+        self.assertNotIn(b"required native test passed", result.stdout + result.stderr)
+
+    def test_nofile_caller_context_rejects_malformed_stale_private_and_contradictory_records(self):
+        work, cleanup = self.failure_line(), self.cleanup_line()
+        invalid = [work + work, cleanup + work, work + cleanup + cleanup,
+                   work.replace(b"caller_role=oracle", b"caller_role=pair"),
+                   work.replace(b"caller_case=soft64_hard128", b"caller_case=all"),
+                   work.replace(b"caller_operation=create", b"caller_operation=witness"),
+                   work.replace(b"code=125", b"code=0"), work.replace(b"code=125", b"code=0125"),
+                   self.failure_line(termination="signal", code="65"),
+                   work.replace(b"code=125", b"code=256"), work.replace(b"observed_termination=exit", b"observed_termination=unknown"),
+                   b"\x1b[31m" + work, work.replace(b"caller_role=oracle", b"caller_role=\x1b[31moracle"),
+                   work.rstrip(b"\n") + b" " + SECRET + b"\n", work.replace(b"\n", b"\r\n"),
+                   work.replace(b"\n", b"\0" + SECRET + b"\n"),
+                   self.cleanup_line("ownership_guard", "exit", "125"),
+                   b"DOCKERLENS_NATIVE_NOFILE_FAILURE: " + SECRET + b"\n",
+                   work + b"DOCKERLENS_NATIVE_PIDS_MEASUREMENT_REFUSAL: code=pids-eof\n"]
+        for records in invalid:
+            result, _calls, _dates = self.wrapper(self.failure_transcript(records), 101)
+            self.assertNotIn(b"DOCKERLENS_NATIVE_NOFILE_", result.stdout + result.stderr)
+        for output in (work, self.failure_transcript(cleanup=cleanup).replace(HANDOFF, b"") + HANDOFF,
+                       self.failure_transcript(cleanup=cleanup) + HANDOFF,
+                       self.failure_transcript(work).replace(b"DOCKERLENS_NATIVE_CHECK: nofile_cleanup\n", b""),
+                       self.failure_transcript(cleanup=cleanup).replace(HANDOFF, b""),
+                       self.failure_transcript(work).rstrip(b"\n")):
+            result, _calls, _dates = self.wrapper(output, 101)
+            self.assertNotIn(b"DOCKERLENS_NATIVE_NOFILE_", result.stdout + result.stderr)
+        for status in (0, 101):
+            result, _calls, _dates = self.wrapper(self.failure_transcript(b"\x1b[31m" + work) + SUCCESS, status)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn(b"DOCKERLENS_NATIVE_NOFILE_", result.stdout + result.stderr)
+            result, _calls, _dates = self.wrapper(self.failure_transcript(work) + SUCCESS, status)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn(b"DOCKERLENS_NATIVE_NOFILE_", result.stdout + result.stderr)
+            self.assertNotIn(b"required native test passed", result.stdout + result.stderr)
+        result, _calls, _dates = self.wrapper()
+        self.assertEqual(result.returncode, 0)
+        self.assertNotIn(b"DOCKERLENS_NATIVE_NOFILE_", result.stdout + result.stderr)
+
+    def test_nofile_acquisition_error_projects_only_for_one_reached_failed_capture(self):
+        base = self.failure_line("all", "none", "acquisition", "unknown", "none").rstrip(b"\n")
+        capture = b"DOCKERLENS_NATIVE_CHECK: nofile_capture\n"
+        effects = b"DOCKERLENS_NATIVE_CHECK: nofile_effects\n"
+        context = b"DOCKERLENS_NATIVE_CHECK: nofile_context\n"
+        cleanup_marker = b"DOCKERLENS_NATIVE_CHECK: nofile_cleanup\n"
+        cleanup = self.cleanup_line()
+
+        def transcript(work, cleanup_record=b""):
+            return self.failure_transcript(work, cleanup_record).replace(effects, effects + capture)
+
+        errors = ("endpoint", "cancelled", "deadline", "io", "protocol", "status", "version", "shape",
+                  "selection", "budget_invalid", "budget_requests", "budget_pending_response",
+                  "budget_response_without_request", "budget_exhausted", "budget_selected_resources",
+                  "budget_expansions", "budget_bytes", "budget_elapsed", "budget_input",
+                  "budget_invalid_resource_ref", "budget_incomplete", "budget_observation_id_exhausted",
+                  "budget_capture_accounting", "budget_missing_api_version", "budget_resource_conflict")
+        for category in errors:
+            with self.subTest(category=category):
+                work = base + f" acquisition_error={category}\n".encode()
+                self.assertLessEqual(len(work.rstrip(b"\n")), 256)
+                result, calls, dates = self.wrapper(transcript(work), 101)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(b"failed (exit 101)", result.stderr)
+                self.assertEqual(result.stderr.count(work), 1)
+                self.assertNotIn(SECRET, result.stdout + result.stderr)
+                self.assertEqual(len(calls), 2)
+                self.assertEqual(dates, ["date"])
+
+        work = base + b" acquisition_error=shape\n"
+        result, _, _ = self.wrapper(transcript(work, cleanup), 101)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(b"failed (exit 101)", result.stderr)
+        self.assertLess(result.stderr.index(work), result.stderr.index(cleanup))
+        legacy, _, _ = self.wrapper(self.failure_transcript(base + b"\n"), 101)
+        self.assertIn(base + b"\n", legacy.stderr)
+
+        invalid = (
+            self.failure_transcript(work), transcript(work).replace(capture, capture * 2),
+            transcript(work).replace(capture, capture + b"decorated: " + capture),
+            transcript(work).replace(effects + capture, capture + effects),
+            transcript(work).replace(context + effects, effects + context),
+            transcript(work).replace(context, context * 2),
+            transcript(work).replace(capture, b"").replace(cleanup_marker, cleanup_marker + capture),
+            transcript(work + work), transcript(work).rstrip(b"\n"),
+            transcript(work.replace(b"shape", SECRET)), transcript(work.replace(b"shape", b"future")),
+            transcript(work.replace(b"shape", b"shape\0")),
+            transcript(work.replace(b"shape", b"shape acquisition_error=io")),
+            transcript(work.replace(b"code=none", b"code=none observer_entry=unknown")),
+            transcript(work.replace(b"termination=unknown code=none", b"termination=exit code=1")),
+            transcript(work.replace(b"caller_operation=acquisition", b"caller_operation=daemon_health")),
+            transcript(work).replace(cleanup_marker, b"DOCKERLENS_NATIVE_CHECK: nofile_proof\n" + cleanup_marker),
+            transcript(work) + SUCCESS,
+        )
+        for output in invalid:
+            result, _, _ = self.wrapper(output, 101)
+            self.assertNotIn(b"DOCKERLENS_NATIVE_NOFILE_FAILURE:", result.stdout + result.stderr)
+            self.assertNotIn(SECRET, result.stdout + result.stderr)
+        result, _, _ = self.wrapper(transcript(work), 0)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn(b"acquisition_error=", result.stdout + result.stderr)
+
+    def test_nofile_shape_detail_requires_the_exact_acquisition_error(self):
+        base = self.failure_line("all", "none", "acquisition", "unknown", "none").rstrip(b"\n")
+        cleanup_stage = b"DOCKERLENS_NATIVE_CHECK: nofile_cleanup\n"
+
+        def output(work):
+            return self.failure_transcript(work + b"\n").replace(
+                cleanup_stage, b"DOCKERLENS_NATIVE_CHECK: nofile_capture\n" + cleanup_stage)
+
+        fields = (b"container_identity", b"container_related", b"network_request",
+                  b"network_identity", b"network_id", b"duplicate_network_id",
+                  b"duplicate_noncanonical_network_id", b"volume_request", b"volume_identity")
+        for field in fields:
+            work = base + b" acquisition_error=shape acquisition_shape=" + field
+            result, _, _ = self.wrapper(output(work), 101)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn(b"failed (exit 101)", result.stderr)
+            self.assertEqual(result.stderr.count(work + b"\n"), 1)
+            self.assertNotIn(SECRET, result.stdout + result.stderr)
+
+        shape = b" acquisition_shape=duplicate_network_id"
+        invalid = (base + shape, base + b" acquisition_error=status" + shape,
+                   base + b" acquisition_error=shape acquisition_shape=" + SECRET,
+                   base + b" acquisition_error=shape" + shape + shape,
+                   base.replace(b"operation=acquisition", b"operation=daemon_health")
+                   + b" acquisition_error=shape" + shape)
+        for work in invalid:
+            result, _, _ = self.wrapper(output(work), 101)
+            self.assertNotIn(b"acquisition_shape=", result.stdout + result.stderr)
+            self.assertNotIn(SECRET, result.stdout + result.stderr)
+
+    def test_nofile_acquisition_record_and_cleanup_pair_precede_optional_terminal_summary(self):
+        work = (self.failure_line("all", "none", "acquisition", "unknown", "none").rstrip(b"\n")
+                + b" acquisition_error=shape\n")
+        failed = b"test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 100 filtered out; finished in 0.00s\n"
+        cleanup_stage = b"DOCKERLENS_NATIVE_CHECK: nofile_cleanup\n"
+        refusal = self.cleanup_line()
+        for cleanup in (b"", refusal):
+            output = self.failure_transcript(work, cleanup).replace(
+                cleanup_stage, b"DOCKERLENS_NATIVE_CHECK: nofile_capture\n" + cleanup_stage)
+            for status, suffix in ((101, failed), (124, b"")):
+                with self.subTest(cleanup=bool(cleanup), status=status):
+                    result, _, _ = self.wrapper(output + suffix, status)
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn(f"failed (exit {status})".encode(), result.stderr)
+                    self.assertEqual(result.stderr.count(work), 1)
+                    self.assertEqual(result.stderr.count(refusal), int(bool(cleanup)))
+            invalid = [failed + output, output.replace(cleanup_stage, cleanup_stage + failed),
+                       output.replace(work, failed + work), output + failed * 2,
+                       output + failed + SUCCESS, output + SUCCESS, output + failed.rstrip(b"\n"),
+                       output + failed.replace(b"1 failed", b"2 failed"),
+                       output + b"test result: FAILED. " + SECRET + b"\n"]
+            if cleanup:
+                invalid.append(output.replace(refusal, failed + refusal))
+            for case, transcript in enumerate(invalid):
+                with self.subTest(cleanup=bool(cleanup), case=case):
+                    result, _, _ = self.wrapper(transcript, 101)
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn(b"failed (exit 101)", result.stderr)
+                    self.assertNotIn(b"DOCKERLENS_NATIVE_NOFILE_", result.stdout + result.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()

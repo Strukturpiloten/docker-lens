@@ -14,9 +14,9 @@ use crate::version::{
     TargetProfileIdentity,
 };
 
-const SOURCE_CANDIDATE: &str = "ef8b40c2d392c3983a3ebdc54730812352fe6b39";
+const SOURCE_CANDIDATE: &str = "a36e42fbaeee6585c954948c9fe3a8686d86018b";
 const SOURCE_RUN: &str =
-    "https://github.com/Strukturpiloten/docker-lens/actions/runs/38106164571/attempts/1";
+    "https://github.com/Strukturpiloten/docker-lens/actions/runs/40119803977/attempts/1";
 
 // This is the exact admission set for the currently compiled cohort. A later
 // reviewed cohort must explicitly replace the set for each lane; extending the
@@ -52,6 +52,7 @@ const REVIEWED_CAPABILITIES: &[Capability] = &[
     Capability::BindRelabelShared,
     Capability::BindRelabelPrivate,
     Capability::StopSignal,
+    Capability::CommandClear,
 ];
 const REVIEWED_SHAPES: &[NativeCapabilityShape] = &[
     NativeCapabilityShape::StandaloneCreate,
@@ -101,6 +102,7 @@ const REVIEWED_SHAPES: &[NativeCapabilityShape] = &[
     NativeCapabilityShape::BindMountPrivateRelabelReadWrite,
     NativeCapabilityShape::BindMountPrivateRelabelReadOnly,
     NativeCapabilityShape::StopSignal,
+    NativeCapabilityShape::ClearCommand,
 ];
 const UPSTREAM_CAPABILITIES: &[Capability] = &[
     Capability::StandaloneContainer,
@@ -134,6 +136,7 @@ const UPSTREAM_CAPABILITIES: &[Capability] = &[
     Capability::BindRelabelPrivate,
     Capability::PortHostIpv6,
     Capability::StopSignal,
+    Capability::CommandClear,
 ];
 const UPSTREAM_SHAPES: &[NativeCapabilityShape] = &[
     NativeCapabilityShape::StandaloneCreate,
@@ -185,6 +188,7 @@ const UPSTREAM_SHAPES: &[NativeCapabilityShape] = &[
     NativeCapabilityShape::FixedIpv6HostPort,
     NativeCapabilityShape::EphemeralIpv6HostPort,
     NativeCapabilityShape::StopSignal,
+    NativeCapabilityShape::ClearCommand,
 ];
 
 fn expected_admission(
@@ -203,30 +207,30 @@ fn expected_admission(
 const RECORDS: [(NativeEvidenceLane, &str, &str); 4] = [
     (
         NativeEvidenceLane::Debian11Rootful,
-        "ae366c50cb7213cf62f75b0cee002ec1f81c7ec56b0518053575c0c2f2c74033",
+        "9f26a185660badfbd6777bbf3a520f03e8fb48a777f8724bff506af5d28ba910",
         include_str!(
-            "../docs/evidence/reviewed/sha256/ae366c50cb7213cf62f75b0cee002ec1f81c7ec56b0518053575c0c2f2c74033.json"
+            "../docs/evidence/reviewed/sha256/9f26a185660badfbd6777bbf3a520f03e8fb48a777f8724bff506af5d28ba910.json"
         ),
     ),
     (
         NativeEvidenceLane::Debian11Rootless,
-        "3f207baae9a2fd58f1a02b4f2c0cc282f10ab36b70e1497ed36e7a5c58a954fd",
+        "1843873d6cae5b91d0ae3917f8238491239089905747c193e7f46027f17d891c",
         include_str!(
-            "../docs/evidence/reviewed/sha256/3f207baae9a2fd58f1a02b4f2c0cc282f10ab36b70e1497ed36e7a5c58a954fd.json"
+            "../docs/evidence/reviewed/sha256/1843873d6cae5b91d0ae3917f8238491239089905747c193e7f46027f17d891c.json"
         ),
     ),
     (
         NativeEvidenceLane::UpstreamRootful,
-        "1a128e59871f6a22c69618c5c01d5909bf928d3de4f1eb03957af6cd12c6464b",
+        "b0825b797f052257f706b0102c5c720e7fcbbaef0e585869bb6d23d2e756fb94",
         include_str!(
-            "../docs/evidence/reviewed/sha256/1a128e59871f6a22c69618c5c01d5909bf928d3de4f1eb03957af6cd12c6464b.json"
+            "../docs/evidence/reviewed/sha256/b0825b797f052257f706b0102c5c720e7fcbbaef0e585869bb6d23d2e756fb94.json"
         ),
     ),
     (
         NativeEvidenceLane::UpstreamRootless,
-        "90d64a85ec81af3a1b69520555c6c160b70c8631b14519fec28e1b1fb742c95b",
+        "e6d27662271bcce957d25fe83f027eafa0264f65787d4be9b8314eb157c9ec74",
         include_str!(
-            "../docs/evidence/reviewed/sha256/90d64a85ec81af3a1b69520555c6c160b70c8631b14519fec28e1b1fb742c95b.json"
+            "../docs/evidence/reviewed/sha256/e6d27662271bcce957d25fe83f027eafa0264f65787d4be9b8314eb157c9ec74.json"
         ),
     ),
 ];
@@ -577,7 +581,8 @@ fn native_shape(name: &str) -> NativeCapabilityShape {
 #[cfg(test)]
 mod tests {
     use super::{
-        RECORDS, REVIEWED_CAPABILITIES, REVIEWED_SHAPES, capability, native_shape, record,
+        RECORDS, REVIEWED_CAPABILITIES, REVIEWED_SHAPES, UPSTREAM_CAPABILITIES, UPSTREAM_SHAPES,
+        capability, native_shape, record,
     };
     use crate::version::{
         Capability, CapabilityError, NativeCapabilityShape, TargetCapabilityCatalog,
@@ -667,6 +672,9 @@ mod tests {
                 .iter_mut()
                 .find(|entry| entry["name"] == "Command")
                 .unwrap();
+            // Even though CommandClear is now admitted separately, replacing
+            // Command must still fail: it drops a baseline group and duplicates
+            // the new singleton. Keep this historical negative reachable.
             entry["name"] = "CommandClear".into();
             entry["admitted_shapes"] = serde_json::json!(["ClearCommand"]);
         });
@@ -691,6 +699,60 @@ mod tests {
         });
         rejected(|value| {
             value["capabilities"][1]["admitted_shapes"][0] = "NotAShape".into();
+        });
+    }
+
+    #[test]
+    fn command_clear_requires_the_exact_positive_singleton_on_every_lane() {
+        for (lane, digest, source) in RECORDS {
+            let admitted = record(lane, digest, source);
+            assert!(
+                admitted
+                    .capabilities
+                    .iter()
+                    .any(|fact| fact.capability == Capability::CommandClear)
+            );
+        }
+        assert!(REVIEWED_CAPABILITIES.contains(&Capability::CommandClear));
+        assert!(UPSTREAM_CAPABILITIES.contains(&Capability::CommandClear));
+        assert!(REVIEWED_SHAPES.contains(&NativeCapabilityShape::ClearCommand));
+        assert!(UPSTREAM_SHAPES.contains(&NativeCapabilityShape::ClearCommand));
+        rejected(|value| {
+            value["capabilities"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|entry| entry["name"] != "CommandClear");
+        });
+        for shapes in [
+            serde_json::json!([]),
+            serde_json::json!(["ClearCommand", "ClearCommand"]),
+            serde_json::json!(["ClearEntrypoint"]),
+        ] {
+            rejected(|value| {
+                value["capabilities"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|entry| entry["name"] == "CommandClear")
+                    .unwrap()["admitted_shapes"] = shapes.clone();
+            });
+        }
+        rejected(|value| {
+            value["capabilities"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|entry| entry["name"] == "CommandClear")
+                .unwrap()["state"] = "unavailable".into();
+        });
+        rejected(|value| {
+            value["capabilities"]
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!({
+                    "name":"EntrypointClear", "state":"available",
+                    "admitted_shapes":["ClearEntrypoint"],
+                }));
         });
     }
 

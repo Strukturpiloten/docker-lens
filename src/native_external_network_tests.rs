@@ -474,7 +474,11 @@ impl Run {
         }
     }
     fn podman(&mut self, cleanup: bool, args: &[String]) -> Output {
-        let mut argv = vec!["podman".into(), "--remote=false".into()];
+        if args.first().is_some_and(|arg| arg == "inspect") {
+            let extra = crate::native_outer_test_command::snapshot_extra_calls();
+            self.charge(cleanup, extra, extra * 65536);
+        }
+        let mut argv = crate::native_outer_test_command::prefix();
         argv.extend_from_slice(args);
         self.command(cleanup, self.elevated, &argv)
     }

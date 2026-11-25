@@ -2,6 +2,151 @@
 
 ## Unreleased
 
+## [0.2.0]
+
+### Consumer changes
+
+- Read bounded Docker Engine observations using explicitly selected container
+  IDs, names, prefixes or labels, network IDs, and volume names. The decoder
+  preserves request-bound identities, selected roots, runtime settings,
+  network membership and IPAM, and volume configuration. Engine observations
+  do not establish who authored the configuration.
+- Plan standalone container settings, multiple network attachments, and
+  external network and volume prerequisites as inert data. Review the
+  [complete artifact](docs/complete-artifact.md) to retain its prerequisite and
+  operation ordering. Request-only bytes omit the prerequisites.
+- Finite rootless PIDs settings can produce a typed unresolved destination
+  prerequisite. Use `RenderedArtifact::destination_pids_prerequisites()` and
+  assess against a caller-selected destination capture. Compatible reported
+  metadata leaves delegation and enforcement unverified. Use
+  `ResourceSupportObservation::missing(observation_id)` when no support was
+  observed. See the [destination contract](docs/destination-pids-prerequisite.md).
+- Rust 1.98.1 is the minimum, up from 1.85.0. The exact `serde_json`
+  requirement changes from `=1.0.149` to `=1.0.154`. If your manifest excludes
+  1.0.154, update its constraint and regenerate the lockfile.
+
+### Migrating Rust consumers from 0.1.0
+
+| Changed contract | Migration |
+| --- | --- |
+| Additional fields on public structs | Supply `Operation.action` with `Create` or `RequireExisting` as appropriate. Give `ContainerIntent` explicit `settings` and `networks`. Update hand-built `DecodedInventory`, `DecodedVersion`, `ContainerObservation`, `NetworkAttachment`, `NetworkObservation`, `VolumeObservation` and `MountObservation` literals for the new fields. Prefer decoded observations and retain missing facts when constructing test inputs. |
+| Enum numeric casts | Ordinals changed on `Capability`, `FieldPath`, `IntentError`, `PlanningError` and `TargetField`. Map named variants explicitly when assigning application values. Decode stored old ordinals using the 0.1.0 mapping before migrating data. |
+| Network resource shape | Construct and match `TargetResource::Network(NetworkIntent)`. Provide its role and `NetworkSource::Create` or `NetworkSource::External`. Review an external network as a destination prerequisite. |
+| Volume resource labels | Supply `labels` when constructing `TargetResource::Volume`, using an empty vector when none are authored. Match the field when you need it or use `..`. |
+| New variants on exhaustive enums | Update matches on `Selector`, `MountSource`, `Capability`, `TargetField`, `FieldPath`, `TargetResource`, `AcquisitionError`, `IntentError` and `PlanningError`. In particular, handle `ExternalVolume` as an existing-resource requirement and `Tmpfs` as a separate mount source. |
+| Healthcheck accessor | Replace `Healthcheck::command()` with `Healthcheck::test()`. Match `HealthTest::Exec`, `Shell` and `Disabled`; only the exec form is an argument vector. |
+| Container network field | Replace `ContainerIntent.network` with `networks`, a collection of `NetworkAttachmentIntent` values. Preserve each attachment's identity, aliases and requested addresses. |
+
+Native proof and failure-context sources cover configured lifecycle, identity,
+network, PIDs, nofile, device, memory, capability and logging cases. Source
+coverage does not qualify a candidate’s Engine lanes or a downstream
+application. The exact-candidate native and downstream gates remain required.
+
+## Development checkpoints before 0.2.0
+
+- Refine test-only PIDs matching failures through a closed 73-site observation
+and report finite nofile stderr-capture availability reasons. Preserve legacy marker
+acceptance, work/cleanup diagnostic separation, guards, budgets and successful proofs;
+source diagnostics grant no capability or native acceptance.
+- Validate authored finite container memory as exact bytes from 6 MiB through
+signed maximum; reject smaller positive limits and overflow without rounding.
+Omitted memory stays distinct from explicit unlimited/zero; requested memory
+remains separately capability-gated, and observed source values stay unchanged. This restores an unmerged target
+validation correction, not native memory enforcement or capability admission.
+
+- Add bounded discovery and explicit selection by canonical container or
+  network ID, volume name, container name, name prefix, or label. Captures retain
+  opaque selected-root references and reasons; discovery can return protected
+  list metadata without inspecting containers.
+
+- Expand protected typed container runtime, mount, network and IPAM observations,
+  including request-bound container and network identities and active endpoint
+  membership. These are snapshot evidence, not proof of authored ownership.
+
+- Add capability-gated standalone `ContainerSettings` and typed network intent
+  and attachments, including bridge, internal and external networks, IPAM,
+  aliases and static addresses. Unsupported shapes and profiles fail closed;
+  planning and rendering remain inert.
+
+- Represent existing named volumes as explicit prerequisites, and preserve
+  protected labels for newly created volumes. Consumers must review complete
+  artifact obligations; an external volume is not implicitly created.
+
+- Update public struct and enum construction for the expanded model: supply
+  `ContainerIntent.settings` and typed networks, use the
+  `TargetResource::Network` tuple form and volume labels, and account for
+  `DecodedInventory` provenance fields and `DecodedVersion.resource_support`.
+
+- Extend the test-only PIDs27 source to validate domain, domain-threaded and
+  threaded cgroup roles, local leader membership and typed ancestor chains.
+  Its private `pids-v2` proof carries the observed types and is checked by
+  independent readers; root framing and worker/controller protocols remain v1.
+  The source outcome remains unadmitted. Fresh exact-candidate four-lane PIDs27
+  qualification and cleanup, nofile28, and consumer acceptance remain pending.
+
+- Select the independently reviewed guarded CommandClear source cohort for
+  candidate rehearsal on the four exact profiles. It requires an explicit Exec
+  entrypoint; EntrypointClear remains withheld. Fresh final-candidate native
+  and consumer gates remain required before production admission or release.
+
+- Align the exact JSON parser dependency with the current reviewed consumer
+  graph at `serde_json =1.0.154`. Keep registry integrity and require fresh native
+  qualification; this dependency change adds no capability or release admission.
+
+- Prepare the preserved nofile producer, strict reader and custody controls as
+  registered test-only source. Keep default private proofs at16KiB and allow
+  only the explicit bounded nofile path up to512KiB. Do not invoke canonical28
+  before unresolved PIDs27, emit a public nofile result or admit a capability.
+
+- Recover preserved ShmSize, numeric supplementary-group DAC and diagonal
+  kernel-setting proofs as mandatory calls 24–26 with separate owner scopes,
+  strict post-call/emitter readers and selected-backend accounting. Preserve
+  existing first 23 calls, #125 API, maintained profile policy and original
+  resource/deadline/cleanup bounds. Add only closed unadmitted observations;
+  PIDs/nofile, fresh native qualification and milestone completion remain due.
+
+- Decode `/info` PIDs limit, cgroup driver and cgroup version as independently
+  available observation-scoped reports. Missing, null, empty and redacted values
+  remain distinct; malformed present types fail with value-free errors. Public
+  `ResourceSupportObservation` struct literals must supply the added fields or
+  use `missing(observation_id)`.
+
+- Recover the inert finite-rootless-PIDs destination obligation. Complete
+  artifacts retain schema-4 prerequisites;
+  pure destination assessment remains delegation/enforcement-unverified.
+  Preserve existing capability gates, request bytes and schema 1/2/3 output when
+  the new obligation is absent. No native or catalogue admission is implied.
+
+- Maintain the scoped per-job GitHub-runner AppArmor userns profile for the owned
+  outer-Docker upstream-rootless fixture in the three existing native workflows.
+  Require exact task label/custody and proven profile removal after the complete
+  native sequence before ordinary evidence and success; failures and cancellation
+  remain failures. Preserve local-host policy, other lanes, budgets and historical
+  experimental evidence. Fresh candidate validation remains required; no
+  cgroup/PIDs authority, capability admission or release is claimed.
+
+- Recover command/entrypoint-clear as mandatory invocation 23 after hostname's
+  strict reader, outside both lifecycle cleanup-token scopes. Retain nonempty
+  image defaults, four paired process effects and dedicated once-only cleanup;
+  reuse selected-backend snapshot charging and original limits. Require the
+  complete private proof in the harness and emitter, projecting only a closed
+  unadmitted observation at that checkpoint. ADRs 0036 and 0037 subsequently
+  selected the guarded CommandClear source cohort described above; fresh
+  qualification remains pending.
+- Recover the committed hostname producer and strict private reader as mandatory
+  invocation 22, with independent harness/emitter validation and a separate
+  one-child cleanup-owner scope. Preserve all first 21 requirements, budgets,
+  backend accounting and experimental non-acceptance. Only a closed unadmitted
+  observation is emitted; no hostname capability, raw shape-map or catalogue
+  admission is added at that checkpoint. Calls 24–27 have since been recovered
+  as source; fresh qualification, nofile28 and consumer gates remain pending.
+- Recover the preserved health-interval configuration boundary and lifecycle
+  default/zero effects as mandatory calls 20 and 21, with strict private proof
+  validation and closed unadmitted observations. Preserve the original nineteen,
+  current topology/diagnostics/pins/cleanup and experimental non-acceptance.
+  The full preserved 28-call inventory and exact-candidate qualification remain
+  pending; this stage adds no raw capability or catalogue admission.
+
 - Raise the minimum supported Rust version from 1.85.0 to 1.98.1, matching the
   pinned development toolchain. Consumers must upgrade Rust before building.
 - Select ADR 0019's authenticated configured stop-signal source cohort for

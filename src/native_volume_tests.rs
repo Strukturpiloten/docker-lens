@@ -138,16 +138,17 @@ fn inner_docker(args: &[&str]) -> std::process::Output {
     command.args(["-k", "5s", "60"]);
     match required("NATIVE_PODMAN_USE_SUDO").as_str() {
         "0" => {
-            command.arg("podman");
+            command.args(crate::native_outer_test_command::prefix());
         }
         "1" => {
-            command.args(["sudo", "-n", "podman"]);
+            command.args(["sudo", "-n"]);
+            command.args(crate::native_outer_test_command::prefix());
         }
         _ => panic!("closed Podman privilege selector"),
     }
     command.args([
         "exec",
-        &required("NATIVE_OUTER_CONTAINER"),
+        &required("NATIVE_OUTER_CONTAINER_ID"),
         "docker",
         "-H",
         "unix:///dockerlens-native/docker.sock",
@@ -179,16 +180,17 @@ fn dockerd_effective_uid() -> u32 {
     command.args(["-k", "5s", "15"]);
     match required("NATIVE_PODMAN_USE_SUDO").as_str() {
         "0" => {
-            command.arg("podman");
+            command.args(crate::native_outer_test_command::prefix());
         }
         "1" => {
-            command.args(["sudo", "-n", "podman"]);
+            command.args(["sudo", "-n"]);
+            command.args(crate::native_outer_test_command::prefix());
         }
         _ => panic!("closed Podman privilege selector"),
     }
     command.args([
         "exec",
-        &required("NATIVE_OUTER_CONTAINER"),
+        &required("NATIVE_OUTER_CONTAINER_ID"),
         "sh",
         "-ec",
         r#"count=0; effective=

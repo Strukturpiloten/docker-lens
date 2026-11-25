@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
-"""Run closed host probes in one verified native lane's outer network namespace."""
+"""Closed namespace probes with explicit canonical outer-client context.
+
+The Rust caller retains its original privilege-aware sixteen-second window.
+Each raw inspect, including attach-only custody validation, retains the original
+two-second/512-byte observation budget and one-second termination allowance.
+"""
 
 import os
+from pathlib import Path
 import re
 import select
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -102,11 +109,17 @@ def parse_token(value: str) -> Identity:
     return Identity(container_id, int(pid), started_at, int(ticks))
 
 
-def inspect(outer: str, run_id: str) -> tuple[str, int, str]:
+def inspect(outer: str, run_id: str, engine: str, directory: str) -> tuple[str, int, str]:
+    if engine not in ("podman", "docker") or not Path(directory).is_absolute():
+        raise ProbeFailure("input")
     try:
         process = subprocess.Popen(
-            ["podman", "inspect", "--format", INSPECT_FORMAT, outer],
+            ["timeout", "--signal=TERM", "--kill-after=1s", "2s", "bash",
+             str(Path(__file__).resolve().with_name("native-outer-command.sh")),
+             "--engine", engine, "--directory", directory,
+             "inspect", "--format", INSPECT_FORMAT, outer],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            start_new_session=True,
         )
     except OSError as error:
         raise ProbeFailure("inspect") from error
@@ -127,14 +140,24 @@ def inspect(outer: str, run_id: str) -> tuple[str, int, str]:
             output.extend(chunk)
             if len(output) > 512:
                 raise ProbeFailure("inspect")
-        if process.wait(timeout=max(0, deadline - time.monotonic())) != 0:
+        exited = None
+        while time.monotonic() < deadline:
+            exited = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            if exited is not None:
+                break
+            time.sleep(min(0.005, max(0, deadline - time.monotonic())))
+        if exited is None or exited.si_code != os.CLD_EXITED or exited.si_status != 0:
             raise ProbeFailure("inspect")
     except (OSError, subprocess.TimeoutExpired) as error:
         raise ProbeFailure("inspect") from error
     finally:
-        if process.poll() is None:
-            process.kill()
-            process.wait(timeout=1)
+        # Keep the leader unreaped until its group is signaled: no PID reuse
+        # window, including when a client exits but descendants hold the pipe.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait(timeout=1)
         if process.stdout is not None:
             process.stdout.close()
     try:
@@ -174,8 +197,8 @@ def process_start_ticks(proc_fd: int, pid: int) -> int:
         raise ProbeFailure("process") from error
 
 
-def verified_process(outer: str, run_id: str, expected: tuple[str, int, str]):
-    if inspect(outer, run_id) != expected:
+def verified_process(outer: str, run_id: str, expected: tuple[str, int, str], engine: str, directory: str):
+    if inspect(outer, run_id, engine, directory) != expected:
         raise ProbeFailure("changed")
     pid = expected[1]
     try:
@@ -200,7 +223,7 @@ def verified_process(outer: str, run_id: str, expected: tuple[str, int, str]):
         if (not all(type(value) is int and value > 0 for value in (*held_identity, *host_identity))
                 or held_identity == host_identity):
             raise ProbeFailure("identity")
-        if inspect(outer, run_id) != expected:
+        if inspect(outer, run_id, engine, directory) != expected:
             raise ProbeFailure("changed")
     except ProbeFailure:
         os.close(net_fd)
@@ -241,30 +264,35 @@ def probe_command(mode: str, argument: str | None) -> list[str]:
 
 
 def main() -> int:
-    if len(sys.argv) < 3 or len(sys.argv) > 5:
+    if (len(sys.argv) < 7 or len(sys.argv) > 9 or sys.argv[1] != "--engine"
+            or sys.argv[3] != "--directory"):
         raise ProbeFailure("input")
-    mode, outer = sys.argv[1:3]
+    engine, directory = sys.argv[2], sys.argv[4]
+    if engine not in ("podman", "docker") or not Path(directory).is_absolute():
+        raise ProbeFailure("input")
+    arguments = sys.argv[5:]
+    mode, outer = arguments[:2]
     name = NAME.fullmatch(outer)
     if name is None:
         raise ProbeFailure("input")
     run_id = name.group(1)
     if mode == "identity":
-        if len(sys.argv) != 3:
+        if len(arguments) != 2:
             raise ProbeFailure("input")
-        expected = inspect(outer, run_id)
-        ticks, net_fd = verified_process(outer, run_id, expected)
+        expected = inspect(outer, run_id, engine, directory)
+        ticks, net_fd = verified_process(outer, run_id, expected, engine, directory)
         os.close(net_fd)
         print(Identity(*expected, ticks).token())
         return 0
-    if len(sys.argv) not in (4, 5):
+    if len(arguments) not in (3, 4):
         raise ProbeFailure("input")
-    cached = parse_token(sys.argv[3])
-    argument = sys.argv[4] if len(sys.argv) == 5 else None
+    cached = parse_token(arguments[2])
+    argument = arguments[3] if len(arguments) == 4 else None
     command = probe_command(mode, argument)
     if shutil.which("nsenter") is None or shutil.which(command[0]) is None:
         raise ProbeFailure("missing_tool")
     expected = (cached.container_id, cached.pid, cached.started_at)
-    ticks, net_fd = verified_process(outer, run_id, expected)
+    ticks, net_fd = verified_process(outer, run_id, expected, engine, directory)
     if ticks != cached.start_ticks:
         os.close(net_fd)
         raise ProbeFailure("process")
@@ -279,7 +307,7 @@ def main() -> int:
         raise ProbeFailure("probe") from error
     finally:
         os.close(net_fd)
-    if inspect(outer, run_id) != expected:
+    if inspect(outer, run_id, engine, directory) != expected:
         raise ProbeFailure("changed")
     if result.returncode < 0:
         raise ProbeFailure("probe")
