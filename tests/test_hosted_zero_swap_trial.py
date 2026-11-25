@@ -1196,7 +1196,8 @@ class EntrypointTrial(unittest.TestCase):
         policy_advance=0,
         package_error=None,
     ):
-        now, deadlines, host_boot = [0], [], "e" * 64
+        # Package policy deadlines are relative to an ordinary nonzero clock origin.
+        now, deadlines, host_boot = [1 if package_case else 0], [], "e" * 64
         package_calls = []
         package_impl, capture_impl = trial.packages, trial.capture
         digest = PINS["cloud_image"].split("@sha256:")[1]
@@ -1213,7 +1214,7 @@ class EntrypointTrial(unittest.TestCase):
                 self.assertEqual(package_case, ("plan", "exit"))
                 self.assertNotIn("sudo", argv)
                 self.assertEqual(argv[-6:], ["policy", *PINS["host_packages"]])
-                self.assertEqual(deadline, 2)
+                self.assertEqual(deadline, now[0] + 2)
                 now[0] += policy_advance
                 if policy_cleanup:
                     trial.command_cleanup_failed = True
