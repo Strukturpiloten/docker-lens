@@ -60,7 +60,7 @@ class HostedDiagnosticTests(unittest.TestCase):
         self.host.mkdir(mode=0o700)
         self.raw = self.base / "private"
         self.raw.mkdir(mode=0o700)
-        for source_id, path in PROFILE.SOURCE_PATHS.items():
+        for source_id, path in (PROFILE.SOURCE_PATHS | PROFILE.APPARMOR_PATHS).items():
             target = self.host / path.lstrip("/")
             target.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
             if source_id in PROFILE.DIRECTORY_IDS:
@@ -69,6 +69,8 @@ class HostedDiagnosticTests(unittest.TestCase):
                 target.write_text('ID=ubuntu\nVERSION_ID="26.04"\nIGNORED=' + SECRET + "\n"
                                   if source_id == "os-release" else SECRET + "\n")
                 target.chmod(0o644)
+                if source_id in PROFILE.FEATURE_VALUES:
+                    target.write_bytes(PROFILE.FEATURE_VALUES[source_id][0] + b"\n")
         self.addCleanup(patch.stopall)
         patch.object(PROFILE, "EXPECTED_UID", os.geteuid()).start()
         patch.object(PROFILE, "SOURCE_ROOT", str(self.host)).start()
@@ -77,7 +79,8 @@ class HostedDiagnosticTests(unittest.TestCase):
 
     def execute(self, environment=None, replacements=None, statuses=None, missing=None):
         outputs = {PROFILE.CHECKOUT: (HEAD + "\n").encode(), PROFILE.PACKAGE_QUERY: package_fixture(),
-                   PROFILE.OWNER_QUERY: owner_fixture(), PROFILE.UNIT_QUERY: unit_fixture()}
+                   PROFILE.OWNER_QUERY: owner_fixture(), PROFILE.UNIT_QUERY: unit_fixture(),
+                   PROFILE.APPARMOR_QUERY: b"apparmor\tinstall ok installed\t4.0.1-0ubuntu1\tamd64\n"}
         outputs.update(replacements or {})
         statuses = statuses or {}
         calls, children, sizes = [], [], []
@@ -199,6 +202,218 @@ class HostedDiagnosticTests(unittest.TestCase):
             native.assert_not_called()
         self.assertNotIn("control:docker-ce:arm64:postinst", PROFILE.SOURCE_IDS)
 
+    def test_apparmor_positive_facts_survive_original_partial_inventory(self):
+        result, _ = self.execute(replacements={PROFILE.PACKAGE_QUERY:
+                                b"docker-ce\tunknown ok not-installed\t\t\n"})
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["observations"]["packages"]["failure_detail"],
+                         {"field": "version", "category": "empty", "row": 1,
+                          "validated_dpkg_state": "not-installed"})
+        facts = result["observations"]["apparmor"]
+        for name, value in {"enabled": "Y", "restrict_unprivileged_userns": "1",
+                            "namespace_mask": "present", "policy_v9": "yes"}.items():
+            self.assertEqual(facts[name], {"status": "observed", "value": value})
+        for name in ("parser", "abi_4_0"):
+            self.assertEqual(facts[name]["sha256"], hashlib.sha256((SECRET + "\n").encode()).hexdigest())
+            self.assertEqual(facts[name]["kind"], "regular")
+        self.assertEqual(facts["parser_package_version"], {
+            "status": "reported", "version": "4.0.1-0ubuntu1", "architecture": "amd64",
+            "provenance": "installed_apparmor_package_metadata", "executable_version": "not_established"})
+
+    def test_apparmor_missing_unexpected_and_negative_fields_are_independent(self):
+        self.source("parser").unlink()
+        self.source("namespace_mask").write_bytes(b"malformed/" + SECRET.encode())
+        self.source("enabled").write_bytes(b"N\n")
+        self.source("restrict_unprivileged_userns").write_bytes(b"0\n")
+        self.source("policy_v9").write_bytes(b"no\n")
+        result, _ = self.execute()
+        facts = result["observations"]["apparmor"]
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(facts["parser"], {"status": "unavailable", "reason": "source_missing"})
+        self.assertEqual(facts["namespace_mask"], {"status": "unavailable", "reason": "invalid_metadata"})
+        for name, value in (("enabled", "N"), ("restrict_unprivileged_userns", "0"), ("policy_v9", "no")):
+            self.assertEqual(facts[name], {"status": "observed", "value": value})
+        self.assertEqual(facts["abi_4_0"]["status"], "observed")
+
+    def test_apparmor_package_version_unavailable_does_not_hide_features(self):
+        for raw in (b"", b"apparmor\tdeinstall ok config-files\t4.0.1\tamd64\n",
+                    b"apparmor\tinstall ok installed\t\tamd64\n", b"private\n",
+                    b"docker-ce\tinstall ok installed\t1\tamd64\n"):
+            with self.subTest(raw=raw):
+                result, _ = self.execute(replacements={PROFILE.APPARMOR_QUERY: raw})
+                facts = result["observations"]["apparmor"]
+                self.assertEqual(facts["parser_package_version"]["status"], "unavailable")
+                self.assertEqual(facts["enabled"]["value"], "Y")
+        for options in ({"missing": PROFILE.APPARMOR_QUERY}, {"statuses": {PROFILE.APPARMOR_QUERY: 124}}):
+            result, _ = self.execute(**options)
+            self.assertEqual(result["observations"]["apparmor"]["parser_package_version"]["status"], "unavailable")
+
+    def test_apparmor_fixed_files_reject_links_permissions_and_arbitrary_access(self):
+        for name in PROFILE.APPARMOR_PATHS:
+            target = self.source(name)
+            original = target.read_bytes()
+            target.unlink()
+            target.symlink_to("/" + SECRET)
+            with self.subTest(name=name), self.assertRaises(PROFILE.Unavailable):
+                self.read(name)
+            target.unlink()
+            target.write_bytes(original)
+            target.chmod(0o666)
+            with self.assertRaises(PROFILE.Unavailable): self.read(name)
+            target.chmod(0o644)
+        with PROFILE.private_outputs() as files, patch.object(PROFILE.os, "open") as opened:
+            with self.assertRaises(PROFILE.Unavailable):
+                PROFILE.read_source("/etc/" + SECRET, files, time.monotonic() + 2)
+            opened.assert_not_called()
+        real_open = os.open
+        def denied(path, flags, *args, **kwargs):
+            if path == "v9": raise PermissionError(errno.EACCES, SECRET)
+            return real_open(path, flags, *args, **kwargs)
+        with patch.object(PROFILE.os, "open", side_effect=denied):
+            result, _ = self.execute()
+        self.assertEqual(result["observations"]["apparmor"]["policy_v9"], {
+            "status": "unavailable", "reason": "custody_failure", "failure_detail":
+            {"guard": "open", "component": "leaf", "category": "permission_denied"}})
+
+    def test_apparmor_feature_caps_framing_and_pseudo_file_sizes(self):
+        for raw in (b"", b"Y\n\n", b" Y\n", b"Y\x00", b"\xff", b"X" * 129):
+            self.source("enabled").write_bytes(raw)
+            with self.subTest(raw=raw), self.assertRaises(PROFILE.Unavailable): self.read("enabled")
+        self.source("enabled").write_bytes(b"Y\n")
+        original_stat, original_fstat = os.stat, os.fstat
+        inode = self.source("enabled").stat().st_ino
+        def pseudo(info):
+            if info.st_ino != inode: return info
+            fields = {name: getattr(info, name) for name in dir(info) if name.startswith("st_")}
+            fields["st_size"] = 4096
+            return SimpleNamespace(**fields)
+        with patch.object(PROFILE.os, "stat", side_effect=lambda *a, **kw: pseudo(original_stat(*a, **kw))), \
+             patch.object(PROFILE.os, "fstat", side_effect=lambda *a: pseudo(original_fstat(*a))):
+            self.assertEqual(self.read("enabled"), {"status": "observed", "value": "Y"})
+
+    def test_apparmor_descriptor_custody_and_replacement_refusal(self):
+        real_open, real_read, real_close = os.open, os.read, os.close
+        for name in ("parser", "abi_4_0", "policy_v9"):
+            opened, closed = [], []
+            source = self.source(name)
+            inode = source.stat().st_ino
+            changed = []
+            def held_open(path, flags, *args, **kwargs):
+                self.assertTrue(flags & os.O_NOFOLLOW)
+                if path != str(self.host): self.assertIn("dir_fd", kwargs)
+                fd = real_open(path, flags, *args, **kwargs)
+                opened.append(fd)
+                return fd
+            def held_close(fd):
+                closed.append(fd)
+                return real_close(fd)
+            def replace(fd, count):
+                raw = real_read(fd, count)
+                if os.fstat(fd).st_ino == inode and not changed:
+                    source.unlink()
+                    source.write_bytes(b"replacement")
+                    changed.append(True)
+                return raw
+            with PROFILE.private_outputs() as files, \
+                 patch.object(PROFILE.os, "open", side_effect=held_open), \
+                 patch.object(PROFILE.os, "close", side_effect=held_close), \
+                 patch.object(PROFILE.os, "read", side_effect=replace):
+                with self.subTest(name=name), self.assertRaises(PROFILE.Unavailable) as caught:
+                    PROFILE.read_source(name, files, time.monotonic() + 2)
+                self.assertEqual(caught.exception.reason, "custody_failure")
+                self.assertEqual(sorted(opened), sorted(closed))
+
+    def test_namespace_mask_projects_only_exact_token_membership(self):
+        cases = [(b"userns_create", "present"), (b"userns_create\n", "present"),
+                 (b"userns_create other_feature\n", "present"),
+                 (b"other_feature userns_create\n", "present"),
+                 (b"userns_create\tother_feature\n", "present"),
+                 (b"other_feature\tuserns_create\n", "present"),
+                 (b" \tother_feature\t  userns_create \t\n", "present"),
+                 (b"other_feature\n", "absent"),
+                 (b"userns_create_extra userns_creat xuserns_create\n", "absent")]
+        for raw, expected in cases:
+            with self.subTest(raw=raw):
+                self.source("namespace_mask").write_bytes(raw)
+                self.assertEqual(self.read("namespace_mask"), {"status": "observed", "value": expected})
+        self.source("namespace_mask").write_bytes(("userns_create " + SECRET.replace("-", "_") + "\n").encode())
+        result, _ = self.execute()
+        self.assertEqual(result["observations"]["apparmor"]["namespace_mask"],
+                         {"status": "observed", "value": "present"})
+        self.assertNotIn(SECRET.replace("-", "_"), json.dumps(result))
+
+    def test_namespace_mask_refuses_malformed_or_ambiguous_lists(self):
+        for raw in (b"", b" \t\n", b"userns_create\n\n", b"userns_create\nother_feature\n",
+                    b"userns_create\r\n", b"userns_create\vother_feature\n",
+                    b"userns_create\fother_feature\n", b"userns_create\x00other_feature\n",
+                    b"userns_create \xff\n", b"userns_create other-feature\n",
+                    b"userns_create other/feature\n", b"userns_create OTHER\n", b"x" * 129):
+            with self.subTest(raw=raw):
+                self.source("namespace_mask").write_bytes(raw)
+                with self.assertRaises(PROFILE.Unavailable): self.read("namespace_mask")
+                result, _ = self.execute()
+                record = result["observations"]["apparmor"]["namespace_mask"]
+                self.assertEqual(record["status"], "unavailable")
+                self.assertEqual(set(record), {"status", "reason"})
+                self.assertEqual(record["reason"], "output_overflow" if len(raw) > 128 else "invalid_metadata")
+
+    def test_feature_overflow_is_independent_but_total_exhaustion_stops_collection(self):
+        self.source("enabled").write_bytes(b"X" * 129)
+        result, calls = self.execute()
+        self.assertEqual(calls, list(PROFILE.COMMANDS))
+        self.assertEqual(result["observations"]["apparmor"]["enabled"],
+                         {"status": "unavailable", "reason": "output_overflow"})
+        self.assertEqual(result["observations"]["apparmor"]["policy_v9"]["value"], "yes")
+        self.source("enabled").write_bytes(b"Y\n")
+        real_read = PROFILE.read_source
+        for exact in (True, False):
+            visited = []
+            def exhaust(source_id, files, *args):
+                visited.append(source_id)
+                if source_id == "parser":
+                    files.used = PROFILE.TOTAL_SOURCE - (self.source("parser").stat().st_size if exact else 1)
+                return real_read(source_id, files, *args)
+            with self.subTest(exact=exact), patch.object(PROFILE, "read_source", side_effect=exhaust):
+                result, calls = self.execute()
+                self.assertEqual(visited, ["parser", "abi_4_0"] if exact else ["parser"])
+                self.assertEqual(calls, list(PROFILE.COMMANDS[:-1]))
+                self.assertEqual((result["status"], result["reason"], result["observations"]),
+                                 ("unavailable", "output_overflow", None))
+
+    def test_exact_total_allows_the_last_source_to_finish(self):
+        with PROFILE.private_outputs() as files:
+            size = self.source("helper:invoke-rc.d").stat().st_size
+            files.used = PROFILE.TOTAL_SOURCE - size
+            record = PROFILE.read_source("helper:invoke-rc.d", files, time.monotonic() + 2)
+            self.assertEqual(record["status"], "observed")
+            self.assertEqual(files.used, PROFILE.TOTAL_SOURCE)
+
+    def test_exceeded_budget_refuses_before_new_read_or_child(self):
+        with PROFILE.private_outputs() as files:
+            files.used = PROFILE.TOTAL_SOURCE + 1
+            with patch.object(PROFILE.os, "read") as read, \
+                 patch.object(PROFILE.os, "open") as opened, \
+                 patch.object(PROFILE.subprocess, "Popen") as child:
+                with self.assertRaises(PROFILE.Unavailable):
+                    PROFILE.read_source("parser", files, time.monotonic() + 2)
+                with self.assertRaises(PROFILE.Unavailable):
+                    PROFILE.capture(PROFILE.APPARMOR_QUERY, files, "command", time.monotonic() + 2)
+                read.assert_not_called()
+                opened.assert_not_called()
+                child.assert_not_called()
+
+    def test_older_scalar_features_still_have_closed_exact_framing(self):
+        for name, values in (("enabled", (b"Y", b"N")),
+                             ("restrict_unprivileged_userns", (b"1", b"0")),
+                             ("policy_v9", (b"yes", b"no"))):
+            for value in values:
+                for suffix in (b"", b"\n"):
+                    self.source(name).write_bytes(value + suffix)
+                    self.assertEqual(self.read(name), {"status": "observed", "value": value.decode()})
+                for raw in (b" " + value, value + b" other", value + b"\n\n", value + b"\r\n"):
+                    self.source(name).write_bytes(raw)
+                    with self.assertRaises(PROFILE.Unavailable): self.read(name)
+
     def test_dispatch_provenance_refuses_before_any_host_query(self):
         for key in CI:
             with self.subTest(key=key):
@@ -263,7 +478,7 @@ class HostedDiagnosticTests(unittest.TestCase):
             PROFILE.owner_metadata(("dpkg: /" + SECRET + "\n").encode())
 
     def source(self, source_id="helper:invoke-rc.d"):
-        return self.host / PROFILE.SOURCE_PATHS[source_id].lstrip("/")
+        return self.host / (PROFILE.SOURCE_PATHS | PROFILE.APPARMOR_PATHS)[source_id].lstrip("/")
 
     def read(self, source_id="helper:invoke-rc.d"):
         with PROFILE.private_outputs() as files:
@@ -399,7 +614,7 @@ class HostedDiagnosticTests(unittest.TestCase):
             self.assertNotIn(SECRET, output.getvalue() + errors.getvalue())
             if len(argv) == 1:
                 record = json.loads(output.getvalue())
-                self.assertEqual(record["schema_version"], 3)
+                self.assertEqual(record["schema_version"], 4)
                 self.assertEqual(record["purpose"], "hosted_prerequisite_diagnostic")
                 self.assertEqual(record["admission"], "unadmitted")
 
@@ -424,7 +639,7 @@ class HostedDiagnosticTests(unittest.TestCase):
                    ({"field": "version", "category": "empty", "row": 1, "raw": SECRET}, "invalid_metadata"),
                    ({"guard": SECRET, "component": "leaf", "category": "check_failed"}, "custody_failure"),
                    ({"guard": "owner", "component": SECRET, "category": "check_failed"}, "custody_failure"),
-                   ({"guard": "owner", "component": "ancestor_5", "category": "check_failed"}, "custody_failure"),
+                   ({"guard": "owner", "component": "ancestor_8", "category": "check_failed"}, "custody_failure"),
                    ({"guard": "owner", "component": "leaf", "category": SECRET}, "custody_failure"),
                    ({"guard": "owner", "component": "leaf", "category": []}, "custody_failure"),
                    (source, "invalid_metadata"), (source, "command_failed"), (SECRET, "custody_failure")]
@@ -465,7 +680,7 @@ class HostedDiagnosticTests(unittest.TestCase):
         copyright = self.source("copyright:dpkg")
         copyright.chmod(0o666)
         result, calls = self.execute(replacements={PROFILE.PACKAGE_QUERY: raw})
-        self.assertEqual(result["schema_version"], 3)
+        self.assertEqual(result["schema_version"], 4)
         self.assertEqual(result["status"], "partial")
         self.assertEqual(calls, list(PROFILE.COMMANDS))
         self.assertEqual(result["observations"]["packages"], {"status": "unavailable", "reason": "invalid_metadata",
@@ -551,7 +766,7 @@ class HostedDiagnosticTests(unittest.TestCase):
 
     def test_schema3_success_has_no_failure_detail_and_preserves_observations(self):
         result, calls = self.execute()
-        self.assertEqual((result["schema_version"], result["status"], result["reason"]), (3, "observed", "complete"))
+        self.assertEqual((result["schema_version"], result["status"], result["reason"]), (4, "observed", "complete"))
         self.assertNotIn("failure_detail", json.dumps(result))
         self.assertEqual(calls, list(PROFILE.COMMANDS))
         self.assertEqual(PROFILE.package_metadata(b""), {name: {"status": "missing"} for name in PROFILE.PACKAGES})
@@ -595,7 +810,7 @@ class HostedDiagnosticTests(unittest.TestCase):
         raw = (b"docker-ce\tinstall ok installed\t1\tamd64\n"
                b"docker-ce-cli\tdeinstall ok config-files\t\tamd64\n")
         result, calls = self.execute(replacements={PROFILE.PACKAGE_QUERY: raw})
-        self.assertEqual((result["schema_version"], result["status"], result["admission"]), (3, "partial", "unadmitted"))
+        self.assertEqual((result["schema_version"], result["status"], result["admission"]), (4, "partial", "unadmitted"))
         self.assertEqual(calls, list(PROFILE.COMMANDS))
         self.assertEqual(result["observations"]["packages"],
                          {"status": "unavailable", "reason": "invalid_metadata", "failure_detail":
