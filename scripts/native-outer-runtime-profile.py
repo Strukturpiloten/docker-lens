@@ -1,13 +1,14 @@
-"""Closed hosted prerequisite diagnostic; installed bytes are DATA, never admission.
+"""Closed hosted prerequisite diagnostic; installed observations never grant admission.
 
 Capture, cancellation and private-output ownership are extracted from the reviewed
-runtime diagnostic. No native daemon, package install, helper execution or service
+runtime diagnostic. No native daemon, package install, policy execution or service
 mutation exists here. This script has no arguments, command/path selectors or
 product dependencies.
 """
 
 from contextlib import contextmanager
 import errno
+import ctypes
 import hashlib
 import json
 import os
@@ -61,7 +62,7 @@ SOURCE_IDS = frozenset(SOURCE_PATHS)
 DIRECTORY_IDS = frozenset(source_id for source_id in SOURCE_IDS
                           if source_id.startswith(("vendor:", "etc:", "run:")) and source_id.endswith(".d"))
 PURPOSE = "hosted_prerequisite_diagnostic"
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 APPARMOR_PATHS = {
     "parser": "/usr/sbin/apparmor_parser",
     "abi_4_0": "/etc/apparmor.d/abi/4.0",
@@ -73,6 +74,11 @@ APPARMOR_PATHS = {
 FEATURE_VALUES = {"enabled": (b"Y", b"N"), "restrict_unprivileged_userns": (b"1", b"0"),
                   "namespace_mask": (b"userns_create",), "policy_v9": (b"yes", b"no")}
 FEATURE_LIMIT = 128
+PARSER_ALIASES = ("/usr/sbin/apparmor_parser", "/sbin/apparmor_parser")
+PROVENANCE_PATHS = {"diversions": "/var/lib/dpkg/diversions"}
+for _arch in ("", ":amd64"):
+    for _suffix in ("list", "md5sums"):
+        PROVENANCE_PATHS[_arch + ":" + _suffix] = "/var/lib/dpkg/info/apparmor" + _arch + "." + _suffix
 WORKFLOW = "Strukturpiloten/docker-lens/.github/workflows/check.yml@refs/heads/main"
 JOB = "hosted-prerequisite-diagnostic"
 # Check's ubuntu-26.04 X64 job has distinct provider and os-release identities.
@@ -239,9 +245,10 @@ def private_outputs():
             pending.cleanup = "failed"
 
 
-def capture(command, files, prefix, deadline, cancellation=None, allowed_statuses=(0,)):
+def capture(command, files, prefix, deadline, cancellation=None, allowed_statuses=(0,), parser_fd=None):
     """Reviewed incremental drain/cleanup; every production child is allowlisted."""
-    if command not in COMMANDS or prefix != "command":
+    parser_command = bounded_command("/proc/self/fd/" + str(parser_fd), "--version")
+    if (command not in COMMANDS if parser_fd is None else command != parser_command) or prefix != "command":
         raise Unavailable("command_failed")
     if cancellation is not None:
         cancellation.check()
@@ -250,12 +257,13 @@ def capture(command, files, prefix, deadline, cancellation=None, allowed_statuse
         os.lseek(descriptor, 0, os.SEEK_SET)
         os.ftruncate(descriptor, 0)
     try:
+        extra = {} if parser_fd is None else {"pass_fds": (parser_fd,), "preexec_fn": no_new_privileges}
         process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                    stderr=subprocess.PIPE, env=ENVIRONMENT,
-                                   cwd=Path(__file__).resolve().parents[1])
+                                   cwd=Path(__file__).resolve().parents[1], **extra)
     except FileNotFoundError:
         raise Unavailable("tool_unavailable") from None
-    except OSError:
+    except (OSError, subprocess.SubprocessError):
         raise Unavailable("command_failed") from None
     counts = {"stdout": 0, "stderr": 0}
     overflow = False
@@ -372,12 +380,12 @@ def directory_identity(info):
     return info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid
 
 
-def read_source(source_id, files, deadline, cancellation=None):
+def read_source(source_id, files, deadline, cancellation=None, inspect=None):
     """Only finite, source-owned paths; no native-provided paths are followed."""
-    require(source_id in SOURCE_IDS or source_id in APPARMOR_PATHS)
+    require(source_id in SOURCE_IDS or source_id in APPARMOR_PATHS or source_id in PROVENANCE_PATHS)
     checkpoint(deadline, cancellation)
     require(files.used <= TOTAL_SOURCE, "output_overflow")
-    path = APPARMOR_PATHS[source_id] if source_id in APPARMOR_PATHS else SOURCE_PATHS[source_id]
+    path = (APPARMOR_PATHS | PROVENANCE_PATHS | SOURCE_PATHS)[source_id]
     feature = source_id in FEATURE_VALUES
     file_limit = FEATURE_LIMIT if feature else FILE_LIMIT
     components = path.split("/")[1:]
@@ -416,7 +424,7 @@ def read_source(source_id, files, deadline, cancellation=None):
         result = {"status": "observed", "uid": before.st_uid, "gid": before.st_gid,
                   "mode": stat.S_IMODE(before.st_mode), "size": before.st_size}
         if stat.S_ISLNK(before.st_mode):
-            source_check(source_id not in APPARMOR_PATHS, "kind", "leaf")
+            source_check(source_id in SOURCE_IDS, "kind", "leaf")
             # Only fixed override paths may describe a mask; never follow it.
             target = os.readlink(components[-1], dir_fd=descriptor)
             result.update(status="symlink", mask=target == "/dev/null")
@@ -463,6 +471,10 @@ def read_source(source_id, files, deadline, cancellation=None):
             guard = "stability"
             source_check(source_identity(os.fstat(child)) == source_identity(before), "stability", "leaf")
             result.update(kind="regular", sha256=hashlib.sha256(raw).hexdigest())
+            if inspect is not None:
+                result = inspect(child, bytes(raw), result)
+                checkpoint(deadline, cancellation)
+                source_check(source_identity(os.fstat(child)) == source_identity(before), "stability", "leaf")
             if feature:
                 value = bytes(raw).removesuffix(b"\n")
                 if source_id == "namespace_mask":
@@ -564,22 +576,142 @@ def package_metadata(raw):
     return result
 
 
-def apparmor_observations(files, deadline, cancellation=None):
-    """Independent fixed facts, never parser execution or policy qualification."""
+def no_new_privileges():
+    # Linux PR_SET_NO_NEW_PRIVS is inherited across timeout's exec. This does
+    # not load policy or grant authority, and failure prevents execution.
+    if ctypes.CDLL(None, use_errno=True).prctl(38, 1, 0, 0, 0) != 0:
+        raise OSError("privilege restriction unavailable")
+
+
+def unprivileged_context():
+    if (len(set(os.getresuid())) != 1 or os.getuid() == 0 or len(set(os.getresgid())) != 1):
+        return False
+    class Header(ctypes.Structure):
+        _fields_ = [("version", ctypes.c_uint32), ("pid", ctypes.c_int)]
+    class Capabilities(ctypes.Structure):
+        _fields_ = [("effective", ctypes.c_uint32), ("permitted", ctypes.c_uint32),
+                    ("inheritable", ctypes.c_uint32)]
+    caps = (Capabilities * 2)()
+    try:
+        return (ctypes.CDLL(None).capget(ctypes.byref(Header(0x20080522, 0)), caps) == 0
+                and all(not (entry.effective or entry.permitted or entry.inheritable) for entry in caps))
+    except (OSError, AttributeError):
+        return False
+
+
+def parser_version(fd, files, deadline, cancellation):
+    checkpoint(deadline, cancellation)
+    require(unprivileged_context(), "custody_failure")
+    info = os.fstat(fd)
+    require(stat.S_ISREG(info.st_mode) and info.st_mode & 0o6000 == 0
+            and info.st_mode & 0o111 != 0, "custody_failure")
+    try:
+        require(not os.getxattr(fd, "security.capability"), "custody_failure")
+    except OSError as error:
+        require(error.errno in {errno.ENODATA, errno.ENOTSUP}, "custody_failure")
+    command = bounded_command("/proc/self/fd/" + str(fd), "--version")
+    raw = capture(command, files, "command", min(deadline, time.monotonic() + 4),
+                  cancellation, parser_fd=fd)
+    match = re.fullmatch(rb"AppArmor parser version ([0-9]{1,4}(?:\.[0-9]{1,4}){1,3})\n(?:[\x20-\x7e]{1,200}\n)*", raw)
+    require(match is not None)
+    return {"status": "reported", "version": match[1].decode("ascii"),
+            "provenance": "unverified_installed_executable_observation"}
+
+
+def recorded_path(value, absolute):
+    return bool(value) and value.startswith("/") == absolute and all(32 <= ord(c) <= 126 for c in value)
+
+
+def local_parser_provenance(files, deadline, cancellation, parser_md5):
     result = {}
+    for field, suffix in (("parser_package_owner", "list"), ("parser_package_checksum", "md5sums"),
+                          ("parser_diversion", None)):
+        records = []
+        try:
+            def parse(_fd, raw, _metadata):
+                text = raw.decode("ascii")
+                require(not text or text.endswith("\n"))
+                lines = text.split("\n")[:-1] if text else []
+                if suffix == "list":
+                    # Validate every literal LF-delimited row before deriving
+                    # either ownership or absence. dpkg records '/.' and paths
+                    # containing spaces; neither needs normalization.
+                    require(all(recorded_path(line, True) for line in lines))
+                    found = [line for line in lines if line in PARSER_ALIASES]
+                    require(len(found) <= 1)
+                    return {"status": "reported", "owner": "apparmor" if found else "not_recorded",
+                            "provenance": "installed_package_database"}
+                if suffix == "md5sums":
+                    matches = []
+                    for line in lines:
+                        match = re.fullmatch(r"([0-9a-f]{32})  (.+)", line)
+                        require(match is not None and recorded_path(match[2], False))
+                        if "/" + match[2] in PARSER_ALIASES:
+                            matches.append(match[1])
+                    require(len(matches) == 1 and parser_md5 is not None)
+                    return {"status": "reported", "algorithm": "md5", "comparison":
+                            "match" if matches[0] == parser_md5 else "mismatch",
+                            "provenance": "installed_package_database"}
+                require(len(lines) % 3 == 0)
+                matches = []
+                for offset in range(0, len(lines), 3):
+                    original, diverted, package = lines[offset:offset + 3]
+                    require(recorded_path(original, True) and recorded_path(diverted, True)
+                            and (package == ":" or re.fullmatch(
+                                r"[a-z0-9][a-z0-9+.-]+(?::[a-z0-9][a-z0-9-]*)?", package)))
+                    if original in PARSER_ALIASES or diverted in PARSER_ALIASES:
+                        matches.append("local" if package == ":" else "package")
+                require(len(matches) <= 1)
+                return {"status": "reported", "registration": matches[0] if matches else "none",
+                        "provenance": "installed_package_database"}
+            for key in ("diversions",) if suffix is None else (":" + suffix, ":amd64:" + suffix):
+                record = read_source(key, files, deadline, cancellation, inspect=parse)
+                if record["status"] != "missing":
+                    records.append(record)
+            require(len(records) == 1, "source_missing" if not records else "invalid_metadata")
+            result[field] = records[0]
+        except (Unavailable, UnicodeError) as error:
+            if isinstance(error, Unavailable) and (error.reason in {"timeout", "cleanup_failure"}
+                                                  or files.used > TOTAL_SOURCE):
+                raise
+            result[field] = {"status": "unavailable", "reason":
+                             error.reason if isinstance(error, Unavailable) else "invalid_metadata"}
+    return result
+
+
+def apparmor_observations(files, deadline, cancellation=None):
+    """Independent fixed facts; version printing never grants policy admission."""
+    result = {}
+    parser_md5 = None
+    def inspect_parser(fd, raw, metadata):
+        nonlocal parser_md5
+        parser_md5 = hashlib.md5(raw, usedforsecurity=False).hexdigest()
+        try:
+            version = parser_version(fd, files, deadline, cancellation)
+        except Unavailable as error:
+            if error.reason in {"completion_unknown", "cleanup_failure", "collector_io_failure"} or files.used > TOTAL_SOURCE:
+                raise
+            version = {"status": "unavailable", "reason": error.reason}
+        return dict(metadata, executable_version=version)
     for source_id in APPARMOR_PATHS:
         checkpoint(deadline, cancellation)
         try:
-            record = read_source(source_id, files, deadline, cancellation)
+            record = read_source(source_id, files, deadline, cancellation,
+                                 inspect=inspect_parser if source_id == "parser" else None)
             if record["status"] == "missing":
                 record = {"status": "unavailable", "reason": "source_missing"}
         except Unavailable as error:
-            if error.reason in {"timeout", "cleanup_failure"} or files.used > TOTAL_SOURCE:
+            if error.reason in {"timeout", "cleanup_failure", "completion_unknown", "collector_io_failure"} or files.used > TOTAL_SOURCE:
                 raise
             record = {"status": "unavailable", "reason": error.reason}
             if error.failure_detail is not None:
                 record["failure_detail"] = error.failure_detail
         result[source_id] = record
+        if source_id == "parser":
+            result["parser_version"] = record.pop("executable_version", {
+                "status": "unavailable", "reason": record.get("reason", "custody_failure")})
+            if record["status"] != "observed":
+                parser_md5 = None
     try:
         records = package_metadata(capture(APPARMOR_QUERY, files, "command",
                                            min(deadline, time.monotonic() + 4), cancellation, (0, 1)))
@@ -589,13 +721,14 @@ def apparmor_observations(files, deadline, cancellation=None):
                 "package_not_installed")
         result["parser_package_version"] = {
             "status": "reported", "version": package["version"], "architecture": package["architecture"],
-            "provenance": "installed_apparmor_package_metadata", "executable_version": "not_established"}
+            "provenance": "installed_apparmor_package_metadata"}
     except Unavailable as error:
         if error.reason in {"completion_unknown", "cleanup_failure", "collector_io_failure", "output_overflow"}:
             raise
         result["parser_package_version"] = {"status": "unavailable", "reason": error.reason}
         if error.failure_detail is not None:
             result["parser_package_version"]["failure_detail"] = error.failure_detail
+    result.update(local_parser_provenance(files, deadline, cancellation, parser_md5))
     return result
 
 

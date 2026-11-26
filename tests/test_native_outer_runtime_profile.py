@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("hosted_diagnostic", ROOT / "scripts/native-outer-runtime-profile.py")
 PROFILE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(PROFILE)
+UNPRIVILEGED_CONTEXT = PROFILE.unprivileged_context
 SECRET = "private-host-source-user-stderr-canary"
 HEAD = "a" * 40
 CI = {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted", "RUNNER_OS": "Linux",
@@ -60,7 +61,7 @@ class HostedDiagnosticTests(unittest.TestCase):
         self.host.mkdir(mode=0o700)
         self.raw = self.base / "private"
         self.raw.mkdir(mode=0o700)
-        for source_id, path in (PROFILE.SOURCE_PATHS | PROFILE.APPARMOR_PATHS).items():
+        for source_id, path in (PROFILE.SOURCE_PATHS | PROFILE.APPARMOR_PATHS | PROFILE.PROVENANCE_PATHS).items():
             target = self.host / path.lstrip("/")
             target.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
             if source_id in PROFILE.DIRECTORY_IDS:
@@ -71,13 +72,24 @@ class HostedDiagnosticTests(unittest.TestCase):
                 target.chmod(0o644)
                 if source_id in PROFILE.FEATURE_VALUES:
                     target.write_bytes(PROFILE.FEATURE_VALUES[source_id][0] + b"\n")
+        self.source("parser").chmod(0o755)
+        for key, path in PROFILE.PROVENANCE_PATHS.items():
+            target = self.host / path.lstrip("/")
+            if key.startswith(":amd64"):
+                target.unlink()
+            else:
+                target.write_text("" if key == "diversions" else
+                                  "/usr/sbin/apparmor_parser\n" if key == ":list" else
+                                  hashlib.md5((SECRET + "\n").encode()).hexdigest() + "  usr/sbin/apparmor_parser\n")
         self.addCleanup(patch.stopall)
         patch.object(PROFILE, "EXPECTED_UID", os.geteuid()).start()
         patch.object(PROFILE, "SOURCE_ROOT", str(self.host)).start()
+        patch.object(PROFILE, "unprivileged_context", return_value=True).start()
         original = tempfile.mkdtemp
         patch.object(PROFILE.tempfile, "mkdtemp", side_effect=lambda **kw: original(dir=self.raw, **kw)).start()
 
-    def execute(self, environment=None, replacements=None, statuses=None, missing=None):
+    def execute(self, environment=None, replacements=None, statuses=None, missing=None,
+                version_output=b"AppArmor parser version 5.0.2\n", on_version=None, cancellation=None):
         outputs = {PROFILE.CHECKOUT: (HEAD + "\n").encode(), PROFILE.PACKAGE_QUERY: package_fixture(),
                    PROFILE.OWNER_QUERY: owner_fixture(), PROFILE.UNIT_QUERY: unit_fixture(),
                    PROFILE.APPARMOR_QUERY: b"apparmor\tinstall ok installed\t4.0.1-0ubuntu1\tamd64\n"}
@@ -87,8 +99,15 @@ class HostedDiagnosticTests(unittest.TestCase):
         real_popen, real_discard = subprocess.Popen, PROFILE.RawFiles.discard
 
         def fake(command, **kwargs):
-            self.assertIn(command, PROFILE.COMMANDS)
-            calls.append(command)
+            parser = bool(kwargs.get("pass_fds"))
+            if parser:
+                fd, = kwargs["pass_fds"]
+                self.assertEqual(command, PROFILE.bounded_command("/proc/self/fd/" + str(fd), "--version"))
+                self.assertEqual(kwargs["preexec_fn"], PROFILE.no_new_privileges)
+                if on_version is not None: on_version(fd)
+            else:
+                self.assertIn(command, PROFILE.COMMANDS)
+                calls.append(command)
             self.assertEqual(kwargs["env"], PROFILE.ENVIRONMENT)
             self.assertEqual(kwargs["stdin"], subprocess.DEVNULL)
             self.assertEqual(kwargs["cwd"], ROOT)
@@ -99,8 +118,8 @@ class HostedDiagnosticTests(unittest.TestCase):
                     self.assertEqual(stat.S_IMODE(item.stat().st_mode), 0o600)
             if command == missing:
                 raise FileNotFoundError(SECRET)
-            data = outputs[command]
-            expression = repr(data) if len(data) < 4096 else "b'X' * " + str(len(data))
+            data = version_output if parser else outputs[command]
+            expression = repr(data) if parser or len(data) < 4096 else "b'X' * " + str(len(data))
             program = ("import sys; sys.stdout.buffer.write(" + expression + "); sys.stdout.flush(); "
                        "sys.stderr.buffer.write(" + repr(SECRET.encode()) + "); sys.exit(" +
                        str(statuses.get(command, 0)) + ")")
@@ -116,7 +135,7 @@ class HostedDiagnosticTests(unittest.TestCase):
         try:
             with patch.object(PROFILE.subprocess, "Popen", side_effect=fake), \
                     patch.object(PROFILE.RawFiles, "discard", discard), redirect_stdout(stdout), redirect_stderr(stderr):
-                result = PROFILE.sample(CI if environment is None else environment)
+                result = PROFILE.sample(CI if environment is None else environment, cancellation)
         finally:
             for child in children:
                 child.wait(timeout=2)
@@ -218,7 +237,233 @@ class HostedDiagnosticTests(unittest.TestCase):
             self.assertEqual(facts[name]["kind"], "regular")
         self.assertEqual(facts["parser_package_version"], {
             "status": "reported", "version": "4.0.1-0ubuntu1", "architecture": "amd64",
-            "provenance": "installed_apparmor_package_metadata", "executable_version": "not_established"})
+            "provenance": "installed_apparmor_package_metadata"})
+
+    def test_version_and_local_database_facts_are_independent(self):
+        md5 = self.host / PROFILE.PROVENANCE_PATHS[":md5sums"].lstrip("/")
+        md5.write_text("0" * 32 + "  usr/sbin/apparmor_parser\n")
+        result, _ = self.execute(replacements={PROFILE.APPARMOR_QUERY: b""})
+        facts = result["observations"]["apparmor"]
+        self.assertEqual(facts["parser_version"]["version"], "5.0.2")
+        self.assertEqual(facts["parser_package_checksum"]["comparison"], "mismatch")
+        self.assertEqual(facts["parser_package_owner"]["owner"], "apparmor")
+        self.assertEqual(facts["parser_package_version"]["status"], "unavailable")
+        self.assertEqual(facts["parser_diversion"]["registration"], "none")
+        result, _ = self.execute(version_output=b"unparsed private output\n")
+        self.assertEqual(result["observations"]["apparmor"]["parser_version"]["reason"], "invalid_metadata")
+        self.assertEqual(result["observations"]["apparmor"]["parser_package_checksum"]["comparison"], "mismatch")
+
+    def test_version_execution_uses_the_held_inert_executable(self):
+        # Execute a private inert fixture through the actual fd/timeout path;
+        # never invoke the system parser or a command selected by input.
+        self.source("parser").write_text("#!/usr/bin/python3\nimport os\n"
+            "assert os.environ == {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C', 'LC_ALL': 'C'}\n"
+            "assert 'NoNewPrivs:\\t1' in open('/proc/self/status').read()\n"
+            "print('AppArmor parser version 5.0.2')\n")
+        with PROFILE.private_outputs() as files:
+            record = PROFILE.read_source("parser", files, time.monotonic() + 4,
+                inspect=lambda fd, raw, metadata: dict(metadata,
+                    version=PROFILE.parser_version(fd, files, time.monotonic() + 3, None)))
+        self.assertEqual(record["version"]["version"], "5.0.2")
+        self.assertEqual(record["sha256"], hashlib.sha256(self.source("parser").read_bytes()).hexdigest())
+
+    def test_version_unsafe_modes_root_and_capabilities_refuse_without_child(self):
+        for mode in (0o4755, 0o2755, 0o644):
+            self.source("parser").chmod(mode)
+            result, _ = self.execute()
+            self.assertEqual(result["observations"]["apparmor"]["parser_version"]["reason"], "custody_failure")
+        self.source("parser").chmod(0o755)
+        for replacement in (patch.object(PROFILE, "unprivileged_context", return_value=False),
+                            patch.object(PROFILE.os, "getxattr", return_value=b"capability")):
+            with replacement:
+                result, _ = self.execute()
+            self.assertEqual(result["observations"]["apparmor"]["parser_version"]["status"], "unavailable")
+
+    def test_privilege_context_refuses_root_identity_drift_and_process_capabilities(self):
+        for uid, uids, gids in ((0, (0, 0, 0), (1, 1, 1)),
+                                (1, (1, 0, 1), (1, 1, 1)), (1, (1, 1, 1), (1, 0, 1))):
+            with patch.object(PROFILE.os, "getuid", return_value=uid), \
+                 patch.object(PROFILE.os, "getresuid", return_value=uids), \
+                 patch.object(PROFILE.os, "getresgid", return_value=gids), \
+                 patch.object(PROFILE.ctypes, "CDLL") as libc:
+                self.assertFalse(UNPRIVILEGED_CONTEXT())
+                libc.assert_not_called()
+        for field in (None, "effective", "permitted", "inheritable"):
+            def capget(_header, caps):
+                if field is not None:
+                    setattr(caps[1], field, 1)
+                return 0
+            with patch.object(PROFILE.os, "getuid", return_value=1), \
+                 patch.object(PROFILE.os, "getresuid", return_value=(1, 1, 1)), \
+                 patch.object(PROFILE.os, "getresgid", return_value=(1, 1, 1)), \
+                 patch.object(PROFILE.ctypes, "CDLL", return_value=SimpleNamespace(capget=capget)):
+                self.assertEqual(UNPRIVILEGED_CONTEXT(), field is None)
+
+    def test_version_change_refuses_hash_and_version_together(self):
+        def replace(_fd):
+            self.source("parser").unlink()
+            self.source("parser").write_text("replacement")
+        result, _ = self.execute(on_version=replace)
+        facts = result["observations"]["apparmor"]
+        self.assertEqual(facts["parser"]["status"], "unavailable")
+        self.assertEqual(facts["parser_version"]["status"], "unavailable")
+        self.assertEqual(facts["parser_package_checksum"]["status"], "unavailable")
+
+    def test_local_database_aliases_and_diversions_are_closed(self):
+        for suffix in ("list", "md5sums"):
+            path = self.host / PROFILE.PROVENANCE_PATHS[":" + suffix].lstrip("/")
+            path.write_text(path.read_text().replace("usr/sbin/", "sbin/"))
+        path = self.host / PROFILE.PROVENANCE_PATHS["diversions"].lstrip("/")
+        path.write_text("/sbin/apparmor_parser\n/private/" + SECRET + "\nlocal-package\n")
+        result, _ = self.execute()
+        facts = result["observations"]["apparmor"]
+        self.assertEqual(facts["parser_package_owner"]["owner"], "apparmor")
+        self.assertEqual(facts["parser_package_checksum"]["comparison"], "match")
+        self.assertEqual(facts["parser_diversion"]["registration"], "package")
+
+    def test_version_malformed_and_byte_limit_refusals_preserve_hash(self):
+        for raw in (b"", b"AppArmor parser version 5.0.2", b"AppArmor parser version 5.x\n",
+                    b"AppArmor parser version 5.0.2\n\x00", b"x" * (PROFILE.LIMIT + 1)):
+            result, _ = self.execute(version_output=raw)
+            facts = result["observations"]["apparmor"]
+            self.assertEqual(facts["parser_version"]["status"], "unavailable")
+            self.assertEqual(facts["parser"]["status"], "observed")
+
+    def test_provenance_complete_package_lists_preserve_valid_rows_and_refuse_bad_rows(self):
+        path = self.host / PROFILE.PROVENANCE_PATHS[":list"].lstrip("/")
+        harmless = b"/.\n/usr\n/path with spaces\n"
+        for target in (b"", b"/usr/sbin/apparmor_parser\n", b"/sbin/apparmor_parser\n"):
+            with self.subTest(valid_target=target):
+                path.write_bytes(harmless + target)
+                result, _ = self.execute()
+                facts = result["observations"]["apparmor"]
+                self.assertEqual(facts["parser_package_owner"]["owner"], "apparmor" if target else "not_recorded")
+                self.assertEqual(facts["parser_version"]["version"], "5.0.2")
+                self.assertEqual(facts["parser_package_checksum"]["comparison"], "match")
+        for bad in (b"/bad\x00name\n", b"relative/path\n", b"/bad\r\n", b"\n", b"/bad\x7f\n"):
+            for target in (b"", b"/usr/sbin/apparmor_parser\n"):
+                for first in (True, False):
+                    with self.subTest(bad=bad, target=target, first=first):
+                        path.write_bytes(harmless + (target + bad if first else bad + target))
+                        result, _ = self.execute()
+                        facts = result["observations"]["apparmor"]
+                        self.assertEqual(facts["parser_package_owner"], {
+                            "status": "unavailable", "reason": "invalid_metadata"})
+                        self.assertEqual(facts["parser_version"]["version"], "5.0.2")
+                        self.assertEqual(facts["parser_package_checksum"]["comparison"], "match")
+
+    def test_provenance_complete_checksums_preserve_relative_paths_and_refuse_bad_rows(self):
+        path = self.host / PROFILE.PROVENANCE_PATHS[":md5sums"].lstrip("/")
+        target = path.read_bytes()
+        harmless = b"0" * 32 + b"  usr/share/path with spaces\n"
+        path.write_bytes(harmless + target.replace(b"usr/sbin/", b"sbin/"))
+        result, _ = self.execute()
+        self.assertEqual(result["observations"]["apparmor"]["parser_package_checksum"]["comparison"], "match")
+        for bad in (b"usr/bad\x00name", b"/absolute/path", b"usr/bad\r", b"usr/bad\x7f"):
+            for first in (True, False):
+                with self.subTest(bad=bad, first=first):
+                    malformed = b"0" * 32 + b"  " + bad + b"\n"
+                    path.write_bytes(target + malformed if first else malformed + target)
+                    result, _ = self.execute()
+                    facts = result["observations"]["apparmor"]
+                    self.assertEqual(facts["parser_package_checksum"], {
+                        "status": "unavailable", "reason": "invalid_metadata"})
+                    self.assertEqual(facts["parser_version"]["version"], "5.0.2")
+                    self.assertEqual(facts["parser_package_owner"]["owner"], "apparmor")
+
+    def test_provenance_complete_diversions_preserve_local_marker_and_refuse_bad_rows(self):
+        path = self.host / PROFILE.PROVENANCE_PATHS["diversions"].lstrip("/")
+        for package, expected in ((b":", "local"), (b"local-package", "package"),
+                                  (b"local-package:amd64", "package")):
+            with self.subTest(package=package):
+                path.write_bytes(b"/sbin/apparmor_parser\n/path with spaces\n" + package + b"\n")
+                result, _ = self.execute()
+                self.assertEqual(result["observations"]["apparmor"]["parser_diversion"]["registration"], expected)
+        target = b"/usr/sbin/apparmor_parser\n/diverted\n:\n"
+        for malformed in (b"/other\n/destination\nnot a package\n", b"relative\n/destination\nvalid-package\n",
+                          b"/other\n/dest\x00ination\nvalid-package\n", b"/other\n/destination\nPACKAGE\n",
+                          b"/other\r\n/destination\nvalid-package\n"):
+            for present in (False, True):
+                with self.subTest(malformed=malformed, present=present):
+                    path.write_bytes((target if present else b"") + malformed)
+                    result, _ = self.execute()
+                    facts = result["observations"]["apparmor"]
+                    self.assertEqual(facts["parser_diversion"], {
+                        "status": "unavailable", "reason": "invalid_metadata"})
+                    self.assertEqual(facts["parser_version"]["version"], "5.0.2")
+                    self.assertEqual(facts["parser_package_owner"]["owner"], "apparmor")
+                    self.assertEqual(facts["parser_package_checksum"]["comparison"], "match")
+
+    def test_parser_capture_terminal_failures_stop_sample_and_clean_outputs(self):
+        real_capture = PROFILE.capture
+        for reason in ("completion_unknown", "collector_io_failure", "cleanup_failure"):
+            captured = []
+            def fail_parser(command, files, *args, **kwargs):
+                captured.append(command)
+                if kwargs.get("parser_fd") is not None:
+                    files.discard()
+                    raise PROFILE.Unavailable(reason)
+                return real_capture(command, files, *args, **kwargs)
+            with self.subTest(reason=reason), patch.object(PROFILE, "capture", side_effect=fail_parser):
+                result, calls = self.execute()
+                self.assertEqual(result, {
+                    "schema_version": 5, "purpose": PROFILE.PURPOSE, "admission": "unadmitted",
+                    "provenance": "unverified_installed_observation", "status": "unavailable",
+                    "reason": reason, "binding": PROFILE.binding(CI), "observations": None})
+                self.assertEqual(calls, list(PROFILE.COMMANDS[:-1]))
+                self.assertEqual(len(captured), len(PROFILE.COMMANDS))
+                self.assertEqual(captured[-1][-1], "--version")
+                self.assertNotIn(PROFILE.APPARMOR_QUERY, captured)
+                self.assertEqual(list(self.raw.iterdir()), [])
+
+    def test_parser_capture_recoverable_failures_preserve_independent_facts(self):
+        real_capture = PROFILE.capture
+        for reason in ("tool_unavailable", "command_failed", "timeout", "output_overflow", "invalid_metadata"):
+            def fail_parser(command, files, *args, **kwargs):
+                if kwargs.get("parser_fd") is not None:
+                    raise PROFILE.Unavailable(reason)
+                return real_capture(command, files, *args, **kwargs)
+            with self.subTest(reason=reason), patch.object(PROFILE, "capture", side_effect=fail_parser):
+                result, calls = self.execute()
+            self.assertEqual((result["status"], result["reason"]), ("partial", "complete"))
+            facts = result["observations"]["apparmor"]
+            self.assertEqual(facts["parser_version"], {"status": "unavailable", "reason": reason})
+            self.assertEqual(facts["parser"]["status"], "observed")
+            self.assertEqual(facts["parser_package_version"]["status"], "reported")
+            self.assertEqual(facts["parser_package_checksum"]["comparison"], "match")
+            self.assertEqual(calls, list(PROFILE.COMMANDS))
+            self.assertEqual(list(self.raw.iterdir()), [])
+
+    def test_version_exact_stream_limit_and_cancellation_cleanup(self):
+        prefix = b"AppArmor parser version 5.0.2\n"
+        # Bounded printable lines make the first output exactly 64 KiB.
+        remaining = PROFILE.LIMIT - len(prefix)
+        raw = prefix + (b"x" * 127 + b"\n") * (remaining // 128)
+        raw += b"x" * (remaining % 128 - 1) + b"\n"
+        self.assertEqual(len(raw), PROFILE.LIMIT)
+        result, _ = self.execute(version_output=raw)
+        self.assertEqual(result["observations"]["apparmor"]["parser_version"]["version"], "5.0.2")
+        cancellation = PROFILE.Cancellation()
+        with self.assertRaises(PROFILE.Cancelled):
+            self.execute(cancellation=cancellation,
+                         on_version=lambda _fd: cancellation.request(signal.SIGTERM))
+        self.assertEqual(list(self.raw.iterdir()), [])
+
+    def test_database_missing_malformed_and_duplicate_records_are_independent(self):
+        md5 = self.host / PROFILE.PROVENANCE_PATHS[":md5sums"].lstrip("/")
+        md5.unlink()
+        diversion = self.host / PROFILE.PROVENANCE_PATHS["diversions"].lstrip("/")
+        diversion.write_bytes(b"incomplete\n")
+        result, _ = self.execute()
+        facts = result["observations"]["apparmor"]
+        self.assertEqual(facts["parser_version"]["version"], "5.0.2")
+        self.assertEqual(facts["parser_package_checksum"]["reason"], "source_missing")
+        self.assertEqual(facts["parser_diversion"]["reason"], "invalid_metadata")
+        alternate = self.host / PROFILE.PROVENANCE_PATHS[":amd64:list"].lstrip("/")
+        alternate.write_text("/usr/sbin/apparmor_parser\n")
+        alternate.chmod(0o644)
+        result, _ = self.execute()
+        self.assertEqual(result["observations"]["apparmor"]["parser_package_owner"]["reason"], "invalid_metadata")
 
     def test_apparmor_missing_unexpected_and_negative_fields_are_independent(self):
         self.source("parser").unlink()
@@ -368,14 +613,14 @@ class HostedDiagnosticTests(unittest.TestCase):
         real_read = PROFILE.read_source
         for exact in (True, False):
             visited = []
-            def exhaust(source_id, files, *args):
+            def exhaust(source_id, files, *args, **kwargs):
                 visited.append(source_id)
                 if source_id == "parser":
                     files.used = PROFILE.TOTAL_SOURCE - (self.source("parser").stat().st_size if exact else 1)
-                return real_read(source_id, files, *args)
+                return real_read(source_id, files, *args, **kwargs)
             with self.subTest(exact=exact), patch.object(PROFILE, "read_source", side_effect=exhaust):
                 result, calls = self.execute()
-                self.assertEqual(visited, ["parser", "abi_4_0"] if exact else ["parser"])
+                self.assertEqual(visited, ["parser"])
                 self.assertEqual(calls, list(PROFILE.COMMANDS[:-1]))
                 self.assertEqual((result["status"], result["reason"], result["observations"]),
                                  ("unavailable", "output_overflow", None))
@@ -478,7 +723,7 @@ class HostedDiagnosticTests(unittest.TestCase):
             PROFILE.owner_metadata(("dpkg: /" + SECRET + "\n").encode())
 
     def source(self, source_id="helper:invoke-rc.d"):
-        return self.host / (PROFILE.SOURCE_PATHS | PROFILE.APPARMOR_PATHS)[source_id].lstrip("/")
+        return self.host / (PROFILE.SOURCE_PATHS | PROFILE.APPARMOR_PATHS | PROFILE.PROVENANCE_PATHS)[source_id].lstrip("/")
 
     def read(self, source_id="helper:invoke-rc.d"):
         with PROFILE.private_outputs() as files:
@@ -614,7 +859,7 @@ class HostedDiagnosticTests(unittest.TestCase):
             self.assertNotIn(SECRET, output.getvalue() + errors.getvalue())
             if len(argv) == 1:
                 record = json.loads(output.getvalue())
-                self.assertEqual(record["schema_version"], 4)
+                self.assertEqual(record["schema_version"], 5)
                 self.assertEqual(record["purpose"], "hosted_prerequisite_diagnostic")
                 self.assertEqual(record["admission"], "unadmitted")
 
@@ -680,7 +925,7 @@ class HostedDiagnosticTests(unittest.TestCase):
         copyright = self.source("copyright:dpkg")
         copyright.chmod(0o666)
         result, calls = self.execute(replacements={PROFILE.PACKAGE_QUERY: raw})
-        self.assertEqual(result["schema_version"], 4)
+        self.assertEqual(result["schema_version"], 5)
         self.assertEqual(result["status"], "partial")
         self.assertEqual(calls, list(PROFILE.COMMANDS))
         self.assertEqual(result["observations"]["packages"], {"status": "unavailable", "reason": "invalid_metadata",
@@ -766,7 +1011,7 @@ class HostedDiagnosticTests(unittest.TestCase):
 
     def test_schema3_success_has_no_failure_detail_and_preserves_observations(self):
         result, calls = self.execute()
-        self.assertEqual((result["schema_version"], result["status"], result["reason"]), (4, "observed", "complete"))
+        self.assertEqual((result["schema_version"], result["status"], result["reason"]), (5, "observed", "complete"))
         self.assertNotIn("failure_detail", json.dumps(result))
         self.assertEqual(calls, list(PROFILE.COMMANDS))
         self.assertEqual(PROFILE.package_metadata(b""), {name: {"status": "missing"} for name in PROFILE.PACKAGES})
@@ -810,7 +1055,7 @@ class HostedDiagnosticTests(unittest.TestCase):
         raw = (b"docker-ce\tinstall ok installed\t1\tamd64\n"
                b"docker-ce-cli\tdeinstall ok config-files\t\tamd64\n")
         result, calls = self.execute(replacements={PROFILE.PACKAGE_QUERY: raw})
-        self.assertEqual((result["schema_version"], result["status"], result["admission"]), (4, "partial", "unadmitted"))
+        self.assertEqual((result["schema_version"], result["status"], result["admission"]), (5, "partial", "unadmitted"))
         self.assertEqual(calls, list(PROFILE.COMMANDS))
         self.assertEqual(result["observations"]["packages"],
                          {"status": "unavailable", "reason": "invalid_metadata", "failure_detail":

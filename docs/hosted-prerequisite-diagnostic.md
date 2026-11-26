@@ -42,7 +42,8 @@ The fixed command families are bounded `git rev-parse HEAD`, `dpkg-query
 --show`, `dpkg-query --search`, and `systemctl --no-pager --no-ask-password show`.
 Only ten explicit package names (with an independent AppArmor-only query), seven startup/query helpers, and
 `docker.service`, `docker.socket`, `containerd.service` are queried. There is no
-Docker/Podman command or socket query, sudo, journal, helper/script execution,
+Docker/Podman command or socket query, sudo, journal, helper/script execution beyond
+schema 5's fixed parser version query,
 start/stop/restart/reload, package installation or arbitrary caller path. Child
 commands inherit only a fixed PATH and C locale, never credentials or daemon
 selectors. `systemctl show` reads systemd metadata, not Docker daemon state.
@@ -244,13 +245,80 @@ It never salvages rows from the original inventory. Thus an empty version on an
 unrelated not-installed row still refuses that entire inventory while these
 new facts remain available.
 
-The package database cannot prove the parser executable's own version or its
-ownership/content relationship to a package: `executable_version` remains
-`not_established`. The parser is hashed as data and is never executed, including
-for `--version`. No policy compilation, loading, installation or host mutation
+In schema 4, the package database could not prove the parser executable's own
+version or its ownership/content relationship to a package: `executable_version`
+was `not_established`. The parser was hashed as data without execution.
+No policy compilation, loading, installation or host mutation
 occurs. No kernel release, effective profile, daemon identity or native effect
 is inferred. Global cancellation, budget exhaustion or unsafe command completion
 still fail closed under the existing envelope rules. A fresh protected-main
 artifact and independent review are needed to establish actual hosted facts;
 ordinary fake regressions establish only collector behavior. Admission remains
 `unadmitted`.
+
+## Schema 5: held executable version and local package records
+
+Issue #308 adds independent `parser_version`, `parser_package_owner`,
+`parser_package_checksum` and `parser_diversion` records in `observations.apparmor`.
+All envelopes use schema 5. The package version record drops schema 4's
+`executable_version: not_established`; executable observations have their own
+record and never inherit a package version. Historical artifacts remain unchanged.
+
+After hashing the fixed `/usr/sbin/apparmor_parser`, the collector retains its
+original no-follow regular-file descriptor and the entire directory chain while
+running only `--version` through that descriptor (`/proc/self/fd/N`). The original
+file and named path must still match their metadata after execution. File change
+refuses both the hash and version; the collector never executes a replacement.
+The command receives the existing fixed PATH/C locale environment, empty stdin,
+the existing timeout wrapper and capture limits. The child receives Linux
+`no_new_privs` before exec, including the timeout wrapper. Root, mismatched real/
+effective/saved identities, any effective/permitted/inheritable capability,
+set-ID executable, file capability or inaccessible capability metadata refuses
+the version query. No escalation, policy compilation/loading, service operation,
+package installation or new workflow authority is introduced.
+
+Only an ASCII `AppArmor parser version` line with two to four bounded numeric
+components is published, with provenance
+`unverified_installed_executable_observation`. Optional bounded printable trailing
+lines are validated then discarded. Malformed output, timeout, unsafe context
+or missing executable reports unavailability. This self-report can be admissible
+even when archive provenance is unresolved or a local checksum differs. It does
+not establish publisher identity, warning semantics, ABI compatibility or native
+qualification. The trusted installed system file remains an unverified observation.
+
+Local provenance reads only `/var/lib/dpkg/info/apparmor.list` and
+`apparmor.md5sums`, their separately fixed `:amd64` alternatives, and
+`/var/lib/dpkg/diversions`, through the same guarded reader. No path from these
+records is opened or executed. Exactly one plain or architecture-qualified
+record is required per fact; ambiguous records refuse. Ownership reports only
+whether this AppArmor package list records the exact parser path; `not_recorded`
+does not prove another package owns it or that it is unowned. The legitimate
+package path alias `/sbin/apparmor_parser` is accepted as an exact declaration,
+without traversing `/sbin`. No substring, basename or arbitrary normalization
+is accepted. This finite observation does not scan every installed package.
+
+All three database formats validate every literal LF-delimited row before
+publishing a fact; CR, NUL, DEL, other controls and malformed unrelated rows
+make that fact unavailable. Package-list and diversion paths must be absolute;
+checksum paths must be relative. `/.` and names containing spaces are preserved
+as recorded, without normalization. A diversion package is a syntactically valid
+lowercase Debian package name (optionally architecture-qualified), or the literal
+local marker `:`. Rejected records never suppress independent facts.
+
+Checksum comparison uses the exact path's single recorded MD5 against the bytes
+of the same stable parser whose SHA-256 is published. Only `match` or `mismatch`
+and the algorithm escape, never the database digest or raw records. MD5 here is
+an installed-record comparison, not an integrity/authenticity claim. Diversions
+are parsed as complete three-line records and publish only `none`, `local` or
+`package` for registrations involving the exact path or fixed alias; destination
+and package text never escape. Missing, malformed or unsafe database files leave
+that fact unavailable without hiding a separately admissible version or hash.
+Conversely, unavailable version output does not erase local provenance.
+
+Every read and both captured command streams share the original 8 MiB allowance;
+new database reads retain the 2 MiB file cap. Exactly reaching a byte cap still
+allows EOF; the first additional byte refuses. The original 45-second deadline,
+per-child timeout/kill fallback, private raw files, cancellation and cleanup
+rules remain. Unsafe child completion and cumulative exhaustion retain global
+refusal. Ordinary inert fixture tests establish collector behavior only; fresh
+protected-main collection and independent artifact review remain pending.
