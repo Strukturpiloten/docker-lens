@@ -38,9 +38,9 @@ extra token permission is changed. A diagnostic is not a PR validation substitut
 
 ## Finite read-only collection
 
-The four fixed command vectors are bounded `git rev-parse HEAD`, `dpkg-query
+The fixed command families are bounded `git rev-parse HEAD`, `dpkg-query
 --show`, `dpkg-query --search`, and `systemctl --no-pager --no-ask-password show`.
-Only ten explicit package names, seven startup/query helpers, and
+Only ten explicit package names (with an independent AppArmor-only query), seven startup/query helpers, and
 `docker.service`, `docker.socket`, `containerd.service` are queried. There is no
 Docker/Podman command or socket query, sudo, journal, helper/script execution,
 start/stop/restart/reload, package installation or arbitrary caller path. Child
@@ -117,7 +117,7 @@ main diagnostic is still needed to learn the actual missing prerequisite facts.
 
 ## Schema 3: validated dpkg status context
 
-The emitted manifest version is now 3, including cancellation/unavailable
+Schema 3 emitted manifest version 3, including cancellation/unavailable
 envelopes. Package `failure_detail` may additionally contain
 `validated_dpkg_state`, and only for a later `version` or `architecture` failure
 on a positive row ordinal. The parser derives this value from the third token
@@ -184,3 +184,73 @@ Installed Python/core utilities, dpkg and systemd follow the existing mutable
 Ubuntu 26.04 runner unavailable-integrity/manual-review boundary.
 Historical native evidence stays immutable. Focused fake controls establish only
 source behavior; independent review and final complete gates remain required.
+
+## Schema 4: independent AppArmor prerequisite observations
+
+Issue #306 adds `observations.apparmor`; emitted manifests, including unavailable
+and cancellation envelopes, now use schema 4. Existing observation fields,
+whole-inventory refusal and validated failure context retain their behavior.
+Historical schemas and artifacts remain unchanged. No workflow caller, gate,
+permission, dependency, operational pin or Renovate ownership changes.
+
+The independent group reads exactly these fixed paths as data:
+
+| Field | Path | Published values |
+| --- | --- | --- |
+| `enabled` | `/sys/module/apparmor/parameters/enabled` | `Y`, `N` |
+| `restrict_unprivileged_userns` | `/proc/sys/kernel/apparmor_restrict_unprivileged_userns` | `1`, `0` |
+| `namespace_mask` | `/sys/kernel/security/apparmor/features/namespaces/mask` | `present`, `absent` (exact `userns_create` token) |
+| `policy_v9` | `/sys/kernel/security/apparmor/features/policy/versions/v9` | `yes`, `no` |
+| `parser` | `/usr/sbin/apparmor_parser` | regular-file metadata and SHA-256 |
+| `abi_4_0` | `/etc/apparmor.d/abi/4.0` | regular-file metadata and SHA-256 |
+
+Feature reads allow one trailing newline, with a 128-byte cap. The scalar
+`enabled`, `restrict_unprivileged_userns` and `policy_v9` fields retain their
+closed exact values. `namespace_mask` instead tests whitespace-token membership,
+as the submitted helper does: a bounded single-line ASCII list consists of
+lowercase identifier tokens (`[a-z][a-z0-9_]*`) separated by spaces or tabs,
+with optional leading/trailing spaces/tabs and one optional final newline.
+An exact `userns_create` token in any position reports `observed / present`;
+a well-formed list without it reports `observed / absent`, including near misses
+such as `userns_create_extra`. Unknown tokens never leave the collector, either
+as text or a digest. Empty lists, embedded/repeated newlines, CR/other controls,
+non-ASCII bytes and invalid token syntax remain unavailable; this framing is
+deliberately stricter than the helper's general byte whitespace splitter.
+Unknown scalar, empty, binary or otherwise malformed values report
+`unavailable / invalid_metadata` without raw data or its digest. Oversized fields
+report `unavailable / output_overflow`. Negative closed values are observations,
+not compatibility decisions. Feature pseudo-files may advertise zero or page-sized
+lengths: content is bounded independently of their advertised size. The parser
+and ABI retain the existing 2 MiB per-file limit and length equality check.
+All reads share the existing 8 MiB cumulative budget and 45-second deadline.
+If a field exceeds its own cap, later fields can still be observed within the
+shared allowance. At exactly 8 MiB the collector may check for end of input.
+A single additional byte triggers `output_overflow` for the entire collection
+and prevents further source reads or child queries.
+The same held no-follow descriptor walk, root ownership, mode, regular-file,
+single-link and post-read stability checks apply. New leaf symlinks are refused,
+never followed or described; deeper custody components extend through
+`ancestor_7`. Missing files report `unavailable / source_missing`; unreadable
+files retain closed custody guard/category detail, including permission denial.
+Each missing or refused fact is independent and makes the receipt partial.
+
+`parser_package_version` uses a separate fixed `dpkg-query --show apparmor`
+with the existing format, command limits and strict metadata parser. Only
+AppArmor rows are accepted; an installed, non-reinstreq install/hold state is
+required. It reports the full package version and architecture with provenance
+`installed_apparmor_package_metadata`. Missing/noninstalled rows, malformed
+metadata, missing tools and timeouts remain explicit unavailable outcomes.
+It never salvages rows from the original inventory. Thus an empty version on an
+unrelated not-installed row still refuses that entire inventory while these
+new facts remain available.
+
+The package database cannot prove the parser executable's own version or its
+ownership/content relationship to a package: `executable_version` remains
+`not_established`. The parser is hashed as data and is never executed, including
+for `--version`. No policy compilation, loading, installation or host mutation
+occurs. No kernel release, effective profile, daemon identity or native effect
+is inferred. Global cancellation, budget exhaustion or unsafe command completion
+still fail closed under the existing envelope rules. A fresh protected-main
+artifact and independent review are needed to establish actual hosted facts;
+ordinary fake regressions establish only collector behavior. Admission remains
+`unadmitted`.

@@ -61,7 +61,18 @@ SOURCE_IDS = frozenset(SOURCE_PATHS)
 DIRECTORY_IDS = frozenset(source_id for source_id in SOURCE_IDS
                           if source_id.startswith(("vendor:", "etc:", "run:")) and source_id.endswith(".d"))
 PURPOSE = "hosted_prerequisite_diagnostic"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
+APPARMOR_PATHS = {
+    "parser": "/usr/sbin/apparmor_parser",
+    "abi_4_0": "/etc/apparmor.d/abi/4.0",
+    "enabled": "/sys/module/apparmor/parameters/enabled",
+    "restrict_unprivileged_userns": "/proc/sys/kernel/apparmor_restrict_unprivileged_userns",
+    "namespace_mask": "/sys/kernel/security/apparmor/features/namespaces/mask",
+    "policy_v9": "/sys/kernel/security/apparmor/features/policy/versions/v9",
+}
+FEATURE_VALUES = {"enabled": (b"Y", b"N"), "restrict_unprivileged_userns": (b"1", b"0"),
+                  "namespace_mask": (b"userns_create",), "policy_v9": (b"yes", b"no")}
+FEATURE_LIMIT = 128
 WORKFLOW = "Strukturpiloten/docker-lens/.github/workflows/check.yml@refs/heads/main"
 JOB = "hosted-prerequisite-diagnostic"
 # Check's ubuntu-26.04 X64 job has distinct provider and os-release identities.
@@ -70,7 +81,8 @@ RUNNER_VERSION_ID = "26.04"
 REASONS = {"complete", "ci_identity_unavailable", "checkout_unavailable", "tool_unavailable",
            "command_failed", "timeout", "output_overflow", "invalid_metadata",
            "custody_failure", "cleanup_failure", "collector_io_failure", "completion_unknown",
-           "cancelled", "cancelled_completion_unknown", "manifest_overflow"}
+           "cancelled", "cancelled_completion_unknown", "manifest_overflow", "source_missing",
+           "package_not_installed"}
 
 def bounded_command(*arguments):
     return ("/usr/bin/timeout", "--signal=TERM", "--kill-after=1s", "2s", *arguments)
@@ -83,14 +95,16 @@ UNIT_QUERY = bounded_command("/usr/bin/systemctl", "--no-pager", "--no-ask-passw
                              "--property=Id", "--property=LoadState", "--property=ActiveState",
                              "--property=SubState", "--property=UnitFileState", "--property=FragmentPath",
                              "--property=DropInPaths")
-COMMANDS = (CHECKOUT, PACKAGE_QUERY, OWNER_QUERY, UNIT_QUERY)
+APPARMOR_QUERY = bounded_command("/usr/bin/dpkg-query", "--show", "--showformat=" + SHOW_FORMAT, "apparmor")
+COMMANDS = (CHECKOUT, PACKAGE_QUERY, OWNER_QUERY, UNIT_QUERY, APPARMOR_QUERY)
 PACKAGE_FIELDS = frozenset({"encoding", "framing", "columns", "package", "status", "version", "architecture"})
 PACKAGE_CATEGORIES = frozenset({"empty", "invalid_syntax", "unrecognized", "duplicate", "invalid_count",
                                 "invalid_encoding", "oversize", "missing_terminator"})
 VALIDATED_DPKG_STATES = frozenset({"not-installed", "config-files", "half-installed", "unpacked",
                                    "half-configured", "triggers-awaited", "triggers-pending", "installed"})
 SOURCE_GUARDS = frozenset({"open", "metadata", "owner", "mode", "kind", "links", "stability", "close"})
-SOURCE_COMPONENTS = frozenset({"root", "ancestor_1", "ancestor_2", "ancestor_3", "ancestor_4", "leaf"})
+SOURCE_COMPONENTS = frozenset({"root", "ancestor_1", "ancestor_2", "ancestor_3", "ancestor_4",
+                               "ancestor_5", "ancestor_6", "ancestor_7", "leaf"})
 SOURCE_CATEGORIES = frozenset({"check_failed", "symlink_refused", "not_directory", "permission_denied",
                                "io_error", "other_io"})
 
@@ -231,6 +245,7 @@ def capture(command, files, prefix, deadline, cancellation=None, allowed_statuse
         raise Unavailable("command_failed")
     if cancellation is not None:
         cancellation.check()
+    require(files.used <= TOTAL_SOURCE, "output_overflow")
     for descriptor in files.values():
         os.lseek(descriptor, 0, os.SEEK_SET)
         os.ftruncate(descriptor, 0)
@@ -260,7 +275,8 @@ def capture(command, files, prefix, deadline, cancellation=None, allowed_statuse
                 timed_out = True
                 break
             for key, _ in selector.select(min(remaining, 0.1)):
-                chunk = os.read(key.fd, 4096)
+                require(files.used <= TOTAL_SOURCE, "output_overflow")
+                chunk = os.read(key.fd, min(4096, TOTAL_SOURCE - files.used + 1))
                 if not chunk:
                     selector.unregister(key.fileobj)
                     continue
@@ -358,8 +374,12 @@ def directory_identity(info):
 
 def read_source(source_id, files, deadline, cancellation=None):
     """Only finite, source-owned paths; no native-provided paths are followed."""
-    require(source_id in SOURCE_IDS)
-    path = SOURCE_PATHS[source_id]
+    require(source_id in SOURCE_IDS or source_id in APPARMOR_PATHS)
+    checkpoint(deadline, cancellation)
+    require(files.used <= TOTAL_SOURCE, "output_overflow")
+    path = APPARMOR_PATHS[source_id] if source_id in APPARMOR_PATHS else SOURCE_PATHS[source_id]
+    feature = source_id in FEATURE_VALUES
+    file_limit = FEATURE_LIMIT if feature else FILE_LIMIT
     components = path.split("/")[1:]
     require(path.startswith("/") and all(part not in {"", ".", ".."} for part in components))
     descriptors, ancestors = [], []
@@ -396,6 +416,7 @@ def read_source(source_id, files, deadline, cancellation=None):
         result = {"status": "observed", "uid": before.st_uid, "gid": before.st_gid,
                   "mode": stat.S_IMODE(before.st_mode), "size": before.st_size}
         if stat.S_ISLNK(before.st_mode):
+            source_check(source_id not in APPARMOR_PATHS, "kind", "leaf")
             # Only fixed override paths may describe a mask; never follow it.
             target = os.readlink(components[-1], dir_fd=descriptor)
             result.update(status="symlink", mask=target == "/dev/null")
@@ -418,7 +439,7 @@ def read_source(source_id, files, deadline, cancellation=None):
         else:
             source_check(stat.S_ISREG(before.st_mode), "kind", "leaf")
             source_check(before.st_nlink == 1, "links", "leaf")
-            require(0 <= before.st_size <= FILE_LIMIT, "output_overflow")
+            require(0 <= before.st_size and (feature or before.st_size <= file_limit), "output_overflow")
             guard = "open"
             child = os.open(components[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
                             dir_fd=descriptor)
@@ -428,18 +449,31 @@ def read_source(source_id, files, deadline, cancellation=None):
             source_check(source_identity(os.fstat(child)) == source_identity(before), "stability", "leaf")
             raw = bytearray()
             guard = "metadata"
-            while len(raw) <= FILE_LIMIT:
+            while len(raw) <= file_limit:
                 checkpoint(deadline, cancellation)
-                part = os.read(child, min(4096, FILE_LIMIT + 1 - len(raw)))
+                require(files.used <= TOTAL_SOURCE, "output_overflow")
+                part = os.read(child, min(4096, file_limit + 1 - len(raw), TOTAL_SOURCE - files.used + 1))
                 files.used += len(part)
                 require(files.used <= TOTAL_SOURCE, "output_overflow")
                 raw.extend(part)
                 if not part:
                     break
-            require(len(raw) == before.st_size <= FILE_LIMIT, "output_overflow")
+            # procfs/securityfs/sysfs values can advertise zero or a page size.
+            require(len(raw) <= file_limit and (feature or len(raw) == before.st_size), "output_overflow")
             guard = "stability"
             source_check(source_identity(os.fstat(child)) == source_identity(before), "stability", "leaf")
             result.update(kind="regular", sha256=hashlib.sha256(raw).hexdigest())
+            if feature:
+                value = bytes(raw).removesuffix(b"\n")
+                if source_id == "namespace_mask":
+                    # Kernel feature names are tokens, not a whole-field enum.
+                    # Bound framing and grammar before projecting only membership.
+                    require(re.fullmatch(rb"[ \t]*[a-z][a-z0-9_]*(?:[ \t]+[a-z][a-z0-9_]*)*[ \t]*", value))
+                    result = {"status": "observed", "value":
+                              "present" if b"userns_create" in value.split() else "absent"}
+                else:
+                    require(value in FEATURE_VALUES[source_id])
+                    result = {"status": "observed", "value": value.decode("ascii")}
             if source_id == "os-release":
                 # Parse data only; never source shell assignments.
                 guard = "metadata"
@@ -527,6 +561,41 @@ def package_metadata(raw):
                                              "https://github.com/docker/containerd-packaging" if name == "containerd.io" else
                                              "https://launchpad.net/ubuntu/+source/" + name),
                         "source_reference_status": "review_required", "license_hash_record": "copyright:" + name}
+    return result
+
+
+def apparmor_observations(files, deadline, cancellation=None):
+    """Independent fixed facts, never parser execution or policy qualification."""
+    result = {}
+    for source_id in APPARMOR_PATHS:
+        checkpoint(deadline, cancellation)
+        try:
+            record = read_source(source_id, files, deadline, cancellation)
+            if record["status"] == "missing":
+                record = {"status": "unavailable", "reason": "source_missing"}
+        except Unavailable as error:
+            if error.reason in {"timeout", "cleanup_failure"} or files.used > TOTAL_SOURCE:
+                raise
+            record = {"status": "unavailable", "reason": error.reason}
+            if error.failure_detail is not None:
+                record["failure_detail"] = error.failure_detail
+        result[source_id] = record
+    try:
+        records = package_metadata(capture(APPARMOR_QUERY, files, "command",
+                                           min(deadline, time.monotonic() + 4), cancellation, (0, 1)))
+        require(all(record["status"] == "missing" for name, record in records.items() if name != "apparmor"))
+        package = records["apparmor"]
+        require(package.get("package_status") in {"install ok installed", "hold ok installed"},
+                "package_not_installed")
+        result["parser_package_version"] = {
+            "status": "reported", "version": package["version"], "architecture": package["architecture"],
+            "provenance": "installed_apparmor_package_metadata", "executable_version": "not_established"}
+    except Unavailable as error:
+        if error.reason in {"completion_unknown", "cleanup_failure", "collector_io_failure", "output_overflow"}:
+            raise
+        result["parser_package_version"] = {"status": "unavailable", "reason": error.reason}
+        if error.failure_detail is not None:
+            result["parser_package_version"]["failure_detail"] = error.failure_detail
     return result
 
 
@@ -647,6 +716,8 @@ def sample(environment, cancellation=None):
                     if error.failure_detail is not None:
                         observations[field]["failure_detail"] = error.failure_detail
                     partial = True
+            observations["apparmor"] = apparmor_observations(files, deadline, cancellation)
+            partial = partial or any(record["status"] == "unavailable" for record in observations["apparmor"].values())
             for source_id in sorted(SOURCE_IDS):
                 checkpoint(deadline, cancellation)
                 try:
