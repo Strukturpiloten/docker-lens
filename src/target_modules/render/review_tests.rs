@@ -252,6 +252,7 @@ fn debian_target_context_preserves_exact_package_evidence_and_redacts_debug() {
         network_prerequisites: vec![],
         volume_prerequisites: vec![],
         bind_source_prerequisites: vec![],
+        destination_pids_prerequisites: vec![],
         native: Some(NativeRenderState {
             context: PlanningContext::Target(profile),
             requests: vec![],
@@ -259,6 +260,7 @@ fn debian_target_context_preserves_exact_package_evidence_and_redacts_debug() {
         }),
     };
     let expected = b"{\"schema_version\":1,\"context\":{\"kind\":\"target\",\"build\":{\"kind\":\"debian_package\",\"revision\":\"20.10.5+dfsg1-1+deb11u2\"},\"engine_release\":\"20.10.5+dfsg1\",\"advertised_api_version\":\"1.41\",\"acquisition_api_version\":\"1.41\",\"rendering_api_version\":\"1.41\",\"daemon_mode\":\"rootful\",\"evidence_sha256\":\"abababababababababababababababababababababababababababababababab\"},\"requests\":[],\"prerequisites\":[]}\n";
+    assert!(artifact.destination_pids_prerequisites().is_empty());
     assert_eq!(artifact.complete_bytes().unwrap(), expected);
     let debug = format!("{artifact:?} {:?}", artifact.context());
     assert!(!debug.contains("20.10.5"));

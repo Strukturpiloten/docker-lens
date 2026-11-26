@@ -1,6 +1,9 @@
 //! Independent live source probes in the isolated four-lane Engine harness.
 //! The harness supplies CLI-created fixtures and direct GET responses as oracles.
 
+#[path = "../src/native_outer_test_command.rs"]
+mod native_outer_test_command;
+
 use std::collections::HashSet;
 use std::fs;
 use std::io::Read;
@@ -378,16 +381,17 @@ fn membership_cli(args: &[&str]) -> (bool, Vec<u8>) {
     command.args(["--kill-after=1s", "20s"]);
     match required("NATIVE_PODMAN_USE_SUDO").as_str() {
         "1" => {
-            command.args(["sudo", "-n", "podman"]);
+            command.args(["sudo", "-n"]);
+            command.args(crate::native_outer_test_command::prefix());
         }
         "0" => {
-            command.arg("podman");
+            command.args(crate::native_outer_test_command::prefix());
         }
         _ => panic!("invalid native Podman privilege mode"),
     }
     command.args([
         "exec",
-        &required("NATIVE_OUTER_CONTAINER"),
+        &required("NATIVE_OUTER_CONTAINER_ID"),
         "docker",
         "-H",
         "unix:///dockerlens-native/docker.sock",

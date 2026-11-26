@@ -1,5 +1,7 @@
 """Fault injection for exact resource cleanup and ignored native test selection."""
 
+
+from native_timeout_support import TIMER, system_timer
 import json
 import os
 import re
@@ -11,14 +13,19 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class NativeHarnessTests(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(mock.patch.dict(os.environ, {"script_dir": str(ROOT / "scripts"),
+                                                      "native_outer_script_dir": str(ROOT / "scripts")}))
+
     def test_port_publication_is_independent_eleventh_mandatory_check_before_manifest(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text()
-        invocations = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$',
+        invocations = re.findall(r'^[ \t]*"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$',
                                  source, re.MULTILINE)
         self.assertEqual(invocations, [
             ("native_capture", "live_engine_capture_decodes"),
@@ -40,6 +47,17 @@ class NativeHarnessTests(unittest.TestCase):
             ("native_lifecycle", "live_lifecycle_matches_engine"),
             ("native_runtime_filesystem", "live_runtime_filesystem_matches_engine"),
             ("native_tmpfs_effect", "live_tmpfs_effects_match_engine"),
+            ("native_health_start_interval_boundary", "live_health_start_interval_boundary_matches_engine"),
+            ("native_lifecycle_default_effect", "live_lifecycle_default_effects_match_engine"),
+            ("native_hostname", "live_hostname_matches_engine"),
+            ("native_command_clear", "live_command_clear_matches_engine"),
+            ("native_shm_size", "live_shm_size_effects_match_engine"),
+            ("native_supplementary_groups", "live_supplementary_groups_match_engine"),
+            ("native_kernel_settings", "live_kernel_settings_match_engine"),
+            ("native_pids", "live_pids_limits_and_effects_match_engine"),
+            ("native_nofile", "live_nofile_limits_and_effects_match_engine"),
+            ("native_device_mapping", "live_device_mapping_matches_engine"),
+            ("native_memory", "live_memory_limits_and_effects_match_engine"), ("native_capabilities", "live_named_capabilities_match_engine"), ("native_logging", "live_logging_matches_engine"),
         ])
         self.assertLess(source.index('native_port live_port_publications_match_engine'),
                         source.index('python3 "$script_dir/native-evidence.py"'))
@@ -133,9 +151,6 @@ fi
             root = Path(directory)
             self._tool(root, "sudo", '#!/bin/sh\nprintf "%s\\n" "$*" > "$FAKE_SUDO_ARGS"\n'
                        '[ "$1" = -n ] || exit 42\nshift\nexec "$@"\n')
-            self._tool(root, "timeout", '#!/bin/sh\nprintf "%s\\n" "$*" > "$FAKE_TIMEOUT_ARGS"\n'
-                       '[ "$1" = --signal=TERM ] && [ "$2" = --kill-after=2s ] '
-                       '&& [ "$3" = 8s ] || exit 43\nshift 3\nexec "$@"\n')
             self._tool(root, "podman", '#!/bin/sh\nprintf "%s\\n" "$*"\n'
                        'echo "private-canary native failure" >&2\n')
             env = os.environ.copy()
@@ -146,7 +161,7 @@ fi
                     (root / "sudo-args").unlink(missing_ok=True)
                     prefix = "sudo -n podman" if elevated else "podman"
                     result = subprocess.run(
-                        ["bash", "-c", f"podman_cmd=({prefix})\n" + helpers
+                        ["bash", "-c", f"script_dir={str(ROOT / 'scripts')!r};podman_cmd=({prefix})\n" + helpers
                          + "cleanup_podman inspect exact-task-name\n"],
                         env=env, capture_output=True, text=True, timeout=5, check=False,
                     )
@@ -157,12 +172,9 @@ fi
                     if elevated:
                         self.assertEqual(
                             (root / "sudo-args").read_text().strip(),
-                            "-n timeout --signal=TERM --kill-after=2s 8s podman inspect exact-task-name",
+                            f"-n {system_timer()} --signal=TERM --kill-after=2s 8s podman inspect exact-task-name",
                         )
-                    self.assertEqual(
-                        (root / "timeout-args").read_text().strip(),
-                        "--signal=TERM --kill-after=2s 8s podman inspect exact-task-name",
-                    )
+
 
     def test_cleanup_immediate_stop_preserves_ownership_and_absence_checks(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
@@ -207,7 +219,7 @@ esac
 ''')
             env = os.environ.copy()
             env.update(PATH=f"{root}:{env['PATH']}", FAKE_RESOURCE=str(root / "resource"),
-                       FAKE_REMOVE_ARGS=str(root / "remove-args"), FAKE_ID="a" * 64)
+                       FAKE_REMOVE_ARGS=str(root / "remove-args"), FAKE_ID="a" * 64, FAKE_CLIENT_BOUND="8")
             for mode, original in (
                 ("success", False), ("success", True), ("query_error", False),
                 ("mismatched_owner", False), ("remove_error", False),
@@ -296,11 +308,11 @@ if [[ $1 == rm || ${2:-} == rm ]]; then
 else exit 50; fi
 ''')
             env = os.environ.copy()
-            env.update(PATH=f"{root}:{env['PATH']}", FAKE_STATE=str(root),
+            env.update(PATH=f"{root}:{env['PATH']}", FAKE_STATE=str(root), TMPDIR=str(root),
                        FAKE_OUTER_ID="a" * 64, FAKE_SIDECAR_ID="b" * 64)
             for mode in ("success", "container_leftover", "network_error"):
                 with self.subTest(mode=mode), tempfile.TemporaryDirectory(
-                    prefix="dockerlens-native.", dir=env.get("TMPDIR") or "/tmp",
+                    prefix="dockerlens-native.", dir=root,
                 ) as temporary:
                     for role in ("container", "sidecar", "network", "volume"):
                         (root / role).touch()
@@ -842,11 +854,16 @@ else exit 50; fi
 
     def test_outer_ipv4_diagnostics_are_closed_for_each_rejection(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
+        runtime = (ROOT / "scripts/native-outer-runtime.sh").read_text(encoding="utf-8")
+        command = runtime.split("native_outer_command() {", 1)[1].split("\n}\n", 1)[0]
         helper = source.split("validated_outer_ipv4() {", 1)[1].split(
             "\n}\nsidecar_setup_failed()", 1
         )[0]
         network = "dl-native-net-fixture"
-        valid = {network: {"IPAddress": "10.89.0.2"}}
+        valid = {network: {"IPAddress": "10.89.0.2", "NetworkID": "a" * 64, "IPPrefixLen": 24}}
+        pool = {"schema_version": 1, "kind": "test-only-outer-network-topology", "candidate": "c" * 40,
+                "run": "fixture", "backend": "podman", "network": {"id": "a" * 64, "name": network,
+                "driver": "bridge", "scope": None, "ipam_driver": "host-local", "ipv4_pools": ["10.89.0.0/24"]}}
         fixtures = (
             ('{"private-canary":', "json_shape", "0"),
             (json.dumps([]), "json_shape", "0"),
@@ -856,10 +873,16 @@ else exit 50; fi
             (json.dumps({network: {"IPAddress": "private-canary"}}), "ipv4_malformed", "0"),
             (json.dumps({network: {"IPAddress": 173604866}}), "ipv4_malformed", "0"),
             (json.dumps({network: {"IPAddress": "8.8.8.8"}}), "ipv4_nonprivate", "0"),
+            (json.dumps({network: valid[network] | {"NetworkID": "b" * 64}}), "network_pool", "0"),
+            (json.dumps({network: valid[network] | {"IPPrefixLen": 16}}), "network_pool", "0"),
+            (json.dumps({network: valid[network] | {"IPAddress": "10.90.0.2"}}), "network_pool", "0"),
             (json.dumps(valid), "inspect_failed", "42"),
             ("private-canary" * 300, "output_limit", "0"),
         )
         with tempfile.TemporaryDirectory() as directory:
+            for tool, target in (("bash", "/bin/bash"), ("python3", sys.executable),
+                                 ("timeout", TIMER)):
+                (Path(directory) / tool).symlink_to(target)
             fake = Path(directory) / "podman"
             fake.write_text(
                 '#!/usr/bin/env bash\nprintf %s "$FAKE_NETWORKS"\nexit "$FAKE_PODMAN_STATUS"\n',
@@ -868,6 +891,10 @@ else exit 50; fi
             fake.chmod(0o755)
             script = (
                 'podman_cmd=("$FAKE_PODMAN")\n'
+                'native_outer_cmd=("${podman_cmd[@]}")\n'
+                f'native_outer_command() {{{command}\n}}\n'
+                'diagnose_native_startup() { :; }\n'
+                f'script_dir={str(ROOT / "scripts")!r}\nrun_id=fixture\nNATIVE_IDENTITY_CANDIDATE_SHA={"c" * 40}\n'
                 f'outer_network={network}\n'
                 f'validated_outer_ipv4() {{{helper}\n}}\n'
                 'validated_outer_ipv4 "$FAKE_ROLE" dl-native-fixture\n'
@@ -875,11 +902,12 @@ else exit 50; fi
             for role in ("sidecar", "daemon"):
                 for networks, category, status in fixtures:
                     with self.subTest(role=role, category=category, status=status):
-                        env = os.environ.copy()
+                        env = {"PATH": directory, "native_outer_script_dir": str(ROOT / "scripts")}
                         env.update(FAKE_PODMAN=str(fake), FAKE_ROLE=role,
-                                   FAKE_NETWORKS=networks, FAKE_PODMAN_STATUS=status)
+                                   FAKE_NETWORKS=networks, FAKE_PODMAN_STATUS=status,
+                                   outer_network_projection=json.dumps(pool))
                         result = subprocess.run(
-                            ["bash", "-c", script], env=env, capture_output=True,
+                            ["/bin/bash", "-c", script], env=env, capture_output=True,
                             text=True, timeout=15, check=False,
                         )
                         self.assertNotEqual(result.returncode, 0)
@@ -889,11 +917,12 @@ else exit 50; fi
                             f"DOCKERLENS_NATIVE_SIDECAR_SETUP: phase=attachment role={role} category={category}",
                         )
                         self.assertNotIn("private-canary", result.stderr)
-            env = os.environ.copy()
+            env = {"PATH": directory, "native_outer_script_dir": str(ROOT / "scripts")}
             env.update(FAKE_PODMAN=str(fake), FAKE_ROLE="sidecar",
-                       FAKE_NETWORKS=json.dumps(valid), FAKE_PODMAN_STATUS="0")
+                       FAKE_NETWORKS=json.dumps(valid), FAKE_PODMAN_STATUS="0",
+                       outer_network_projection=json.dumps(pool))
             result = subprocess.run(
-                ["bash", "-c", script], env=env, capture_output=True,
+                ["/bin/bash", "-c", script], env=env, capture_output=True,
                 text=True, timeout=15, check=False,
             )
             self.assertEqual(result.returncode, 0)
@@ -1444,31 +1473,77 @@ fi
             self.assertIn("DOCKERLENS_NATIVE_ERROR: selection", result.stderr)
             self.assertNotIn("private", result.stdout + result.stderr)
 
-    def test_vfs_launch_argument_is_isolated_to_debian_rootless(self) -> None:
-        source = (ROOT / "scripts/native-conformance.sh").read_text()
-        block = "start=(/usr/local/bin/start-dockerd" + source.split(
-            "start=(/usr/local/bin/start-dockerd", 1
-        )[1].split("\nrun_flags=", 1)[0]
-        for lane in (
-            "debian11-rootful",
-            "debian11-rootless",
-            "upstream-rootful",
-            "upstream-rootless",
-        ):
-            with self.subTest(lane=lane):
-                result = subprocess.run(
-                    ["bash", "-c", "set -euo pipefail\nlane=$1\n" + block
-                     + '\nprintf \'%s\\n\' "${start[@]}"\n', "launch-args", lane],
-                    capture_output=True, text=True, timeout=5, check=False,
-                )
-                self.assertEqual(result.returncode, 0, result.stderr)
-                expected = [
-                    "/usr/local/bin/start-dockerd",
-                    "--host=unix:///dockerlens-native/docker.sock",
-                ]
-                if lane == "debian11-rootless":
-                    expected.append("--storage-driver=vfs")
-                self.assertEqual(result.stdout.splitlines(), expected)
+    def test_guest_daemon_launch_arguments_stay_lane_specific(self) -> None:
+        runtime = ROOT / "scripts/native-outer-runtime.sh"
+        # The CLI arguments are NUL-framed so the guest program remains one
+        # argument. The recorder does not invoke an outer runtime.
+        recorder = r'''set -euo pipefail
+source "$1"
+native_outer_engine=$2
+native_outer_directory=$4
+native_outer_script_dir=$5
+exec 3>&1
+native_outer_command() { printf '%s\0' "$@" >&3; }
+python3() {
+  [[ $# == 3 && $1 == "$native_outer_script_dir/native-outer-observation.py" &&
+     $2 == created-cid && $3 == "$native_outer_directory/outer-create.cid" ]]
+  printf '%064d\n' 0
+}
+declare -A held=([name]=owned [run]=run [lane]="$3"
+  [owner_key]=io.dockerlens.native-run [network]=owned-net [volume]=owned-data
+  [socket_dir]="$4/socket" [guest_dir]=/dockerlens-native
+  [image]="$6" [log_path]="$4/daemon.log")
+native_outer_create_daemon held'''
+        source = runtime.read_text()
+        bootstrap = source.split("<<'DOCKERLENS_DOMAIN_BOOTSTRAP'\n", 1)[1].split(
+            "\nDOCKERLENS_DOMAIN_BOOTSTRAP", 1
+        )[0]
+        self.assertIn("\n", bootstrap)
+        image = "example.invalid/engine:1@sha256:" + "a" * 64
+        for backend in ("podman", "docker"):
+            for lane in ("debian11-rootful", "debian11-rootless",
+                         "upstream-rootful", "upstream-rootless"):
+                with self.subTest(backend=backend, lane=lane), tempfile.TemporaryDirectory() as owned:
+                    result = subprocess.run(
+                        ["bash", "-c", recorder, "launch-args", str(runtime), backend,
+                         lane, owned, str(ROOT / "scripts"), image],
+                        capture_output=True, timeout=5, check=False,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    argv, separator, cid = result.stdout.rpartition(b"\0")
+                    self.assertEqual((separator, cid, result.stderr), (b"\0", b"0" * 64 + b"\n", b""))
+                    expected = [
+                        "120", "run", "--pull=never", "-d", "--name", "owned",
+                        "--cidfile", f"{owned}/outer-create.cid",
+                        "--label", "io.dockerlens.native-run=run", "--network", "owned-net",
+                        "--privileged", "--pids-limit=512", "--memory=4g",
+                    ]
+                    if lane == "debian11-rootful":
+                        expected.append("--cgroupns=private")
+                    if lane == "debian11-rootless":
+                        expected.extend(("--oom-score-adj=0", "--security-opt", "apparmor=unconfined"))
+                    destination = "/home/docker/.local/share/docker" if lane.endswith("-rootless") else "/var/lib/docker"
+                    mount = "owned-data:" + destination
+                    if backend == "podman":
+                        expected.extend(("--cgroup-conf=memory.swap.max=0",
+                                         "--image-volume=ignore", "--log-driver=k8s-file",
+                                         "--log-opt", f"path={owned}/daemon.log", "--log-opt",
+                                         "max-size=1048576", "--cpus=2"))
+                        mount += ":U,suid,dev" if lane == "debian11-rootless" else ":U"
+                    else:
+                        expected.extend(("--memory-swap=4g",
+                                         "--cpu-period=100000", "--cpu-quota=200000",
+                                         "--log-driver=json-file", "--log-opt", "max-size=1m",
+                                         "--log-opt", "max-file=1"))
+                    expected.extend(("--volume", mount, "--volume", f"{owned}/socket:/dockerlens-native", image))
+                    if lane == "debian11-rootful":
+                        expected.extend(("/bin/sh", "-c", bootstrap, "dl-native-domain"))
+                    expected.extend(("/usr/local/bin/start-dockerd", "--host=unix:///dockerlens-native/docker.sock"))
+                    if lane == "debian11-rootless":
+                        expected.append("--storage-driver=vfs")
+                    if lane == "upstream-rootful":
+                        expected.extend(("--feature", "time-namespaces=false"))
+                    self.assertEqual(argv.decode().split("\0"), expected)
 
     def test_vfs_driver_evidence_is_positive_only_for_debian_rootless(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text()
@@ -1512,14 +1587,16 @@ fi
             ("debian11-rootless", "", 0, False),
             ("upstream-rootless", "", 42, True),
         ):
-            with self.subTest(lane=lane, mountinfo=mountinfo, status=status):
+            with self.subTest(lane=lane, mountinfo=mountinfo, status=status), tempfile.TemporaryDirectory() as temporary:
+                child = Path(temporary) / "unused"
+                child.write_text('#!/bin/sh\nprintf \"%s\\n\" \"$TEST_MOUNTINFO\"\necho protected-secret >&2\nexit \"$TEST_STATUS\"\n')
+                child.chmod(0o700)
                 env = os.environ.copy()
+                env["PATH"] = temporary + os.pathsep + env["PATH"]
                 env.update(lane=lane, script_dir=str(ROOT / "scripts"),
                            TEST_MOUNTINFO=mountinfo, TEST_STATUS=str(status))
                 result = subprocess.run(
                     ["bash", "-c", "set -euo pipefail\n"
-                     "timeout() { printf '%s\\n' \"$TEST_MOUNTINFO\"; "
-                     "echo protected-secret >&2; return \"$TEST_STATUS\"; }\n"
                      "podman_cmd=(unused)\ncontainer=synthetic\n" + block
                      + "\nprintf 'native-work-admitted'\n"],
                     env=env, capture_output=True, text=True, timeout=5, check=False,
@@ -1542,10 +1619,11 @@ fi
         source = (ROOT / "scripts/native-conformance.sh").read_text(encoding="utf-8")
         fixture = source.split(
             "# A random directory, two containers, network, and volume belong to this lane.", 1
-        )[1].split("\nwatchdog_pid=", 1)[0]
+        )[1].split("\nnative_outer_select ", 1)[0]
         with tempfile.TemporaryDirectory() as temporary:
             env = os.environ.copy()
             env["TMPDIR"] = temporary
+            env["script_dir"] = str(ROOT / "scripts")
             result = subprocess.run(
                 ["bash", "-c", "set -euo pipefail\numask 077\n" + fixture
                  + "\nprintf '%s\\n' \"$run_dir\""],
@@ -1731,9 +1809,39 @@ esac
                         self.assertFalse((state / "error_inspected-bridge").exists())
 
     def test_owned_resources_are_cleaned_after_early_failures(self) -> None:
+        self._check_owned_resources_are_cleaned_after_early_failures()
+
+    def test_cleanup_fixtures_ignore_inherited_native_candidate_context(self) -> None:
+        inherited = {
+            "PATH": os.environ["PATH"],
+            "GITHUB_ACTIONS": "true",
+            "RUNNER_ENVIRONMENT": "github-hosted",
+            "RUNNER_OS": "Linux",
+            "GITHUB_REF": "refs/heads/main",
+            "GITHUB_EVENT_NAME": "workflow_dispatch",
+            "GITHUB_REPOSITORY": "Strukturpiloten/docker-lens",
+            "GITHUB_WORKFLOW_REF": (
+                "Strukturpiloten/docker-lens/.github/workflows/"
+                "native-validation.yml@refs/heads/main"
+            ),
+            "GITHUB_JOB": "candidate",
+            "GITHUB_RUN_ID": "39879541371",
+            "GITHUB_RUN_ATTEMPT": "1",
+            "ImageOS": "ubuntu24",
+        }
+        with mock.patch.dict(os.environ, inherited, clear=True):
+            self._check_owned_resources_are_cleaned_after_early_failures((
+                ("upstream-rootless", "run"),
+                ("upstream-rootless", "volume_remains"),
+                ("upstream-rootless", "volume_inspect_partial"),
+                ("upstream-rootless", "network_remains"),
+            ))
+
+    def _check_owned_resources_are_cleaned_after_early_failures(self, cases=None) -> None:
         fake_podman = """#!/usr/bin/env bash
 set -eu
 state=$FAKE_NATIVE_STATE
+[[ ${1:-} != --remote=false ]] || shift
 command=$1; shift
 case "$command" in
   info)
@@ -1761,8 +1869,12 @@ case "$command" in
  [[ $FAKE_NATIVE_FAULT == network_create ]] && exit 42
  echo "$name" ;;
  inspect) for name; do :; done
- echo "$name" | sed 's/^dl-native-net-//'
- [[ $FAKE_NATIVE_FAULT == network_inspect_partial ]] && exit 42
+ if [[ $* == *'{{json .}}'* ]]; then
+  printf '{"id":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","name":"%s","driver":"bridge","labels":{"io.dockerlens.native-run":"%s"},"subnets":[{"subnet":"10.88.0.0/24","gateway":"10.88.0.1"}],"ipam_options":{"driver":"host-local"}}\n' "$name" "${name#dl-native-net-}"
+ else
+  echo "$name" | sed 's/^dl-native-net-//'
+  [[ $FAKE_NATIVE_FAULT == network_inspect_partial ]] && exit 42
+ fi
  exit 0 ;;
  rm) for name; do :; done
  read -r expected < "$state/expected-network"
@@ -1787,7 +1899,10 @@ case "$command" in
         if [[ $* == *Labels* ]]; then
           for name; do :; done
           printf '%s|local|%s|2026-10-11T00:00:00Z|%s\n' "$name" "$state" "${name#dl-native-data-}"
-          [[ $FAKE_NATIVE_FAULT == volume_inspect_partial ]] && exit 42
+          if [[ $FAKE_NATIVE_FAULT == volume_inspect_partial ]]; then
+            touch "$state/volume_inspect_partial_reached"
+            exit 42
+          fi
           true
         else echo "$state"; fi ;;
       rm)
@@ -1803,6 +1918,7 @@ case "$command" in
  prior=
  for item in "$@"; do
  if [[ $prior == --name ]]; then name=$item; fi
+      if [[ $prior == --cidfile ]]; then cidfile=$item; fi
  if [[ $item == path=* ]]; then log_path=${item#path=}; fi
  if [[ $item == *@sha256:* ]]; then daemon_image=$item; fi
  prior=$item
@@ -1827,6 +1943,7 @@ case "$command" in
      printf '%s\n' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
      exit 42
    fi
+   printf '%s' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa > "$cidfile"
    printf '%s\n' "$log_path" > "$state/daemon-log-path"
    printf '%s\n' "$daemon_image" > "$state/daemon-image"
    printf '1970-01-01T00:00:00.000000000Z stdout F private-startup-canary\n' >> "$log_path"
@@ -1890,7 +2007,7 @@ logs)
  if [[ $name == dl-native-egress-* ]]; then ip=10.88.0.2; else ip=10.88.0.3; fi
  if [[ $name == dl-native-egress-* && $FAKE_NATIVE_FAULT == sidecar_running_empty_ip ]]; then ip=; fi
  if [[ $name == dl-native-egress-* && $FAKE_NATIVE_FAULT == sidecar_exited_empty_ip ]]; then ip=; fi
- printf '{"%s":{"IPAddress":"%s"}}\n' "$network_name" "$ip"
+ printf '{"%s":{"IPAddress":"%s","NetworkID":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","IPPrefixLen":24}}\n' "$network_name" "$ip"
  elif [[ $* == *State.Running* ]]; then
  if [[ $FAKE_NATIVE_FAULT == sidecar_state_unavailable ]]; then exit 42; fi
     if [[ $FAKE_NATIVE_FAULT == sidecar_exited_empty_ip ||
@@ -1935,7 +2052,7 @@ logs)
   *) exit 4 ;;
 esac
 """
-        for lane, fault in (
+        for lane, fault in cases or (
             ("debian11-rootful", "volume"),
             ("debian11-rootful", "pull"),
             ("debian11-rootful", "network_create"),
@@ -1999,9 +2116,30 @@ esac
                            "&& [ \"$1\" = -c ]; then "
                            "echo private-canary; exit 87; fi\n"
                            f'exec "{sys.executable}" "$@"\n')
-                env = os.environ.copy()
-                env.update(PATH=f"{bin_dir}:{env['PATH']}",
-                           FAKE_NATIVE_STATE=str(state), FAKE_NATIVE_FAULT=fault, TMPDIR=str(root))
+                # Keep the watchdog interval in its own shell. An external
+                # sleeper would retain the captured pipes after that shell exits.
+                # The private FIFO carries no data and read holds both ends.
+                os.mkfifo(state / "watchdog-clock", 0o600)
+                watchdog_fixture = root / "watchdog-clock.sh"
+                watchdog_fixture.write_text("""sleep() {
+  if [[ ${FUNCNAME[1]:-} == watchdog && $# == 1 && $1 == 5 ]]; then
+    local unused status=0
+    read -r -t "$1" unused <> "$FAKE_NATIVE_STATE/watchdog-clock" || status=$?
+    # Bash reports this timeout as 128 + SIGALRM.
+    [[ $status == 142 ]]
+  else
+    command sleep "$@"
+  fi
+}
+""", encoding="utf-8")
+                # This fake Podman fixture is local, not a native dispatch job.
+                env = {
+                    "BASH_ENV": str(watchdog_fixture),
+                    "PATH": f"{bin_dir}:{os.environ['PATH']}",
+                    "FAKE_NATIVE_STATE": str(state),
+                    "FAKE_NATIVE_FAULT": fault,
+                    "TMPDIR": str(root),
+                }
                 command = ["bash", str(ROOT / "scripts/native-conformance.sh"), lane]
                 if fault == "cancel_after_sidecar":
                     process = subprocess.Popen(
@@ -2025,6 +2163,11 @@ esac
                     if fault == "sidecar_inspect_hang":
                         self.assertLess(time.monotonic() - started, 18)
                 self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn("native AppArmor experiment selection refused", result.stderr)
+                if fault == "run":
+                    self.assertTrue((state / "ran").exists())
+                if fault == "volume_inspect_partial":
+                    self.assertTrue((state / "volume_inspect_partial_reached").exists())
                 if fault in ("unexpected_mount", "legacy_podman_json", "log_registration_id", "log_registration_digest", "log_registration_missing_digest", "log_registration_path"):
                     observed = json.loads((state / "registration-observed.json").read_text())
                     self.assertEqual(observed["status"], "registered" if fault in ("unexpected_mount", "legacy_podman_json") else "prepared")
@@ -2169,6 +2312,18 @@ esac
 
     def test_native_curl_readiness_sites_keep_exact_argv_counts_and_final_fallback(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text()
+        diagnostic_start = source.index("\nouter_guest_http_failure_diagnostic() {") + 1
+        diagnostic_end = source.index("\n}\n", diagnostic_start) + 3
+        diagnostic = source[diagnostic_start:diagnostic_end]
+        source = source[:diagnostic_start] + source[diagnostic_end:]
+        self.assertEqual(len(re.findall(r"/usr/bin/curl --disable\b", diagnostic)), 1)
+        self.assertIn('native_outer_command 3 exec "$outer_container_id" /bin/sh -c', diagnostic)
+        self.assertIn('if [ ! -e /usr/bin/curl ]; then', diagnostic)
+        self.assertIn('elif [ ! -x /usr/bin/curl ]; then', diagnostic)
+        self.assertIn('/usr/bin/curl --disable -sS --noproxy "*" --retry 0 --proto "=http"', diagnostic)
+        self.assertIn('--max-time 2 --request GET --output /dev/null --write-out "%{http_code}" "$1"', diagnostic)
+        self.assertIn('\' dockerlens-guest-http "http://$sidecar_ip:18084/"', diagnostic)
+        self.assertEqual(diagnostic.count('http://$sidecar_ip:18084/'), 1)
         self.assertEqual(len(re.findall(r"\bcurl\b", source)), 4)  # Preflight and three sites.
         readiness = "deadline=$((SECONDS + 360))" + source.split(
             "deadline=$((SECONDS + 360))", 1
@@ -2218,7 +2373,7 @@ diagnose_native_startup() {{ printf '%s\\n' startup-diagnostic >&2; }}
     def test_native_curl_api_get_keeps_exact_argv_count_limits_and_failure_status(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         api_get = "api_get() {" + source.split("api_get() {", 1)[1].split("\njson_key() {", 1)[0]
-        self.assertIn("status=$(timeout 20 curl -q --noproxy '*' -fsS --max-time 15", api_get)
+        self.assertIn("status=$(\"$script_dir/native_gnu_timeout.py\" 20 curl -q --noproxy '*' -fsS --max-time 15", api_get)
         for http_status, native_exit, expected_exit in (("200", 0, 0), ("404", 0, 1),
                                                        ("000", 7, 7), ("404", 22, 22)):
             with self.subTest(http_status=http_status, native_exit=native_exit), \
@@ -2228,7 +2383,7 @@ diagnose_native_startup() {{ printf '%s\\n' startup-diagnostic >&2; }}
                 target = directory / "container.json"
                 calls, env = self._native_curl_client(directory, [native_exit], http_status)
                 request = "/v1.41/containers/synthetic/json"
-                script = 'set -euo pipefail\nsocket=$1\n' + api_get + '\napi_get "$2" "$3"'
+                script = f'set -euo pipefail\nscript_dir={str(ROOT / "scripts")!r}\nsocket=$1\n' + api_get + '\napi_get "$2" "$3"'
                 result = subprocess.run(
                     ["bash", "-c", script, "curl-api-test", str(socket_path), request, str(target)],
                     cwd=directory, env=env, capture_output=True, text=True, timeout=10, check=False,
@@ -2272,7 +2427,7 @@ sys.exit(exits[min(len(previous), len(exits) - 1)])
     def test_published_image_and_fixture_contracts_are_static(self) -> None:
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         self.assertIn("DEBIAN_DOCKER_PACKAGE='20.10.5+dfsg1-1+deb11u2'", source)
-        self.assertIn('storage_mount="$volume:', source)
+        self.assertIn('mount="${context[volume]}:$destination"', (ROOT / "scripts/native-outer-runtime.sh").read_text())
         self.assertIn('rootless ]]; then printf /home/docker/.local/share/docker', source)
         self.assertIn('--user 0:0 --workdir /tmp --hostname dockerlens-native', source)
         self.assertIn('--label io.dockerlens.fixture=synthetic', source)

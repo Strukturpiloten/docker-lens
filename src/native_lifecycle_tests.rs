@@ -2,11 +2,192 @@
 
 use super::*;
 
+#[path = "native_lifecycle_default_effect_tests.rs"]
+mod default_effect;
+
 #[path = "native_runtime_filesystem_tests.rs"]
 mod runtime_filesystem;
 
 #[path = "native_tmpfs_effect_tests.rs"]
 mod tmpfs_effect;
+
+#[path = "native_health_start_interval_boundary_tests.rs"]
+mod health_start_interval_boundary;
+
+#[path = "native_hostname_tests.rs"]
+mod hostname;
+#[path = "native_kernel_settings_tests.rs"]
+mod kernel_settings;
+#[path = "native_pids_tests.rs"]
+#[cfg(target_os = "linux")]
+mod pids;
+#[path = "native_shm_size_tests.rs"]
+mod shm_size;
+#[path = "native_supplementary_groups_tests.rs"]
+mod supplementary_groups;
+// Prepared only: canonical invocation 28 must remain behind unresolved PIDs27.
+#[path = "native_nofile_tests.rs"]
+pub(super) mod nofile;
+
+#[path = "native_device_mapping_tests.rs"]
+mod device_mapping;
+
+#[path = "native_capabilities_tests.rs"]
+mod capabilities;
+#[path = "native_memory_tests.rs"]
+mod memory;
+
+#[path = "native_logging_tests.rs"]
+mod logging;
+
+// Only new source families require this strict, separately supplied selector.
+// Actual snapshot charges remain owned by the existing shared I/O helper.
+#[derive(Clone, Copy)]
+enum SourceOuterBackend {
+    Podman,
+    Docker,
+}
+
+impl SourceOuterBackend {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "podman" => Some(Self::Podman),
+            "docker" => Some(Self::Docker),
+            _ => None,
+        }
+    }
+
+    fn private_cgroup_namespace(self, raw: &Value) -> Option<&str> {
+        // The selected CLI supplies its native HostConfig schema. The bridge
+        // already rejects duplicate JSON keys before forwarding the snapshot.
+        let (expected, other) = match self {
+            Self::Podman => ("CgroupMode", "CgroupnsMode"),
+            Self::Docker => ("CgroupnsMode", "CgroupMode"),
+        };
+        let config = raw.get("HostConfig")?.as_object()?;
+        if config.contains_key(other) {
+            return None;
+        }
+        config
+            .get(expected)?
+            .as_str()
+            .filter(|mode| *mode == "private")
+    }
+
+    fn snapshot_extra_calls(self) -> usize {
+        match self {
+            Self::Podman => 0,
+            Self::Docker => 1,
+        }
+    }
+
+    fn snapshot_extra_bytes(self) -> usize {
+        match self {
+            Self::Podman => 0,
+            Self::Docker => 65_536,
+        }
+    }
+
+    // The initial snapshot has already been charged. Only its pending peer is
+    // added here, alongside the unchanged two/three ordinary read envelopes.
+    fn final_snapshot_room(self, calls: usize, bytes: usize, ordinary_calls: usize) -> bool {
+        matches!(ordinary_calls, 2 | 3)
+            && calls
+                .checked_add(ordinary_calls + self.snapshot_extra_calls())
+                .is_some_and(|total| total <= MAX_CALLS - CLEANUP_CALLS)
+            && bytes
+                .checked_add(ordinary_calls * (65_550 + 8192) + self.snapshot_extra_bytes())
+                .is_some_and(|total| total <= MAX_BYTES - CLEANUP_BYTES)
+    }
+}
+
+fn source_outer_backend() -> SourceOuterBackend {
+    SourceOuterBackend::parse(&required("NATIVE_OUTER_ENGINE"))
+        .unwrap_or_else(|| panic!("closed source accounting backend"))
+}
+
+#[test]
+fn source_backend_accounting_is_closed_and_does_not_charge_io() {
+    let podman = SourceOuterBackend::parse("podman").unwrap();
+    let docker = SourceOuterBackend::parse("docker").unwrap();
+    assert_eq!(
+        (podman.snapshot_extra_calls(), podman.snapshot_extra_bytes()),
+        (0, 0)
+    );
+    assert_eq!(
+        (docker.snapshot_extra_calls(), docker.snapshot_extra_bytes()),
+        (1, 65_536)
+    );
+    for value in ["", "Docker", "podman ", "docker\n", "unknown", "rootless"] {
+        assert!(SourceOuterBackend::parse(value).is_none());
+    }
+}
+
+#[test]
+fn source_private_cgroup_namespace_requires_the_selected_backend_field() {
+    for (backend, expected, other) in [
+        (SourceOuterBackend::Podman, "CgroupMode", "CgroupnsMode"),
+        (SourceOuterBackend::Docker, "CgroupnsMode", "CgroupMode"),
+    ] {
+        let raw = |config| json!({"HostConfig": config});
+        let own = |mode| json!({(expected): mode});
+        assert_eq!(
+            backend.private_cgroup_namespace(&raw(own(json!("private")))),
+            Some("private")
+        );
+        for config in [
+            Value::Null,
+            json!([]),
+            json!("private"),
+            json!({}),
+            json!({(other): "private"}),
+            json!({"Cgroups": "private", "cgroupMode": "private"}),
+            json!({(expected): "private", (other): "private"}),
+            json!({(expected): "private", (other): "host"}),
+            json!({(expected): "private", (other): null}),
+            json!({(expected): "host", (other): "private"}),
+        ] {
+            assert_eq!(backend.private_cgroup_namespace(&raw(config)), None);
+        }
+        assert_eq!(backend.private_cgroup_namespace(&json!({})), None);
+        for mode in [
+            json!("host"),
+            json!(""),
+            json!("default"),
+            json!("container:peer"),
+            json!("ns:/some/path"),
+            json!("Private"),
+            json!("private "),
+            json!(null),
+            json!(true),
+            json!(1),
+            json!({"mode": "private"}),
+        ] {
+            assert_eq!(backend.private_cgroup_namespace(&raw(own(mode))), None);
+        }
+    }
+}
+
+#[test]
+fn source_pending_final_snapshot_reserves_one_backend_extra_with_checked_boundaries() {
+    // Independent literal capacities: 300 ordinary calls and 2 MiB ordinary
+    // bytes. These counters already include the initial snapshot and batch.
+    for (backend, normal_calls, calls, bytes) in [
+        (SourceOuterBackend::Podman, 2, 298, 1_949_668),
+        (SourceOuterBackend::Docker, 2, 297, 1_884_132),
+        (SourceOuterBackend::Podman, 3, 297, 1_875_926),
+        (SourceOuterBackend::Docker, 3, 296, 1_810_390),
+    ] {
+        assert!(backend.final_snapshot_room(calls, bytes, normal_calls));
+        assert!(!backend.final_snapshot_room(calls + 1, bytes, normal_calls));
+        assert!(!backend.final_snapshot_room(calls, bytes + 1, normal_calls));
+        assert!(!backend.final_snapshot_room(usize::MAX, bytes, normal_calls));
+        assert!(!backend.final_snapshot_room(calls, usize::MAX, normal_calls));
+    }
+    for normal_calls in [0, 1, 4, usize::MAX] {
+        assert!(!SourceOuterBackend::Docker.final_snapshot_room(0, 0, normal_calls));
+    }
+}
 
 const CONTRACT: &str = "lifecycle-v1";
 const FILENAME: &str = "lifecycle-v1.json";
@@ -112,6 +293,13 @@ fn docker(run: &HealthRun, args: &[String]) -> Vec<u8> {
 }
 
 fn outer_context(run: &HealthRun) -> Value {
+    outer_context_observation(run, false).0
+}
+
+// Preserve the original inspected state for source experiments which need
+// actual runtime PID/start/restart custody. Existing callers keep their
+// unchanged, closed projection; neither path accepts a caller-made snapshot.
+fn outer_context_observation(run: &HealthRun, cleanup: bool) -> (Value, Value) {
     let id = required("NATIVE_OUTER_CONTAINER_ID");
     assert!(identifier(&id), "closed outer identity");
     let image = required("NATIVE_OUTER_IMAGE");
@@ -124,9 +312,17 @@ fn outer_context(run: &HealthRun) -> Value {
         "1" => true,
         _ => panic!("closed privilege selector"),
     };
-    let mut command = run.timer(false, elevated);
-    command.args(["podman", "inspect", "--format", "{{json .}}", &id]);
-    let value: Value = serde_json::from_slice(&run.capture(&mut command, None, false))
+    run.charge_outer_snapshot(cleanup);
+    let mut command = run.timer(cleanup, elevated);
+    command.args(crate::native_outer_test_command::prefix());
+    if cleanup {
+        // PIDs final readback uses the cleanup stream envelope. The bridge
+        // still authenticates the same snapshot before dropping unused fields.
+        command.args(["pids-final-snapshot", &id]);
+    } else {
+        command.args(["inspect", "--format", "{{json .}}", &id]);
+    }
+    let value: Value = serde_json::from_slice(&run.capture(&mut command, None, cleanup))
         .unwrap_or_else(|_| panic!("private outer JSON"));
     let mounts = value["Mounts"]
         .as_array()
@@ -172,9 +368,10 @@ fn outer_context(run: &HealthRun) -> Value {
             && networks.contains_key(&format!("dl-native-net-{}", run.run)),
         "authenticated unchanged two-CPU outer context"
     );
-    json!({"id":id,"name":run.outer,"owner":run.run,"image":image,
+    let projection = json!({"id":id,"name":run.outer,"owner":run.run,"image":image,
         "data_volume":format!("dl-native-data-{}",run.run),"socket_source":directory.join("socket"),
-        "privileged":true,"memory_bytes":4294967296_u64,"cpu_quota":200000,"cpu_period":100000,"pids_limit":512})
+        "privileged":true,"memory_bytes":4294967296_u64,"cpu_quota":200000,"cpu_period":100000,"pids_limit":512});
+    (projection, value)
 }
 
 fn image_snapshot(run: &HealthRun) -> Value {
@@ -207,6 +404,37 @@ fn image_snapshot(run: &HealthRun) -> Value {
         "borrowed default TERM signal"
     );
     json!({"id":value["Id"],"repo_digests":value["RepoDigests"],"config":value["Config"]})
+}
+
+fn borrowed_image_config(config: &Value, api: &str) -> bool {
+    let Some(fields) = config.as_object() else {
+        return false;
+    };
+    (config["Volumes"].is_null() || config["Volumes"] == json!({}))
+        && (config["Entrypoint"].is_null() || config["Entrypoint"] == json!([]))
+        // API 1.56 image inspect omits an unset User. Container inspect still
+        // has to provide its own explicit user value at every observation.
+        && fields.get("User").map_or(api == "1.56", |user| {
+            matches!(user.as_str(), Some("" | "0" | "0:0"))
+        })
+}
+// The complete container templates emit this member even when the Engine
+// omits HostConfig.Init. An absent member here is a malformed projection.
+fn inspect_init_is_unset_or_disabled(projection: &Value) -> bool {
+    matches!(
+        projection.get("init"),
+        Some(Value::Null | Value::Bool(false))
+    )
+}
+
+#[test]
+fn strict_container_projection_retains_only_null_or_false_init() {
+    assert!(inspect_init_is_unset_or_disabled(&json!({"init":null})));
+    assert!(inspect_init_is_unset_or_disabled(&json!({"init":false})));
+    assert!(!inspect_init_is_unset_or_disabled(&json!({})));
+    for invalid in [json!(true), json!(0), json!("false"), json!([]), json!({})] {
+        assert!(!inspect_init_is_unset_or_disabled(&json!({"init":invalid})));
+    }
 }
 
 fn utc_ns() -> u64 {
@@ -280,12 +508,61 @@ fn bind(run: &mut HealthRun, index: usize, id: &str) {
     run.ids[index] = Some(id.to_owned());
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CleanupPhase {
+    LookupName,
+    NameOwnership,
+    IdOwnership,
+    Delete,
+    PostDeleteIdAbsence,
+    PostDeleteNameAbsence,
+    ReadbackIdAbsence,
+    ReadbackNameAbsence,
+}
+impl CleanupPhase {
+    fn name(self) -> &'static str {
+        match self {
+            Self::LookupName => "lookup_name",
+            Self::NameOwnership => "name_ownership",
+            Self::IdOwnership => "id_ownership",
+            Self::Delete => "delete",
+            Self::PostDeleteIdAbsence => "post_delete_id_absence",
+            Self::PostDeleteNameAbsence => "post_delete_name_absence",
+            Self::ReadbackIdAbsence => "readback_id_absence",
+            Self::ReadbackNameAbsence => "readback_name_absence",
+        }
+    }
+}
+
 fn remove_container(run: &mut HealthRun, index: usize) -> bool {
+    remove_container_with_phase(run, index, &Cell::new(CleanupPhase::LookupName))
+}
+
+fn remove_container_with_phase(
+    run: &mut HealthRun,
+    index: usize,
+    phase: &Cell<CleanupPhase>,
+) -> bool {
+    phase.set(CleanupPhase::LookupName);
+    if let Some(observation) = &run.nofile_command_observation {
+        observation
+            .active_lookup
+            .set(Some(NofileLookupFailure::BeforeCapture));
+    }
     let (status, value) = run.inspect(&run.names[index], true);
+    if matches!(status, 200 | 404)
+        && let Some(observation) = &run.nofile_command_observation
+    {
+        observation.active_lookup.set(None);
+    }
     if status == 404 {
         return run.ids[index].is_some();
     }
-    if status != 200 || !owned(run, &value, index, run.ids[index].as_deref()) {
+    if status != 200 {
+        return false;
+    }
+    phase.set(CleanupPhase::NameOwnership);
+    if !owned(run, &value, index, run.ids[index].as_deref()) {
         return false;
     }
     let id = value["Id"]
@@ -302,45 +579,83 @@ fn remove_container(run: &mut HealthRun, index: usize) -> bool {
         return false;
     }
     run.ids[index] = Some(id.clone());
+    phase.set(CleanupPhase::IdOwnership);
     let (status, immediate) = run.inspect(&id, true);
     if status != 200 || !owned(run, &immediate, index, Some(&id)) {
         return false;
     }
-    run.api(
-        "DELETE",
-        &format!("/v{}/containers/{id}?force=1", run.api),
-        None,
-        true,
-    )
-    .0 == 204
-        && run.inspect(&id, true).0 == 404
-        && run.inspect(&run.names[index], true).0 == 404
+    phase.set(CleanupPhase::Delete);
+    if run
+        .api(
+            "DELETE",
+            &format!("/v{}/containers/{id}?force=1", run.api),
+            None,
+            true,
+        )
+        .0
+        != 204
+    {
+        return false;
+    }
+    phase.set(CleanupPhase::PostDeleteIdAbsence);
+    if run.inspect(&id, true).0 != 404 {
+        return false;
+    }
+    phase.set(CleanupPhase::PostDeleteNameAbsence);
+    run.inspect(&run.names[index], true).0 == 404
 }
 
 fn cleanup(run: &mut HealthRun) -> CleanupDisposition {
+    cleanup_with_phase(run).0
+}
+
+fn cleanup_with_phase(run: &mut HealthRun) -> (CleanupDisposition, Option<CleanupPhase>) {
+    let phase = Cell::new(CleanupPhase::LookupName);
     let mut verified = true;
+    let mut first_unverified = None;
+    let mut record = |run: &HealthRun, step_verified: bool| {
+        if let Some(observation) = &run.nofile_command_observation {
+            let failure = observation.active_lookup.take();
+            if !step_verified
+                && first_unverified.is_none()
+                && phase.get() == CleanupPhase::LookupName
+            {
+                observation.first_lookup_failure.set(failure);
+            }
+        }
+        verified &= step_verified;
+        if !step_verified {
+            first_unverified.get_or_insert(phase.get());
+        }
+    };
     for index in 0..run.names.len() {
         if run.attempted[index] {
-            verified &= std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                remove_container(run, index)
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                remove_container_with_phase(run, index, &phase)
             }))
             .unwrap_or(false);
+            record(run, result);
         }
     }
     for _ in 0..2 {
         for index in 0..run.names.len() {
             if run.attempted[index] {
-                verified &= std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    run.ids[index]
-                        .as_ref()
-                        .is_some_and(|id| run.inspect(id, true).0 == 404)
-                        && run.inspect(&run.names[index], true).0 == 404
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    phase.set(CleanupPhase::ReadbackIdAbsence);
+                    run.ids[index].as_ref().is_some_and(|id| {
+                        if run.inspect(id, true).0 != 404 {
+                            return false;
+                        }
+                        phase.set(CleanupPhase::ReadbackNameAbsence);
+                        run.inspect(&run.names[index], true).0 == 404
+                    })
                 }))
                 .unwrap_or(false);
+                record(run, result);
             }
         }
     }
-    cleanup_disposition(verified)
+    (cleanup_disposition(verified), first_unverified)
 }
 
 fn create(run: &mut HealthRun, index: usize) {

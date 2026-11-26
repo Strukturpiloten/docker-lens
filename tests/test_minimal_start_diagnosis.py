@@ -12,7 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 NATIVE_SCRIPT = (ROOT / "scripts/native-conformance.sh").read_text()
 START = NATIVE_SCRIPT.index("# Docker CLI errors may contain authored values.")
-END = NATIVE_SCRIPT.index("network_id=$(timeout 30", START)
+END = NATIVE_SCRIPT.index('network_id=$("$script_dir/native_gnu_timeout.py" 30', START)
 PROBE = NATIVE_SCRIPT[START:END]
 PRESENCE_HELPER = NATIVE_SCRIPT[NATIVE_SCRIPT.index("native_presence() {"):
                                NATIVE_SCRIPT.index("cleanup_remove() {")]

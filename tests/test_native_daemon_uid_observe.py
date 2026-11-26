@@ -5,9 +5,12 @@ process, stream, selector event, clock tick and syscall below is synthetic.
 Neither these controls nor parser success establish Docker compatibility.
 """
 
+
+from native_timeout_support import TIMER, system_timer
 import contextlib
 import errno
 import importlib.util
+import sys
 import io
 import runpy
 import signal
@@ -19,6 +22,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
 SPEC = importlib.util.spec_from_file_location(
     "uid_observe_spec", ROOT / "scripts/native-daemon-uid.py"
 )
@@ -195,8 +199,12 @@ class ObservationHarness:
             raise self.kill_error
 
     def __enter__(self):
+        selected = UID_OBSERVE.timeout_path()
+        self.timer = selected
         self.stack = contextlib.ExitStack()
         self.stack.__enter__()
+        self.stack.enter_context(patch.object(UID_OBSERVE, "timeout_path", return_value=selected))
+        self.stack.enter_context(patch("native_gnu_timeout.selected_path", return_value=selected))
         self.popen = self.stack.enter_context(
             patch.object(UID_OBSERVE.subprocess, "Popen", side_effect=self.spawn))
         self.factory = self.stack.enter_context(
@@ -218,7 +226,7 @@ class ObservationHarness:
     def cli(self, mode="rootful"):
         # The newly executed module imports the same patched stdlib modules;
         # it cannot spawn, select, read, signal or consult the real host clock.
-        with patch.object(sys, "argv", ["native-daemon-uid.py", OUTER, mode]):
+        with patch.object(sys, "argv", ["native-daemon-uid.py", OUTER, mode, "podman", "/tmp/held"]):
             return runpy.run_path(str(ROOT / "scripts/native-daemon-uid.py"), run_name="__main__")
 
 
@@ -238,7 +246,7 @@ class DaemonUidObserveTests(unittest.TestCase):
     def assert_refused(self, harness, exception=ValueError, reason=None, *, parsed=False, selector=True):
         with harness:
             with self.assertRaises(exception) as refused:
-                UID_OBSERVE.observe(OUTER, "rootful")
+                UID_OBSERVE.observe(OUTER, "rootful", "podman", "/tmp/held")
             if reason is not None:
                 self.assertEqual(str(refused.exception), reason)
                 self.assertNotIn(CANARY, str(refused.exception))
@@ -257,7 +265,7 @@ class DaemonUidObserveTests(unittest.TestCase):
             with self.subTest(case=index):
                 harness = ObservationHarness(stdout=chunks, selections=selections)
                 with harness:
-                    self.assertEqual(UID_OBSERVE.observe(OUTER, mode), expected)
+                    self.assertEqual(UID_OBSERVE.observe(OUTER, mode, "podman", "/tmp/held"), expected)
                     harness.parse.assert_called_once_with(b"".join(chunks), b"", 0, mode)
                     harness.kill.assert_not_called()
                 self.assert_closed(harness)
@@ -269,12 +277,13 @@ class DaemonUidObserveTests(unittest.TestCase):
         for host_uid in (0, 1000):
             harness = ObservationHarness(host_uid=host_uid)
             with harness:
-                self.assertEqual(UID_OBSERVE.observe(OUTER, "rootful"), 0)
+                self.assertEqual(UID_OBSERVE.observe(OUTER, "rootful", "podman", "/tmp/held"), 0)
                 arguments, keywords = harness.popen.call_args
                 prefix = [] if host_uid == 0 else ["sudo", "-n"]
-                self.assertEqual(arguments[0][:-1], prefix + [
-                    "timeout", "--signal=TERM", "--kill-after=2s", "8s",
-                    "podman", "exec", OUTER, "sh", "-ec"])
+                self.assertEqual(arguments[0][:len(prefix) + 5], prefix + [
+                    harness.timer, "--signal=TERM", "--kill-after=2s", "8s", "env"])
+                self.assertEqual(arguments[0][-11:], ["bash", str(ROOT / "scripts/native-outer-command.sh"),
+                    "--engine", "podman", "--directory", "/tmp/held", "exec", OUTER, "sh", "-ec", UID_OBSERVE.QUERY])
                 self.assertEqual(keywords, {"stdin": subprocess.DEVNULL,
                                            "stdout": subprocess.PIPE, "stderr": subprocess.PIPE,
                                            "start_new_session": True})
@@ -356,7 +365,7 @@ class DaemonUidObserveTests(unittest.TestCase):
         harness = ObservationHarness(spawn_error=OSError(errno.EIO, CANARY))
         with harness:
             with self.assertRaises(OSError):
-                UID_OBSERVE.observe(OUTER, "rootful")
+                UID_OBSERVE.observe(OUTER, "rootful", "podman", "/tmp/held")
             harness.factory.assert_not_called()
             harness.kill.assert_not_called()
             harness.parse.assert_not_called()

@@ -101,7 +101,7 @@ class ExternalNetworkWiringTests(unittest.TestCase):
         harness = (ROOT / "scripts/native-conformance.sh").read_text()
         invocations = re.findall(r'^"\$\(dirname "\$0"\)/run-exact-native-test.sh" (\w+) (\w+)$',
                                  harness, re.MULTILINE)
-        self.assertEqual(len(invocations), 19)
+        self.assertEqual(len(invocations), 26)
         self.assertEqual(invocations[13:15], [("native_bind_relabel", "live_bind_relabel_configuration_matches_engine"),
                                            (TARGET, TEST)])
         command = f'"$(dirname "$0")/run-exact-native-test.sh" {TARGET} {TEST}'
@@ -115,7 +115,11 @@ class ExternalNetworkWiringTests(unittest.TestCase):
     def test_emitter_keeps_nineteen_positional_arguments_and_fixed_private_child(self):
         harness = (ROOT / "scripts/native-conformance.sh").read_text().replace("\\\n", "")
         emitter_line = next(line for line in harness.splitlines() if 'python3 "$script_dir/native-evidence.py"' in line)
-        self.assertEqual(len(shlex.split(emitter_line)) - 2, 19)
+        emitter_arguments = shlex.split(emitter_line)
+        self.assertEqual(emitter_arguments[:3], [
+            "native_publication_command", "python3", "$script_dir/native-evidence.py",
+        ])
+        self.assertEqual(len(emitter_arguments[3:]), 19)
         self.assertNotIn("NATIVE_EXTERNAL_NETWORK_PROOF_PATH", emitter_line)
         emitter = (ROOT / "scripts/native-evidence.py").read_text()
         self.assertIn("len(sys.argv) != 20", emitter)

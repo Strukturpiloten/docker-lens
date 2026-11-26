@@ -1133,6 +1133,45 @@ fn network_endpoint_aliases_preserve_values_and_availability() {
 }
 
 #[test]
+fn memory_observation_retains_signed_values_without_target_validation() {
+    for value in [
+        i64::MIN,
+        -1,
+        0,
+        1,
+        1_048_576,
+        6_000_000,
+        6_291_455,
+        6_291_456,
+        6_291_457,
+        67_108_864,
+        i64::MAX,
+    ] {
+        let body = format!(r#"{{"HostConfig":{{"Memory":{value}}}}}"#);
+        let decoded = decode_capture(&container(&body)).unwrap();
+        let memory = &decoded.containers[0].runtime.memory_bytes;
+        assert_eq!(memory.availability, Availability::Present);
+        assert_eq!(memory.origin, Origin::Effective);
+        assert_eq!(memory.value(), Some(&value));
+    }
+    for (body, availability) in [
+        (r#"{}"#, Availability::Missing),
+        (r#"{"HostConfig":{}}"#, Availability::Missing),
+        (r#"{"HostConfig":{"Memory":null}}"#, Availability::Null),
+        (
+            r#"{"HostConfig":{"Memory":{"__docker_lens_redacted__":true}}}"#,
+            Availability::Redacted,
+        ),
+    ] {
+        let decoded = decode_capture(&container(body)).unwrap();
+        let memory = &decoded.containers[0].runtime.memory_bytes;
+        assert_eq!(memory.availability, availability);
+        assert_eq!(memory.origin, Origin::Effective);
+        assert!(memory.value().is_none());
+    }
+}
+
+#[test]
 fn runtime_and_network_inspect_fields_keep_independent_native_meanings() {
     let fixture = capture(vec![
         (
@@ -1233,4 +1272,43 @@ fn runtime_availability_and_failure_categories_are_closed() {
         decode_capture(&container(r#"{"HostConfig":{"Memory":"512m"}}"#)),
         Err(DecodeError::InvalidShape(FieldPath::ResourceLimit))
     ));
+}
+
+#[test]
+fn pids_null_and_missing_remain_distinct_from_numeric_native_sentinels() {
+    for (body, availability, value) in [
+        (
+            r#"{"HostConfig":{"PidsLimit":null}}"#,
+            Availability::Null,
+            None,
+        ),
+        (r#"{"HostConfig":{}}"#, Availability::Missing, None),
+        (r#"{}"#, Availability::Missing, None),
+        (
+            r#"{"HostConfig":{"PidsLimit":16}}"#,
+            Availability::Present,
+            Some(16),
+        ),
+        (
+            r#"{"HostConfig":{"PidsLimit":64}}"#,
+            Availability::Present,
+            Some(64),
+        ),
+        (
+            r#"{"HostConfig":{"PidsLimit":0}}"#,
+            Availability::Present,
+            Some(0),
+        ),
+        (
+            r#"{"HostConfig":{"PidsLimit":-1}}"#,
+            Availability::Present,
+            Some(-1),
+        ),
+    ] {
+        let decoded = decode_capture(&container(body)).unwrap();
+        let observed = &decoded.containers[0].runtime.pids_limit;
+        assert_eq!(observed.availability, availability);
+        assert_eq!(observed.value().copied(), value);
+        assert_eq!(observed.origin, Origin::Effective);
+    }
 }

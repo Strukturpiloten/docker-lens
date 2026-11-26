@@ -91,7 +91,7 @@ REASONS = {"complete", "ci_identity_unavailable", "checkout_unavailable", "tool_
            "package_not_installed"}
 
 def bounded_command(*arguments):
-    return ("/usr/bin/timeout", "--signal=TERM", "--kill-after=1s", "2s", *arguments)
+    return (str(Path(__file__).resolve().with_name("native_gnu_timeout.py")), "--signal=TERM", "--kill-after=1s", "2s", *arguments)
 
 CHECKOUT = bounded_command("/usr/bin/git", "rev-parse", "HEAD")
 SHOW_FORMAT = "\t".join("$" + "{" + field + "}" for field in ("Package", "Status", "Version", "Architecture")) + "\n"

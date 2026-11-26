@@ -71,6 +71,105 @@ class SharedAutomationTests(unittest.TestCase):
             {"rust", "documentation", "lockfile-release-age"},
         )
 
+    def documentation_rust_setup(self) -> dict[str, Any]:
+        # The cold prose fixture also imports this module without PyYAML.
+        import yaml
+
+        workflow = yaml.safe_load((ROOT / ".github/workflows/check.yml").read_text())
+        job = workflow["jobs"]["documentation"]
+        steps = job["steps"]
+        matches = [
+            step
+            for step in steps
+            if step.get("name") == "Install repository-pinned Rust for policy fixtures"
+        ]
+        self.assertEqual(len(matches), 1)
+        setup = matches[0]
+        self.assertEqual(setup["working-directory"], "source")
+        self.assertNotIn("if", setup, "prose also executes the real compiler fixture")
+        self.assertNotIn("continue-on-error", setup)
+        self.assertLess(
+            next(i for i, step in enumerate(steps) if step.get("id") == "source"),
+            steps.index(setup),
+        )
+        self.assertLess(
+            next(i for i, step in enumerate(steps) if "shared-python" in step.get("uses", "")),
+            steps.index(setup),
+        )
+        self.assertLess(
+            steps.index(setup),
+            next(
+                i for i, step in enumerate(steps) if "--task documentation" in step.get("run", "")
+            ),
+        )
+        return setup
+
+    def test_documentation_provisions_rust_for_every_executing_profile(self) -> None:
+        self.documentation_rust_setup()
+        for profiles in (
+            ("full",),
+            ("prose",),
+            ("executable-docs",),
+            ("rust-tests",),
+            ("prose", "rust-tests"),
+        ):
+            with self.subTest(profiles=profiles):
+                self.assertIn("documentation", self.policy.selected_jobs(profiles))
+        plan = planner.make_plan(ROOT, self.policy, event="push", tested_sha=SHA)
+        self.assertEqual(plan["profile"], "full")
+        self.assertTrue(plan["jobs"]["documentation"])
+
+    def test_documentation_rust_setup_uses_declared_channel_and_fails_closed(self) -> None:
+        setup = self.documentation_rust_setup()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            binary = root / "bin"
+            binary.mkdir()
+            (root / "rust-toolchain.toml").write_text('[toolchain]\nchannel = "fixture-channel"\n')
+            trace = root / "trace"
+            rustup = binary / "rustup"
+            rustup.write_text(
+                f"#!{sys.executable}\n"
+                "import json, os, sys\n"
+                "with open(os.environ['RUST_SETUP_TRACE'], 'a') as out:\n"
+                "    out.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+                "if sys.argv[1] == 'toolchain': sys.exit(int(os.environ['INSTALL_STATUS']))\n"
+            )
+            rustup.chmod(0o755)
+            for status in (0, 19):
+                trace.unlink(missing_ok=True)
+                result = subprocess.run(
+                    ["bash", "-e", "-o", "pipefail", "-c", setup["run"]],
+                    cwd=root,
+                    env={
+                        **os.environ,
+                        "PATH": str(binary) + os.pathsep + os.environ["PATH"],
+                        "RUSTUP_TOOLCHAIN": "unrelated",
+                        "INSTALL_STATUS": str(status),
+                        "RUST_SETUP_TRACE": str(trace),
+                    },
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, status, result.stderr)
+                calls = [json.loads(line) for line in trace.read_text().splitlines()]
+                self.assertEqual(
+                    calls[0],
+                    [
+                        "toolchain",
+                        "install",
+                        "fixture-channel",
+                        "--profile",
+                        "minimal",
+                        "--no-self-update",
+                    ],
+                )
+                self.assertEqual(
+                    calls[1:], [] if status else [["run", "fixture-channel", "rustc", "--version"]]
+                )
+
     def test_aggregate_rejects_failed_cancelled_missing_and_unexpected_skips(self) -> None:
         plan = planner.make_plan(ROOT, self.policy, event="push", tested_sha=SHA)
         comparison = planner.Comparison("push", SHA, SHA, SHA)
@@ -736,6 +835,9 @@ class SharedAutomationTests(unittest.TestCase):
                 scripts.mkdir()
                 tools.mkdir()
                 (scripts / "check-all.sh").write_text(gate)
+                (scripts / "native_gnu_timeout.py").symlink_to(
+                    ROOT / "scripts/native_gnu_timeout.py"
+                )
                 for name in ("format-lint.sh", "check-msrv.sh"):
                     path = scripts / name
                     path.write_text("#!/usr/bin/env bash\nexit 0\n")

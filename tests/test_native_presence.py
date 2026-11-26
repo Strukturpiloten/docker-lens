@@ -1,8 +1,10 @@
 """Independent command and cleanup faults; no native runtime is launched."""
 
+from native_timeout_support import TIMER, system_timer
 import importlib.util
 import os
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -22,6 +24,93 @@ SPEC.loader.exec_module(PRESENCE)
 
 
 class NativePresenceTests(unittest.TestCase):
+    def test_normal_isolated_entries_leave_fresh_source_directories_unchanged(self):
+        runtime = ROOT / "scripts/native-outer-runtime.sh"
+        for entry in ("direct", "shell"):
+            with self.subTest(entry=entry), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                scripts, evidence = directory / "scripts", directory / "evidence"
+                scripts.mkdir()
+                evidence.mkdir()
+                for name in ("native-presence.py", "native_gnu_timeout.py"):
+                    shutil.copy2(ROOT / "scripts" / name, scripts / name)
+                before = {p.name: (p.read_bytes(), p.stat().st_mode) for p in scripts.iterdir()}
+                environment = dict(os.environ)
+                environment.pop("PYTHONDONTWRITEBYTECODE", None)
+                if entry == "direct":
+                    argv = ["/usr/bin/python3", "-I", str(scripts / "native-presence.py"),
+                            "exists", str(evidence), "--", "/usr/bin/false"]
+                    expected = (1, b"absent\n", b"")
+                else:
+                    body = ('source "$1"; native_outer_script_dir=$2; native_outer_engine=podman; '
+                            'native_outer_cmd=(/usr/bin/false); native_outer_presence volume owned "$3"')
+                    argv = ["/bin/bash", "-c", body, "fixture", str(runtime), str(scripts), str(evidence)]
+                    expected = (1, b"", b"")
+                result = subprocess.run(argv, env=environment, capture_output=True, timeout=3, check=False)
+                self.assertEqual((result.returncode, result.stdout, result.stderr), expected)
+                self.assertEqual({p.name for p in scripts.iterdir()}, set(before))
+                self.assertEqual({p.name: (p.read_bytes(), p.stat().st_mode) for p in scripts.iterdir()}, before)
+
+    def test_normal_isolated_entry_ignores_ambient_configuration_and_timer_path(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            marker = directory / "ambient-started"
+            (directory / "sitecustomize.py").write_text(
+                f"from pathlib import Path; Path({str(marker)!r}).touch()")
+            result = subprocess.run([sys.executable, "-I", str(HELPER), "exists", temporary, "--", "/bin/sh", "-c", "exit 1"],
+                env=dict(os.environ, PYTHONPATH=temporary, PYTHONUSERBASE=temporary,
+                         native_gnu_timeout="/nonexistent/untrusted-timer"),
+                capture_output=True, timeout=3, check=False)
+            self.assertEqual((result.returncode, result.stdout, result.stderr), (1, b"absent\n", b""))
+            self.assertFalse(marker.exists())
+
+    def test_isolated_selection_rejects_invalid_provider_or_expired_budget_before_client(self):
+        for selected in (None, "/tmp/timer", "/usr/bin/timeout"):
+            with self.subTest(selected=selected), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                helper = directory / "native-presence.py"
+                helper.write_bytes(HELPER.read_bytes())
+                marker = directory / "client-started"
+                selection = ("raise RuntimeError('inert unavailable provider')" if selected is None else
+                             f"return {selected!r}, 'inert-version'")
+                # An over-budget successful resolution must not launch a client.
+                delay = "time.sleep(0.2); " if selected == "/usr/bin/timeout" else ""
+                (directory / "native_gnu_timeout.py").write_text(
+                    f"import time\ndef select(*, deadline):\n    {delay}{selection}\n")
+                code = (f"import runpy; m=runpy.run_path({str(helper)!r}); "
+                        f"print(m['query'](['/bin/sh','-c', 'touch {marker}'], m['Path']({temporary!r}), 'exists', seconds=0.1))")
+                result = subprocess.run([sys.executable, "-I", "-c", code],
+                    capture_output=True, timeout=3, check=False)
+                self.assertEqual((result.returncode, result.stdout, result.stderr), (0, b"('unknown', 2)\n", b""))
+                self.assertFalse(marker.exists())
+
+    def test_isolated_selection_cancellation_reaps_its_inert_probe(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            helper = directory / "native-presence.py"
+            helper.write_bytes(HELPER.read_bytes())
+            pid_file = directory / "probe-pid"
+            (directory / "native_gnu_timeout.py").write_text(
+                "import subprocess,sys\ndef select(*, deadline):\n"
+                f"    subprocess.run([sys.executable, '-c', \"import os,time; open({str(pid_file)!r},'w').write(str(os.getpid())); time.sleep(30)\"], timeout=2)\n")
+            process = subprocess.Popen([sys.executable, "-I", str(helper), "exists", temporary,
+                                        "--", "/nonexistent/client-must-not-run"],
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                deadline = time.monotonic() + 2
+                while not pid_file.exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertTrue(pid_file.exists())
+                process.send_signal(signal.SIGTERM)
+                stdout, stderr = process.communicate(timeout=3)
+                self.assertEqual((process.returncode, stdout, stderr), (2, b"unknown\n", b""))
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(int(pid_file.read_text()), 0)
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.communicate(timeout=3)
+
     def test_empty_native_status_is_the_only_exists_evidence(self) -> None:
         cases = (
             (0, b"", b"", ("present", 0)),
@@ -119,6 +208,76 @@ class NativePresenceTests(unittest.TestCase):
 
 
 class PresenceCleanupTests(unittest.TestCase):
+    def test_complete_inspection_mismatch_retains_resources_without_query_failure(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text()
+        helpers = source[source.index("cleanup_podman() {"):source.index("trap cleanup EXIT")]
+        for role in ("network", "volume"):
+            for value in ("", "wrong-identity", "one|two", "wrong\nidentity"):
+                with self.subTest(role=role, value=value):
+                    setup = (
+                        "set -u\nnative_outer_engine=docker\nrun_id=expected-owner\n"
+                        "network_attempted=1; network_created=1; outer_network=held-network; outer_network_id=held-id\n"
+                        "volume_attempted=1; volume=held-volume; volume_identity=expected-identity\n"
+                        "payload=$1\n"
+                    )
+                    seams = (
+                        "native_presence() { return 0; }\n"
+                        "native_outer_binding() { return 0; }\n"
+                        "cleanup_inspect_query() { printf '%s' \"$payload\"; return 0; }\n"
+                        "cleanup_remove() { printf 'unexpected-removal\\n'; return 0; }\n"
+                        "cleanup_identity_stage() { printf 'unexpected-query-failure\\n'; }\n"
+                        "cleanup_refuse() { printf '%s:%s\\n' \"$1\" \"$2\"; }\n"
+                    )
+                    result = subprocess.run(
+                        ["bash", "-c", setup + helpers + seams + f"cleanup_{role}\n", "fixture", value],
+                        capture_output=True, timeout=3, check=False,
+                    )
+                    self.assertEqual(result.returncode, 1)
+                    self.assertEqual(result.stdout, f"{role}:identity_mismatch\n".encode())
+                    self.assertEqual(result.stderr, b"")
+
+    def test_inspection_handoff_keeps_selected_privilege_query_and_status(self) -> None:
+        source = (ROOT / "scripts/native-conformance.sh").read_text()
+        helper = source[source.index("cleanup_inspect_query() {"):source.index("native_presence() {")]
+        cases = (
+            ("network-owner-inspect", "dl-native-net-ABC123xy",
+             ["network", "inspect", "--format", '{{index .Labels "io.dockerlens.native-run"}}']),
+            ("volume-identity-inspect", "dl-native-data-ABC123xy",
+             ["volume", "inspect", "--format",
+              '{{.Name}}|{{.Driver}}|{{.Mountpoint}}|{{.CreatedAt}}|{{index .Labels "io.dockerlens.native-run"}}']),
+        )
+        for engine in ("docker", "podman"):
+            for elevated in (False, True):
+                for status in (0, 1, 130, 143):
+                    for kind, name, original_query in cases:
+                        with self.subTest(engine=engine, elevated=elevated, status=status, kind=kind):
+                            setup = (
+                                "set -u\nscript_dir=/reviewed/scripts\n"
+                                "run_dir=/private/dockerlens-native.ABC123xy\n"
+                                f"native_outer_engine={engine}\n"
+                                f"native_outer_cmd=({'sudo -n env' if elevated else 'env'})\n"
+                                f"python3() {{ printf 'frontend\\0'; printf '%s\\0' \"$@\"; return {status}; }}\n"
+                                f"cleanup_podman() {{ printf 'legacy\\0'; printf '%s\\0' \"$@\"; return {status}; }}\n"
+                                "sudo() { printf 'owned-sudo\\n' >&2; [[ $1 == -n ]] || return 99; shift; \"$@\"; }\n"
+                            )
+                            result = subprocess.run(
+                                ["bash", "-c", setup + helper + "\ncleanup_inspect_query \"$1\" \"$2\"\n",
+                                 "fixture", kind, name], capture_output=True, timeout=3, check=False,
+                            )
+                            expected = (
+                                ["frontend", "/reviewed/scripts/native-cleanup-inspect-diagnostic.py", "owner",
+                                 "--engine", "docker", "--directory", "/private/dockerlens-native.ABC123xy",
+                                 "--kind", kind, "--name", name]
+                                if engine == "docker" else ["legacy", *original_query, name]
+                            )
+                            self.assertEqual(result.returncode, status)
+                            self.assertEqual(result.stdout.split(b"\0"), [item.encode() for item in expected] + [b""])
+                            self.assertEqual(result.stderr, b"owned-sudo\n" if engine == "docker" and elevated else b"")
+        self.assertIn('current=$(cleanup_inspect_query volume-identity-inspect "$volume")', source)
+        self.assertIn('owner=$(cleanup_inspect_query network-owner-inspect "$outer_network")', source)
+        self.assertIn('[[ $current == "$volume_identity" ]]', source)
+        self.assertIn('[[ $owner == "$run_id" ]]', source)
+
     def run_shell(self, role: str, phase: str, fault: str, *, elevated: bool = False):
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         helpers = source[source.index("cleanup_podman() {"):source.index("trap cleanup EXIT")]
@@ -246,7 +405,7 @@ volume_identity='r_volume|local|/mock/volume|created|owner'
         result, retained, _, privileged, _ = self.run_shell("volume", "readback", "stderr1", elevated=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertTrue(retained)
-        self.assertIn("-n timeout --signal=TERM --kill-after=2s 8s python3", privileged)
+        self.assertIn(f"-n {system_timer()} --signal=TERM --kill-after=2s 8s python3 -I", privileged)
         self.assertNotIn("private configuration", result.stderr)
 
     def test_helper_launch_one_without_marker_is_unknown(self) -> None:
@@ -271,6 +430,7 @@ volume_identity='r_volume|local|/mock/volume|created|owner'
         for marker, status, expected in cases:
             with self.subTest(marker=marker, status=status), tempfile.TemporaryDirectory() as temporary:
                 directory = Path(temporary)
+                (directory / "native_gnu_timeout.py").symlink_to(TIMER)
                 (directory / "native-presence.py").write_text(
                     f"import sys; sys.stdout.write({marker!r}); raise SystemExit({status})")
                 setup = (f"script_dir={shlex.quote(temporary)}; run_dir={shlex.quote(temporary)}; "

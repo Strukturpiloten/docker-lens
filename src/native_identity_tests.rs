@@ -413,9 +413,13 @@ impl IdentityRun {
         let remaining = self.deadline.saturating_duration_since(Instant::now());
         let seconds = command_seconds(remaining, cleanup)
             .unwrap_or_else(|| panic!("shared native identity budget"));
-        let mut command = Command::new(if elevated { "sudo" } else { "timeout" });
+        let mut command = Command::new(if elevated {
+            "sudo"
+        } else {
+            crate::native_outer_test_command::timeout_program()
+        });
         if elevated {
-            command.args(["-n", "timeout"]);
+            command.args(["-n", crate::native_outer_test_command::timeout_program()]);
         }
         command.args(["--signal=TERM", "--kill-after=1", &seconds.to_string()]);
         command
@@ -482,10 +486,10 @@ impl IdentityRun {
             _ => panic!("closed Podman selector"),
         };
         let mut command = self.timer(cleanup, elevated);
+        command.args(crate::native_outer_test_command::prefix());
         command.args([
-            "podman",
             "exec",
-            &required("NATIVE_OUTER_CONTAINER"),
+            &required("NATIVE_OUTER_CONTAINER_ID"),
             "docker",
             "-H",
             "unix:///dockerlens-native/docker.sock",

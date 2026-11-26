@@ -410,9 +410,13 @@ impl NativeRun {
             remaining > if cleanup { 1 } else { 40 },
             "shared native port deadline/reserve"
         );
-        let mut command = Command::new(if elevated { "sudo" } else { "timeout" });
+        let mut command = Command::new(if elevated {
+            "sudo"
+        } else {
+            crate::native_outer_test_command::timeout_program()
+        });
         if elevated {
-            command.args(["-n", "timeout"]);
+            command.args(["-n", crate::native_outer_test_command::timeout_program()]);
         }
         command.args([
             "--signal=TERM",
@@ -889,10 +893,10 @@ impl NativeRun {
             self.uncertain_mutation.set(true);
         }
         let mut command = self.timer(false, Self::elevated(), 16);
+        command.args(crate::native_outer_test_command::prefix());
         command.args([
-            "podman",
             "exec",
-            &required("NATIVE_OUTER_CONTAINER"),
+            &required("NATIVE_OUTER_CONTAINER_ID"),
             "docker",
             "-H",
             "unix:///dockerlens-native/docker.sock",
@@ -1310,10 +1314,10 @@ impl NativeRun {
         // Same independent process oracle as the existing native target proof,
         // under this test's privilege-aware shared timer/output budget.
         let mut command = self.timer(false, Self::elevated(), 15);
+        command.args(crate::native_outer_test_command::prefix());
         command.args([
-            "podman",
             "exec",
-            &required("NATIVE_OUTER_CONTAINER"),
+            &required("NATIVE_OUTER_CONTAINER_ID"),
             "sh",
             "-ec",
             r#"count=0; effective=
@@ -1354,12 +1358,15 @@ printf '%s:%s\n' "$count" "$effective""#,
         require_namespace_probe_mode(mode);
         let mut command = self.timer(false, Self::elevated(), 16);
         let outer = format!("dl-native-{}", self.run_id);
+        command.args(crate::native_outer_test_command::context_env());
         command.args([
             "python3",
             concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/native-net-probe.py"),
-            mode,
-            &outer,
         ]);
+        // Reuse the canonical builder's checked explicit engine/directory suffix.
+        let selected = crate::native_outer_test_command::prefix();
+        command.args(&selected[selected.len() - 4..]);
+        command.args([mode, &outer]);
         if mode != "identity" {
             command.arg(
                 self.outer_identity

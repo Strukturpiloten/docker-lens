@@ -1,0 +1,97 @@
+{
+  "source_commit": "ea69314435b036c94afb84ed8d09ba6ff967d583",
+  "provenance": "Original methods/functions extracted with git show from exact source commit before type-detail edits.",
+  "purpose": "Immutable pre-type-detail metadata baseline; original guards/calls/finally compared after removing only reviewed observer plumbing.",
+  "methods": {
+    "_group_escape": {
+      "source_path": "scripts/native_pids_boundary.py",
+      "class_name": null,
+      "method_name": "_group_escape",
+      "first_line": 68,
+      "last_line": 81,
+      "method_source_utf8_sha256": "1cab82b733462631a54fcecde111045deeb294baeee1788b696cba4e4b49a493",
+      "method_source": "def _group_escape(observer, site):\n    try:\n        yield\n    except BaseException as error:\n        if observer is not None:\n            try:\n                tag = _group_exception_tag(error)\n            except BaseException:\n                tag = \"unclassified\"\n            try:\n                observer(site, tag)\n            except BaseException:\n                pass\n        raise\n"
+    },
+    "fs_magic": {
+      "source_path": "scripts/native_pids_boundary.py",
+      "class_name": null,
+      "method_name": "fs_magic",
+      "first_line": 222,
+      "last_line": 228,
+      "method_source_utf8_sha256": "b570a2aee301b64da46c1e692a62aa3183e7dd64725c5c14fffccac4657646d3",
+      "method_source": "def fs_magic(fd):\n    # Linux statfs starts with a native long f_type. Oversize storage is intentional.\n    storage = ctypes.create_string_buffer(256)\n    libc = ctypes.CDLL(None, use_errno=True)\n    if libc.fstatfs(ctypes.c_int(fd), ctypes.byref(storage)) != 0:\n        raise Refusal()\n    return ctypes.c_long.from_buffer(storage).value\n"
+    },
+    "Budget.check": {
+      "source_path": "scripts/native_pids_boundary.py",
+      "class_name": "Budget",
+      "method_name": "check",
+      "first_line": 169,
+      "last_line": 170,
+      "method_source_utf8_sha256": "144fdffa166397a20410371cf311baa05090aaa7051fc751743374f9676923d2",
+      "method_source": "    def check(self):\n        startup_require(\"budget_deadline\", self.clock() < self.work_ns)\n"
+    },
+    "Budget.read": {
+      "source_path": "scripts/native_pids_boundary.py",
+      "class_name": "Budget",
+      "method_name": "read",
+      "first_line": 172,
+      "last_line": 177,
+      "method_source_utf8_sha256": "06a1aa93f1686dd49194140d2faddb5bf3d8ea9f7f71e2df516a876dae7b8f27",
+      "method_source": "    def read(self, maximum):\n        self.check()\n        self.reads += 1\n        self.bytes += maximum\n        startup_require(\"budget_reads\", self.reads <= 65536)\n        startup_require(\"budget_bytes\", self.bytes <= SOURCE_BYTES)\n"
+    },
+    "Budget.fd": {
+      "source_path": "scripts/native_pids_boundary.py",
+      "class_name": "Budget",
+      "method_name": "fd",
+      "first_line": 179,
+      "last_line": 185,
+      "method_source_utf8_sha256": "f15adc383ee73ea36aae4079afb2755643e137848f7a9dadfb9cd3069c820eb2",
+      "method_source": "    def fd(self):\n        self.check()\n        self.fds += 1\n        self.opens += 1\n        self.peak_fds = max(self.peak_fds, self.fds)\n        startup_require(\"budget_fds\", self.fds <= 256)\n        startup_require(\"budget_opens\", self.opens <= 32768)\n"
+    },
+    "LinuxSource.open": {
+      "source_path": "scripts/native_pids_boundary.py",
+      "class_name": "LinuxSource",
+      "method_name": "open",
+      "first_line": 325,
+      "last_line": 332,
+      "method_source_utf8_sha256": "e277297515f2d561236c29c81ffc314e41c6ad342ba143cd0573ae87293fc0e1",
+      "method_source": "    def open(self, name, parent=None, directory=False, magic=False):\n        self.budget.fd()\n        flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK\n        if directory:\n            flags |= os.O_DIRECTORY\n        if not magic:\n            flags |= os.O_NOFOLLOW\n        return self.own(os.open(name, flags, dir_fd=parent))\n"
+    },
+    "LinuxSource.read_fd": {
+      "source_path": "scripts/native_pids_boundary.py",
+      "class_name": "LinuxSource",
+      "method_name": "read_fd",
+      "first_line": 358,
+      "last_line": 376,
+      "method_source_utf8_sha256": "89304fb8ff9446d6ed0bcbec14fb09f85d75f654d7cf9003ee46ef5733b2a75d",
+      "method_source": "    def read_fd(self, fd, maximum):\n        integer(maximum, 0, 65536)\n        capacity = min(1024, maximum + 1)\n        self.budget.read(capacity)\n        os.lseek(fd, 0, os.SEEK_SET)\n        chunks = []\n        size = 0\n        while True:\n            # Precharge each actual bounded syscall, including partial/EOF/error\n            # calls. Whole-file caps still apply; unused charges never refund.\n            chunk = os.read(fd, capacity)\n            if not chunk:\n                break\n            size += len(chunk)\n            require(size <= maximum)\n            chunks.append(chunk)\n            capacity = min(1024, maximum + 1 - size)\n            self.budget.read(capacity)\n        return b\"\".join(chunks)\n"
+    },
+    "LinuxSource.check_group": {
+      "source_path": "scripts/native_pids_boundary.py",
+      "class_name": "LinuxSource",
+      "method_name": "check_group",
+      "first_line": 494,
+      "last_line": 523,
+      "method_source_utf8_sha256": "cbf2f66f9164e8dd785ab7ebd15283bc5e87a4ab43729bb09ef70c7c966630fa",
+      "method_source": "    def check_group(self, group, observer=None):\n        with _group_escape(observer, \"gv_time\"):\n            self.budget.check()\n        with _group_escape(observer, \"gv_record\"):\n            require(group.mount_record in self.read(self.proc, \"self/mountinfo\", 65536).decode(\"ascii\").splitlines())\n        with _group_escape(observer, \"gv_bind\"):\n            self.check_mount(group.directories[0], group.mount_record)\n        with _group_escape(observer, \"gv_ids\"):\n            require(tuple(identity(d) for d in group.directories) == group.identities)\n        with _group_escape(observer, \"gv_dirs\"):\n            # Reopen only beneath held parents to detect removal/replacement of names.\n            for parent, name, expected in zip(group.directories, group.names, group.identities[1:]):\n                fd = self.open(name, parent, directory=True)\n                try:\n                    require(identity(fd) == expected and fs_magic(fd) == CGROUP_MAGIC)\n                finally:\n                    self.close_fd(fd)\n        with _group_escape(observer, \"gv_files\"):\n            for name, held in zip(FILES, group.files):\n                fd = self.open(name, group.directories[-1])\n                try:\n                    require(identity(fd) == identity(held) and fs_magic(fd) == CGROUP_MAGIC)\n                finally:\n                    self.close_fd(fd)\n        with _group_escape(observer, \"gv_type\"):\n            fd = self.open(\"cgroup.type\", group.directories[-1])\n            try:\n                require(fs_magic(fd) == CGROUP_MAGIC and self.read_fd(fd, 32) == b\"domain\\n\")\n            finally:\n                self.close_fd(fd)\n"
+    },
+    "RuntimeBudget.check": {
+      "source_path": "scripts/native_pids_locator.py",
+      "class_name": "RuntimeBudget",
+      "method_name": "check",
+      "first_line": 77,
+      "last_line": 78,
+      "method_source_utf8_sha256": "db2b83bf8afbe19b23575a0d79f6c79cfaae0ca2b926204e16b926f100f5d79b",
+      "method_source": "    def check(self):\n        boundary.startup_require(\"budget_deadline\", self.clock() < (self.deadline_ns if self.cleanup_only else self.work_ns))\n"
+    },
+    "BindRecorder.escape": {
+      "source_path": "scripts/native-pids-supervisor.py",
+      "class_name": "BindRecorder",
+      "method_name": "escape",
+      "first_line": 190,
+      "last_line": 209,
+      "method_source_utf8_sha256": "5ea9be99806b2580e2875aae862c5447762f6d0db11e6ae81c565891f1b3bb5b",
+      "method_source": "    def escape(self, site, exception=None):\n        if not self.active or self.seen:\n            return\n        self.seen = True\n        try:\n            if type(site) is not str:\n                return\n            if site in BIND_SITES and exception is None:\n                record = f\"DOCKERLENS_NATIVE_PIDS_BIND: s=w_{site}\\n\"\n                self.value = site\n            elif (site in HOST_BIND_SITES and type(exception) is str and exception in HOST_BIND_EXCEPTIONS\n                    and (exception != \"declared_unsupported_events\" or site in (\"gh_root\", \"gh_nodes\"))):\n                record = f\"DOCKERLENS_NATIVE_PIDS_BIND: s=w_{site} e={exception}\\n\"\n                self.value = (site, exception)\n            else:\n                return\n            self.emitted = True\n            os.write(2, record.encode(\"ascii\"))\n        except BaseException:\n            pass\n"
+    }
+  }
+}

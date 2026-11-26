@@ -1,6 +1,6 @@
 # Release validation and publication
 
-DockerLens has a published 0.1.0 baseline, verified by ADR 0020. The DockerLens
+DockerLens uses the published 0.1.0 baseline under [ADR 0023](decisions/0023-development-and-published-api-checks.md). The DockerLens
 integration owner selects the public API, version and release notes. The maintainer
 approves crate publication in GitHub after the exact candidate has passed validation.
 
@@ -10,14 +10,18 @@ Require reviewed product and downstream evidence under [DockerLens #31](https://
 and [BoxFerry #343](https://github.com/Strukturpiloten/boxferry/issues/343). Preserve
 the reviewed target profiles, complete local and package gates, external-consumer
 checks and actual four-lane native evidence. Older runs do not qualify a new SHA.
-DockerLens #127 and the held #128 track the hosted backend and renewed native
-qualification. Enabling the publisher does not resolve that work.
+The [migration ledger](standalone-migration-ledger.md) retains the
+application-derived consumer obligations, including [ADR 0012](decisions/0012-candidate-volume-label-admission.md).
+A small consumer smoke test cannot establish application acceptance. Native
+qualification and publication approval remain separate.
 
 Select a new stable crate version, update the manifest and lockfile together, and
 finalize accurate release notes in one matching changelog section, such as
 `## [X.Y.Z] - YYYY-MM-DD`. Merge and verify the exact final candidate on main.
 
-Run from a clean Linux checkout with the repository's development tools:
+Run from a clean Linux checkout with the repository's development tools.
+The isolated native harness uses local outer Podman and admitted hosted outer
+Docker, with [explicit backend selection](native-outer-runtime.md).
 
 ```sh
 test -z "$(git status --porcelain)"

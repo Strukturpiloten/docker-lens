@@ -1,5 +1,76 @@
 # Standalone Docker migration ledger
 
+## Explicit logging source invocation 32
+
+[ADR 0050](decisions/0050-logging-native-source-proof.md) and the
+[logging contract](native-logging-contract.md) append six explicit CLI/rendered
+controls after original29/read, memory30/read and capabilities31/read. The
+canonical 32-invocation sequence has eleven delegated cleanup owners. One actual
+read retains exact canary/refusal bytes and actual CLI status, including NUL
+rejection, without shell-variable normalization. The immediate private reader
+runs without publication; the nineteen-argument emitter repeats validation and
+independently enforces a closed non-admitting result before output. This proves
+configured retention and a bounded read only. Rotation, durability, default
+behavior and public admission remain outside scope. Final source review/gates
+and fresh whole32 four-profile native time/output/cleanup qualification remain due.
+
+
+## Named capabilities source invocation 31
+
+[ADR 0049](decisions/0049-named-capabilities-native-source-proof.md) and the
+[named-capabilities contract](native-capabilities-contract.md) append eleven
+idle controls after the unchanged 30/read prefix, with 32 invocations and eleven
+delegated owners. Independent CLI zero/add-back and ALL/minus controls establish
+transitions; the three unmodified product artifacts establish exact configured
+retention and consistent namespace-local kernel state against measured defaults.
+The mandatory private reader recomputes raw evidence without public projection
+or admission. Complete final-source review/gates and fresh exact-candidate
+four-lane whole 32 time/output fit and cleanup remain pending. Logging32 follows capabilities31/read under ADR 0050.
+
+## Inner memory source invocation 30
+
+[ADR 0048](decisions/0048-inner-memory-native-source-proof.md) and the
+[memory contract](native-memory-contract.md) append memory30 after the complete
+unchanged original 29/readers, with nine delegated owners. Six CLI/rendered
+omitted/finite 64 MiB/zero controls use one supervisor and one bound allocation
+child, real live leaf-local pressure/victim counters, a processed OOM event before
+parent release and the genuine final Engine flag. Private guest root `/` is valid;
+hidden ancestors remain unobserved. Actual child 137 and supervisor-propagated
+parent 137 are distinct. No public memory field, capability or catalogue admission
+is added. Complete final-source gates, independent review and fresh four-profile
+whole 32 execution/fit/cleanup remain pending. Capabilities31 source follows
+under ADR 0049; logging32/read follows under ADR 0050.
+
+
+## Device mapping source invocation 29
+
+[ADR 0047](decisions/0047-device-mapping-native-source-proof.md) appends the
+[finite device proof](native-device-mapping-contract.md) after unchanged
+PIDs27/read and nofile28/read. The current 32-call lane has eleven delegated owners;
+original invocation22 resolver semantics, private custody and non-admission
+rules remain intact. Independent CLI/rendered controls check exact mapping,
+nonsymlink character identity and a bounded held-descriptor read only. The
+private reader is mandatory without emission and repeated by the unchanged
+19-argument emitter. No denied-write/create or DeviceMappings admission claim
+follows. Fresh complete and exact-candidate whole-four-lane native gates,
+actual byte/time fit and verified cleanup remain pending. Memory and named capability source are appended under ADR 0048/0049;
+logging32/read follows under ADR 0050.
+
+
+## Resolver source recovery #148
+
+The current [hostname/resolver contract](native-hostname-contract.md) and
+[ADR 0046](decisions/0046-hostname-resolver-source-proof-v2.md) expand
+invocation 22 under its existing HealthRun/owner with four fresh resolver fixtures,
+while preserving all four hostname controls. Private schema 2/hostname-v2.json
+requires both sections; public hostname-v1, the 19-argument emitter and capability/
+catalogue maps remain unchanged. The original 29 invocation names and readers retain their order; memory30 now
+appends a ninth owner scope under ADR 0048. Resolver failure can prevent reaching PIDs27.
+PIDs27/read and nofile28/read must succeed before device29/read and memory30/read. Earlier qualification is not reusable;
+source checks and actual combined native byte/time fit remain pending. No resolver
+connectivity, IPv6-network, application-acceptance or publication claim follows.
+
+
 This is the finite checkpoint for DockerLens #3, not a completed migration or a
 compatibility claim. DockerLens 0.1.0 supplies the foundation: bounded explicit
 read-only Unix-socket acquisition, pure typed inspection, and inert standalone
@@ -99,7 +170,7 @@ or migration acceptance is established; #31/#343/#366 remain open.
 | #30 target branch | Typed request contract | Remaining proof / owner |
 | --- | --- | --- |
 | Publication | `PortPublication` has exposed-only or ordered `HostBinding` values; each binding distinguishes omitted/explicit IPv4 or IPv6 `HostIp` and fixed/ephemeral `HostPort`. Duplicate or wildcard-overlapping fixed bindings fail before planning. | #31 must inspect resulting fixed/repeated/dynamic bindings, loopback isolation and IPv6 behavior per exact lane; #343 must retain authored address versus observed assigned port. |
-| Process and health | Command and entrypoint distinguish native omission, clear intent and exec. Command clear with inherited or cleared entrypoint fails intent validation; explicit exec entrypoint plus clear command remains capability-gated. Health test distinguishes exec, one shell string, disabled and inherited absence; timing retains omitted versus explicit start values. | #31 must prove the conditional command-clear request against independent literal Engine behavior and compare an entrypoint-only control; `EntrypointClear` needs separate proof. #343 must not infer authored clear from effective source `Config.Cmd`. No empty-string argument workaround, generic API floor, or claim from offline bytes. |
+| Process and health | Command and entrypoint distinguish native omission, clear intent and exec. Command clear with inherited or cleared entrypoint fails intent validation; ADR 0037 selects only explicit exec entrypoint plus clear command for candidate rehearsal. Health test distinguishes exec, one shell string, disabled and inherited absence; timing retains omitted versus explicit start values. | Independently reviewed source run 40119803977 proves accepted Cmd `[]` under that guard, including the entrypoint-only control with intentionally identical process effect. The admission head still needs fresh complete/package/native26 and actual consumer gates. `EntrypointClear`, including inherited image command, needs separate proof. #343 must not infer authored clear from effective source `Config.Cmd`. No empty-string workaround, generic API floor, or offline-only compatibility claim. |
 | Identity and runtime | Protected labels/user/workdir/hostname; typed tmpfs, read-only rootfs, init, stop settings, limits, devices, caps/security/sysctls/groups, DNS/extra hosts and logging render behind individual capabilities. | #31 checks resulting process, mount, resolver and security/resource behavior. #343 maps each neutral field or records actionable loss; a typed branch alone does not close the full application contract. |
 
 The existing source-to-target rows below remain the finite release blockers.
