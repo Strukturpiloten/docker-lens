@@ -42,6 +42,7 @@ def verify_candidate(environment: Mapping[str, str]) -> tuple[str, str, str]:
     if (
         not SHA.fullmatch(candidate)
         or environment.get("GITHUB_REPOSITORY") != "Strukturpiloten/docker-lens"
+        or environment.get("GITHUB_RUN_ATTEMPT") != "1"
         or environment.get("GITHUB_EVENT_NAME") != "workflow_dispatch"
         or environment.get("GITHUB_REF") != "refs/heads/main"
         or environment.get("GITHUB_SHA") != candidate
