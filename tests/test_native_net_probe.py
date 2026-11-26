@@ -4,8 +4,10 @@ import importlib.util
 import contextlib
 import errno
 import io
+import json
 import socket
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -14,7 +16,6 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
-
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts/native-net-probe.py"
 SPEC = importlib.util.spec_from_file_location("dockerlens_native_net_probe", SCRIPT)
@@ -134,13 +135,15 @@ class NativeNetProbeTests(unittest.TestCase):
 
     @staticmethod
     def fake_podman(directory: Path) -> None:
+        for tool in ("timeout", "env", "bash", "python3", "dirname"):
+            (directory / tool).symlink_to(Path(shutil.which(tool)).resolve())
         path = directory / "podman"
         path.write_text("""#!/usr/bin/env python3
 import os
 import sys
 import time
 with open(os.environ['TEST_PIDFILE'], 'w') as pidfile:
-    pidfile.write(str(os.getpid()))
+    pidfile.write('[' + str(os.getpid()) + ']')
 mode = os.environ['TEST_INSPECT_MODE']
 if mode == 'normal':
     sys.stdout.write(os.environ['TEST_INSPECT_LINE'])
@@ -164,32 +167,43 @@ else:
             (self.inspect_output(label="other-run"), False),
             ):
                 with self.subTest(output=output), mock.patch.dict(os.environ, {
-                    "PATH": f"{directory}:{os.environ['PATH']}",
+                    "PATH": directory,
                     "TEST_PIDFILE": str(Path(directory) / "pid"),
                     "TEST_INSPECT_MODE": "normal", "TEST_INSPECT_LINE": output,
-                }):
+                }, clear=True):
                     if valid:
-                        self.assertEqual(PROBE.inspect(self.outer, self.run_id), self.expected)
+                        self.assertEqual(PROBE.inspect(self.outer, self.run_id, "podman", directory), self.expected)
                     else:
                         with self.assertRaises(PROBE.ProbeFailure):
-                            PROBE.inspect(self.outer, self.run_id)
+                            PROBE.inspect(self.outer, self.run_id, "podman", directory)
 
+    @unittest.skipUnless(sys.platform == "linux", "Linux process-group reaping control")
     def test_inspect_kills_and_reaps_oversized_or_stalled_process(self) -> None:
+        import test_native_net_probe_bridge as group_controls
+
+        # Reuse the isolated subreaper fixture: SIGKILL can orphan the dead fake
+        # client before PID1 reaps it. The driver adopts/reaps that exact child,
+        # and a live child fails before any fallback teardown can make it absent.
+        driver = group_controls.NamespaceBridgeTests.group_driver()
         with tempfile.TemporaryDirectory() as directory:
             self.fake_podman(Path(directory))
             pidfile = Path(directory) / "pid"
             for mode in ("overflow", "timeout"):
+                pidfile.unlink(missing_ok=True)
                 with self.subTest(mode=mode), mock.patch.dict(os.environ, {
-                    "PATH": f"{directory}:{os.environ['PATH']}",
+                    "PATH": directory,
                     "TEST_PIDFILE": str(pidfile), "TEST_INSPECT_MODE": mode,
                     "TEST_INSPECT_LINE": "",
-                }):
+                }, clear=True):
                     start = time.monotonic()
-                    with self.assertRaises(PROBE.ProbeFailure):
-                        PROBE.inspect(self.outer, self.run_id)
+                    result = subprocess.run(
+                        [sys.executable, "-c", driver, str(SCRIPT), "podman",
+                         directory, str(pidfile), mode],
+                        capture_output=True, text=True, timeout=4,
+                    )
+                    self.assertEqual(result.returncode, 0, "closed owned-client reaping control failed")
+                    self.assertEqual(json.loads(result.stdout), {"category": "inspect", "reaped": 1})
                     self.assertLess(time.monotonic() - start, 3)
-                    with self.assertRaises(ProcessLookupError):
-                        os.kill(int(pidfile.read_text()), 0)
 
     def test_identity_token_is_closed_and_rejects_wrong_pid_or_source(self) -> None:
         token = PROBE.Identity(*self.expected, 777).token()
@@ -226,7 +240,7 @@ else:
                 PROBE.os, "stat", return_value=SimpleNamespace(st_dev=5, st_ino=101)
             ), mock.patch.object(PROBE.os, "close") as closed:
                 with self.assertRaises(PROBE.ProbeFailure) as failed:
-                    PROBE.verified_process(self.outer, self.run_id, self.expected)
+                    PROBE.verified_process(self.outer, self.run_id, self.expected, "podman", "/tmp/held")
                 self.assertEqual(failed.exception.category, "changed" if isinstance(second, tuple) else "inspect")
                 self.assertEqual(opened.call_args_list[0].args[0], "/proc/4321")
                 self.assertEqual(opened.call_args_list[1].args[0], "ns/net")
@@ -252,8 +266,8 @@ else:
 
     def test_same_host_namespace_refuses_identity_publication_and_nsenter(self) -> None:
         cached = PROBE.Identity(*self.expected, 777)
-        for arguments in ([str(SCRIPT), "identity", self.outer],
-                          [str(SCRIPT), "http", self.outer, cached.token(), "http://127.0.0.1:18110/index.html"]):
+        for arguments in ([str(SCRIPT), "--engine", "podman", "--directory", "/tmp/held", "identity", self.outer],
+                          [str(SCRIPT), "--engine", "podman", "--directory", "/tmp/held", "http", self.outer, cached.token(), "http://127.0.0.1:18110/index.html"]):
             with self.subTest(mode=arguments[1]), mock.patch.object(sys, "argv", arguments), \
                     mock.patch.object(PROBE, "inspect", return_value=self.expected), \
                     mock.patch.object(PROBE.os, "open", side_effect=[10, 11]), \
@@ -274,7 +288,7 @@ else:
         cached = PROBE.Identity(*self.expected, 777)
         for held in (SimpleNamespace(st_dev=5, st_ino=201), SimpleNamespace(st_dev=6, st_ino=101)):
             with self.subTest(device=held.st_dev), \
-                    mock.patch.object(sys, "argv", [str(SCRIPT), "http", self.outer, cached.token(), "http://127.0.0.1:18110/index.html"]), \
+                    mock.patch.object(sys, "argv", [str(SCRIPT), "--engine", "podman", "--directory", "/tmp/held", "http", self.outer, cached.token(), "http://127.0.0.1:18110/index.html"]), \
                     mock.patch.object(PROBE, "inspect", return_value=self.expected) as inspected, \
                     mock.patch.object(PROBE.os, "open", side_effect=[10, 11]) as opened, \
                     mock.patch.object(PROBE, "process_start_ticks", return_value=777), \
@@ -302,7 +316,7 @@ else:
                  (SimpleNamespace(st_dev=True, st_ino=201), SimpleNamespace(st_dev=5, st_ino=101)))
         for held, host in cases:
             with self.subTest(held=type(held), host=type(host)), \
-                    mock.patch.object(sys, "argv", [str(SCRIPT), "http", self.outer, cached.token(), "http://127.0.0.1:18110/index.html"]), \
+                    mock.patch.object(sys, "argv", [str(SCRIPT), "--engine", "podman", "--directory", "/tmp/held", "http", self.outer, cached.token(), "http://127.0.0.1:18110/index.html"]), \
                     mock.patch.object(PROBE, "inspect", return_value=self.expected), \
                     mock.patch.object(PROBE.os, "open", side_effect=[10, 11]), \
                     mock.patch.object(PROBE, "process_start_ticks", return_value=777), \
@@ -318,7 +332,7 @@ else:
 
     def test_cached_pid_start_mismatch_prevents_nsenter(self) -> None:
         cached = PROBE.Identity(*self.expected, 777)
-        with mock.patch.object(sys, "argv", [str(SCRIPT), "http", self.outer, cached.token(),
+        with mock.patch.object(sys, "argv", [str(SCRIPT), "--engine", "podman", "--directory", "/tmp/held", "http", self.outer, cached.token(),
                                              "http://127.0.0.1:18110/index.html"]), mock.patch.object(
             PROBE, "verified_process", return_value=(778, 11)
         ), mock.patch.object(PROBE, "inspect") as inspect, mock.patch.object(
@@ -335,7 +349,7 @@ else:
     def test_ipv6_socket_uses_the_same_pinned_outer_namespace(self) -> None:
         cached = PROBE.Identity(*self.expected, 777)
         with mock.patch.object(
-            sys, "argv", [str(SCRIPT), "ipv6_socket", self.outer, cached.token()]
+            sys, "argv", [str(SCRIPT), "--engine", "podman", "--directory", "/tmp/held", "ipv6_socket", self.outer, cached.token()]
         ), mock.patch.object(
             PROBE, "verified_process", return_value=(777, 11)
         ), mock.patch.object(
@@ -356,7 +370,7 @@ else:
         cached = PROBE.Identity(*self.expected, 777)
         for after, valid in ((self.expected, True), (("other", 4321, self.started), False)):
             with self.subTest(valid=valid), mock.patch.object(
-                sys, "argv", [str(SCRIPT), "http", self.outer, cached.token(),
+                sys, "argv", [str(SCRIPT), "--engine", "podman", "--directory", "/tmp/held", "http", self.outer, cached.token(),
                               "http://127.0.0.1:18110/index.html"]
             ), mock.patch.object(PROBE, "verified_process", return_value=(777, 11)), mock.patch.object(
                 PROBE, "inspect", return_value=after

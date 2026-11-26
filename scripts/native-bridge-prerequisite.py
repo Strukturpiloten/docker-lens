@@ -13,17 +13,29 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Callable, Mapping
+from native_gnu_timeout import selected_path as timeout_path
 
 
 MODULE = Path("/sys/module/br_netfilter")
 IPTABLES = Path("/proc/sys/net/bridge/bridge-nf-call-iptables")
 IP6TABLES = Path("/proc/sys/net/bridge/bridge-nf-call-ip6tables")
-LOAD = ("sudo", "-n", "timeout", "--signal=TERM", "--kill-after=2s", "10s",
+LOAD = ("sudo", "-n", "--signal=TERM", "--kill-after=2s", "10s",
         "modprobe", "br_netfilter")
 
 
 class BridgePrerequisiteError(Exception):
     """The host does not meet this validation-only prerequisite."""
+
+
+def load_command() -> tuple[str, ...]:
+    # Discover as the ordinary caller; sudo executes only the system timer.
+    try:
+        path = timeout_path()
+    except RuntimeError as error:
+        raise BridgePrerequisiteError(str(error)) from None
+    if path not in ("/usr/bin/gnutimeout", "/usr/bin/timeout"):
+        raise BridgePrerequisiteError("existing GNU timeout prerequisite")
+    return LOAD[:2] + (path,) + LOAD[2:]
 
 
 def hosted_main_native_job(environment: Mapping[str, str]) -> bool:
@@ -64,7 +76,7 @@ def bounded_module_command(
     popen: Callable[..., subprocess.Popen[bytes]] = subprocess.Popen,
 ) -> subprocess.CompletedProcess[bytes]:
     """Root-owned timeout bounds modprobe; group kill is a fallback only."""
-    if command != list(LOAD) or check or timeout <= 0 or stdout != subprocess.DEVNULL or stderr != subprocess.DEVNULL:
+    if command != list(load_command()) or check or timeout <= 0 or stdout != subprocess.DEVNULL or stderr != subprocess.DEVNULL:
         raise BridgePrerequisiteError("module load command is not the reviewed bounded operation")
     process = popen(command, stdout=stdout, stderr=stderr, start_new_session=True)
     try:
@@ -113,7 +125,7 @@ def ensure_bridge_prerequisite(
         )
     try:
         result = run(
-            list(LOAD),
+            list(load_command()),
             check=False,
             timeout=15,
             stdout=subprocess.DEVNULL,

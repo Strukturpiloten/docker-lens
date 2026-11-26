@@ -122,8 +122,12 @@ Run `./scripts/format-lint.sh --fix`, then `./scripts/check-all.sh --check` afte
 The local gate covers formatting, Clippy, unit and documentation tests, policy tests, and docs.
 Main push and exact-candidate release validation separately require all four isolated native
 Engine lanes. PR workflows run the complete offline gate only; a green PR does not claim native
-evidence. The native harness uses bounded rootful outer Podman and rootful/rootless inner
-Docker; only genuine passing, independently reviewed lane evidence establishes compatibility.
+evidence. The native harness defaults locally to bounded rootful outer Podman;
+admitted hosted native jobs explicitly verify/select rootful local outer Docker.
+The four rootful/rootless inner Docker lanes are unchanged. Follow the canonical
+[test-only outer runtime seam](docs/native-outer-runtime.md); never probe local
+Docker or substitute its host daemon/socket for an owned inner fixture. Only
+genuine passing, independently reviewed lane evidence establishes compatibility.
 Never silently skip a required check or claim native compatibility from local tests or harness
 definitions alone.
 
@@ -186,8 +190,7 @@ one reviewed immutable source. Never fall back to candidate admission policy.
 logic in the shared source, not a consumer fork. Downloaded development tools
 come from that source's version/checksum inventory.
 
-The current native harness still selects outer Podman on hosted and local
-callers. Docker #127 / held PR #128 and BoxFerry #469 own the outstanding hosted
-Docker rollout; do not claim it delivered or alter the held runtime source as
-part of this adoption. Keep the complete offline, reviewed native dispatch,
-main native and validation-only release gates. No publication is authorized.
+The canonical harness selects outer Podman locally and verifies outer Docker
+for admitted hosted native jobs. Backend selection does not qualify a candidate.
+Keep the complete offline gate, reviewed native dispatch, main native gate
+and protected release prerequisites. Publication requires separate authorization.

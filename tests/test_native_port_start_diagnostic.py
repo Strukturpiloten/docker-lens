@@ -329,8 +329,10 @@ class NativePortStartDiagnosticTests(unittest.TestCase):
         source = (ROOT / "scripts/native-conformance.sh").read_text()
         block = 'port_invocation_us=${EPOCHREALTIME/./}' + source.split(
             'port_invocation_us=${EPOCHREALTIME/./}', 1)[1].split(
-                '\nif [[ -n ${DOCKERLENS_NATIVE_EVIDENCE_DIR', 1)[0]
+                '\n"$(dirname "$0")/run-exact-native-test.sh" native_health_metadata ', 1)[0]
         block = block.replace('"$(dirname "$0")/run-exact-native-test.sh"', "exact_wrapper")
+        self.assertEqual(block.count("exact_wrapper"), 1)
+        self.assertIn("exact_wrapper native_port live_port_publications_match_engine", block)
         calls = self.root / "calls"
         for status in (0, 37):
             script = ("set -euo pipefail\ntrap 'printf cleanup >> \"$calls\"' EXIT\n"
@@ -358,20 +360,22 @@ class NativePortStartDiagnosticTests(unittest.TestCase):
             (0, "100.00", 0, CANARY, "unavailable"),
         ):
             with self.subTest(expected=expected, end=end):
-                self.tool("timeout", '#!/bin/sh\nshift 3\nexec "$@"\n')
-                self.tool("python3", "#!/bin/sh\nprintf '%s\\n' " + shlex.quote(output) + f"\nexit {status}\n")
+                trace = self.root / "helper-called"
+                trace.unlink(missing_ok=True)
+                self.tool("python3", "#!/bin/sh\nprintf called >\"$HELPER_TRACE\"\nprintf '%s\\n' " + shlex.quote(output) + f"\nexit {status}\n")
                 script = ("set -euo pipefail\n" + self.shell_function() + "\n"
                           + "read_count=0\nread() { read_count=$((read_count+1)); "
                           + f"if (( read_count == 1 )); then builtin read \"$@\" <<< '100.00 0'; "
                           + f"else builtin read \"$@\" <<< '{end} 0'; fi; }}\n"
-                          + f"SECONDS={seconds}; watchdog_pid=$$; script_dir=/private; run_dir=/private; "
+                          + f"SECONDS={seconds}; watchdog_pid=$$; script_dir={shlex.quote(str(HELPER.parent))}; run_dir=/private; "
                           + f"run_id={RUN}; lane=debian11-rootless; NATIVE_PORT_CANDIDATE_SHA={CANDIDATE}; "
                           + f"port_invocation_us=1234567890123456; port_start_log_fd=9; image={shlex.quote(IMAGE)}; "
                           + "port_start_failure_diagnostic\n")
                 result = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
-                    env=os.environ | {"PATH": str(self.root) + ":" + os.environ["PATH"]})
+                    env=os.environ | {"PATH": str(self.root) + ":" + os.environ["PATH"], "HELPER_TRACE": str(trace)})
                 self.assertEqual(result.returncode, 0)
                 self.assertIn("collector=" + expected, result.stderr)
+                self.assertEqual(trace.exists(), expected != "budget")
                 self.assertNotIn(CANARY, result.stdout + result.stderr)
 
     def test_actual_nonroot_helper_reads_held_fd_without_stalled_sudo_or_podman(self):
@@ -442,16 +446,21 @@ class NativePortStartDiagnosticTests(unittest.TestCase):
     def test_definition_and_proof_boundaries(self):
         source = (ROOT / "src/native_port_tests.rs").read_text()
         harness = (ROOT / "scripts/native-conformance.sh").read_text()
+        runtime = (ROOT / "scripts/native-outer-runtime.sh").read_text()
         helper = HELPER.read_text()
         wrapper = (ROOT / "scripts/run-exact-native-test.sh").read_text()
         emitter = (ROOT / "scripts/native-evidence.py").read_text()
-        self.assertIn('--log-driver=k8s-file --log-opt "path=$run_dir/diagnostics/daemon.log" --log-opt max-size=1048576', harness)
+        self.assertIn('--log-driver=k8s-file --log-opt "path=${context[log_path]}" --log-opt max-size=1048576', runtime)
+        self.assertIn('"$lane" "$image" "$run_dir/diagnostics/daemon.log"', harness)
         self.assertIn("inspect --format '{{json .}}'", harness)
         self.assertNotIn("{{json .Id}}", harness)
         self.assertNotIn("subprocess", helper)
         observer = self.shell_function()
         self.assertNotIn("sudo", observer)
-        self.assertNotIn("podman", observer)
+        # A backend policy selector is not permission to spawn a runtime client.
+        self.assertNotIn("podman", observer.replace("${native_outer_engine:-podman}", "selected_backend"))
+        self.assertIn('if [[ ${native_outer_engine:-podman} == docker ]]; then', observer)
+        self.assertLess(observer.index("collector=unavailable"), observer.index("local remaining="))
         self.assertIn("--kill-after=0.25s 3.5s", observer)
         self.assertIn("Some(28 | 124)", source)
         self.assertIn("Some(Duration::from_secs(4))", source)

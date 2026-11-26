@@ -1,6 +1,76 @@
 # Architecture decisions
 
+- [0056: Nofile case-bridge proof schema 2](0056-nofile-case-bridge-proof-schema-2.md)
+  isolates the two unlimited pairs on owned bridges, retains the finite default,
+  versions only the private packet and eleven-expansion fixture schedule, and
+  preserves public identity rejection, original global caps and non-admission.
+
+- [0053: Fixed path flags for the mediated prerequisite](0053-mediated-disconnected-path-flags.md)
+  forward-ports the approved issue 158 paired path flags, superseding only ADR 0051's
+  flag-free declaration. Legacy callers stay unchanged; parser/kernel interpretation
+  and fresh native qualification remain on hold.
+
+- [0052: Controlled PIDs CREATE observations](0052-controlled-pids-create-observations.md)
+  separates explicit minus-one request intent from owned CREATE null readback and versions only
+  private acquisition observations; public uncertainty and actual effect obligations remain strict.
+
+- [0051: Fixed ordinary mediated profile builder](0051-ordinary-mediated-profile-builder.md)
+  adds only an opt-in pure builder with thirteen explicit ABI4 family rules,
+  including seven POSIX queue permissions. The rejected all-rule candidate remains
+  historical. Active legacy callers and immutable pins remain unchanged; consumer
+  integration and native qualification remain separate obligations.
+
+
+- [0050: Explicit logging configured-state and one-line source proof](0050-logging-native-source-proof.md)
+  appends logging32 after original29/read, memory30/read and capabilities31/read,
+  with eleven owners, exact configured drivers and one bounded non-admitting read.
+
+
+- [0049: Named capabilities native source proof](0049-named-capabilities-native-source-proof.md)
+  appends capabilities31 after the unchanged 30/read prefix with ten owners; CLI
+  transitions and unmodified artifact retention remain distinct, private and non-admitting.
+
+- [0048: Inner memory native source proof](0048-inner-memory-native-source-proof.md)
+  appends memory30 after the original 29/readers with nine owners; live local
+  pressure and actual child-victim evidence remain private and non-admitting.
+
+- [0047: Device mapping native source proof](0047-device-mapping-native-source-proof.md)
+  appends only device29 after PIDs27/read and nofile28/read; supersedes only
+  ADR0046's roster/owner counts to 29/eight, retaining resolver and non-admission rules.
+
+- [0046: Hostname and resolver source proof v2](0046-hostname-resolver-source-proof-v2.md)
+  expands invocation 22 under its existing owner and limits, requires private v2,
+  and retains public hostname-v1; earlier qualification cannot qualify the change.
+
+- [0045: Canonical nofile28 source integration](0045-canonical-nofile-source-integration.md)
+  appends one private nofile child after mandatory PIDs27/reader, retaining
+  original ownership/deadlines/EXIT cleanup and unchanged public admission;
+  ADR0056 amends its current private fixture schedule; exact-candidate native
+  qualification remains pending.
+
+- [0042: Finite sudo ancestor UID shape](0042-sudo-monitor-uid-shape.md)
+  admits only the exact positive-peer/root-effective/saved/filesystem shape for
+  non-supervisor links still bound to the existing fixed sudo and ancestry checks;
+  native qualification and the observed run's UID/role remain unresolved.
+- [0041: Original-owner PIDs27 source integration](0041-original-owner-pids-experiment.md)
+  adopts the Linux-only owner/controller/private reader and canonical call27,
+  preserving source-only unadmitted status and fresh native qualification.
+
+- [0040: In-process PIDs runtime source session](0040-pids-runtime-source-session.md)
+  adds held inner-peer/namespace association and prepared root supervision;
+  original owner integration and native qualification remain pending.
+
+- [0039: Prepared measured PIDs boundary](0039-measured-pids-boundary.md) defines
+  an unwired post-daemon-start/pre-workload collector only. Historical ADRs
+  0022–0035 remain unadopted. Current ADRs 0041/0045 now supply PIDs27/nofile28
+  source integration; final native qualification remains pending.
+
 Durable native boundaries and evidence/admission contracts:
+
+ADR 0004 now maintains the narrowly scoped GitHub-runner upstream-rootless
+userns profile prerequisite. Proven native completion and profile cleanup may
+produce ordinary evidence; the former experiment's deliberate non-success
+barrier is superseded while its historical evidence keeps its original status.
 
 - [0001: Native boundaries](0001-native-boundaries.md)
 - [0002: Capture and offline target profiles](0002-capture-and-offline-target-profiles.md)
@@ -22,15 +92,47 @@ Durable native boundaries and evidence/admission contracts:
 - [0018: Reviewed external-network cohort](0018-reviewed-external-network-cohort.md)
 - [0019: Reviewed configured stop-signal cohort](0019-reviewed-stop-signal-cohort.md)
 - [0020: Seed trusted shared validation policy](0020-trusted-shared-validation-policy.md)
-
-ADR 0019 selects only the complete StopSignal singleton beyond ADR 0018's
-retained groups for candidate rehearsal. ADR 0017's None/false/true, conditional
-schema-3 and pure snapshot boundaries remain; fresh final-candidate sixteen-test
-native and actual consumer gates still block ready/merge/main admission and
-release. Historical evidence and earlier obligations are preserved.
-
 - [0021: Seed the trusted shared reader](0021-shared-automation-bootstrap.md)
 - [0022: Shared development automation](0022-shared-development-automation.md)
-
 - [0023: Development and published API checks](0023-development-and-published-api-checks.md)
 - [0024: Protected DockerLens crate publication](0024-protected-crate-publication.md)
+- [0036: Guarded CommandClear raw-source projection](0036-command-clear-native-source-projection.md)
+- [0037: Reviewed CommandClear cohort](0037-reviewed-command-clear-cohort.md)
+- [0038: Maintained profile for the exact Box consumer](0038-maintained-profile-for-box-consumer.md)
+- [0039: Measured live PIDs boundary](0039-measured-pids-boundary.md)
+- [0040: Runtime-associated PIDs source session](0040-pids-runtime-source-session.md)
+- [0041: Original-owner PIDs27 experiment](0041-original-owner-pids-experiment.md)
+- [0042: Finite sudo monitor UID shape](0042-sudo-monitor-uid-shape.md)
+- [0043: Prepare thread-aware PIDs source coverage](0043-thread-aware-pids-source-contract.md)
+- [0044: Typed PIDs source and private proof v2](0044-typed-pids-source-and-proof-v2.md)
+- [0054: Observation-scoped cgroup and PIDs reports](0054-observation-scoped-cgroup-reports.md)
+- [0055: Unresolved rootless PIDs destination obligation](0055-rootless-pids-destination-obligation.md)
+
+ADR 0043 prepares pure topology contracts and controls only. It does not replace
+current collector guards, emit proof v2, establish physical budget fit, or qualify
+native execution. Its explicit implementation and independent-review gates remain.
+
+
+ADR 0038 adds only the separately enumerated BoxFerry reviewed-consumer identity
+to the test-only maintained profile helper; native contexts and receipts retain
+their existing contract. Trusted source/admission, Box lifecycle/evidence wiring
+and fresh exact-candidate qualification remain separate obligations.
+
+Numbers 0025–0035 remain reserved for preserved unpublished f406cb22 decisions,
+including 0035 Docker gated-entry custody. The shared automation and publication
+decisions use 0020–0024. The reservation adopts none of the unpublished decisions.
+ADR 0036 versions only the current command-clear raw-source singleton. ADR 0037
+supersedes only ADR 0019's active selection, retaining its complete baseline and
+adding only guarded CommandClear. EntrypointClear remains withheld. ADR 0012's
+consumer gates and fresh final-head qualification remain required.
+
+ADRs 0054/0055 recover inert observation and destination-prerequisite contracts.
+They do not admit PIDs capabilities or authenticate delegation/enforcement.
+Schema 4 is selected only for the new finite rootless obligation; legacy artifact
+and request representations retain their existing bytes otherwise.
+
+Historical ADR 0019 selected only the complete StopSignal singleton beyond ADR 0018's
+retained groups for candidate rehearsal. ADR 0017's None/false/true, conditional
+schema-3 and pure snapshot boundaries remain; fresh final-candidate twenty-six-test
+native and actual consumer gates still block ready/merge/main admission and
+release. Historical evidence and earlier obligations are preserved.

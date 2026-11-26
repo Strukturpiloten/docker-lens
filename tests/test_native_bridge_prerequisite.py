@@ -1,5 +1,6 @@
 """Offline host bridge preflight tests; no module is loaded by this suite."""
 
+from native_timeout_support import TIMER, system_timer
 import importlib.util
 import subprocess
 import sys
@@ -11,6 +12,7 @@ from unittest import mock
 
 
 SOURCE = Path(__file__).resolve().parents[1] / "scripts/native-bridge-prerequisite.py"
+sys.path.insert(0, str(SOURCE.parent))
 SPEC = importlib.util.spec_from_file_location("native_bridge_prerequisite", SOURCE)
 assert SPEC is not None and SPEC.loader is not None
 bridge = importlib.util.module_from_spec(SPEC)
@@ -93,7 +95,7 @@ class NativeBridgePrerequisiteTests(unittest.TestCase):
 
     def test_hosted_missing_module_loads_exact_command_then_checks_both_sysctls(self) -> None:
         def loaded(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
-            self.assertEqual(command, ["sudo", "-n", "timeout", "--signal=TERM",
+            self.assertEqual(command, ["sudo", "-n", system_timer(), "--signal=TERM",
                                        "--kill-after=2s", "10s", "modprobe", "br_netfilter"])
             self.assertEqual(kwargs["timeout"], 15)
             self.assertIs(kwargs["stdout"], subprocess.DEVNULL)
@@ -150,7 +152,7 @@ class NativeBridgePrerequisiteTests(unittest.TestCase):
             return subprocess.Popen([sys.executable, "-c", parent], **kwargs)
         with self.assertRaises(subprocess.TimeoutExpired):
             bridge.bounded_module_command(
-                list(bridge.LOAD), check=False, timeout=0.3,
+                list(bridge.load_command()), check=False, timeout=0.3,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 popen=fake_popen,
             )
@@ -163,12 +165,12 @@ class NativeBridgePrerequisiteTests(unittest.TestCase):
             pid = 123456
 
             def wait(self, timeout: float) -> int:
-                raise subprocess.TimeoutExpired(list(bridge.LOAD), timeout, b"private-output")
+                raise subprocess.TimeoutExpired(list(bridge.load_command()), timeout, b"private-output")
 
         with mock.patch.object(bridge.os, "killpg", side_effect=PermissionError("private-path")):
             with self.assertRaises(subprocess.TimeoutExpired):
                 bridge.bounded_module_command(
-                    list(bridge.LOAD), check=False, timeout=15,
+                    list(bridge.load_command()), check=False, timeout=15,
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                     popen=lambda _command, **_kwargs: FakeRootProcess(),
                 )

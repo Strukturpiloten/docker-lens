@@ -67,6 +67,8 @@ mod native_network_attachment_tests;
 #[cfg(test)]
 mod native_network_tests;
 #[cfg(test)]
+mod native_outer_test_command;
+#[cfg(test)]
 mod native_port_tests;
 #[cfg(test)]
 mod native_target_tests;

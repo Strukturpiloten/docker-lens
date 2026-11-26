@@ -3,6 +3,39 @@
 Status: accepted harness contract; historical four-lane source evidence reviewed.
 Each changed candidate and release requires fresh complete and native gates.
 
+Scope amendment: [ADR 0038](0038-maintained-profile-for-box-consumer.md) supersedes
+only the maintained profile helper's native-only consumer restriction with one
+separately enumerated BoxFerry reviewed-consumer context. The native lifecycle,
+receipts, historical evidence and qualification obligations below are unchanged.
+
+The current [test-only outer runtime](../native-outer-runtime.md) additionally
+selects verified rootful local Docker in admitted hosted jobs while retaining
+local default Podman. This updates orchestration, not the four maintained inner
+images or this ADR's native evidence/admission obligation. Historical Podman source
+evidence below remains historical; it does not qualify the new Docker backend.
+The maintained GitHub-runner userns prerequisite applies only to the owned
+upstream-rootless fixture under hosted outer Docker in the exact main-push,
+trusted-main native-dispatch and standalone exact-main release-validation jobs.
+It may
+compile and add one run-owned named AppArmor userns profile after read-only
+host/parser/ABI checks, bind it to the unchanged privileged launch, and verify
+the creation-bound task's effective kernel label. Original-directory custody,
+durable intent and authenticated daemon absence govern removal; uncertainty
+retains evidence until disposable-runner teardown. No installation, ambient
+policy change, fallback, new native assertion or acceptance exemption is allowed.
+The complete mandatory native sequence, owned resource cleanup, and a validated
+verified-label/removed-profile receipt now permit ordinary evidence and job
+success. Missing or uncertain prerequisites still fail the lane and aggregate.
+This supersedes only the former issue127 experiment's mandatory non-success
+barrier and dispatcher-only scope. Earlier experimental and failed-run evidence
+retains its original status; it does not qualify the maintained successor.
+Local host restrictions, cgroup/PIDs authority, product capability admission and
+release obligations are unchanged. See the bounded lifecycle and source
+provenance in [outer runtime](../native-outer-runtime.md#maintained-github-runner-upstream-rootless-userns-prerequisite).
+
+Both use owned inner container/data-volume/socket identities in the existing
+shared host store; the host Docker daemon/socket is never the fixture itself.
+
 The four independent native lanes use the published, version-tagged and
 digest-pinned containers#260 GHCR images: Debian 11 packaged Engine in
 rootful and rootless mode, and upstream Engine 29 in rootful and rootless
@@ -16,7 +49,8 @@ without changing host policy. Only Debian 11 rootless uses suid,dev on its
 task-owned outer data-root volume, and the harness verifies the effective
 mount flags. Independent CLI probes isolated the need to this historical
 rootless runc's read-only named-volume remount under outer nosuid,nodev;
-other lanes retain their default data-volume and AppArmor options. This does not claim
+other lanes retain their default data-volume and AppArmor options outside the
+explicit maintained prerequisite above. This does not claim
 conformance under restrictive outer storage mounts or enforcing outer
 AppArmor. No guest APT provisioning occurs.
 

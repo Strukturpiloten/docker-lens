@@ -134,20 +134,21 @@ fn write_request_body(child: &mut Child, body: &[u8]) -> Result<(), OutputError>
 }
 
 fn inner_docker(args: &[&str]) -> std::process::Output {
-    let mut command = Command::new("timeout");
+    let mut command = Command::new(crate::native_outer_test_command::timeout_program());
     command.args(["-k", "5s", "60"]);
     match required("NATIVE_PODMAN_USE_SUDO").as_str() {
         "0" => {
-            command.arg("podman");
+            command.args(crate::native_outer_test_command::prefix());
         }
         "1" => {
-            command.args(["sudo", "-n", "podman"]);
+            command.args(["sudo", "-n"]);
+            command.args(crate::native_outer_test_command::prefix());
         }
         _ => panic!("closed Podman privilege selector"),
     }
     command.args([
         "exec",
-        &required("NATIVE_OUTER_CONTAINER"),
+        &required("NATIVE_OUTER_CONTAINER_ID"),
         "docker",
         "-H",
         "unix:///dockerlens-native/docker.sock",
@@ -175,20 +176,21 @@ fn docker_ok(args: &[&str]) -> Vec<u8> {
 }
 
 fn dockerd_effective_uid() -> u32 {
-    let mut command = Command::new("timeout");
+    let mut command = Command::new(crate::native_outer_test_command::timeout_program());
     command.args(["-k", "5s", "15"]);
     match required("NATIVE_PODMAN_USE_SUDO").as_str() {
         "0" => {
-            command.arg("podman");
+            command.args(crate::native_outer_test_command::prefix());
         }
         "1" => {
-            command.args(["sudo", "-n", "podman"]);
+            command.args(["sudo", "-n"]);
+            command.args(crate::native_outer_test_command::prefix());
         }
         _ => panic!("closed Podman privilege selector"),
     }
     command.args([
         "exec",
-        &required("NATIVE_OUTER_CONTAINER"),
+        &required("NATIVE_OUTER_CONTAINER_ID"),
         "sh",
         "-ec",
         r#"count=0; effective=
@@ -296,7 +298,7 @@ impl NativeApi {
         if method == "POST" {
             self.posts += 1;
         }
-        let mut command = Command::new("timeout");
+        let mut command = Command::new(crate::native_outer_test_command::timeout_program());
         command.args([
             "-k",
             "5s",

@@ -91,11 +91,10 @@ queue path. Native fixture qualification remains a separate product boundary.
 
 ## Native and release limitations
 
-The current harness still requires outer Podman on local and hosted callers.
-DockerLens #127 / held PR #128 and BoxFerry #469 own the required hosted Docker
-backend rollout and fresh qualification. The Renovate test-container extractor
-separately selects Docker on GitHub and Podman locally; this proves no native
-Engine behavior.
+The [canonical native harness](native-outer-runtime.md) uses outer Podman
+locally and verifies outer Docker for admitted hosted native jobs. Every
+changed candidate needs fresh qualification. The Renovate test-container
+extractor selects its backend separately and supplies no native Engine evidence.
 
 Release validation explicitly selects published API against the canonical
 registry baseline and actual chosen manifest version. Its final required guard

@@ -67,6 +67,9 @@ mod stop_signal;
 #[path = "native_lifecycle_tests.rs"]
 mod lifecycle;
 
+#[path = "native_command_clear_tests.rs"]
+mod command_clear;
+
 fn required(name: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| panic!("closed health metadata environment"))
 }
@@ -274,7 +277,429 @@ fn capture_room(calls: usize, bytes: usize, cleanup: bool) -> bool {
             .is_some_and(|total| total <= bytes_limit)
 }
 
+// A read-only absence control is not an owned mutation slot. Binding is closed
+// to this one invocation, exact legacy profile, and the original run token; no
+// caller-supplied path/name or arbitrary authorization callback is accepted.
+enum HealthAbsenceLookup {
+    Disabled,
+    LifecycleDefaultLegacy {
+        original_run: String,
+        original_lane: String,
+    },
+}
+
+impl HealthAbsenceLookup {
+    fn for_invocation(
+        candidate_key: &str,
+        deadline_key: &str,
+        run: &str,
+        lane: &str,
+        api: &str,
+    ) -> Self {
+        if candidate_key == "NATIVE_LIFECYCLE_DEFAULT_EFFECT_CANDIDATE_SHA"
+            && deadline_key == "NATIVE_LIFECYCLE_DEFAULT_EFFECT_DEADLINE_EPOCH"
+            && matches!(lane, "debian11-rootful" | "debian11-rootless")
+            && api == "1.41"
+            && run.len() == 8
+            && run.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        {
+            Self::LifecycleDefaultLegacy {
+                original_run: run.to_owned(),
+                original_lane: lane.to_owned(),
+            }
+        } else {
+            Self::Disabled
+        }
+    }
+
+    fn name(&self, run: &str, lane: &str, api: &str) -> Option<String> {
+        match self {
+            Self::LifecycleDefaultLegacy {
+                original_run,
+                original_lane,
+            } if run == original_run && lane == original_lane && api == "1.41" => {
+                Some(format!("dl-def-{original_run}-zero-cli-refusal"))
+            }
+            _ => None,
+        }
+    }
+}
+
+// Disabled for every owner except nofile. Only already-waited failed statuses
+// are retained; a new capture cannot inherit the preceding command's status.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NofileObserverSite {
+    RootUid,
+    RootGid,
+    ReportWait,
+    ReportFile,
+    ReportLink,
+    WorkerError,
+    WorkerPid,
+    WorkerExe,
+    WorkerArgv,
+    Transcript,
+    ParentLimits,
+    WorkerLimits,
+}
+impl NofileObserverSite {
+    const ALL: [Self; 12] = [
+        Self::RootUid,
+        Self::RootGid,
+        Self::ReportWait,
+        Self::ReportFile,
+        Self::ReportLink,
+        Self::WorkerError,
+        Self::WorkerPid,
+        Self::WorkerExe,
+        Self::WorkerArgv,
+        Self::Transcript,
+        Self::ParentLimits,
+        Self::WorkerLimits,
+    ];
+    fn name(self) -> &'static str {
+        match self {
+            Self::RootUid => "rootuid",
+            Self::RootGid => "rootgid",
+            Self::ReportWait => "reportwait",
+            Self::ReportFile => "reportfile",
+            Self::ReportLink => "reportlink",
+            Self::WorkerError => "workererror",
+            Self::WorkerPid => "workerpid",
+            Self::WorkerExe => "workerexe",
+            Self::WorkerArgv => "workerargv",
+            Self::Transcript => "transcript",
+            Self::ParentLimits => "parentlimits",
+            Self::WorkerLimits => "workerlimits",
+        }
+    }
+    fn from_capture(bytes: &[u8]) -> Option<Self> {
+        const PREFIX: &[u8] = b"DOCKERLENS_NATIVE_NOFILE_OBSERVER";
+        if bytes.len() > 8192 || bytes.contains(&0) || !bytes.ends_with(b"\n") {
+            return None;
+        }
+        let mut records = bytes
+            .split(|byte| *byte == b'\n')
+            .filter(|line| line.starts_with(PREFIX));
+        let line = records.next()?;
+        if records.next().is_some() {
+            return None;
+        }
+        let name = line.strip_prefix(b"DOCKERLENS_NATIVE_NOFILE_OBSERVER: site=")?;
+        Self::ALL
+            .into_iter()
+            .find(|site| site.name().as_bytes() == name)
+    }
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NofileObserverUnavailable {
+    Empty,
+    Oversize,
+    Nul,
+    NonUtf8,
+    Unterminated,
+    MarkerAbsent,
+    DuplicateMarker,
+    MalformedMarker,
+}
+impl NofileObserverUnavailable {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Empty => "empty",
+            Self::Oversize => "oversize",
+            Self::Nul => "nul",
+            Self::NonUtf8 => "non_utf8",
+            Self::Unterminated => "unterminated",
+            Self::MarkerAbsent => "marker_absent",
+            Self::DuplicateMarker => "duplicate_marker",
+            Self::MalformedMarker => "malformed_marker",
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NofileObserverCapture {
+    Matched(NofileObserverSite),
+    Unavailable(NofileObserverUnavailable),
+}
+impl NofileObserverCapture {
+    fn from_capture(bytes: &[u8]) -> Self {
+        // Legacy byte acceptance wins, including non-UTF8 nonmarker noise.
+        if let Some(site) = NofileObserverSite::from_capture(bytes) {
+            return Self::Matched(site);
+        }
+        let reason = if bytes.len() > 8192 {
+            NofileObserverUnavailable::Oversize
+        } else if bytes.contains(&0) {
+            NofileObserverUnavailable::Nul
+        } else if !bytes.is_empty() && !bytes.ends_with(b"\n") {
+            NofileObserverUnavailable::Unterminated
+        } else if bytes.is_empty() {
+            NofileObserverUnavailable::Empty
+        } else {
+            let mut markers = bytes
+                .split(|byte| *byte == b'\n')
+                .filter(|line| line.starts_with(b"DOCKERLENS_NATIVE_NOFILE_OBSERVER"));
+            let first = markers.next();
+            if markers.next().is_some() {
+                NofileObserverUnavailable::DuplicateMarker
+            } else if first.is_some() {
+                NofileObserverUnavailable::MalformedMarker
+            } else if std::str::from_utf8(bytes).is_err() {
+                NofileObserverUnavailable::NonUtf8
+            } else {
+                NofileObserverUnavailable::MarkerAbsent
+            }
+        };
+        Self::Unavailable(reason)
+    }
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NofileLookupFailure {
+    BeforeCapture,
+    CaptureIncomplete,
+    StdoutLimit,
+    StderrLimit,
+    BothLimits,
+    Process,
+    HttpFrame,
+    HttpStatus,
+    Json,
+}
+
+impl NofileLookupFailure {
+    fn name(self) -> &'static str {
+        match self {
+            Self::BeforeCapture => "before_capture",
+            Self::CaptureIncomplete => "capture_incomplete",
+            Self::StdoutLimit => "stdout_limit",
+            Self::StderrLimit => "stderr_limit",
+            Self::BothLimits => "both_limits",
+            Self::Process => "process",
+            Self::HttpFrame => "http_frame",
+            Self::HttpStatus => "http_status",
+            Self::Json => "json",
+        }
+    }
+}
+
+#[derive(Default)]
+struct NofileCommandObservation {
+    current_failure: Cell<Option<std::process::ExitStatus>>,
+    observer_capture: Cell<Option<NofileObserverCapture>>,
+    first_failure: Cell<Option<std::process::ExitStatus>>,
+    active_lookup: Cell<Option<NofileLookupFailure>>,
+    first_lookup_failure: Cell<Option<NofileLookupFailure>>,
+}
+
+impl NofileCommandObservation {
+    fn reset(&self) {
+        self.observer_capture.set(None);
+        self.current_failure.set(None);
+        self.first_failure.set(None);
+        self.active_lookup.set(None);
+        self.first_lookup_failure.set(None);
+    }
+    fn begin_capture(&self) {
+        self.observer_capture.set(None);
+        self.current_failure.set(None);
+    }
+    fn observe_stderr(&self, status: std::process::ExitStatus, error: &[u8]) {
+        self.observe(status);
+        self.observer_capture.set(if status.success() {
+            None
+        } else {
+            Some(NofileObserverCapture::from_capture(error))
+        });
+    }
+
+    fn observe_stderr_overflow(&self, status: std::process::ExitStatus, overflow: bool) {
+        // This hook accepts only already-computed capture metadata. It must
+        // never inspect an untrusted/truncated prefix before the stream guard.
+        if overflow && !status.success() {
+            self.observe(status);
+            self.observer_capture
+                .set(Some(NofileObserverCapture::Unavailable(
+                    NofileObserverUnavailable::Oversize,
+                )));
+        }
+    }
+
+    fn observe(&self, status: std::process::ExitStatus) {
+        if !status.success() {
+            self.current_failure.set(Some(status));
+            if self.first_failure.get().is_none() {
+                self.first_failure.set(Some(status));
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum MemoryContextOperation {
+    VersionGet,
+    VersionCli,
+    InfoGet,
+    SecurityCli,
+    DaemonUid,
+    Package,
+    BaseImage,
+    Acquire,
+    Facts,
+    BorrowedImage,
+    OuterSnapshot,
+    Reserve,
+    Baseline,
+    BaselineReport,
+}
+
+impl MemoryContextOperation {
+    fn name(self) -> &'static str {
+        match self {
+            Self::VersionGet => "version_get",
+            Self::VersionCli => "version_cli",
+            Self::InfoGet => "info_get",
+            Self::SecurityCli => "security_cli",
+            Self::DaemonUid => "daemon_uid",
+            Self::Package => "package",
+            Self::BaseImage => "base_image",
+            Self::Acquire => "acquire",
+            Self::Facts => "facts",
+            Self::BorrowedImage => "borrowed_image",
+            Self::OuterSnapshot => "outer_snapshot",
+            Self::Reserve => "reserve",
+            Self::Baseline => "baseline",
+            Self::BaselineReport => "baseline_report",
+        }
+    }
+}
+
+// The exact memory test arms this on its own test thread and takes it before
+// any effect or cleanup. Other tests and worker threads start unarmed.
+std::thread_local! {
+    static MEMORY_CONTEXT: Cell<Option<MemoryContextTrace>> = const { Cell::new(None) };
+}
+
+#[derive(Clone, Copy)]
+struct MemoryContextTrace {
+    operation: MemoryContextOperation,
+    status: Option<std::process::ExitStatus>,
+    limited: bool,
+    site: &'static str,
+}
+
+impl MemoryContextTrace {
+    fn begin() {
+        MEMORY_CONTEXT.set(Some(Self::new(MemoryContextOperation::VersionGet)));
+    }
+
+    fn new(operation: MemoryContextOperation) -> Self {
+        Self {
+            operation,
+            status: None,
+            limited: false,
+            site: "none",
+        }
+    }
+
+    fn select(operation: MemoryContextOperation) {
+        MEMORY_CONTEXT.with(|state| {
+            if state.get().is_some() {
+                state.set(Some(Self::new(operation)));
+            }
+        });
+    }
+
+    fn observe(status: std::process::ExitStatus, limited: bool, error: &[u8]) {
+        MEMORY_CONTEXT.with(|state| {
+            if let Some(mut trace) = state.get() {
+                trace.status = Some(status);
+                trace.limited = limited;
+                if matches!(trace.operation, MemoryContextOperation::Baseline)
+                    && !status.success()
+                    && !limited
+                {
+                    trace.site =
+                        if status.code() == Some(2) && error == b"native outer command refused\n" {
+                            "bridge_refused"
+                        } else {
+                            Self::guest_site(error).unwrap_or("none")
+                        };
+                }
+                state.set(Some(trace));
+            }
+        });
+    }
+
+    fn guest_site(error: &[u8]) -> Option<&'static str> {
+        if !error.ends_with(b"\n") || error.contains(&0) {
+            return None;
+        }
+        const FAMILY: &[u8] = b"DOCKERLENS_NATIVE_MEMORY_GUEST";
+        if error
+            .windows(FAMILY.len())
+            .filter(|bytes| *bytes == FAMILY)
+            .count()
+            != 1
+        {
+            return None;
+        }
+        let site = error
+            .split(|byte| *byte == b'\n')
+            .find(|line| line.starts_with(FAMILY))?
+            .strip_prefix(b"DOCKERLENS_NATIVE_MEMORY_GUEST: site=")?;
+        [
+            "identity",
+            "mount",
+            "namespaces",
+            "outer",
+            "swap",
+            "node_open",
+            "node_type",
+            "node_type_unavailable",
+            "node_type_object",
+            "node_type_read",
+            "node_type_domain_threaded",
+            "node_type_domain_invalid",
+            "node_type_threaded",
+            "node_type_other",
+            "node_values",
+            "node_events",
+            "node_readback",
+            "clock",
+        ]
+        .into_iter()
+        .find(|name| site == name.as_bytes())
+    }
+
+    fn take() -> Option<Self> {
+        MEMORY_CONTEXT.take()
+    }
+
+    fn failure_line(self) -> String {
+        use std::os::unix::process::ExitStatusExt;
+        let result = match self.status {
+            _ if self.limited => "stream_limit",
+            Some(status) if status.success() => "success",
+            Some(_) => "nonzero",
+            None => "unobserved",
+        };
+        let (termination, code) = if let Some(code) = self.status.and_then(|status| status.code()) {
+            ("exit", code.to_string())
+        } else if let Some(signal) = self.status.and_then(|status| status.signal()) {
+            ("signal", signal.to_string())
+        } else {
+            ("unknown", "none".to_owned())
+        };
+        format!(
+            "DOCKERLENS_NATIVE_MEMORY_CONTEXT_FAILURE: operation={} result={result} termination={termination} code={code} site={}",
+            self.operation.name(),
+            self.site
+        )
+    }
+}
+
 struct HealthRun {
+    nofile_command_observation: Option<NofileCommandObservation>,
     run: String,
     lane: String,
     candidate: String,
@@ -290,11 +715,13 @@ struct HealthRun {
     names: Vec<String>,
     ids: Vec<Option<String>>,
     attempted: Vec<bool>,
+    absence_lookup: HealthAbsenceLookup,
     deadline: Instant,
     calls: Cell<usize>,
     bytes: Cell<usize>,
     facts: Option<DaemonFacts>,
     cleaned: bool,
+    cleanup_delegated: bool,
 }
 
 struct HealthExpectation {
@@ -394,7 +821,10 @@ impl HealthRun {
             })
             .collect::<Vec<_>>();
         names.push(format!("dl-health-{run}-seed"));
+        let absence_lookup =
+            HealthAbsenceLookup::for_invocation(candidate_key, deadline_key, &run, &lane, &api);
         Self {
+            nofile_command_observation: None,
             derived_tag: format!("dl-health-{}:inherited", run.to_ascii_lowercase()),
             run,
             lane,
@@ -410,11 +840,13 @@ impl HealthRun {
             names,
             ids: vec![None; 9],
             attempted: vec![false; 9],
+            absence_lookup,
             deadline: Instant::now() + remaining,
             calls: Cell::new(0),
             bytes: Cell::new(0),
             facts: None,
             cleaned: false,
+            cleanup_delegated: false,
         }
     }
 
@@ -430,19 +862,35 @@ impl HealthRun {
             .map(|left| left.as_secs().min(8))
             .filter(|seconds| *seconds > 0)
             .unwrap_or_else(|| panic!("shared health metadata deadline"));
-        let mut command = Command::new(if elevated { "sudo" } else { "timeout" });
+        let mut command = Command::new(if elevated {
+            "sudo"
+        } else {
+            crate::native_outer_test_command::timeout_program()
+        });
         if elevated {
-            command.args(["-n", "timeout"]);
+            command.args(["-n", crate::native_outer_test_command::timeout_program()]);
         }
         command.args(["--signal=TERM", "--kill-after=1s", &format!("{seconds}s")]);
         command
     }
 
     fn capture(&self, command: &mut Command, input: Option<&[u8]>, cleanup: bool) -> Vec<u8> {
+        if let Some(observation) = &self.nofile_command_observation {
+            observation.begin_capture();
+        }
         assert!(
             capture_room(self.calls.get(), self.bytes.get(), cleanup),
             "reserved native command/byte budget"
         );
+        let lookup = self
+            .nofile_command_observation
+            .as_ref()
+            .filter(|observation| cleanup && observation.active_lookup.get().is_some());
+        if let Some(observation) = lookup {
+            observation
+                .active_lookup
+                .set(Some(NofileLookupFailure::CaptureIncomplete));
+        }
         self.calls.set(self.calls.get() + 1);
         command.stdout(Stdio::piped()).stderr(Stdio::piped());
         if input.is_some() {
@@ -477,15 +925,50 @@ impl HealthRun {
         let (error, error_overflow) = err.join().unwrap_or_else(|_| panic!("private stderr join"));
         self.bytes
             .set(self.bytes.get() + output.len() + error.len());
+        if let Some(observation) = &self.nofile_command_observation {
+            observation.observe_stderr_overflow(status, error_overflow || error.len() > 8192);
+        }
+        if let Some(observation) = lookup {
+            let stage = match (overflow, error_overflow) {
+                (true, true) => NofileLookupFailure::BothLimits,
+                (true, false) => NofileLookupFailure::StdoutLimit,
+                (false, true) => NofileLookupFailure::StderrLimit,
+                (false, false) => NofileLookupFailure::CaptureIncomplete,
+            };
+            observation.active_lookup.set(Some(stage));
+        }
+        if !cleanup {
+            MemoryContextTrace::observe(status, overflow || error_overflow, &error);
+        }
         assert!(
             !overflow && !error_overflow && self.bytes.get() <= MAX_BYTES,
             "private stream budget"
         );
+        if let Some(observation) = &self.nofile_command_observation {
+            observation.observe_stderr(status, &error);
+        }
+        if let Some(observation) = lookup
+            && !status.success()
+        {
+            observation
+                .active_lookup
+                .set(Some(NofileLookupFailure::Process));
+        }
         assert!(
             status.success(),
             "original native command must complete successfully"
         );
         output
+    }
+
+    fn charge_outer_snapshot(&self, cleanup: bool) {
+        let extra = crate::native_outer_test_command::snapshot_extra_calls();
+        self.calls.set(self.calls.get() + extra);
+        self.bytes.set(self.bytes.get() + extra * 65536);
+        assert!(
+            capture_room(self.calls.get(), self.bytes.get(), cleanup),
+            "outer snapshot reserve"
+        );
     }
 
     fn outer(&self, args: &[String], cleanup: bool) -> Vec<u8> {
@@ -495,7 +978,8 @@ impl HealthRun {
             _ => panic!("closed privilege selector"),
         };
         let mut command = self.timer(cleanup, elevated);
-        command.args(["podman", "exec", &self.outer]);
+        command.args(crate::native_outer_test_command::prefix());
+        command.args(["exec", &required("NATIVE_OUTER_CONTAINER_ID")]);
         command.args(args);
         self.capture(&mut command, None, cleanup)
     }
@@ -510,7 +994,11 @@ impl HealthRun {
         self.outer(&command, cleanup)
     }
 
-    fn api(&self, method: &str, path: &str, body: Option<&Value>, cleanup: bool) -> (u16, Value) {
+    fn legacy_default_absence_name(&self) -> Option<String> {
+        self.absence_lookup.name(&self.run, &self.lane, &self.api)
+    }
+
+    fn request_allowed(&self, method: &str, path: &str) -> bool {
         let prefix = format!("/v{}", self.api);
         let keys = self
             .names
@@ -520,6 +1008,9 @@ impl HealthRun {
         let container_read = keys
             .clone()
             .any(|key| path == format!("{prefix}/containers/{key}/json"));
+        let legacy_absence_read = self
+            .legacy_default_absence_name()
+            .is_some_and(|name| path == format!("{prefix}/containers/{name}/json"));
         let container_start = self
             .ids
             .iter()
@@ -542,16 +1033,50 @@ impl HealthRun {
             .derived_id
             .as_ref()
             .is_some_and(|id| path == format!("{prefix}/images/{id}?force=0"));
+        method == "GET"
+            && (path == "/version"
+                || path == format!("{prefix}/info")
+                || container_read
+                || legacy_absence_read
+                || image_read)
+            || method == "POST" && (create || container_start)
+            || method == "DELETE" && (container_delete || image_delete)
+    }
+
+    fn request_allowed_with_body(&self, method: &str, path: &str, body: Option<&Value>) -> bool {
+        self.request_allowed(method, path) && (method != "GET" || body.is_none())
+    }
+
+    fn api(&self, method: &str, path: &str, body: Option<&Value>, cleanup: bool) -> (u16, Value) {
         assert!(
-            method == "GET"
-                && (path == "/version"
-                    || path == format!("{prefix}/info")
-                    || container_read
-                    || image_read)
-                || method == "POST" && (create || container_start)
-                || method == "DELETE" && (container_delete || image_delete),
+            self.request_allowed_with_body(method, path, body),
             "allowlisted exact native request"
         );
+        self.api_response(method, path, body, cleanup)
+    }
+
+    // Only the nofile owner can construct this closed, scope-bound admission.
+    // Other fixture families retain their original allowlist without networks.
+    fn nofile_network_api(
+        &self,
+        request: &lifecycle::nofile::NetworkRequest,
+        cleanup: bool,
+    ) -> (u16, Value) {
+        assert!(
+            request.matches(self, cleanup),
+            "bound nofile network request scope"
+        );
+        let (method, path, body) = request.parts();
+        self.api_response(method, path, body, cleanup)
+    }
+
+    fn api_response(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+        cleanup: bool,
+    ) -> (u16, Value) {
         let input = body.map(|body| {
             serde_json::to_vec(body).unwrap_or_else(|_| panic!("private request encoding"))
         });
@@ -585,6 +1110,15 @@ impl HealthRun {
             &format!("http://localhost{path}"),
         ]);
         let output = self.capture(&mut command, input.as_deref(), cleanup);
+        let lookup = self
+            .nofile_command_observation
+            .as_ref()
+            .filter(|observation| cleanup && observation.active_lookup.get().is_some());
+        if let Some(observation) = lookup {
+            observation
+                .active_lookup
+                .set(Some(NofileLookupFailure::HttpFrame));
+        }
         let at = output
             .iter()
             .rposition(|byte| *byte == b'\n')
@@ -594,11 +1128,21 @@ impl HealthRun {
             .and_then(|text| text.parse().ok())
             .unwrap_or_else(|| panic!("closed HTTP status"));
         let value = if status == 200 || status == 201 {
+            if let Some(observation) = lookup {
+                observation
+                    .active_lookup
+                    .set(Some(NofileLookupFailure::Json));
+            }
             serde_json::from_slice(&output[..at])
                 .unwrap_or_else(|_| panic!("bounded private native JSON"))
         } else {
             Value::Null
         };
+        if let Some(observation) = lookup {
+            observation
+                .active_lookup
+                .set(Some(NofileLookupFailure::HttpStatus));
+        }
         (status, value)
     }
 
@@ -930,6 +1474,7 @@ impl HealthRun {
 impl HealthRun {
     fn context(&mut self) -> u32 {
         eprintln!("DOCKERLENS_NATIVE_CHECK: health_metadata_context");
+        MemoryContextTrace::select(MemoryContextOperation::VersionGet);
         let (status, version) = self.api("GET", "/version", None, false);
         assert_eq!(status, 200);
         let engine = version["Version"]
@@ -946,6 +1491,7 @@ impl HealthRun {
             "exact observed Engine"
         );
         assert_eq!(version["ApiVersion"], self.api);
+        MemoryContextTrace::select(MemoryContextOperation::VersionCli);
         let cli = self.docker(
             &[
                 "version".to_owned(),
@@ -958,6 +1504,7 @@ impl HealthRun {
             cli.as_slice(),
             format!("{engine}|{}\n", self.api).as_bytes()
         );
+        MemoryContextTrace::select(MemoryContextOperation::InfoGet);
         let (status, info) = self.api("GET", &format!("/v{}/info", self.api), None, false);
         assert_eq!(status, 200);
         let rootless = info["Rootless"] == true
@@ -969,6 +1516,7 @@ impl HealthRun {
                 })
             });
         assert_eq!(rootless, self.mode == DaemonMode::Rootless);
+        MemoryContextTrace::select(MemoryContextOperation::SecurityCli);
         let security = self.docker(
             &[
                 "info".to_owned(),
@@ -985,6 +1533,7 @@ impl HealthRun {
                 .any(|option| option == "name=rootless" || option.starts_with("name=rootless,")),
             rootless
         );
+        MemoryContextTrace::select(MemoryContextOperation::DaemonUid);
         let uid = self.outer(&["sh".to_owned(), "-ec".to_owned(),
             "count=0; uid=; for status in /proc/[0-9]*/status; do [ -f \"$status\" ] || continue; IFS= read -r comm < \"${status%/status}/comm\" || continue; [ \"$comm\" = dockerd ] || continue; count=$((count+1)); while read -r key real effective saved filesystem; do if [ \"$key\" = Uid: ]; then uid=$effective; break; fi; done < \"$status\"; done; printf '%s:%s\\n' \"$count\" \"$uid\"".to_owned()], false);
         let uid = std::str::from_utf8(&uid)
@@ -997,6 +1546,7 @@ impl HealthRun {
             "independent effective daemon mode"
         );
         if self.lane.starts_with("debian11-") {
+            MemoryContextTrace::select(MemoryContextOperation::Package);
             let package = self.outer(
                 &[
                     "dpkg-query".to_owned(),
@@ -1010,6 +1560,7 @@ impl HealthRun {
         }
         // Engine zero means inherit. Independently establish that this pinned
         // base has no inherited health/default positive period before zero cases.
+        MemoryContextTrace::select(MemoryContextOperation::BaseImage);
         let (status, base_image) = self.api(
             "GET",
             &format!("/v{}/images/{}/json", self.api, self.base),
@@ -1022,6 +1573,7 @@ impl HealthRun {
             "inspected pinned image ID"
         );
         assert_eq!(image_start_period(&base_image), Some(0));
+        MemoryContextTrace::select(MemoryContextOperation::Acquire);
         let elapsed = self
             .remaining()
             .checked_sub(Duration::from_secs(46))
@@ -1050,6 +1602,7 @@ impl HealthRun {
                 .all(|exchange| exchange.status().code() == 200),
             "complete actual capture"
         );
+        MemoryContextTrace::select(MemoryContextOperation::Facts);
         let decoded =
             decode_capture(&capture).unwrap_or_else(|_| panic!("actual native capture decode"));
         let mut facts = decoded.version.daemon;
@@ -1496,13 +2049,57 @@ impl HealthRun {
 
 impl Drop for HealthRun {
     fn drop(&mut self) {
-        if !self.cleaned {
+        if self.owns_drop_cleanup() {
             let clean = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.cleanup()))
                 .unwrap_or(false);
             if !clean {
                 eprintln!("DOCKERLENS_NATIVE_CHECK: health_metadata_cleanup_unverified");
             }
         }
+    }
+}
+
+impl HealthRun {
+    fn owns_drop_cleanup(&self) -> bool {
+        !self.cleaned && !self.cleanup_delegated
+    }
+}
+
+const PRIVATE_PROOF_LIMIT: usize = 16 * 1024;
+const MAX_PRIVATE_PROOF_LIMIT: usize = 512 * 1024;
+
+fn private_proof_bytes(proof: &Value, max_bytes: usize) -> Vec<u8> {
+    assert!(
+        (1..=MAX_PRIVATE_PROOF_LIMIT).contains(&max_bytes),
+        "reviewed private proof bound"
+    );
+    let bytes = serde_json::to_vec(proof).unwrap_or_else(|_| panic!("private proof encoding"));
+    assert!(
+        !bytes.is_empty() && bytes.len() <= max_bytes,
+        "bounded private proof"
+    );
+    bytes
+}
+
+#[test]
+fn private_proof_payload_limits_preserve_default_and_reject_overflow() {
+    for bound in [PRIVATE_PROOF_LIMIT, MAX_PRIVATE_PROOF_LIMIT] {
+        let exact = json!("x".repeat(bound - 2));
+        assert_eq!(private_proof_bytes(&exact, bound).len(), bound);
+        let oversized = json!("x".repeat(bound - 1));
+        assert!(std::panic::catch_unwind(|| private_proof_bytes(&oversized, bound)).is_err());
+    }
+    let old_overflow = json!("x".repeat(PRIVATE_PROOF_LIMIT - 1));
+    assert!(
+        std::panic::catch_unwind(|| private_proof_bytes(&old_overflow, PRIVATE_PROOF_LIMIT))
+            .is_err()
+    );
+    for bound in [0, MAX_PRIVATE_PROOF_LIMIT + 1, usize::MAX] {
+        assert!(std::panic::catch_unwind(|| private_proof_bytes(&json!({}), bound)).is_err());
+    }
+    for value in [json!("é"), json!("\n")] {
+        assert_eq!(private_proof_bytes(&value, 4).len(), 4);
+        assert!(std::panic::catch_unwind(|| private_proof_bytes(&value, 3)).is_err());
     }
 }
 
@@ -1573,12 +2170,12 @@ impl ProofTarget {
     }
 
     fn publish(&self, proof: &Value) {
+        self.publish_bounded(proof, PRIVATE_PROOF_LIMIT);
+    }
+
+    fn publish_bounded(&self, proof: &Value, max_bytes: usize) {
         self.check();
-        let bytes = serde_json::to_vec(proof).unwrap_or_else(|_| panic!("private proof encoding"));
-        assert!(
-            !bytes.is_empty() && bytes.len() <= 16384,
-            "bounded private proof"
-        );
+        let bytes = private_proof_bytes(proof, max_bytes);
         let relative = PathBuf::from(format!(
             "/proc/self/fd/{}/{}",
             std::os::fd::AsRawFd::as_raw_fd(&self.held),
@@ -1649,6 +2246,57 @@ fn live_health_metadata_matches_engine() {
     );
     target.publish(&run.proof(&cases));
     eprintln!("DOCKERLENS_NATIVE_CHECK: health_metadata_evidence");
+}
+
+#[test]
+fn memory_guest_site_rejects_every_second_family_occurrence() {
+    for error in [
+        b"DOCKERLENS_NATIVE_MEMORY_GUEST: site=node_events\nnotice: DOCKERLENS_NATIVE_MEMORY_GUEST: site=clock\n".as_slice(),
+        b"notice: DOCKERLENS_NATIVE_MEMORY_GUEST: site=clock\nDOCKERLENS_NATIVE_MEMORY_GUEST: site=node_events\n",
+        b"DOCKERLENS_NATIVE_MEMORY_GUEST: site=node_events\nDOCKERLENS_NATIVE_MEMORY_GUEST: site=node_events\n",
+        b"DOCKERLENS_NATIVE_MEMORY_GUEST: site=node_events DOCKERLENS_NATIVE_MEMORY_GUEST: site=clock\n",
+        b"notice: DOCKERLENS_NATIVE_MEMORY_GUEST DOCKERLENS_NATIVE_MEMORY_GUEST\nDOCKERLENS_NATIVE_MEMORY_GUEST: site=node_events\n",
+    ] {
+        assert_eq!(MemoryContextTrace::guest_site(error), None);
+    }
+}
+
+#[test]
+fn memory_guest_site_requires_a_complete_exact_line_and_known_site() {
+    assert_eq!(
+        MemoryContextTrace::guest_site(
+            b"notice: \xff\nDOCKERLENS_NATIVE_MEMORY_GUEST: site=node_events\nmore noise\n"
+        ),
+        Some("node_events")
+    );
+    assert_eq!(
+        MemoryContextTrace::guest_site(b"DOCKERLENS_NATIVE_MEMORY_GUEST: site=clock\n"),
+        Some("clock")
+    );
+    for error in [
+        b"ordinary stderr\n".as_slice(),
+        b"notice: DOCKERLENS_NATIVE_MEMORY_GUEST: site=clock\n",
+        b"DOCKERLENS_NATIVE_MEMORY_GUEST: site=node_events\ntruncated",
+        b"DOCKERLENS_NATIVE_MEMORY_GUEST: site=node_events",
+        b"DOCKERLENS_NATIVE_MEMORY_GUEST: site=\n",
+        b"DOCKERLENS_NATIVE_MEMORY_GUEST: site=node_events\r\n",
+        b"DOCKERLENS_NATIVE_MEMORY_GUEST: site=node_events extra\n",
+        b"DOCKERLENS_NATIVE_MEMORY_GUEST: site=bridge_refused\n",
+        b"DOCKERLENS_NATIVE_MEMORY_GUEST: site=node_events\nnoise\0\n",
+    ] {
+        assert_eq!(MemoryContextTrace::guest_site(error), None);
+    }
+}
+
+#[test]
+fn memory_guest_site_checks_the_entire_retained_stderr() {
+    let line = b"\nDOCKERLENS_NATIVE_MEMORY_GUEST: site=node_events\n";
+    let mut error = vec![b'x'; 8192 - line.len()];
+    error.extend_from_slice(line);
+    assert_eq!(MemoryContextTrace::guest_site(&error), Some("node_events"));
+    let embedded = b"notice: DOCKERLENS_NATIVE_MEMORY_GUEST\n";
+    error[..embedded.len()].copy_from_slice(embedded);
+    assert_eq!(MemoryContextTrace::guest_site(&error), None);
 }
 
 #[test]

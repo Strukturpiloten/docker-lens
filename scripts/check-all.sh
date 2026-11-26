@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+"$(dirname -- "$0")/native_gnu_timeout.py" --identify
 
 unset DOCKERLENS_METADATA_UNCHANGED
 

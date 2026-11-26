@@ -441,9 +441,13 @@ impl Run {
     fn command(&mut self, cleanup: bool, elevated: bool, args: &[String]) -> Output {
         const CAP: usize = 64 * 1024;
         self.charge(cleanup, 1, 2 * CAP);
-        let mut command = Command::new(if elevated { "sudo" } else { "timeout" });
+        let mut command = Command::new(if elevated {
+            "sudo"
+        } else {
+            crate::native_outer_test_command::timeout_program()
+        });
         if elevated {
-            command.args(["-n", "timeout"]);
+            command.args(["-n", crate::native_outer_test_command::timeout_program()]);
         }
         command
             .args([
@@ -474,7 +478,11 @@ impl Run {
         }
     }
     fn podman(&mut self, cleanup: bool, args: &[String]) -> Output {
-        let mut argv = vec!["podman".into(), "--remote=false".into()];
+        if args.first().is_some_and(|arg| arg == "inspect") {
+            let extra = crate::native_outer_test_command::snapshot_extra_calls();
+            self.charge(cleanup, extra, extra * 65536);
+        }
+        let mut argv = crate::native_outer_test_command::prefix();
         argv.extend_from_slice(args);
         self.command(cleanup, self.elevated, &argv)
     }

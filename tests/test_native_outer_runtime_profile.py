@@ -1,5 +1,7 @@
 """Fake-only hosted prerequisite collection; never execute host/package/native tools."""
 
+
+from native_timeout_support import TIMER
 from contextlib import redirect_stderr, redirect_stdout
 import errno
 import hashlib
@@ -180,7 +182,7 @@ class HostedDiagnosticTests(unittest.TestCase):
         self.assertEqual(result["observations"]["units"]["docker.service"]["fragment"], "vendor")
         self.assertEqual(result["observations"]["trigger_execution_set"], "not_established")
         for command in PROFILE.COMMANDS:
-            self.assertEqual(command[:4], ("/usr/bin/timeout", "--signal=TERM", "--kill-after=1s", "2s"))
+            self.assertEqual(command[:4], (TIMER, "--signal=TERM", "--kill-after=1s", "2s"))
             self.assertNotIn(command[4], {"/usr/bin/docker", "/usr/bin/podman", "/usr/bin/sudo"})
             self.assertNotIn("start", command)
             self.assertNotIn("restart", command)

@@ -152,20 +152,21 @@ impl LabelRun {
     }
 
     fn cli(&self, args: &[String]) -> Vec<u8> {
-        let mut command = Command::new("timeout");
+        let mut command = Command::new(crate::native_outer_test_command::timeout_program());
         command.args(["--kill-after=1", "60"]);
         match required("NATIVE_PODMAN_USE_SUDO").as_str() {
             "0" => {
-                command.arg("podman");
+                command.args(crate::native_outer_test_command::prefix());
             }
             "1" => {
-                command.args(["sudo", "-n", "podman"]);
+                command.args(["sudo", "-n"]);
+                command.args(crate::native_outer_test_command::prefix());
             }
             _ => panic!("closed Podman selector"),
         }
         command.args([
             "exec",
-            &required("NATIVE_OUTER_CONTAINER"),
+            &required("NATIVE_OUTER_CONTAINER_ID"),
             "docker",
             "-H",
             "unix:///dockerlens-native/docker.sock",
@@ -197,7 +198,7 @@ impl LabelRun {
             "closed native label API path"
         );
         let input = body.map(|value| serde_json::to_vec(value).expect("synthetic JSON"));
-        let mut command = Command::new("timeout");
+        let mut command = Command::new(crate::native_outer_test_command::timeout_program());
         command.args([
             "--kill-after=1",
             "20",
