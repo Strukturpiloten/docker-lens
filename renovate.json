@@ -1,8 +1,8 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "github>Strukturpiloten/boxferry//renovate-presets/common#48c5d49581b82e830666dbe2487046b24cb92fc0",
-    "github>Strukturpiloten/boxferry//renovate-presets/rust#48c5d49581b82e830666dbe2487046b24cb92fc0"
+    "github>Strukturpiloten/boxferry//renovate-presets/common#5c2ea1a8f0f4bcbd2636d99d47674188972400a9",
+    "github>Strukturpiloten/boxferry//renovate-presets/rust#5c2ea1a8f0f4bcbd2636d99d47674188972400a9"
   ],
   "enabledManagers": [
     "cargo",
